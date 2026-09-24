@@ -145,6 +145,11 @@ protocol error.
 | | `audit_log` | own calls only |
 | Skills | `skills_list` | name, description, version, verified date |
 | | `skill_get` | `name`; returns the skill body and its version |
+| Issues | `issue_search` | `query`, `state: open \| fixed \| closed \| any`, `skill`; searches before anything is filed |
+| | `issue_get` | `id`; the issue, its comments, its state and the release that fixed it |
+| | `issue_create` | `title`, `body`, `category`, `machine`, `skill`, `confirm_new`; context is attached by the server (section 4.6) |
+| | `issue_comment` | `id`, `body`; more detail or "same here" |
+| | `issue_confirm` | `id`, `works: true \| false`; the reporter checks a fix, which closes or reopens the issue |
 
 `machine_create` returns only after SSH answers, and returns the line to paste into
 `~/.ssh/config`. The agent sends the member's public key. The platform never generates or returns
@@ -153,7 +158,8 @@ a private key.
 ### 4.4 Admin tools
 
 Callable only by `winlab-admin`: `quota_set`, `request_approve`, `request_reject`, `tenant_list`,
-`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `reconcile_run`, `image_build`.
+`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `reconcile_run`, `image_build`,
+`issue_triage` (label, merge a duplicate), `issue_resolve` (`id`, `fixed_in`, `note`).
 
 ### 4.5 Skills
 
@@ -172,8 +178,10 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 | `sdn-coursework` | SDN and NFV homework | Ubuntu LTS VM with `nested_virt`, Mininet, Open vSwitch and a controller, and the address ranges to avoid inside the VM |
 | `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port |
 | `continuous-deployment` | deploy on every push from GitHub or GitLab | a self-hosted runner inside the machine, or an SSH deploy through the tenant's port; tokens and deploy keys stay inside the machine |
+| `nextjs` | a Next.js site or app | Node LTS in a VM sized for `next build` (at least 2 GB), `output: "standalone"` run by systemd, `domain_add` to its port with TLS at the gateway, environment in a `0600` file, database and cache reached through `peer_allow`, deploys through `continuous-deployment` |
 | `docker-host` | run containers | Docker in a VM, compose files, where volumes live, disk sizing |
 | `database` | a PostgreSQL database for an app or a project | PostgreSQL in a VM (stateful work never goes in a CT), listening on the private address only, other machines let in with `peer_allow` and never `port_open` on 5432, SCRAM passwords kept inside the machine, `pg_dump` on a timer plus a snapshot before upgrades, disk sized for data and dumps |
+| `redis` | a cache, queue or session store | Redis in a VM (a cache with persistence off may use a CT), bound to the private address with an ACL user and password, never `port_open` on 6379, `maxmemory` with an eviction policy, AOF `everysec` when the data matters, `vm.overcommit_memory=1` so background saves do not fail |
 | `k3s-cluster` | a lightweight Kubernetes cluster | one server VM and agent VMs in the tenant's `/24`, `swap_mb: 0` on every node, `kubectl` and `k9s` on the server, the kubeconfig reached through an SSH tunnel instead of a public 6443, ingress through `domain_add` to the bundled Traefik |
 | `kubernetes-cluster` | upstream Kubernetes with kubeadm | control plane and worker VMs with at least 2 vCPU and 2 GB each, `swap_mb: 0`, containerd, a CNI with its default pod range, `kubectl` and `k9s`, the same tunnel and ingress rules as `k3s-cluster` |
 | `team-project` | a project shared by several members | the project tenant, `peer_allow` between machines, who owns what |
@@ -220,11 +228,14 @@ watched in production after it.
    not need, no private key or token appears in any tool argument. Stateful skills are checked
    after a reboot as well: a database keeps its rows, and every cluster node is `Ready` again
    (a node left with swap on passes at first and fails here).
-3. Every case runs in two arms, with the skill and with that skill hidden from `skills_list`, 5
+3. Composite cases cover the common stack across skills: "a Next.js app with PostgreSQL and
+   Redis, deployed on every push" must end with the site answering on its domain, the database
+   and cache reachable only from the app machine, and a push that changes the page.
+4. Every case runs in two arms, with the skill and with that skill hidden from `skills_list`, 5
    runs per arm, with a clean agent that has only the carrel connector. Claude Code and Codex both
    run it.
-4. Measured per arm: pass rate, tool calls, error results, cost, wall time, and safety violations.
-5. Results are committed as `skills/<name>/evals/results/<version>.json`, so every version has a
+5. Measured per arm: pass rate, tool calls, error results, cost, wall time, and safety violations.
+6. Results are committed as `skills/<name>/evals/results/<version>.json`, so every version has a
    record to compare against.
 
 **Release gate**: a new skill ships only if its pass rate with the skill beats the arm without it
@@ -234,8 +245,32 @@ values into tool arguments.
 
 **Production signal**: every `skill_get` is a span. `usage_report` shows, per skill and version,
 how often it was read and how the session went after it: whether the machine reached ready, and
-how many error results followed. A skill that is read often and still followed by errors is the
-next one to fix.
+how many error results followed, and how many issues name it (section 4.6). A skill that is read
+often and still followed by errors or issues is the next one to fix.
+
+### 4.6 Issues
+
+Agents hit the same problems again and again. Issues let one member's agent learn from another's:
+search first, read how it was solved, and file only what is new.
+
+- **Where they live**: GitHub Issues on this repository, written by a GitHub App that only the
+  server holds. Members never need a GitHub account; admins fix them in the normal loop, and a
+  pull request that says "Fixes #n" moves the issue to `fixed` with the release that carries it.
+- **States**: `open`, then `fixed` (an admin or a merged pull request, with `fixed_in`), then
+  `closed` when the reporter's agent runs `issue_confirm` with `works: true`, or back to `open`
+  with `works: false`. A `fixed` issue with no confirmation closes itself after 14 days.
+- **Search before create**: `issue_create` runs `issue_search` on the title first. When similar
+  issues exist it returns them with `conflict` and files nothing, unless `confirm_new: true`.
+  The server instructions tell agents to search as soon as a tool returns an error they cannot
+  explain.
+- **Context the server attaches**: tenant slug, machine kind and image, carrel version, skill and
+  skill version, and the error codes of the reporter's last 20 calls. Never addresses, keys,
+  environment values or anything the audit mask would hide. Bodies pass the same mask.
+- **Who sees what**: every member can search and read every issue; only the reporter confirms.
+  `issue_create` is limited to 10 per tenant per day.
+- **Categories**: `bug`, `question`, `skill` (the guidance was wrong or missing), `capacity`,
+  `request`. `skill` issues are labelled with the skill name and feed the production signal of
+  4.5.3.
 
 ## 5. Resources and quotas
 
@@ -536,7 +571,7 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 | M2 Control plane | A clean agent with only the MCP connector, given "Open a VM on winlab for my SDN homework", signs in through Keycloak and ends with a working SSH session |
 | M3 Access | The same agent opens a port and a domain, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date |
-| M5 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, and `usage_report` shows reads per skill version |
+| M5 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
 | M6 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
 | M7 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
 
