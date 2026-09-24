@@ -128,7 +128,7 @@ protocol error.
 | | `request_list` | own requests and their state |
 | Catalog | `images_list` | `kind: vm \| ct`; returns version, end of support date, default flag |
 | | `sizes_list` | presets `small`, `medium`, `large` |
-| Machines | `machine_create` | `kind`, `name`, `image`, `size` or `cpu` + `memory_mb` + `disk_gb`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `tags[]` |
+| Machines | `machine_create` | `kind`, `name`, `image`, `size` or `cpu` + `memory_mb` + `disk_gb`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `tags[]` |
 | | `machine_get`, `machine_list` | state, private address, SSH line, image support status |
 | | `machine_resize` | grow only; disk never shrinks |
 | | `machine_power` | `start \| stop \| shutdown \| reboot` |
@@ -173,12 +173,19 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 | `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port |
 | `continuous-deployment` | deploy on every push from GitHub or GitLab | a self-hosted runner inside the machine, or an SSH deploy through the tenant's port; tokens and deploy keys stay inside the machine |
 | `docker-host` | run containers | Docker in a VM, compose files, where volumes live, disk sizing |
+| `database` | a PostgreSQL database for an app or a project | PostgreSQL in a VM (stateful work never goes in a CT), listening on the private address only, other machines let in with `peer_allow` and never `port_open` on 5432, SCRAM passwords kept inside the machine, `pg_dump` on a timer plus a snapshot before upgrades, disk sized for data and dumps |
+| `k3s-cluster` | a lightweight Kubernetes cluster | one server VM and agent VMs in the tenant's `/24`, `swap_mb: 0` on every node, `kubectl` and `k9s` on the server, the kubeconfig reached through an SSH tunnel instead of a public 6443, ingress through `domain_add` to the bundled Traefik |
+| `kubernetes-cluster` | upstream Kubernetes with kubeadm | control plane and worker VMs with at least 2 vCPU and 2 GB each, `swap_mb: 0`, containerd, a CNI with its default pod range, `kubectl` and `k9s`, the same tunnel and ingress rules as `k3s-cluster` |
 | `team-project` | a project shared by several members | the project tenant, `peer_allow` between machines, who owns what |
 | `rescue` | "I cannot get in" | `machine_console_log`, then `machine_reset_access`, and the host key warning that follows |
 | `quota-and-cleanup` | out of room | idle machines, snapshots to drop, then `quota_request` with a reason |
 
-Candidates for later, each added only with its own evaluation (4.5.3): `database`, `k3s-cluster`,
-`jupyter`, and GPU skills once GPUs exist.
+Both cluster skills check `quota_get` first, because a cluster needs several machines at once.
+Their pod and service defaults (k3s `10.42/16` and `10.43/16`, kubeadm `10.96.0.0/12`, flannel
+`10.244/16`) do not overlap the tenant networks (section 6.1).
+
+Candidates for later, each added only with its own evaluation (4.5.3): `jupyter`, and GPU skills
+once GPUs exist.
 
 #### 4.5.2 Source, delivery and versions
 
@@ -210,7 +217,9 @@ watched in production after it.
    state (quota, existing machines), and outcome checks.
 2. Checks look at results through the admin API, never at the transcript: the machine exists with
    the right image and flags, SSH works with the member's key, no port is open that the intent did
-   not need, no private key or token appears in any tool argument.
+   not need, no private key or token appears in any tool argument. Stateful skills are checked
+   after a reboot as well: a database keeps its rows, and every cluster node is `Ready` again
+   (a node left with swap on passes at first and fails here).
 3. Every case runs in two arms, with the skill and with that skill hidden from `skills_list`, 5
    runs per arm, with a clean agent that has only the carrel connector. Claude Code and Codex both
    run it.
@@ -366,7 +375,7 @@ within 90 days of it.
 
 | Setting | Why |
 |---|---|
-| Campus apt mirror, `qemu-guest-agent`, 4 GB swap file, `vm.swappiness=10` | Carried from the old host's cloud-init snippet |
+| Campus apt mirror, `qemu-guest-agent`, 4 GB swap file unless `swap_mb` says otherwise (`0` for Kubernetes nodes), `vm.swappiness=10` | Carried from the old host's cloud-init snippet |
 | `fstrim.timer` on, disks `discard=on`, `ssd=1`, `iothread=1`, `virtio-scsi-single` | Space freed in the guest returns to the pool |
 | Unattended security upgrades, timezone Asia/Taipei | Tenants forget |
 | CPU type `x86-64-v2-AES`; `host` only with `nested_virt` | Machines can migrate between nodes |
