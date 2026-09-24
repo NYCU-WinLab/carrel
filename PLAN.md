@@ -143,6 +143,8 @@ protocol error.
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
 | Insight | `machine_metrics` | CPU, memory, disk and network from the hypervisor |
 | | `audit_log` | own calls only |
+| Skills | `skills_list` | name, description, version, verified date |
+| | `skill_get` | `name`; returns the skill body and its version |
 
 `machine_create` returns only after SSH answers, and returns the line to paste into
 `~/.ssh/config`. The agent sends the member's public key. The platform never generates or returns
@@ -155,11 +157,76 @@ Callable only by `winlab-admin`: `quota_set`, `request_approve`, `request_reject
 
 ### 4.5 Skills
 
-- **Claude Code**: skills ship in the lab plugin (`NYCU-WinLab/plugin`) with the MCP connector,
-  for example "a VM for SDN coursework" (Ubuntu LTS, `nested_virt`, OVS and Mininet need a VM,
-  not a CT).
-- **Every other client**: the same guidance lives in the server instructions and tool
-  descriptions, so a client without the plugin still gets it right.
+A skill is guidance an agent reads before it acts: which tools to call in which order, which
+defaults to pick, and which traps to avoid. The tools say what is possible. Skills say what is
+wise for a given intent.
+
+#### 4.5.1 Catalog
+
+Version 1 ships these skills. Each one is named after an intent a member actually has.
+
+| Skill | Intent | What it steers |
+|---|---|---|
+| `getting-started` | first contact | `whoami`, the use policy, uploading the member's public key, writing `~/.ssh/config` |
+| `choose-machine` | "I need a machine for X" | VM or CT, image, size, `nested_virt`; Docker, OVS and Mininet always get a VM |
+| `sdn-coursework` | SDN and NFV homework | Ubuntu LTS VM with `nested_virt`, Mininet, Open vSwitch and a controller, and the address ranges to avoid inside the VM |
+| `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port |
+| `continuous-deployment` | deploy on every push from GitHub or GitLab | a self-hosted runner inside the machine, or an SSH deploy through the tenant's port; tokens and deploy keys stay inside the machine |
+| `docker-host` | run containers | Docker in a VM, compose files, where volumes live, disk sizing |
+| `team-project` | a project shared by several members | the project tenant, `peer_allow` between machines, who owns what |
+| `rescue` | "I cannot get in" | `machine_console_log`, then `machine_reset_access`, and the host key warning that follows |
+| `quota-and-cleanup` | out of room | idle machines, snapshots to drop, then `quota_request` with a reason |
+
+Candidates for later, each added only with its own evaluation (4.5.3): `database`, `k3s-cluster`,
+`jupyter`, and GPU skills once GPUs exist.
+
+#### 4.5.2 Source, delivery and versions
+
+- **One source**: `skills/<name>/SKILL.md` in this repository, next to the server code, so a skill
+  and the tools it names change in the same pull request.
+- **Served by the server**: `skills_list` and `skill_get` return the skills of the running
+  release, so every MCP client (Claude Code, Codex, anything else) reads guidance that matches the
+  tools it can actually call. The server instructions tell the agent to read the matching skill
+  before its first state change.
+- **Claude Code copy**: a release workflow opens a pull request against `NYCU-WinLab/plugin` with a
+  generated copy, so Claude Code can also trigger skills by description. The copy is never edited
+  by hand.
+- **Frontmatter**: `name`, `description`, `version` (SemVer), `requires_tools`, and `verified`
+  (the date and the carrel version the skill last passed its evaluation against).
+- **What a version bump means**: major when the agent's actions change (different tools, a
+  different order), minor when guidance is added, patch for wording.
+- **CI checks on every pull request**: frontmatter is valid, a changed `SKILL.md` has a higher
+  `version`, every name in `requires_tools` exists in the server's tool list, and the description
+  stays short enough to trigger reliably.
+
+#### 4.5.3 Evaluation
+
+A skill exists only if it measurably helps. Every skill is evaluated offline before release and
+watched in production after it.
+
+**Offline bench** (runs on staging, section 10.5):
+
+1. Each skill has cases in `skills/<name>/evals/<case>.yaml`: the member's sentence, the starting
+   state (quota, existing machines), and outcome checks.
+2. Checks look at results through the admin API, never at the transcript: the machine exists with
+   the right image and flags, SSH works with the member's key, no port is open that the intent did
+   not need, no private key or token appears in any tool argument.
+3. Every case runs in two arms, with the skill and with that skill hidden from `skills_list`, 5
+   runs per arm, with a clean agent that has only the carrel connector. Claude Code and Codex both
+   run it.
+4. Measured per arm: pass rate, tool calls, error results, cost, wall time, and safety violations.
+5. Results are committed as `skills/<name>/evals/results/<version>.json`, so every version has a
+   record to compare against.
+
+**Release gate**: a new skill ships only if its pass rate with the skill beats the arm without it
+and it has zero safety violations. A changed skill ships only if it does not score below the
+previous version. Transcripts are masked before they are stored, because agents write secret
+values into tool arguments.
+
+**Production signal**: every `skill_get` is a span. `usage_report` shows, per skill and version,
+how often it was read and how the session went after it: whether the machine reached ready, and
+how many error results followed. A skill that is read often and still followed by errors is the
+next one to fix.
 
 ## 5. Resources and quotas
 
@@ -448,6 +515,8 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 - IPv6 (open decision 13.6).
 - Machines spanning sites, live migration across sites.
 - A web UI.
+- A build and deploy pipeline inside carrel. Deployment runs inside the tenant's machine, guided
+  by the `continuous-deployment` skill.
 
 ### 11.3 Milestones
 
@@ -458,8 +527,9 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 | M2 Control plane | A clean agent with only the MCP connector, given "Open a VM on winlab for my SDN homework", signs in through Keycloak and ends with a working SSH session |
 | M3 Access | The same agent opens a port and a domain, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date |
-| M5 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
-| M6 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
+| M5 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, and `usage_report` shows reads per skill version |
+| M6 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
+| M7 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
 
 ## 12. Lessons carried from the old host
 
