@@ -46,11 +46,14 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-24 | Tenants include projects, not only members. Quota requests and member self-rescue are in scope |
 | 2026-09-24 | Images are LTS or stable releases still under vendor security support, at most 3 per distribution |
 | 2026-09-24 | Everything is built fresh on a new Proxmox host. The existing lab host is reference only (superseded for its guests on 2026-09-27) |
-| 2026-09-27 | Guests of the old host move to carrel through an admin import tool (section 10.6) |
+| 2026-09-27 | Selected guests of the old host move to carrel through an admin import tool (section 10.6) |
 | 2026-09-27 | Names and ports outside a tenant's own subtree and block are requested by members and approved by admins (section 6.10) |
 | 2026-09-27 | Services bound to hardware or a room, and the DERP relay, stay outside carrel |
 | 2026-09-27 | Tenants get private networks and machines with several NICs (section 6.8) |
 | 2026-09-27 | Tenants may import cloud images and ISOs (section 7.8) |
+| 2026-09-27 | carrel ignores the Keycloak groups `vm-users` and `vm-sudoers` |
+| 2026-09-27 | Admin notifications and alerts go by email |
+| 2026-09-27 | The old host keeps running outside carrel. Selected guests move; the rest stay, with the room-bound services, the DERP relay and the tailnet subnet router (section 10.7) |
 
 ## 2. Object model
 
@@ -84,7 +87,7 @@ and these groups:
 | `lab-member/alumni` | 23 | may not create machines (lifecycle, section 10.3) |
 | `winlab-projects/<project>` | 6 projects | each project is a tenant with a project quota |
 | `winlab-admin` | 4 | carrel admins |
-| `vm-users`, `vm-sudoers` | 0 | created earlier by someone else; open decision 13.1 |
+| `vm-users`, `vm-sudoers` | 0 | origin unknown; carrel ignores them |
 
 The MCP endpoint is an OAuth protected resource. Keycloak is the authorization server. The platform
 reads `preferred_username` and the `groups` claim from the token and never trusts a tenant name
@@ -329,7 +332,7 @@ Three kinds share one flow: `quota_request` (more of a dimension), `domain_reque
 `port_request` (special names and ports, section 6.10).
 
 1. A member files a request with a reason. A quota request may carry an end date.
-2. Admins are notified on a push channel (open decision 13.3).
+2. Admins are notified by email.
 3. An admin approves or rejects with a tool call. The result appears in the member's next tool
    response and in `request_list`.
 4. A request with `until` becomes a temporary grant and is withdrawn on that date. Machines that
@@ -686,7 +689,7 @@ it on demand.
 
 ### 9.3 Alerts
 
-sensorium only answers queries, so a scheduled job queries it and pushes alerts to a phone.
+sensorium only answers queries, so a scheduled job queries it and sends alerts by email.
 
 1. Pool or disk over 80 percent, node memory saturated.
 2. Node offline, quorum lost.
@@ -759,33 +762,44 @@ M9 (import) is production only and is checked once, by hand, against its sentenc
   that change once (a new `ipconfig0` changes the cloud-init instance id), applications bound to
   old addresses, and resolvers that cloud-init does not rewrite (Alpine).
 
-### 10.7 Moving the old host
+### 10.7 Living next to the old host
 
-The old lab host (`140.113.194.229`) runs 7 VMs and 7 CTs (inventory of 2026-09-27). It retires
-after M9. The owners below are a proposal (open decision 13.10).
+The old lab host (`140.113.194.229`, 7 VMs and 7 CTs on 2026-09-27) keeps running outside carrel.
+Selected guests move to carrel. Everything else stays, including the room-bound services (display
+bridge, HomeKit door, Wi-Fi uplink), the DERP relay and the tailnet subnet router. Which guests
+move, and to which owner, is decided guest by guest (open decision 13.10); the table is the
+starting proposal.
 
-| Guests | Proposed owner | Notes |
+| Guests | Owner if moved | Notes |
 |---|---|---|
 | sandbox 104, kilo 116, vivado 100, agent-noir 105, sensorium-zyx 205 | tenant `zyx1121` | vivado has a 250 GB disk |
 | minecraft 103, kitbash 115 | tenant `zyx1121` | 25565 as a special port or `mc.winlab.tw` as an `srv` domain; `*.kitbash.zyx.tw` as a `delegated` domain in the `zyx.tw` zone |
 | video 114, agent-oai 201, agent-portal 203, dst 204, hams-bridge 206 | a lab services project tenant | `video`, `hams` and `door` names adopted as special domains |
 | sensorium-winlab 202 | infra (`N = 0`) | carrel's own telemetry goes there (section 9.1) |
-| gateway 200 | not moved | its 11 routes become special domains; its internal DNS is not copied (5 of 11 records were stale) |
-| template 9000 | not moved | rebuilt without keys (section 7.2) |
+| gateway 200, template 9000 | stay | the old gateway keeps serving the names of the guests that stay |
 
-1. carrel runs through M8 (operations and backups) on the new site.
-2. What carrel does not host leaves the old host first: the Bluetooth display bridge, the HomeKit
-   door, the WinLab Wi-Fi uplink, the DERP relay, and the tailnet subnet router (open decision
-   13.8).
-3. Low-risk machines move first (sandbox, kilo). For services with names: lower the Cloudflare TTL
-   a day ahead, import, switch each record, and check from outside the campus (check-host or
-   `curl --resolve`), never only from inside.
-4. hams-bridge moves only after the door controller (`140.113.194.254`) is shown to accept
-   connections from the new site's address. Today it is reached inside the same `/27`. The same
-   holds for `door.winlab.tw`: the lab router's port forward to the door relay accepts only
-   `140.113.194.229`, so that rule changes before the name moves.
-5. Each source guest stays stopped on the old host for 14 days as a rollback. Then the old host is
-   emptied; whether it joins the site as a node is open decision 13.9.
+**Two gateways, one zone**: the old gateway keeps serving the names of the guests that stay, and
+carrel serves the names in its database. Each Cloudflare record points at whichever host serves
+it. carrel changes only records it owns; a name moves from the old gateway to carrel only through
+adoption (section 6.10). Both gateways draw on the same `winlab.tw` certificate budget
+(section 6.4).
+
+**Moving one guest**:
+
+1. Lower the Cloudflare TTL of its records a day ahead.
+2. Run `machine_import` with the guest's names and ports attached (section 10.6).
+3. Switch each record and check from outside the campus (check-host or `curl --resolve`), never
+   only from inside.
+4. Keep the source stopped on the old host for 14 days as a rollback.
+
+**Checks before a guest with outside dependencies moves**:
+
+- hams-bridge reaches the door controller (`140.113.194.254`) inside the same `/27` today. It moves
+  only after the controller is shown to accept connections from the new site's address.
+- `door.winlab.tw` passes through the lab router's port forward to the door relay, which accepts
+  only `140.113.194.229`. If its route moves to carrel's gateway, that rule changes first.
+- Guests that talk to each other across the two hosts (minecraft 103 sends telemetry to dst 204
+  today) either move together or switch to public names.
 
 ## 11. Version 1
 
@@ -793,7 +807,8 @@ after M9. The owners below are a proposal (open decision 13.10).
 
 One site, growing to several nodes. VMs and CTs, member and project tenants, quotas and requests,
 SSH, ports, domains, special domains and ports, peering, private networks and several NICs,
-custom images and ISOs, self-rescue, observability, backups, and importing the old host's guests.
+custom images and ISOs, self-rescue, observability, backups, and importing selected guests of the
+old host.
 
 ### 11.2 Not doing in version 1
 
@@ -818,7 +833,7 @@ custom images and ISOs, self-rescue, observability, backups, and importing the o
 | M6 Custom images | A tenant imports a cloud image by URL and checksum and gets a managed machine with an SSH line; another installs Debian from an ISO through `machine_console_url`, gets its reserved address by DHCP, and both files show in `quota_get`; an import URL that points at a private address is refused |
 | M7 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
 | M8 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
-| M9 Import (production only) | Every guest that section 10.7 moves runs on the new site under its owner, its names answer from outside the campus, hams-bridge reaches the door controller, and each source guest stays stopped on the old host for 14 days |
+| M9 Import (production only) | Every guest chosen under section 10.7 runs on the new site under its owner, its names answer from outside the campus, every check of 10.7 that applies to it passes, and its source stays stopped on the old host for 14 days |
 | M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
 
 ## 12. Lessons carried from the old host
@@ -836,24 +851,19 @@ custom images and ISOs, self-rescue, observability, backups, and importing the o
 
 ## 13. Open decisions
 
-1. `vm-users` and `vm-sudoers` already exist in Keycloak with no members. Reuse them as the carrel
-   access groups, or delete them after finding who made them.
+1. Resolved 2026-09-27: carrel ignores `vm-users` and `vm-sudoers`.
 2. Default quota per `lab-member` subgroup and per project. Needs the hardware inventory.
-3. The push channel for admin notifications and alerts: a Telegram bot, email, or the portal.
+3. Resolved 2026-09-27: admin notifications and alerts go by email.
 4. Egress rate limit per tenant.
 5. How `machine_console_log` captures serial output: a QEMU chardev log file, or a capture of the
    Proxmox terminal proxy.
 6. Whether the campus offers IPv6 for the new host. With it, every machine could have a public
    address and port NAT becomes optional.
 7. Where the carrel database lives and how it is backed up before Proxmox Backup Server exists.
-8. Where the services that leave the old host go (section 10.7): the room-bound ones (display
-   bridge, HomeKit door, Wi-Fi uplink), the DERP relay and the tailnet subnet router. All stay
-   outside carrel, and one small device in the lab could hold them. Admins need a path to the
-   admin network either way.
-9. Whether the old host joins the site as a node once it is empty: only if it stands in the same
-   room (section 8.3) and its hardware-bound services have moved out.
-10. The final owners of the old host's guests (section 10.7), in particular the lab services: one
-    project tenant, several, or infra.
+8. How admins reach the new site's admin network: Tailscale on the new node itself, or a route
+   through the old host's tailnet subnet router, which stays where it is (section 10.7).
+9. Resolved 2026-09-27: the old host stays outside carrel and does not join the site.
+10. Which of the old host's guests move, and their owners (section 10.7). Decided guest by guest.
 11. Which DNS zone staging uses (section 10.5). It must not be `winlab.tw`, and its token must not
     reach any production zone.
 
