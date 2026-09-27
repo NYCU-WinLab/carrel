@@ -30,6 +30,8 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
   lab projects.
 - Not a place where admins look inside tenant machines (section 7.7).
 - Not a human web UI. Version 1 has none. Onboarding is the README.
+- Not a home for services tied to hardware or to a room (Bluetooth, Wi-Fi uplinks, USB devices),
+  nor for tailnet infrastructure such as the DERP relay. They live outside carrel (section 10.7).
 
 ### 1.5 Decisions already made
 
@@ -43,6 +45,11 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-24 | Tenants include projects, not only members. Quota requests and member self-rescue are in scope |
 | 2026-09-24 | Images are LTS or stable releases still under vendor security support, at most 3 per distribution |
 | 2026-09-24 | Everything is built fresh on a new Proxmox host. The existing lab host is reference only |
+| 2026-09-27 | Guests of the old host move to carrel through an admin import tool (section 10.6) |
+| 2026-09-27 | Names and ports outside a tenant's own subtree and block are requested by members and approved by admins (section 6.10) |
+| 2026-09-27 | Services bound to hardware or a room, and the DERP relay, stay outside carrel |
+| 2026-09-27 | Tenants get private networks and machines with several NICs (section 6.8) |
+| 2026-09-27 | Tenants may import cloud images and ISOs (section 7.8) |
 
 ## 2. Object model
 
@@ -50,10 +57,14 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 |---|---|---|
 | Site | One Proxmox cluster in one room. Sites never share a corosync ring | `site` slug |
 | Node | One Proxmox host in a site | node name (`pve1`, `pve2`, ...) |
-| Tenant | A member or a project. Owns quota, a network, machines, ports and domains | serial `N`, slug |
+| Tenant | A member or a project. Owns quota, networks, machines, images, ports and domains | serial `N`, slug |
 | Machine | A VM or an unprivileged CT owned by one tenant | VMID |
-| Grant | One allocation against quota: a port, a domain, a peer rule, a snapshot | id |
-| Request | A quota request waiting for an admin | id |
+| Network | A private layer 2 segment owned by one tenant (section 6.8) | VNet id |
+| Image | A cloud image or ISO a tenant imported (section 7.8) | tenant, name |
+| Grant | One allocation: a port, a domain (own or special), a peer rule, a snapshot | id |
+| Request | A quota, domain or port request waiting for an admin (section 5.3) | id |
+| Zone | A DNS zone carrel manages, and the tenants it is open to (section 6.10) | zone name |
+| Source | A Proxmox host that machines are imported from (section 10.6) | host |
 
 The platform database is the single source of truth. Proxmox state, firewall rules, NAT rules,
 DNS records and proxy routes are all derived from it and rebuilt by the reconciler (section 9.2).
@@ -126,20 +137,31 @@ protocol error.
 | | `quota_get` | `tenant` |
 | | `quota_request` | `tenant`, `dimension`, `amount`, `reason`, `until` |
 | | `request_list` | own requests and their state |
-| Catalog | `images_list` | `kind: vm \| ct`; returns version, end of support date, default flag |
+| Catalog | `images_list` | `kind: vm \| ct`; platform images with version, end of support date and default flag, plus the tenant's own images and ISOs |
 | | `sizes_list` | presets `small`, `medium`, `large` |
-| Machines | `machine_create` | `kind`, `name`, `image`, `size` or `cpu` + `memory_mb` + `disk_gb`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `tags[]` |
+| Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
 | | `machine_get`, `machine_list` | state, private address, SSH line, image support status |
 | | `machine_resize` | grow only; disk never shrinks |
 | | `machine_power` | `start \| stop \| shutdown \| reboot` |
 | | `machine_rebuild` | new `image`; keeps address, ports and domains |
 | | `machine_delete` | `confirm: <name>` |
+| | `machine_media` | `machine`, `iso` or `none`; insert or eject an ISO |
+| | `machine_console_url` | `machine`; a single-use browser console link for the owner, valid 15 minutes (section 7.8) |
+| Networks | `network_create` | `name`, `cidr` (for reference only) |
+| | `network_list`, `network_delete` | `network_delete` needs `confirm: <name>` and no attached NIC |
+| | `machine_nic_attach` | `machine`, `network`, `ip` (optional static address through cloud-init) |
+| | `machine_nic_detach` | `machine`, `nic` |
+| Images | `image_import` | `name`, `url`, `sha256`; a cloud image (`qcow2`, `raw`) |
+| | `iso_import` | `name`, `url`, `sha256` |
+| | `image_delete` | `name` |
 | Rescue | `machine_console_log` | read-only serial output (section 7.6) |
 | | `machine_reset_access` | new `ssh_keys[]` through cloud-init, then reboot |
 | Keys | `ssh_key_add`, `ssh_key_list`, `ssh_key_remove` | account keys applied to new machines |
 | Snapshots | `snapshot_create`, `snapshot_list`, `snapshot_rollback`, `snapshot_delete` | count and size against quota |
 | Ingress | `port_open`, `port_close`, `port_list` | `machine`, `port`, `proto: tcp \| udp`; the public port is assigned |
-| | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub`, `target_port` |
+| | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or an owned special domain, `target_port` |
+| | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `machine`, `target_port`, `reason` (section 6.10) |
+| | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
 | Insight | `machine_metrics` | CPU, memory, disk and network from the hypervisor |
 | | `audit_log` | own calls only |
@@ -153,13 +175,15 @@ protocol error.
 
 `machine_create` returns only after SSH answers, and returns the line to paste into
 `~/.ssh/config`. The agent sends the member's public key. The platform never generates or returns
-a private key.
+a private key. Machines installed from an ISO are the exception: they return in state
+`installing` (section 7.8).
 
 ### 4.4 Admin tools
 
 Callable only by `winlab-admin`: `quota_set`, `request_approve`, `request_reject`, `tenant_list`,
 `tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `reconcile_run`, `image_build`,
-`issue_triage` (label, merge a duplicate), `issue_resolve` (`id`, `fixed_in`, `note`).
+`issue_triage` (label, merge a duplicate), `issue_resolve` (`id`, `fixed_in`, `note`),
+`machine_import` and `source_add` (section 10.6), `zone_add` and `zone_list` (section 6.10).
 
 ### 4.5 Skills
 
@@ -176,7 +200,7 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 | `getting-started` | first contact | `whoami`, the use policy, uploading the member's public key, writing `~/.ssh/config` |
 | `choose-machine` | "I need a machine for X" | VM or CT, image, size, `nested_virt`; Docker, OVS and Mininet always get a VM |
 | `sdn-coursework` | SDN and NFV homework | Ubuntu LTS VM with `nested_virt`, Mininet, Open vSwitch and a controller, and the address ranges to avoid inside the VM |
-| `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port |
+| `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port, names outside the tenant's subtree through `domain_request` |
 | `continuous-deployment` | deploy on every push from GitHub or GitLab | a self-hosted runner inside the machine, or an SSH deploy through the tenant's port; tokens and deploy keys stay inside the machine |
 | `nextjs` | a Next.js site or app | Node LTS in a VM sized for `next build` (at least 2 GB), `output: "standalone"` run by systemd, `domain_add` to its port with TLS at the gateway, environment in a `0600` file, database and cache reached through `peer_allow`, deploys through `continuous-deployment` |
 | `docker-host` | run containers | Docker in a VM, compose files, where volumes live, disk sizing |
@@ -184,6 +208,8 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 | `redis` | a cache, queue or session store | Redis in a VM (a cache with persistence off may use a CT), bound to the private address with an ACL user and password, never `port_open` on 6379, `maxmemory` with an eviction policy, AOF `everysec` when the data matters, `vm.overcommit_memory=1` so background saves do not fail |
 | `k3s-cluster` | a lightweight Kubernetes cluster | one server VM and agent VMs in the tenant's `/24`, `swap_mb: 0` on every node, `kubectl` and `k9s` on the server, the kubeconfig reached through an SSH tunnel instead of a public 6443, ingress through `domain_add` to the bundled Traefik |
 | `kubernetes-cluster` | upstream Kubernetes with kubeadm | control plane and worker VMs with at least 2 vCPU and 2 GB each, `swap_mb: 0`, containerd, a CNI with its default pod range, `kubectl` and `k9s`, the same tunnel and ingress rules as `k3s-cluster` |
+| `network-topology` | "build a network with routers and hosts" | private networks with `network_create`, machines with several NICs, a router VM that does NAT for the topology, MTU 1450, addresses chosen inside the tenant |
+| `custom-image` | "I need an OS that is not in the list" | a cloud image first (managed), an ISO only when no cloud image exists, the checksum from the vendor page, `firmware` and `tpm`, the console link, and what an unmanaged machine loses |
 | `team-project` | a project shared by several members | the project tenant, `peer_allow` between machines, who owns what |
 | `rescue` | "I cannot get in" | `machine_console_log`, then `machine_reset_access`, and the host key warning that follows |
 | `quota-and-cleanup` | out of room | idle machines, snapshots to drop, then `quota_request` with a reason |
@@ -276,8 +302,9 @@ search first, read how it was solved, and file only what is new.
 
 ### 5.1 Dimensions
 
-`vcpu`, `memory_mb`, `disk_gb`, `machines`, `ips`, `public_ports`, `domains`, `snapshots`.
-Every dimension exists for member tenants and project tenants alike.
+`vcpu`, `memory_mb`, `disk_gb`, `machines`, `ips`, `public_ports`, `domains`, `snapshots`,
+`networks`, `images_gb`. Every dimension exists for member tenants and project tenants alike.
+Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
 
 ### 5.2 Quota versus admission
 
@@ -293,9 +320,12 @@ Quota is a promise. Admission is physics. They are checked separately.
 
 When admission fails the tool returns `capacity_exhausted` and lists the tenant's idle machines.
 
-### 5.3 Quota requests
+### 5.3 Requests
 
-1. A member calls `quota_request` with a reason and an optional end date.
+Three kinds share one flow: `quota_request` (more of a dimension), `domain_request` and
+`port_request` (special names and ports, section 6.10).
+
+1. A member files a request with a reason. A quota request may carry an end date.
 2. Admins are notified on a push channel (open decision 13.3).
 3. An admin approves or rejects with a tool call. The result appears in the member's next tool
    response and in `request_list`.
@@ -316,7 +346,9 @@ later. Stopping frees memory admission. Nothing is deleted automatically.
 | Tenant network | `10.200.N.0/24` | `10.200.17.0/24` |
 | VNet name | `t` + 3 digits (Proxmox caps VNet ids at 8 characters) | `t017` |
 | Gateway | `.1`, anycast on every node | `10.200.17.1` |
-| Machine addresses | `.10` to `.250`, static, written by cloud-init | `10.200.17.10` |
+| Machine addresses | `.10` to `.250`, static by cloud-init and reserved in carrel's DHCP (section 6.9) | `10.200.17.10` |
+| Primary VNet VNI | `100000 + N` | `100017` |
+| Private networks | VNet `p` + `N` (3 digits) + `k` (2 digits), VNI `200000 + N * 100 + k`, `k` from 1 to 99 | `p01703`, VNI `201703` |
 | VMID | `10000 + N * 100 + i`, at most 100 machines per tenant | `11700` to `11799` |
 | Public ports | `20000 + N * 10`, 10 per tenant | `20170` to `20179` |
 | Domains | `<sub>.<slug>.winlab.tw` | `hw1.zyx1121.winlab.tw` |
@@ -330,14 +362,22 @@ Why these ranges:
   machines: k3s `10.42/16` and `10.43/16`, kubeadm services `10.96.0.0/12`, flannel `10.244/16`,
   Docker `172.17/16`.
 - Ports `20000` to `29999` are below the Linux ephemeral range (`32768` to `60999`), so they never
-  meet the host's own outgoing connections. Admin forwards live elsewhere.
+  meet the host's own outgoing connections. Ports outside the blocks are special (section 6.10).
 - VMIDs are unique across the whole site, so machines can move between nodes.
 
 ### 6.2 Zones
 
-One SDN EVPN zone carries every tenant VNet, even while the site has one node. A simple zone only
-exists on one node, and replacing a zone later means recreating every VNet. The node that holds
-the public address is the exit node and does the SNAT. FRR is installed by the installer.
+Two SDN zones exist from the first host on, even while the site has one node.
+
+- `tenants`, an EVPN zone, carries every tenant's primary network (`tNNN`). Every node is its
+  anycast gateway, and the node that holds the public address is the exit node that does the SNAT.
+  A simple zone only exists on one node, and replacing a zone later means recreating every VNet.
+- `private`, a VXLAN zone, carries private networks (section 6.8): layer 2 across nodes, with no
+  gateway and no routing. The installer keeps its peer list equal to the site's nodes.
+
+FRR is installed by the installer. Both zones encapsulate in VXLAN, which costs 50 bytes, so tenant
+networks run at MTU 1450 unless the underlay carries jumbo frames. Every VM NIC is created with
+`mtu=1`, which makes the guest inherit the bridge MTU; CT NICs get the MTU set explicitly.
 
 ### 6.3 Isolation
 
@@ -347,19 +387,29 @@ Every tenant machine gets the security group of its tenant:
 2. Accept DNS to the infra resolver.
 3. Accept the peer rules granted to it (section 4.3), inserted above the drops.
 4. Drop the rest of `10.200.0.0/16`.
-5. Drop traffic addressed to any node itself. Routing through the anycast gateway still works.
+5. Drop traffic addressed to any node itself, except DHCP (section 6.9). Routing through the
+   anycast gateway still works.
 
-`ipfilter` is on for every tenant NIC, so a tenant cannot take another tenant's address. The
+`ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports
-(`8006`, `3128`, SSH) listen only on the admin network, never on tenant VNets.
+(`8006`, `3128`, SSH) listen only on the admin network, never on tenant VNets. Private network
+NICs are the one exception to filtering (section 6.8).
 
 ### 6.4 Ingress
 
 - **SSH and opened ports**: DNAT on the exit node from the tenant's public port block to the
   machine. The rules are generated from the database.
-- **Domains**: `*.winlab.tw` names point at the exit node. A gateway machine on the infra network
-  runs Caddy with on-demand TLS; its `ask` endpoint is carrel, which answers yes only for domains
-  in the database. Wildcard certificates do not cover two labels, so every name gets its own.
+- **Tenant domains**: registering a tenant creates `*.<slug>.winlab.tw` in Cloudflare (DNS only)
+  pointing at the exit node, and the Caddy gateway on the infra network obtains one wildcard
+  certificate per tenant through the DNS-01 challenge. Caddy routes only names that exist in the
+  database; any other name under the wildcard gets 404.
+- **Why one certificate per tenant**: Let's Encrypt allows 50 new certificates per registered
+  domain per week, shared with every other `winlab.tw` site, the ones on Vercel included. A
+  certificate per name would hit that limit in the first onboarding week. A certificate per tenant
+  keeps new issuance near the tenant count. Only renewals made through ARI are exempt (Let's
+  Encrypt rate limit page, checked 2026-09-27), so the gateway must renew through ARI; even counted
+  renewals of one certificate per tenant stay far below the limit.
+- **Special domains and ports**: section 6.10.
 - **Hairpin**: tenants reaching a public name from inside are sent to the gateway directly.
 
 ### 6.5 Reserved names
@@ -367,14 +417,17 @@ nftables `proxmox-firewall` is used, because VNet level rules need it. Host mana
 A slug may not equal any label that already exists under `winlab.tw` (68 records on 2026-09-24,
 including personal wildcards such as `*.ben` and `*.stanley`), nor the static list: `carrel`,
 `www`, `auth`, `mail`, `admin`, `api`, `mcp`, `status`, `internal`. Registration checks the live
-Cloudflare zone, not a copy.
+Cloudflare zone, not a copy. A special domain that already exists is not refused outright: an admin
+may adopt the record (section 6.10). That covers migrated names and stale records such as
+`afc.winlab.tw`, which on 2026-09-27 still pointed at the old host with no route behind it.
 
 ### 6.6 Egress and abuse
 
 One compromised tenant machine can get the lab's public address blocked by the campus. Version 1:
 
 - Outbound TCP 25 is dropped for tenants.
-- Per-tenant egress rate limit (value in open decision 13.4).
+- Per-tenant egress rate limit, enforced per NIC with the Proxmox `rate` option (value in open
+  decision 13.4).
 - Connection-rate alerts for scanning patterns.
 - An acceptable use policy in the README, accepted on first `whoami`.
 
@@ -382,6 +435,72 @@ One compromised tenant machine can get the lab's public address blocked by the c
 
 The infra resolver answers `<machine>.<slug>.internal` for every machine and forwards the rest.
 Guests get only this resolver, with no public fallback, so internal names always resolve.
+
+### 6.8 Private networks and several NICs
+
+Tenants build their own topologies: isolated layer 2 segments and machines with several NICs, for
+routing, SDN and other network experiments.
+
+- **Primary network**: every machine's `net0` sits on the tenant's primary network. It carries the
+  SSH line, egress and domains, and it cannot be removed. A machine that must stay off the internet
+  brings `net0` down inside the guest.
+- **Private networks**: `network_create` makes a segment in the `private` zone owned by one tenant.
+  It has no gateway, no NAT, no DHCP and no address on any node, so nothing outside the tenant's
+  machines reaches it, the nodes included.
+- **Addresses**: carrel assigns none. `machine_nic_attach` with `ip` writes a static address
+  through cloud-init; without `ip` the NIC is raw layer 2, and bridges, Open vSwitch and VLAN tags
+  inside the guest all work.
+- **Filtering**: private NICs run without the firewall, `ipfilter` or MAC filtering, so bridging
+  and address experiments work. The blast radius is the tenant's own segment. The NIC `rate` limit
+  still applies, so a loop inside a topology cannot flood the node.
+- **Limits**: `networks` is a quota dimension (4 per tenant to start, at most 99). A machine has at
+  most 8 NICs. A network is deleted only when no NIC is attached. Projects own networks like
+  members do; a segment shared by several members belongs to a project tenant.
+- **Internet for a topology**: the tenant runs its own router VM, with `net0` plus private NICs,
+  and does NAT itself. carrel never routes a private network.
+
+### 6.9 DHCP
+
+carrel runs dnsmasq on every node for the primary networks, with reservations only: each machine's
+MAC maps to its assigned address, and there is no dynamic range. Proxmox's built-in SDN DHCP works
+only in simple zones, and three kinds of machine need DHCP: ISO installs (section 7.8), imported
+guests configured for DHCP (section 10.6), and images without cloud-init. Cloud-init machines keep
+their static configuration, which matches the reservation. `ipfilter` still enforces the address,
+so a guest that ignores DHCP cannot take another one.
+
+### 6.10 Special domains and ports
+
+Anything outside a tenant's own subtree (`*.<slug>.winlab.tw`) and port block is special. Members
+request it; admins approve it.
+
+| Kind | Example | DNS | TLS |
+|---|---|---|---|
+| exact | `afc.winlab.tw` | A record to the exit node | one certificate, DNS-01 |
+| wildcard | `*.afc.winlab.tw` | wildcard A record | one wildcard certificate, DNS-01 |
+| delegated | `*.kitbash.zyx.tw`, names two levels deep | wildcard A record | on demand, asking an `ask_url` on the tenant's machine, under a weekly cap |
+| srv | `_minecraft._tcp.mc.winlab.tw` | SRV record to one of the tenant's public ports | none |
+| port | public TCP 25565 | none | none |
+
+1. `domain_request` or `port_request` files a request (section 5.3).
+2. carrel validates it before an admin sees it: the zone is managed and open to this tenant, the
+   name is not reserved and not inside another tenant's subtree, the port is not on the never list.
+3. An admin approves with `request_approve`. A name that already exists in the zone needs
+   `adopt: true`, which replaces the old record.
+4. The approved name or port becomes a grant of the tenant. `domain_add` can later point it at
+   another of the tenant's machines without a new approval. Deleting the machine leaves the grant
+   unattached for 30 days, then it is released.
+
+**Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
+the tenants the zone is open to. `winlab.tw` is open to every tenant; a personal zone such as
+`zyx.tw` can be open to one tenant only. Records are DNS only by default; an admin may turn on the
+Cloudflare proxy for an HTTP special domain.
+
+**Ports that are never granted**: 22, 25, 53, 80, 443, 111, 3128, 8006, the tenant blocks (`20000`
+to `29999`), and any port the nodes themselves use. A protocol that supports SRV records gets an
+`srv` domain on its normal tenant port instead of a scarce well-known port.
+
+**Certificate budget**: `delegated` names mint certificates on demand, so each such grant carries a
+weekly cap, and under `winlab.tw` it counts against the shared limit of section 6.4.
 
 ## 7. Machines
 
@@ -445,6 +564,33 @@ README says exactly that.
 - `qemu-guest-agent` runs with `guest-exec`, `guest-file-*` and `guest-set-user-password` blocked.
 - Every admin action on a tenant machine is audited and visible to the tenant in `audit_log`.
 
+### 7.8 Custom images and ISOs
+
+Tenants may bring their own operating system. Quota and metrics work unchanged, because carrel
+counts vCPU, memory and disk from the machine's Proxmox configuration and reads metrics from the
+hypervisor; nothing depends on software inside the guest. What depends on the guest is management:
+key injection, the SSH check and graceful shutdown.
+
+| Kind | How it arrives | Managed? | What the member gets |
+|---|---|---|---|
+| Cloud image (`qcow2`, `raw`) | `image_import` with `url` and `sha256`; Proxmox downloads it (`download-url`, content `import`) and verifies the checksum | yes when the image carries cloud-init: keys, addresses and the SSH check work as usual | `machine_create` with `image: "tenant:<name>"` |
+| ISO | `iso_import` with `url` and `sha256` (content `iso`) | no | an empty disk with the ISO attached, a browser console for the installer, and the reserved address by DHCP |
+
+- **Unmanaged machines**: `machine_create` returns in state `installing`, without an SSH line.
+  The member installs through `machine_console_url` and ejects the ISO with `machine_media`.
+  carrel marks the machine ready when its SSH port answers. `machine_reset_access` is not
+  available, snapshots are crash-consistent (no guest agent to freeze the file system), and
+  shutdown uses ACPI.
+- **Firmware**: `firmware: bios | uefi` and `tpm: true` for systems that need them, such as
+  Windows 11. The virtio driver ISO can be attached as a second drive. Licences are the tenant's
+  responsibility.
+- **Browser console**: `machine_console_url` returns a single-use link, valid for 15 minutes and
+  only for the owner, to a console proxy that carrel runs in front of the Proxmox VNC console.
+  This proxy is the one new component that custom ISOs need.
+- **Quota**: image and ISO files count against `images_gb`, at most 20 GB per file. A checksum is
+  mandatory, and imports stay private to the tenant.
+- **CTs** keep to the platform images in version 1.
+
 ## 8. Hosts and sites
 
 ### 8.1 The installer
@@ -461,7 +607,7 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
 |---|---|
 | Node names and management addresses | neutral names `pve1`, `pve2`; fixed addresses |
 | Storage | ZFS, same storage id on every node (`local-zfs`), so replication and migration work |
-| Tenant network | EVPN zone (section 6.2) |
+| Tenant networks | EVPN zone for primary networks, VXLAN zone for private networks (section 6.2) |
 | VMIDs and templates | site-unique ranges (section 6.1) |
 | Data model | site then node from day one (section 2) |
 
@@ -497,8 +643,8 @@ so tenants never get it. Machine insides are the tenant's business and are not c
 
 ### 9.2 Reconciler
 
-A loop compares the database with Proxmox, firewall, NAT, DNS and Caddy every 5 minutes and at
-boot. It repairs drift it owns and reports drift it does not understand. `reconcile_run` triggers
+A loop compares the database with Proxmox, firewall, NAT, DHCP, DNS and Caddy every 5 minutes and
+at boot. It repairs drift it owns and reports drift it does not understand. `reconcile_run` triggers
 it on demand.
 
 ### 9.3 Alerts
@@ -545,12 +691,64 @@ through Release Please. Container images, if any, are tagged by git SHA.
 A nested Proxmox VE runs inside a VM on the first host. CI installs carrel into it from scratch on
 every release candidate and runs the acceptance sentences of section 11.3 against it.
 
+### 10.6 Importing machines
+
+`machine_import` (admin only) brings an existing guest into carrel under a tenant.
+
+- **Sources**: a Proxmox host registered with `source_add` (an API token on that host), moved with
+  Proxmox's `qm remote-migrate` or `pct remote-migrate`, which leaves the source stopped as a
+  rollback; or a vzdump archive, restored. Proxmox marks remote migration experimental, so M8
+  proves it on staging first, and the archive path is the fallback.
+- **Plan first**: `dry_run` returns the target VMID and address, disk sizes, the quota it takes,
+  every configuration change, and warnings. The call with `confirm` runs it.
+- **Normalization**: the NIC moves to the tenant's primary network with `firewall=1`, `mtu=1`, the
+  tenant's security group, `ipfilter` and the `rate` limit. The new address goes into cloud-init
+  (`ipconfig0` and the resolver) for VMs, into `net0` for CTs, and into the DHCP reservation for
+  guests that use DHCP. Keys that are not the owner's leave the cloud-init configuration. The CPU
+  type becomes `x86-64-v2-AES` unless the owner asks for `nested_virt`.
+- **Verification**: carrel boots the guest and checks the new address through the guest agent's
+  read-only network report and the SSH port. A guest that fails is marked `needs_owner_fix` with
+  the reason; no admin logs in to fix it (section 7.7).
+- **Grants in the same call**: the admin can attach the guest's existing names and ports as
+  approved special domains and ports (section 6.10), with `adopt: true` for names already in the
+  zone.
+- **What the owner checks**: `machine_get` lists what carrel cannot see inside the guest: keys
+  left in `authorized_keys`, applications bound to old addresses, and resolvers that cloud-init
+  does not rewrite (Alpine).
+
+### 10.7 Moving the old host
+
+The old lab host (`140.113.194.229`) runs 7 VMs and 7 CTs (inventory of 2026-09-27). It retires
+after M8. The owners below are a proposal (open decision 13.10).
+
+| Guests | Proposed owner | Notes |
+|---|---|---|
+| sandbox 104, kilo 116, vivado 100, agent-noir 105, sensorium-zyx 205 | tenant `zyx1121` | vivado has a 250 GB disk |
+| minecraft 103, kitbash 115 | tenant `zyx1121` | 25565 as a special port or `mc.winlab.tw` as an `srv` domain; `*.kitbash.zyx.tw` as a `delegated` domain in the `zyx.tw` zone |
+| video 114, agent-oai 201, agent-portal 203, dst 204, hams-bridge 206 | a lab services project tenant | `video`, `hams` and `door` names adopted as special domains |
+| sensorium-winlab 202 | infra (`N = 0`) | carrel's own telemetry goes there (section 9.1) |
+| gateway 200 | not moved | its 11 routes become special domains; its internal DNS is not copied (5 of 11 records were stale) |
+| template 9000 | not moved | rebuilt without keys (section 7.2) |
+
+1. carrel runs through M7 (operations and backups) on the new site.
+2. What carrel does not host leaves the old host first: the Bluetooth display bridge, the HomeKit
+   door, the WinLab Wi-Fi uplink, the DERP relay, and the tailnet subnet router (open decision
+   13.8).
+3. Low-risk machines move first (sandbox, kilo). For services with names: lower the Cloudflare TTL
+   a day ahead, import, switch each record, and check from outside the campus (check-host or
+   `curl --resolve`), never only from inside.
+4. hams-bridge moves only after the door controller (`140.113.194.254`) is shown to accept
+   connections from the new site's address. Today it is reached inside the same `/27`.
+5. Each source guest stays stopped on the old host for 14 days as a rollback. Then the old host is
+   emptied; whether it joins the site as a node is open decision 13.9.
+
 ## 11. Version 1
 
 ### 11.1 Scope
 
 One site, growing to several nodes. VMs and CTs, member and project tenants, quotas and requests,
-SSH, ports, domains, peering, self-rescue, observability and backups.
+SSH, ports, domains, special domains and ports, peering, private networks and several NICs,
+custom images and ISOs, self-rescue, observability, backups, and importing the old host's guests.
 
 ### 11.2 Not doing in version 1
 
@@ -567,13 +765,16 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 | Milestone | Done when |
 |---|---|
 | M0 Staging | CI installs a nested node from scratch and the install is idempotent: a second run changes nothing |
-| M1 Host baseline | A bare host after `install.sh` has ZFS, the EVPN zone, the infra network, the firewall, the gateway and all templates, and a tenant address cannot reach host port 8006 |
+| M1 Host baseline | A bare host after `install.sh` has ZFS, both SDN zones, the infra network, the firewall, DHCP reservations, the gateway and all templates; a tenant address cannot reach host port 8006, and a guest set to DHCP receives exactly its reserved address |
 | M2 Control plane | A clean agent with only the MCP connector, given "Open a VM on winlab for my SDN homework", signs in through Keycloak and ends with a working SSH session |
-| M3 Access | The same agent opens a port and a domain, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
-| M4 Quotas | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date |
-| M5 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
-| M6 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
-| M7 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
+| M3 Access | The same agent opens a port and a domain under the tenant's wildcard certificate, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
+| M4 Quotas and requests | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date; the project requests `afc.winlab.tw`, an admin approves it with `adopt: true`, and the site answers over HTTPS on that name |
+| M5 Private networks | Two host VMs on two private networks reach each other only through a router VM, a machine of another tenant on the same node captures no frame from those networks, and 1450 byte packets pass end to end |
+| M6 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
+| M7 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
+| M8 Import | Every guest that section 10.7 moves runs on the new site under its owner, its names answer from outside the campus, hams-bridge reaches the door controller, and each source guest stays stopped on the old host for 14 days |
+| M9 Custom images | A tenant imports a cloud image by URL and checksum and gets a managed machine with an SSH line; another installs Debian from an ISO through `machine_console_url`, gets its reserved address by DHCP, and both files show in `quota_get` |
+| M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
 
 ## 12. Lessons carried from the old host
 
@@ -586,6 +787,7 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 | The thin pool was overcommitted with nothing watching it | Disk admission and alerts (sections 5.2, 9.3) |
 | sensorium looked healthy while it stored nothing for a day | Freshness alert (section 9.3) |
 | A public fallback resolver bypassed internal DNS | No fallback (section 6.7) |
+| The old gateway's internal DNS kept 5 stale records of 11, and a Cloudflare record outlived its machine | DNS is derived from the database; old records are adopted or removed (sections 6.7, 6.10) |
 
 ## 13. Open decisions
 
@@ -599,6 +801,12 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 6. Whether the campus offers IPv6 for the new host. With it, every machine could have a public
    address and port NAT becomes optional.
 7. Where the carrel database lives and how it is backed up before Proxmox Backup Server exists.
+8. Where the tailnet subnet router goes when the old host retires. The DERP relay already lives
+   outside carrel and the router could join it; admins need a path to the admin network either way.
+9. Whether the old host joins the site as a node once it is empty: only if it stands in the same
+   room (section 8.3) and its hardware-bound services have moved out.
+10. The final owners of the old host's guests (section 10.7), in particular the lab services: one
+    project tenant, several, or infra.
 
 ## 14. Vocabulary
 
@@ -606,9 +814,15 @@ SSH, ports, domains, peering, self-rescue, observability and backups.
 |---|---|
 | admission | the physical capacity check at create or start, separate from quota |
 | exit node | the node with the public address; does SNAT and DNAT |
-| grant | one allocation against quota: a port, a domain, a peer rule, a snapshot |
+| grant | one allocation: a port, a domain (own or special), a peer rule, a snapshot |
+| managed machine | a machine carrel can configure and check from outside: cloud-init keys and addresses, the SSH check |
+| primary network | the tenant's routed `/24`, where every machine's `net0` sits |
+| private network | a layer 2 segment of one tenant, with no gateway and no filtering (section 6.8) |
 | reconciler | the loop that rebuilds derived state from the database |
 | serial `N` | a tenant's permanent number; addresses, VMIDs and ports derive from it |
 | site | one Proxmox cluster in one room |
 | slug | a tenant's DNS-safe name, fixed at registration |
+| source | a Proxmox host that machines are imported from |
+| special domain, special port | a name or public port outside the tenant's own subtree or block, granted by an admin (section 6.10) |
 | tenant | a member or a project |
+| unmanaged machine | a machine installed from an ISO: quota and metrics work, key injection and the SSH check do not |
