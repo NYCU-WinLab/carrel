@@ -405,7 +405,7 @@ nftables `proxmox-firewall` is used, because VNet level rules need it. Host mana
 NICs are the one exception to filtering (section 6.8).
 
 **Underlay**: VXLAN (UDP 4789) and BGP (TCP 179) are accepted only when all three hold: the packet
-arrives on the inter-node interface (section 8.3), it is addressed to this node's own underlay
+arrives on the underlay interface (the second link or its own NIC, section 8.3), it is addressed to this node's own underlay
 address, and its source is another node's underlay address. On every other interface, the public
 one included, both are dropped, and with a single node they are dropped everywhere. The source
 check alone is not enough: UDP sources can be forged, and Proxmox's SDN guidance sets `rp_filter`
@@ -673,7 +673,8 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
 ### 8.3 Adding nodes
 
 1. Same room, under 5 ms between nodes. A dedicated corosync link plus a second link for
-   redundancy. VXLAN and BGP between nodes use this inter-node network too (section 6.3).
+   redundancy. VXLAN and BGP between nodes use the second link or a NIC of their own, never the
+   dedicated corosync link, because tenants control that traffic (section 6.3).
 2. Same Proxmox VE version on every node.
 3. Two nodes need a QDevice outside the cluster. Three or more nodes can enable HA.
 4. The exit node is a single point for ingress. A second public address as a VIP removes it.
