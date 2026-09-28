@@ -100,6 +100,7 @@ serial space. `N` is never reused, so a stale rule can never point at a new owne
 
 - `N = 0` is the platform itself (infra network).
 - `N = 1` to `254` are tenants. A second site or a larger range is a later change to this section.
+- `N = 255` is the fetch network, used only by the image fetcher (section 7.8).
 
 ### 3.3 Slugs
 
@@ -129,9 +130,9 @@ protocol error.
 - Failure returns one of a closed set of codes: `quota_exceeded` (with the dimension),
   `capacity_exhausted` (with the member's idle machines), `not_found`, `conflict`, `forbidden`,
   `invalid`, `pending_approval`.
-- A call that has to wait for a budget returns `queued` with `ready_at` (section 6.4). The call
-  ends there; carrel keeps the work and finishes it at `ready_at` without another call, and the
-  matching list tool shows it as queued meanwhile.
+- A call that has to wait for a budget or a slot returns `queued` with `ready_at`, an estimate
+  (sections 6.4 and 7.8). The call ends there; carrel keeps the work and finishes it when the
+  budget or slot frees, without another call, and the matching list tool shows it as queued.
 - Every call is written to the audit log with arguments, and values named like secrets are masked
   before the write.
 - `tenant` is optional. It defaults to the member and may name a project the member belongs to.
@@ -158,7 +159,7 @@ protocol error.
 | | `network_list`, `network_delete` | `network_delete` needs `confirm: <name>` and no attached NIC |
 | | `machine_nic_attach` | `machine`, `network`, `ip` (optional static address through cloud-init) |
 | | `machine_nic_detach` | `machine`, `nic` |
-| Images | `image_import` | `name`, `url`, `sha256`; a cloud image (`qcow2`, `raw`) |
+| Images | `image_import` | `name`, `url`, `sha256`, `format: qcow2 \| raw`; a cloud image |
 | | `iso_import` | `name`, `url`, `sha256` |
 | | `image_delete` | `name` |
 | Rescue | `machine_console_log` | read-only serial output (section 7.6) |
@@ -362,6 +363,7 @@ later. Stopping frees memory admission. Nothing is deleted automatically.
 | Public ports | `20000 + N * 10`, 10 per tenant | `20170` to `20179` |
 | Domains | `<sub>.<slug>.winlab.tw` | `hw1.zyx1121.winlab.tw` |
 | Infra | `10.200.0.0/24`, VMIDs `100` to `199` | Caddy gateway machine `10.200.0.2` |
+| Fetch network | `N = 255`: `10.200.255.0/24`, VNet `t255`, no machines; node `k` uses `.10 + k` | `10.200.255.11` on `pve1` |
 | Templates | VMIDs `9000` to `9099`, 20 per node | `9000` to `9019` on `pve1` |
 
 Why these ranges:
@@ -618,17 +620,27 @@ key injection, the SSH check and graceful shutdown.
 
 - **Fetcher**: imports are downloaded by carrel, not by Proxmox's `download-url`, which runs from
   the node's own network (Proxmox guards it with the `Sys.AccessNetwork` privilege for that
-  reason). The fetcher runs on the infra network with egress filtered like a tenant's. It resolves
-  the name once and pins that address; refuses private, loopback, link-local, `100.64.0.0/10` and
-  the site's own addresses; follows at most 3 redirects and checks each one the same way; streams
-  with a hard stop at the smaller of 20 GB and the tenant's remaining `images_gb`; and verifies the
-  checksum. Files live in a dataset with its own hard quota, so a server that lies about size cannot
-  fill a node. At most 2 imports run at a time.
-- **Hand-off to Proxmox**: the fetcher runs `qemu-img info` on every cloud image and refuses any
-  image whose format is not the declared `qcow2` or `raw`, or that names a backing file or a qcow2
-  data file. A backing file that points at another tenant's disk would otherwise copy that disk into
-  the attacker's machine. Accepted files are written straight into the storage as `import` content
-  (ISOs as `iso` content), never as `images`, because Proxmox applies its own untrusted-image checks
+  reason). The fetcher is a host service on every node, confined to its own network namespace
+  whose only interface sits on the fetch network (`N = 255`, section 6.1); the egress rules of
+  section 6.3 are enforced inside that namespace. It writes to a node-local dataset itself, so no
+  guest ever writes to a host. It resolves the name once and pins that address; refuses private,
+  loopback, link-local, `100.64.0.0/10` and the site's own addresses; follows at most 3 redirects
+  and checks each one the same way; streams with a hard stop at the smaller of 20 GB and the
+  tenant's remaining `images_gb`; and verifies the checksum.
+- **Limits**: one import per tenant and 3 per site at a time; more return `queued` (section 4.2).
+  A download that stays under 2 MB/s for 60 seconds, or runs longer than 3 hours, is aborted, so a
+  slow server cannot hold a slot; at 2 MB/s a 20 GB file still finishes inside 3 hours.
+- **Storage**: files live in a ZFS dataset with its own hard quota, so a server that lies about size
+  cannot fill a node. Proxmox sees it as a directory storage with the same id on every node
+  (`carrel-images`, content `import` and `iso`). When a machine lands on a node that lacks its
+  image, carrel copies the verified file from a node that has it, over the nodes' own SSH trust,
+  and checks the checksum again, the way templates keep one copy per node (section 7.2). Copies
+  do not count again against `images_gb`.
+- **Hand-off to Proxmox**: the fetcher runs `qemu-img info`, under CPU and memory limits, on every
+  cloud image and refuses any image whose format differs from the `format` argument, or that names
+  a backing file or a qcow2 data file. A backing file that points at another tenant's disk would otherwise copy that disk into
+  the attacker's machine. Accepted files go into `carrel-images` as `import` content (ISOs as `iso`
+  content), never as `images`, because Proxmox applies its own untrusted-image checks
   only to `import` volumes, and never through the upload API, which spools to `/var/tmp` on the
   root file system first. A machine created from the image counts its virtual size against
   `disk_gb`.
@@ -850,11 +862,11 @@ old host.
 | M3 Access | The same agent opens a port and a domain under the tenant's wildcard certificate, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas and requests | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date; the project requests a name that already exists, such as `afc.winlab.tw` (its twin in the staging zone on staging), an admin approves it with `adopt: true`, and the site answers over HTTPS on that name |
 | M5 Private networks | Two host VMs on two private networks reach each other only through a router VM, a machine of another tenant on the same node captures no frame from those networks, a frame sent from outside with a guessed VNI never arrives, and 1450 byte packets pass end to end |
-| M6 Custom images | A tenant imports a cloud image by URL and checksum and gets a managed machine with an SSH line; another installs Debian from an ISO through `machine_console_url`, gets its reserved address by DHCP, and both files show in `quota_get`; an import URL that points at an internal address such as `10.0.0.0/8` is refused, and so is a qcow2 image with a backing file |
+| M6 Custom images | A tenant imports a cloud image by URL and checksum and gets a managed machine with an SSH line; another installs Debian from an ISO through `machine_console_url`, gets its reserved address by DHCP, and both files show in `quota_get`; an import URL that points at an internal address such as `10.0.0.0/8` is refused, and so is a qcow2 image with a backing file; a second import by the same tenant waits in `queued` until the first ends |
 | M7 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
 | M8 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
 | M9 Import (production only) | Every guest chosen under section 10.7 runs on the new site under its owner, its names answer from outside the campus, every check of 10.7 that applies to it passes, and its source stays stopped on the old host for 14 days |
-| M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes |
+| M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes; with real peers now, a VXLAN or BGP packet carrying a forged node address on the public interface and a frame with a guessed VNI never arrive (the cases of M1 and M5); a machine created on the new node from an image fetched on the first gets a verified copy |
 
 ## 12. Lessons carried from the old host
 
@@ -897,6 +909,7 @@ old host.
 |---|---|
 | admission | the physical capacity check at create or start, separate from quota |
 | exit node | the node with the public address; does SNAT and DNAT |
+| fetch network | the reserved network `N = 255`, used only by the image fetcher's namespace on each node |
 | grant | one allocation: a port, a domain (own or special), a peer rule, a snapshot |
 | managed machine | a machine carrel can configure and check from outside: cloud-init keys and addresses, the SSH check |
 | primary network | the tenant's routed `/24`, where every machine's `net0` sits |
