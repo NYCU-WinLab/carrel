@@ -397,7 +397,11 @@ Every tenant machine gets the security group of its tenant:
 1. Accept to its own `/24`.
 2. Accept DNS to the infra resolver.
 3. Accept the peer rules granted to it (section 4.3), inserted above the drops.
-4. Drop the rest of `10.200.0.0/16`.
+4. Drop every private and internal range: the rest of `10.200.0.0/16`, all of `10.0.0.0/8`,
+   `172.16.0.0/12`, `192.168.0.0/16` and `100.64.0.0/10`, and the admin and underlay networks
+   wherever they are addressed. Exit nodes forward between the real network and the EVPN network,
+   so without this rule a tenant could reach hosts such as Proxmox Backup Server, the QDevice or
+   the old host's guests.
 5. Drop traffic addressed to any node itself, except DHCP (section 6.9). Routing through the
    anycast gateway still works.
 
@@ -620,30 +624,44 @@ key injection, the SSH check and graceful shutdown.
 
 - **Fetcher**: imports are downloaded by carrel, not by Proxmox's `download-url`, which runs from
   the node's own network (Proxmox guards it with the `Sys.AccessNetwork` privilege for that
-  reason). The fetcher is a host service on every node, confined to its own network namespace
-  whose only interface sits on the fetch network (`N = 255`, section 6.1); the egress rules of
-  section 6.3 are enforced inside that namespace. It writes to a node-local dataset itself, so no
-  guest ever writes to a host. It resolves the name once and pins that address; refuses private,
-  loopback, link-local, `100.64.0.0/10` and the site's own addresses; follows at most 3 redirects
-  and checks each one the same way; streams with a hard stop at the smaller of 20 GB and the
-  tenant's remaining `images_gb`; and verifies the checksum.
-- **Limits**: one import per tenant and 3 per site at a time; more return `queued` (section 4.2).
-  A download that stays under 2 MB/s for 60 seconds, or runs longer than 3 hours, is aborted, so a
-  slow server cannot hold a slot; at 2 MB/s a 20 GB file still finishes inside 3 hours.
-- **Storage**: files live in a ZFS dataset with its own hard quota, so a server that lies about size
-  cannot fill a node. Proxmox sees it as a directory storage with the same id on every node
-  (`carrel-images`, content `import` and `iso`). When a machine lands on a node that lacks its
-  image, carrel copies the verified file from a node that has it, over the nodes' own SSH trust,
-  and checks the checksum again, the way templates keep one copy per node (section 7.2). Copies
-  do not count again against `images_gb`.
-- **Hand-off to Proxmox**: the fetcher runs `qemu-img info`, under CPU and memory limits, on every
-  cloud image and refuses any image whose format differs from the `format` argument, or that names
-  a backing file or a qcow2 data file. A backing file that points at another tenant's disk would otherwise copy that disk into
-  the attacker's machine. Accepted files go into `carrel-images` as `import` content (ISOs as `iso`
-  content), never as `images`, because Proxmox applies its own untrusted-image checks
-  only to `import` volumes, and never through the upload API, which spools to `/var/tmp` on the
-  root file system first. A machine created from the image counts its virtual size against
-  `disk_gb`.
+  reason). The fetcher runs on every node as a dedicated unprivileged user with no capabilities,
+  inside its own network namespace whose only interface sits on the fetch network (`N = 255`,
+  section 6.1). Without capabilities it can neither change that namespace's rules nor enter the
+  host's namespace. It resolves the name once and pins that address; refuses private, loopback,
+  link-local, `100.64.0.0/10` and the site's own addresses; follows at most 3 redirects and checks
+  each one the same way; streams into its own staging directory with a hard stop at the smaller of
+  20 GB and the tenant's remaining `images_gb`; and verifies the checksum.
+- **Rules on the host side**: the fetch network's rules sit on the host end of the fetcher's
+  interface, out of the fetcher's reach: the drops of section 6.3, outbound TCP 80 and 443 only,
+  DNS to the infra resolver only, no traffic between fetchers on different nodes, and a bandwidth
+  cap (section 6.6). The host end is named `veth...`, because a Proxmox SDN reload keeps only
+  bridge ports named `tap`, `veth` or `fwpr`; the reconciler checks that it stays attached.
+- **Limits**: one import per tenant and one per member, 3 per site at a time, so a member of
+  several projects cannot take every slot; more return `queued` (section 4.2). A download that
+  stays under 2 MB/s for 60 seconds, or runs longer than 3 hours, is aborted, so a slow server
+  cannot hold a slot; at 2 MB/s a 20 GB file still finishes inside 3 hours.
+- **Storage**: a root step on the node, not the fetcher, checks each accepted file against the
+  checksum in the database and moves it, read-only, from staging into `carrel-images`. That storage
+  is a ZFS dataset with its own hard quota, so a server that lies about size cannot fill a node, and
+  it is set with `is_mountpoint`, so Proxmox never writes into the root file system when the dataset
+  is missing. A full dataset makes new imports on that node return `capacity_exhausted`. When a
+  machine lands on a node that lacks its image, carrel copies the file from a node that has it, over
+  the nodes' own SSH trust, the way templates keep one copy per node (section 7.2); copies do not
+  count again against `images_gb`. The checksum is checked again before every copy and every
+  `import-from`, so a swapped file is caught.
+- **Migration**: Proxmox refuses to migrate a VM whose CD-ROM sits on storage it believes is local.
+  `carrel-images` is therefore marked `shared`, and carrel keeps that promise itself: before any
+  migration, `node_drain` included, it copies every attached ISO to the target node and checks the
+  checksum.
+- **Hand-off to Proxmox**: `qemu-img info` runs as the unprivileged fetcher user, under CPU and
+  memory limits, on every cloud image, and the image is refused if its format differs from the
+  `format` argument or it names a backing file or a qcow2 data file. A backing file that points at
+  another tenant's disk would otherwise copy that disk into the attacker's machine. Files go into
+  `carrel-images` as `import` content (ISOs as `iso` content), never as `images`, because Proxmox
+  applies its own untrusted-image checks only to `import` volumes, so those checks still hold if a
+  compromised fetcher lies about an image. Nothing goes through the upload API, which spools to
+  `/var/tmp` on the root file system first. A machine created from the image counts its virtual
+  size against `disk_gb`.
 - **Unmanaged machines**: `machine_create` returns in state `installing`, without an SSH line.
   The member installs through `machine_console_url` and ejects the ISO with `machine_media`, which
   marks the machine ready. The SSH check is only a hint for these machines, because systems such as
@@ -866,7 +884,7 @@ old host.
 | M7 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
 | M8 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
 | M9 Import (production only) | Every guest chosen under section 10.7 runs on the new site under its owner, its names answer from outside the campus, every check of 10.7 that applies to it passes, and its source stays stopped on the old host for 14 days |
-| M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing, and machines land on both nodes; with real peers now, a VXLAN or BGP packet carrying a forged node address on the public interface and a frame with a guessed VNI never arrive (the cases of M1 and M5); a machine created on the new node from an image fetched on the first gets a verified copy |
+| M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing (a machine with an ISO attached included), and machines land on both nodes; with real peers now, a VXLAN or BGP packet carrying a forged node address on the public interface and a frame with a guessed VNI never arrive (the cases of M1 and M5); a machine created on the new node from an image fetched on the first gets a verified copy |
 
 ## 12. Lessons carried from the old host
 
