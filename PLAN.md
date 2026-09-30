@@ -54,13 +54,16 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-27 | carrel ignores the Keycloak groups `vm-users` and `vm-sudoers` |
 | 2026-09-27 | Admin notifications and alerts go by email |
 | 2026-09-27 | The old host keeps running outside carrel. Selected guests move; the rest stay, with the room-bound services, the DERP relay and the tailnet subnet router (section 10.7) |
+| 2026-09-30 | B09 first node is `carrel01` at `192.168.13.159`; future nodes get distinct names instead of reusing the room name as an SSH alias |
+| 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it |
+| 2026-09-30 | B09 has outbound HTTPS but no allocated public ingress known to the owner. Begin with admin-only private staging; member access needs a separate ingress design |
 
 ## 2. Object model
 
 | Object | What it is | Key |
 |---|---|---|
 | Site | One Proxmox cluster in one room. Sites never share a corosync ring | `site` slug |
-| Node | One Proxmox host in a site | node name (`pve1`, `pve2`, ...) |
+| Node | One Proxmox host in a site | stable node name (`carrel01`, `carrel02`, ...) |
 | Tenant | A member or a project. Owns quota, networks, machines, images, ports and domains | serial `N`, slug |
 | Machine | A VM or an unprivileged CT owned by one tenant | VMID |
 | Network | A private layer 2 segment owned by one tenant (section 6.8) | VNet id |
@@ -363,8 +366,8 @@ later. Stopping frees memory admission. Nothing is deleted automatically.
 | Public ports | `20000 + N * 10`, 10 per tenant | `20170` to `20179` |
 | Domains | `<sub>.<slug>.winlab.tw` | `hw1.zyx1121.winlab.tw` |
 | Infra | `10.200.0.0/24`, VMIDs `100` to `199` | Caddy gateway machine `10.200.0.2` |
-| Fetch network | `N = 255`: `10.200.255.0/24`, VNet `t255`, no machines; node `k` uses `.10 + k` | `10.200.255.11` on `pve1` |
-| Templates | VMIDs `9000` to `9099`, 20 per node | `9000` to `9019` on `pve1` |
+| Fetch network | `N = 255`: `10.200.255.0/24`, VNet `t255`, no machines; node `k` uses `.10 + k` | `10.200.255.11` on `carrel01` |
+| Templates | VMIDs `9000` to `9099`, 20 per node | `9000` to `9019` on `carrel01` |
 
 Why these ranges:
 
@@ -642,10 +645,12 @@ key injection, the SSH check and graceful shutdown.
   cannot hold a slot; at 2 MB/s a 20 GB file still finishes inside 3 hours.
 - **Storage**: a root step on the node, not the fetcher, checks each accepted file against the
   checksum in the database and moves it, read-only, from staging into `carrel-images`. That storage
-  is a ZFS dataset with its own hard quota, so a server that lies about size cannot fill a node, and
-  it is set with `is_mountpoint`, so Proxmox never writes into the root file system when the dataset
-  is missing. A full dataset makes new imports on that node return `capacity_exhausted`. When a
-  machine lands on a node that lacks its image, carrel copies the file from a node that has it, over
+  is a dedicated, size-limited logical volume with its own ext4 filesystem, separate from the root
+  filesystem, so a server that lies about size cannot fill the root filesystem. It is configured
+  with `is_mountpoint`, so Proxmox refuses writes when the volume is not mounted. Physical thin-pool
+  space still needs admission and monitoring (5.2, 9.3); a volume size limit alone does not reserve
+  pool capacity. A full image volume makes new imports on that node return `capacity_exhausted`.
+  When a machine lands on a node that lacks its image, carrel copies it from a node that has it, over
   the nodes' own SSH trust, the way templates keep one copy per node (section 7.2); copies do not
   count again against `images_gb`. The checksum is checked again before every copy and every
   `import-from`, so a swapped file is caught.
@@ -694,8 +699,8 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
 
 | Item | Decision |
 |---|---|
-| Node names and management addresses | neutral names `pve1`, `pve2`; fixed addresses |
-| Storage | ZFS, same storage id on every node (`local-zfs`), so replication and migration work |
+| Node names and management addresses | stable names `carrel01`, `carrel02`; fixed management addresses; site `b09` identifies the room |
+| Storage | LVM-thin on the existing hardware RAID, with storage id `local-lvm` on every B09 node. Migrations copy local disks. No ZFS replication; recovery uses independent backups |
 | Tenant networks | EVPN zone for primary networks, VXLAN zone for private networks (section 6.2) |
 | VMIDs and templates | site-unique ranges (section 6.1) |
 | Data model | site then node from day one (section 2) |
@@ -706,7 +711,10 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
    redundancy. VXLAN and BGP between nodes use the second link or a NIC of their own, never the
    dedicated corosync link, because tenants control that traffic (section 6.3).
 2. Same Proxmox VE version on every node.
-3. Two nodes need a QDevice outside the cluster. Three or more nodes can enable HA.
+3. Two nodes need a QDevice outside the cluster. Three or more nodes can provide quorum for
+   HA, but local LVM-thin alone cannot restart a failed node's guests elsewhere: their disks are
+   still on that failed node. Planned migrations copy disks while the source is healthy; host
+   failure recovery uses independent backups until shared storage is supplied and tested.
 4. The exit node is a single point for ingress. A second public address as a VIP removes it.
 5. `/etc/pve` is shared by the cluster (firewall, SDN, pools, permissions, storage definitions).
    Interfaces, disks, templates and NAT are per node, and the installer keeps them identical.
@@ -875,7 +883,7 @@ old host.
 | Milestone | Done when |
 |---|---|
 | M0 Staging | CI installs a nested node from scratch and the install is idempotent: a second run changes nothing |
-| M1 Host baseline | A bare host after `install.sh` has ZFS, both SDN zones, the infra network, the firewall, DHCP reservations, the gateway and all templates; a tenant address cannot reach host port 8006, a guest set to DHCP receives exactly its reserved address, and a VXLAN or BGP packet is dropped when it comes from an address that is not a node or carries a forged node address on the public interface |
+| M1 Host baseline | A bare host after `install.sh` has the configured LVM-thin storage, both SDN zones, the infra network, the firewall, DHCP reservations, the gateway and all templates; a tenant address cannot reach host port 8006, a guest set to DHCP receives exactly its reserved address, and a VXLAN or BGP packet is dropped when it comes from an address that is not a node or carries a forged node address on the public interface |
 | M2 Control plane | A clean agent with only the MCP connector, given "Open a VM on winlab for my SDN homework", signs in through Keycloak and ends with a working SSH session |
 | M3 Access | The same agent opens a port and a domain under the tenant's wildcard certificate, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas and requests | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date; the project requests a name that already exists, such as `afc.winlab.tw` (its twin in the staging zone on staging), an admin approves it with `adopt: true`, and the site answers over HTTPS on that name |
@@ -910,8 +918,8 @@ old host.
 6. Whether the campus offers IPv6 for the new host. With it, every machine could have a public
    address and port NAT becomes optional.
 7. Where the carrel database lives and how it is backed up before Proxmox Backup Server exists.
-8. How admins reach the new site's admin network: Tailscale on the new node itself, or a route
-   through the old host's tailnet subnet router, which stays where it is (section 10.7).
+8. Resolved 2026-09-30 for B09: admin SSH uses ProxyJump through the B09 jump host. This is
+   separate from member-facing ingress (13.13).
 9. Resolved 2026-09-27: the old host stays outside carrel and does not join the site.
 10. Which of the old host's guests move, and their owners (section 10.7). Decided guest by guest.
 11. Which DNS zone staging uses (section 10.5). It must not be `winlab.tw`, and its token must not
@@ -920,6 +928,12 @@ old host.
     `winlab.tw` zone, the exposure section 6.4 keeps off carrel's gateway, and it stays while both
     gateways run. Keep it, scope it down, or move DNS changes for the old host's names into carrel's
     control plane.
+13. B09 public ingress: obtain an allocated address / upstream port mapping, or design an
+    authenticated external edge. The management ProxyJump account is not a member-access service.
+    Until verified, do not publish tenant domains or return public SSH lines.
+14. B09 additional-node links: only `nic1` (1 Gbit/s) is connected on the first node. Dedicated
+    corosync and underlay links, a QDevice for two nodes, and backup storage must be supplied before
+    expansion.
 
 ## 14. Vocabulary
 
@@ -940,3 +954,53 @@ old host.
 | special domain, special port | a name or public port outside the tenant's own subtree or block, granted by an admin (section 6.10) |
 | tenant | a member or a project |
 | unmanaged machine | a machine installed from an ISO: quota and metrics work, key injection and the SSH check do not |
+
+## 15. B09 rollout record
+
+### 15.1 Inventory (2026-09-30)
+
+- Node `carrel01`, formerly `server-d3`, in site `b09`; SSH alias `carrel01` via `b09-jump`.
+- Management `192.168.13.159/24` on `vmbr0` / `nic1`, gateway and DNS `192.168.13.254`.
+- Dell PowerEdge R640, Xeon Gold 5218, 32 CPU threads, about 187 GiB usable memory.
+- PERC H730P Mini exposes one approximately 1.6 TiB logical disk. Installed storage is
+  ext4 root plus a roughly 1.5 TiB `local-lvm` thin pool. RAID level / physical disk health
+  have not been verified. No guest or template existed at handover.
+- PVE 9.1.1, kernel 6.17.2-1-pve, nested virtualization enabled. No cluster configured.
+- One management NIC connected; the other seven NICs are not connected.
+- Outbound HTTPS was verified against Debian. Public inbound reachability is not assigned
+  or verified. Never infer a usable public endpoint from a NAT egress address.
+
+`sites/b09/carrel01.json` is the non-secret deployment inventory. Run
+`scripts/host-preflight.py --config sites/b09/carrel01.json` on the node to recheck it.
+The report is a prerequisite check, not a claim that M0/M1, isolation or MCP are ready.
+
+### 15.2 Private bootstrap scope
+
+Admin-only nested staging is running as VM `190`, `carrel-stg01`, with 8 vCPU, 24 GiB RAM,
+a 32 GiB boot disk and a 160 GiB data disk (150 GiB usable thin pool). Its
+management subnet is `172.31.255.0/24` on an isolated host bridge, separate from the tenant
+address plan. Access uses the administrator's SSH key and ProxyJump. Staging receives no
+production DNS, Keycloak client secrets or Cloudflare credentials.
+
+The first member-facing deployment still needs an ingress decision (13.13), the control plane,
+and the acceptance checks in 11.3. The old lab host remains outside this deployment.
+
+### 15.3 Verified bootstrap and remaining work
+
+`sites/b09/bootstrap-verification.json` records the checks after rebooting the physical host:
+
+- The physical node and staging VM start automatically, with no failed systemd services.
+- Both PVE HTTPS endpoints validate against their own CA, and both LVM-thin stores are active.
+- Staging starts a nested KVM process and reaches public HTTPS.
+- Staging cannot initiate connections to physical-host SSH or port 8006, through either the
+  staging bridge or the B09 management address, nor to the jump host's private SSH address.
+- Both bootstrap scripts report `changed: []` on a second apply after the reboot.
+
+The physical host remains on PVE 9.1.1 / kernel 6.17.2-1-pve. The separate nested test node uses
+PVE 9.2.21 / kernel 7.0.14-19-pve from the current no-subscription repository. Align the supported
+PVE version before production acceptance; these nodes are not members of the same cluster.
+
+This verifies the private bootstrap only. M0 still needs CI-driven installation from scratch;
+M1 still needs the actual carrel installer, tenant SDN, DHCP, gateway and image templates. The
+MCP control plane and Keycloak integration are not implemented. Public member access remains
+blocked on 13.13. No milestone in 11.3 is marked complete by these bootstrap checks.
