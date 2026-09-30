@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,24 +51,22 @@ def main():
         ],
         capture=True,
     )
-    run(
-        [
-            "tar",
-            "-czf",
-            str(ROOT / ".runtime/control.tar.gz"),
-            "pyproject.toml",
-            "uv.lock",
-            "src",
-            "-C",
-            ".runtime",
-            "requirements.txt",
-        ],
-        capture=True,
-    )
+
+    def source_only(member):
+        # Native macOS tar otherwise adds AppleDouble resource-fork files,
+        # which can then leak into the built wheel as extra Python files.
+        if any(p.startswith(".") or p == "__pycache__" for p in Path(member.name).parts):
+            return None
+        return member
+
+    with tarfile.open(ROOT / ".runtime/control.tar.gz", "w:gz") as archive:
+        for name in ("pyproject.toml", "uv.lock", "src"):
+            archive.add(ROOT / name, arcname=name, filter=source_only)
+        archive.add(ROOT / ".runtime/requirements.txt", arcname="requirements.txt")
     run(["scp", str(ROOT / ".runtime/control.tar.gz"), "carrel01:/var/lib/carrel/control.tar.gz"])
     ssh(
         "carrel01",
-        "pct push 100 /var/lib/carrel/control.tar.gz /tmp/control.tar.gz && pct exec 100 -- sh -ec 'mkdir -p /opt/carrel /etc/carrel /var/lib/carrel; tar -xzf /tmp/control.tar.gz -C /opt/carrel; id carrel >/dev/null 2>&1 || useradd --system --home /var/lib/carrel --shell /usr/sbin/nologin carrel; chown carrel:carrel /var/lib/carrel; python3 -m venv /opt/carrel/venv; /opt/carrel/venv/bin/pip install --disable-pip-version-check --require-hashes -r /opt/carrel/requirements.txt; /opt/carrel/venv/bin/pip install --disable-pip-version-check --no-deps /opt/carrel'",
+        "pct push 100 /var/lib/carrel/control.tar.gz /tmp/control.tar.gz && pct exec 100 -- sh -ec 'mkdir -p /opt/carrel /etc/carrel /var/lib/carrel; rm -rf /opt/carrel/src; tar -xzf /tmp/control.tar.gz -C /opt/carrel; id carrel >/dev/null 2>&1 || useradd --system --home /var/lib/carrel --shell /usr/sbin/nologin carrel; chown carrel:carrel /var/lib/carrel; python3 -m venv /opt/carrel/venv; /opt/carrel/venv/bin/pip install --disable-pip-version-check --require-hashes -r /opt/carrel/requirements.txt; /opt/carrel/venv/bin/pip install --disable-pip-version-check --no-deps /opt/carrel'",
         capture=True,
     )
     ssh(

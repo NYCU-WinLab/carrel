@@ -34,8 +34,9 @@
     "snapshots": "LVM-thin CT snapshot create/delete succeeded; disk quota increased/decreased by reserved disk size.",
     "backup": "Daily database/config/certificate archive on independent old PVE, mode 0600. Restored SQLite copy reports integrity_check=ok.",
     "restart": "Two physical B09 reboots; final reboot recovered MCP, DNS, DHCP reservation, HTTP route, WireGuard and tenant primary networking. A CT explicitly shut down via MCP remained stopped (onboot=0). New CT 207 also rebooted successfully. Final physical boot ID dfee6905-d808-498e-b6c3-8ffb6c49c820.",
-    "cleanup": "Pending.",
-    "disk_growth": "CT disk grew from 10 to 11 GiB; repeating the same resize succeeded without double allocation."
+    "cleanup": "Both disposable Keycloak accounts deleted; 4 guests, 2 private networks, all test domain/port/peer/snapshot grants removed. Test certificate material, OAuth registrations/refresh bindings and local credentials removed. Tenant serials 1 and 2 retired permanently, with their primary address ranges reserved. Safari temporary admin hook restored/cleared. Fresh backup taken after cleanup.",
+    "disk_growth": "CT disk grew from 10 to 11 GiB; repeating the same resize succeeded without double allocation.",
+    "deployed_source": "All installed Python module hashes and both forced-command adapters match the reviewed repository source; deployment excludes macOS resource forks and bytecode."
   },
   "fixed_during_acceptance": [
     "SDN dnsmasq service dependency and actual bridge existence checks.",
