@@ -1082,3 +1082,28 @@ recovery, M4 special domains/ports, M5 multi-node cases, M6 images/ISOs, M7 skil
 notifications/alumni lifecycle, M9 import and M10 cluster expansion remain. TLS renewal exists in
 code; a real expiry/renewal cycle still needs acceptance. The database backup restore check does
 not substitute for a full disaster-recovery exercise. No email was sent during this deployment.
+
+### 15.5 MCP planning and Codex acceptance (2026-10-01)
+
+Member discovery now has 37 tools plus 9 admin-only tools. `whoami` returns all visible tenant
+quotas with remaining amounts, default tenant and capabilities; `catalog_get` combines image/size
+queries. The two previous list names remain callable compatibility aliases. Unsupported image
+quota fields are hidden without deleting their stored values; units are MiB/GiB throughout.
+
+Mutation previews share before/delta/after quota accounting and never reserve resource identifiers.
+Missing SSH keys become planning requirements; actual creates still require valid public keys.
+`deployment_plan` validates aggregate machines, networks and symbolic NIC attachments without
+resource writes. `capacity_get` exposes aggregate hardware and admission policy, with no other
+tenants' guest details. Admission counts all local-lvm volumes and incomplete reservations.
+MCP resources and resource-template discovery return empty lists.
+
+59 automated tests pass. Six fresh native Codex sessions and one resumed prompt use the same
+inputs as the baseline: 48 to 21 MCP calls, no unexpected tool failures, one expected quota
+rejection. These runs perform reads/previews only, with no shell or resource changes. See
+[the evaluation and evidence](docs/evaluations/2026-10-01-codex-mcp.md) for per-case results and
+separate disposable-VM lifecycle acceptance. This does not establish multi-node or full M2
+acceptance; unsupported features remain tracked in the product plan.
+
+The subsequent disposable Ubuntu VM check also found and fixed rollback reporting: disk-only
+snapshot rollback may stop a guest, and now returns/persists its actual power state with an
+explicit start action. See the evaluation for public SSH/HTTPS, rollback and cleanup evidence.

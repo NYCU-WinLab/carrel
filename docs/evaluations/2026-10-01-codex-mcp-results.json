@@ -1,0 +1,2330 @@
+{
+  "date": "2026-10-01",
+  "code_commit": "4b8ed4c",
+  "client": "codex-cli 0.159.2",
+  "model": "gpt-6-astra",
+  "provider": "github_copilot",
+  "reasoning_effort": "xhigh",
+  "sessions": 6,
+  "turns": 7,
+  "total_mcp_calls": 21,
+  "unexpected_failures": 0,
+  "expected_failures": 1,
+  "environment": "Same prompts and public test key as baseline; same user model config and native OAuth; fresh workspaces outside repo; read-only shell; no resource writes allowed by prompts; resume case continues case 02.",
+  "limits": "One final run per case. Latency includes startup and model time. Token counts are cumulative per-turn CLI usage, including cached tokens.",
+  "cases": [
+    {
+      "case": "01_quota",
+      "thread_id": "01a0f30e-852c-7d41-a7ab-f8f35ed41b66",
+      "seconds": 31.8,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 83879,
+        "cached_input_tokens": 72504,
+        "cache_write_input_tokens": 11363,
+        "output_tokens": 618,
+        "reasoning_output_tokens": 166
+      },
+      "prompt": "幫我看 WinLab 的個人和專案資源配額，各用了多少、還剩多少？\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "username": "zyx1121",
+            "admin": false,
+            "default_tenant": "zyx1121",
+            "tenants": [
+              {
+                "slug": "zyx1121",
+                "kind": "personal",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              },
+              {
+                "slug": "iii-edge-ai",
+                "kind": "project",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              }
+            ],
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        }
+      ],
+      "final": "已查詢 WinLab：個人 **zyx1121** 與專案 **iii-edge-ai** 皆啟用，所有資源使用量均為 **0**。\n\n兩者配額相同，以下為**各自配額，非合計**：\n\n| 資源 | 已用 | 上限 | 剩餘 |\n|---|---:|---:|---:|\n| vCPU | 0 | 8 | 8 |\n| 記憶體 | 0 | 16 GiB | 16 GiB |\n| 磁碟 | 0 | 100 GiB | 100 GiB |\n| 機器 | 0 | 4 | 4 |\n| IP | 0 | 4 | 4 |\n| 公開連接埠 | 0 | 10 | 10 |\n| 網域 | 0 | 10 | 10 |\n| 私有網路 | 0 | 4 | 4 |\n| 快照 | 0 | 4 | 4 |\n\n本次僅呼叫 `whoami` 查詢，未執行資源變更、配額申請或 SSH key 操作。"
+    },
+    {
+      "case": "02_create_no_key",
+      "thread_id": "01a0f30e-89b5-7430-9d03-369174f8fcb8",
+      "seconds": 48.8,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 136072,
+        "cached_input_tokens": 121874,
+        "cache_write_input_tokens": 14180,
+        "output_tokens": 678,
+        "reasoning_output_tokens": 136
+      },
+      "prompt": "幫我在 WinLab 開一台 Ubuntu 跑 Docker，先預演，不要真的建立。\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "username": "zyx1121",
+            "admin": false,
+            "default_tenant": "zyx1121",
+            "tenants": [
+              {
+                "slug": "zyx1121",
+                "kind": "personal",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              },
+              {
+                "slug": "iii-edge-ai",
+                "kind": "project",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              }
+            ],
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "catalog_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "images": [
+              {
+                "name": "debian-13",
+                "kind": "vm",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "debian-13",
+                "kind": "ct",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "vm",
+                "default": false,
+                "support_until": "2029-04-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "ct",
+                "default": false,
+                "support_until": "2029-04-30"
+              }
+            ],
+            "sizes": {
+              "small": {
+                "cpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20
+              },
+              "medium": {
+                "cpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40
+              },
+              "large": {
+                "cpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 80
+              }
+            },
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "capacity_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "capacity": {
+              "checked_at": "2026-09-30T16:03:58.280848+00:00",
+              "scope": "carrel01; shared with infrastructure and other tenants",
+              "units": {
+                "memory": "GiB",
+                "disk": "GiB",
+                "cpu_utilization": "fraction"
+              },
+              "physical": {
+                "cpu": {
+                  "logical_cpus": 32,
+                  "cores": 16,
+                  "utilization": 0
+                },
+                "memory": {
+                  "total": 187.34125900268555,
+                  "used": 6.357074737548828,
+                  "free": 180.98418426513672
+                },
+                "disk": {
+                  "storage": "local-lvm",
+                  "total": 1522.9140625,
+                  "used": 12.031021093018353,
+                  "free": 1510.8830414069816
+                }
+              },
+              "allocatable": {
+                "vcpu": {
+                  "limit": 128,
+                  "committed": 12,
+                  "remaining": 116
+                },
+                "memory_gib": {
+                  "limit": 161.407133102417,
+                  "committed": 26.5,
+                  "remaining": 134.907133102417
+                },
+                "disk_gib": {
+                  "limit": 2284.37109375,
+                  "committed": 236.01171875,
+                  "remaining": 2048.359375
+                }
+              },
+              "policy": {
+                "cpu_overcommit": 4,
+                "memory_reserve_gib": 8,
+                "memory_fraction": 0.9,
+                "disk_overcommit": 1.5,
+                "disk_usage_ceiling": 0.8,
+                "storage_admission_blocked": false,
+                "disk_accounting": "all_local_lvm_volumes",
+                "cpu_memory_accounting": "running guests plus pending reservations",
+                "tenant_quotas_apply_separately": true,
+                "reserves_capacity": false
+              },
+              "gpu": {
+                "allocation_supported": false,
+                "inventory": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "ubuntu-docker",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "size": "small",
+            "packages": [
+              "docker.io"
+            ],
+            "runcmd": [
+              [
+                "systemctl",
+                "enable",
+                "--now",
+                "docker"
+              ]
+            ],
+            "dry_run": true
+          },
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "machine": {
+              "name": "ubuntu-docker",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "cpu": 2,
+              "memory_mb": 2048,
+              "disk_gb": 20,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "docker.io"
+              ],
+              "state": "planned",
+              "reserved": false,
+              "requirements": [
+                "ssh_public_key"
+              ]
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 6,
+                "memory_mb": 14336,
+                "disk_gb": 80,
+                "machines": 3,
+                "ips": 3,
+                "public_ports": 9,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "admission": {
+              "accepted": true,
+              "checked_at": "2026-09-30T16:04:13.109078+00:00",
+              "reserved": false
+            },
+            "requirements": [
+              "ssh_public_key"
+            ],
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "connection": {
+              "available_after": "create",
+              "public_ssh": true
+            },
+            "quota_before": {
+              "used": {
+                "vcpu": 0,
+                "memory_mb": 0,
+                "disk_gb": 0,
+                "machines": 0,
+                "ips": 0,
+                "public_ports": 0,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "delta": {
+              "vcpu": 2,
+              "memory_mb": 2048,
+              "disk_gb": 20,
+              "machines": 1,
+              "ips": 1,
+              "public_ports": 1
+            },
+            "dry_run": true,
+            "state": "planned",
+            "reserved": false,
+            "resource_changes": false,
+            "ready_to_apply": false
+          }
+        }
+      ],
+      "final": "已完成 dry-run，配額與容量檢查通過。\n\n- 租戶：`zyx1121`；名稱：`ubuntu-docker`\n- Ubuntu 24.04 VM：2 vCPU、2 GiB RAM、20 GiB 磁碟\n- 已納入安裝 `docker.io` 與啟動 Docker 的設定；尚未實際執行或驗證。\n- 正式建立仍缺 SSH 公鑰；本次未新增金鑰或申請 quota。\n\n工具確認 `resource_changes=false`、`reserved=false`，未建立或變更遠端資源。"
+    },
+    {
+      "case": "03_project_vm",
+      "thread_id": "01a0f30e-8e47-72e1-a037-28084859b11b",
+      "seconds": 52.5,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 181636,
+        "cached_input_tokens": 162521,
+        "cache_write_input_tokens": 19094,
+        "output_tokens": 729,
+        "reasoning_output_tokens": 59
+      },
+      "prompt": "幫我在 iii-edge-ai 專案開一台 Ubuntu 24.04 跑 Docker，名稱 eval-docker，4 vCPU、8 GiB RAM、40 GiB 磁碟。請實際預演後告訴我能不能開，不要真的建立。這把是本次測試用 SSH 公鑰：<ephemeral Ed25519 public key>\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "username": "zyx1121",
+            "admin": false,
+            "default_tenant": "zyx1121",
+            "tenants": [
+              {
+                "slug": "zyx1121",
+                "kind": "personal",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              },
+              {
+                "slug": "iii-edge-ai",
+                "kind": "project",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              }
+            ],
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "capacity_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "capacity": {
+              "checked_at": "2026-09-30T16:04:02.809662+00:00",
+              "scope": "carrel01; shared with infrastructure and other tenants",
+              "units": {
+                "memory": "GiB",
+                "disk": "GiB",
+                "cpu_utilization": "fraction"
+              },
+              "physical": {
+                "cpu": {
+                  "logical_cpus": 32,
+                  "cores": 16,
+                  "utilization": 0
+                },
+                "memory": {
+                  "total": 187.34125900268555,
+                  "used": 6.5326995849609375,
+                  "free": 180.8085594177246
+                },
+                "disk": {
+                  "storage": "local-lvm",
+                  "total": 1522.9140625,
+                  "used": 12.031021093018353,
+                  "free": 1510.8830414069816
+                }
+              },
+              "allocatable": {
+                "vcpu": {
+                  "limit": 128,
+                  "committed": 12,
+                  "remaining": 116
+                },
+                "memory_gib": {
+                  "limit": 161.407133102417,
+                  "committed": 26.5,
+                  "remaining": 134.907133102417
+                },
+                "disk_gib": {
+                  "limit": 2284.37109375,
+                  "committed": 236.01171875,
+                  "remaining": 2048.359375
+                }
+              },
+              "policy": {
+                "cpu_overcommit": 4,
+                "memory_reserve_gib": 8,
+                "memory_fraction": 0.9,
+                "disk_overcommit": 1.5,
+                "disk_usage_ceiling": 0.8,
+                "storage_admission_blocked": false,
+                "disk_accounting": "all_local_lvm_volumes",
+                "cpu_memory_accounting": "running guests plus pending reservations",
+                "tenant_quotas_apply_separately": true,
+                "reserves_capacity": false
+              },
+              "gpu": {
+                "allocation_supported": false,
+                "inventory": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "tool": "catalog_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "images": [
+              {
+                "name": "debian-13",
+                "kind": "vm",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "debian-13",
+                "kind": "ct",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "vm",
+                "default": false,
+                "support_until": "2029-04-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "ct",
+                "default": false,
+                "support_until": "2029-04-30"
+              }
+            ],
+            "sizes": {
+              "small": {
+                "cpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20
+              },
+              "medium": {
+                "cpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40
+              },
+              "large": {
+                "cpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 80
+              }
+            },
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "name": "eval-docker",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "cpu": 4,
+            "memory_mb": 8192,
+            "disk_gb": 40,
+            "packages": [
+              "docker.io"
+            ],
+            "runcmd": [
+              [
+                "systemctl",
+                "enable",
+                "--now",
+                "docker"
+              ]
+            ],
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true
+          },
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "machine": {
+              "name": "eval-docker",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "cpu": 4,
+              "memory_mb": 8192,
+              "disk_gb": 40,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "docker.io"
+              ],
+              "state": "planned",
+              "reserved": false,
+              "requirements": []
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 60,
+                "machines": 3,
+                "ips": 3,
+                "public_ports": 9,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "admission": {
+              "accepted": true,
+              "checked_at": "2026-09-30T16:04:17.600863+00:00",
+              "reserved": false
+            },
+            "requirements": [],
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "connection": {
+              "available_after": "create",
+              "public_ssh": true
+            },
+            "quota_before": {
+              "used": {
+                "vcpu": 0,
+                "memory_mb": 0,
+                "disk_gb": 0,
+                "machines": 0,
+                "ips": 0,
+                "public_ports": 0,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "delta": {
+              "vcpu": 4,
+              "memory_mb": 8192,
+              "disk_gb": 40,
+              "machines": 1,
+              "ips": 1,
+              "public_ports": 1
+            },
+            "dry_run": true,
+            "state": "planned",
+            "reserved": false,
+            "resource_changes": false,
+            "ready_to_apply": true
+          }
+        }
+      ],
+      "final": "可以開，已實際執行 `dry_run=true`，配額與主機容量檢查皆通過，回傳 `ready_to_apply=true`。\n\n- 專案：`iii-edge-ai`；名稱：`eval-docker`\n- Ubuntu 24.04 VM，4 vCPU、8 GiB RAM、40 GiB 磁碟\n- 預演包含安裝並啟用 Docker，公鑰直接帶入，未新增至金鑰庫\n\n工具確認 `resource_changes=false`、未保留資源；未實際建立，也未提出 quota 申請。此預演不驗證實際開機或 Docker 執行結果。"
+    },
+    {
+      "case": "04_quota_exceeded",
+      "thread_id": "01a0f30f-6066-74e3-b8cf-23c56259cf00",
+      "seconds": 47.8,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 145026,
+        "cached_input_tokens": 129729,
+        "cache_write_input_tokens": 15279,
+        "output_tokens": 860,
+        "reasoning_output_tokens": 178
+      },
+      "prompt": "我想在個人空間開 eval-big，16 vCPU、32 GiB RAM、100 GiB 磁碟，用 Ubuntu 24.04。先實際預演看看可不可行，不要真的建立或送額度申請。SSH 公鑰：<ephemeral Ed25519 public key>\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "username": "zyx1121",
+            "admin": false,
+            "default_tenant": "zyx1121",
+            "tenants": [
+              {
+                "slug": "zyx1121",
+                "kind": "personal",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              },
+              {
+                "slug": "iii-edge-ai",
+                "kind": "project",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              }
+            ],
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "capacity_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "capacity": {
+              "checked_at": "2026-09-30T16:04:57.898529+00:00",
+              "scope": "carrel01; shared with infrastructure and other tenants",
+              "units": {
+                "memory": "GiB",
+                "disk": "GiB",
+                "cpu_utilization": "fraction"
+              },
+              "physical": {
+                "cpu": {
+                  "logical_cpus": 32,
+                  "cores": 16,
+                  "utilization": 0
+                },
+                "memory": {
+                  "total": 187.34125900268555,
+                  "used": 6.610404968261719,
+                  "free": 180.73085403442383
+                },
+                "disk": {
+                  "storage": "local-lvm",
+                  "total": 1522.9140625,
+                  "used": 12.031021093018353,
+                  "free": 1510.8830414069816
+                }
+              },
+              "allocatable": {
+                "vcpu": {
+                  "limit": 128,
+                  "committed": 12,
+                  "remaining": 116
+                },
+                "memory_gib": {
+                  "limit": 161.407133102417,
+                  "committed": 26.5,
+                  "remaining": 134.907133102417
+                },
+                "disk_gib": {
+                  "limit": 2284.37109375,
+                  "committed": 236.01171875,
+                  "remaining": 2048.359375
+                }
+              },
+              "policy": {
+                "cpu_overcommit": 4,
+                "memory_reserve_gib": 8,
+                "memory_fraction": 0.9,
+                "disk_overcommit": 1.5,
+                "disk_usage_ceiling": 0.8,
+                "storage_admission_blocked": false,
+                "disk_accounting": "all_local_lvm_volumes",
+                "cpu_memory_accounting": "running guests plus pending reservations",
+                "tenant_quotas_apply_separately": true,
+                "reserves_capacity": false
+              },
+              "gpu": {
+                "allocation_supported": false,
+                "inventory": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "tool": "catalog_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "images": [
+              {
+                "name": "debian-13",
+                "kind": "vm",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "debian-13",
+                "kind": "ct",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "vm",
+                "default": false,
+                "support_until": "2029-04-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "ct",
+                "default": false,
+                "support_until": "2029-04-30"
+              }
+            ],
+            "sizes": {
+              "small": {
+                "cpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20
+              },
+              "medium": {
+                "cpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40
+              },
+              "large": {
+                "cpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 80
+              }
+            },
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "eval-big",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "cpu": 16,
+            "memory_mb": 32768,
+            "disk_gb": 100,
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true
+          },
+          "status": "failed",
+          "result": {
+            "ok": false,
+            "error": {
+              "code": "quota_exceeded",
+              "message": "Tenant quota would be exceeded",
+              "dimension": "vcpu",
+              "used": 16,
+              "limit": 8,
+              "violations": [
+                {
+                  "dimension": "vcpu",
+                  "used": 16,
+                  "limit": 8
+                },
+                {
+                  "dimension": "memory_mb",
+                  "used": 32768,
+                  "limit": 16384
+                }
+              ],
+              "quota_after": {
+                "used": {
+                  "vcpu": 16,
+                  "memory_mb": 32768,
+                  "disk_gb": 100,
+                  "machines": 1,
+                  "ips": 1,
+                  "public_ports": 1,
+                  "domains": 0,
+                  "networks": 0,
+                  "snapshots": 0
+                },
+                "limit": {
+                  "vcpu": 8,
+                  "memory_mb": 16384,
+                  "disk_gb": 100,
+                  "machines": 4,
+                  "ips": 4,
+                  "public_ports": 10,
+                  "domains": 10,
+                  "networks": 4,
+                  "snapshots": 4
+                },
+                "remaining": {
+                  "vcpu": -8,
+                  "memory_mb": -16384,
+                  "disk_gb": 0,
+                  "machines": 3,
+                  "ips": 3,
+                  "public_ports": 9,
+                  "domains": 10,
+                  "networks": 4,
+                  "snapshots": 4
+                },
+                "units": {
+                  "cpu": "vCPU",
+                  "vcpu": "vCPU",
+                  "memory_mb": "MiB",
+                  "swap_mb": "MiB",
+                  "disk_gb": "GiB"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "final": "已實際執行 `eval-big` 的 dry-run，結果為 **`quota_exceeded`，目前無法建立**。\n\n個人空間 `zyx1121` 的剩餘額度：\n\n| 資源 | 需求 | 剩餘額度 |\n|---|---:|---:|\n| vCPU | 16 | 8 |\n| RAM | 32 GiB | 16 GiB |\n| 磁碟 | 100 GiB | 100 GiB |\n\nUbuntu 24.04 可用，共享主機容量充足；阻礙是個人 CPU、RAM 額度。\n\n未建立或變更資源、未送額度申請、未新增 SSH key；僅查詢與預演（工具會記錄稽核）。"
+    },
+    {
+      "case": "05_mininet",
+      "thread_id": "01a0f30f-64fd-7f63-b11d-b4d50fc4620a",
+      "seconds": 61.7,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 116685,
+        "cached_input_tokens": 101954,
+        "cache_write_input_tokens": 14716,
+        "output_tokens": 1732,
+        "reasoning_output_tokens": 708
+      },
+      "prompt": "我想做 Mininet 加 Open vSwitch 的 SDN 實驗，打算在 WinLab 開兩台 Ubuntu 虛擬機並接一條私人網路，放在 iii-edge-ai 專案。幫我選規格並預演，預演辦不到的步驟請說清楚，不要真的建立。SSH 公鑰：<ephemeral Ed25519 public key>\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "username": "zyx1121",
+            "admin": false,
+            "default_tenant": "zyx1121",
+            "tenants": [
+              {
+                "slug": "zyx1121",
+                "kind": "personal",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              },
+              {
+                "slug": "iii-edge-ai",
+                "kind": "project",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              }
+            ],
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "catalog_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "images": [
+              {
+                "name": "debian-13",
+                "kind": "vm",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "debian-13",
+                "kind": "ct",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "vm",
+                "default": false,
+                "support_until": "2029-04-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "ct",
+                "default": false,
+                "support_until": "2029-04-30"
+              }
+            ],
+            "sizes": {
+              "small": {
+                "cpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20
+              },
+              "medium": {
+                "cpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40
+              },
+              "large": {
+                "cpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 80
+              }
+            },
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "capacity_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "capacity": {
+              "checked_at": "2026-09-30T16:04:48.893827+00:00",
+              "scope": "carrel01; shared with infrastructure and other tenants",
+              "units": {
+                "memory": "GiB",
+                "disk": "GiB",
+                "cpu_utilization": "fraction"
+              },
+              "physical": {
+                "cpu": {
+                  "logical_cpus": 32,
+                  "cores": 16,
+                  "utilization": 0
+                },
+                "memory": {
+                  "total": 187.34125900268555,
+                  "used": 6.350368499755859,
+                  "free": 180.9908905029297
+                },
+                "disk": {
+                  "storage": "local-lvm",
+                  "total": 1522.9140625,
+                  "used": 12.031021093018353,
+                  "free": 1510.8830414069816
+                }
+              },
+              "allocatable": {
+                "vcpu": {
+                  "limit": 128,
+                  "committed": 12,
+                  "remaining": 116
+                },
+                "memory_gib": {
+                  "limit": 161.407133102417,
+                  "committed": 26.5,
+                  "remaining": 134.907133102417
+                },
+                "disk_gib": {
+                  "limit": 2284.37109375,
+                  "committed": 236.01171875,
+                  "remaining": 2048.359375
+                }
+              },
+              "policy": {
+                "cpu_overcommit": 4,
+                "memory_reserve_gib": 8,
+                "memory_fraction": 0.9,
+                "disk_overcommit": 1.5,
+                "disk_usage_ceiling": 0.8,
+                "storage_admission_blocked": false,
+                "disk_accounting": "all_local_lvm_volumes",
+                "cpu_memory_accounting": "running guests plus pending reservations",
+                "tenant_quotas_apply_separately": true,
+                "reserves_capacity": false
+              },
+              "gpu": {
+                "allocation_supported": false,
+                "inventory": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "tool": "deployment_plan",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "machines": [
+              {
+                "name": "sdn-mininet-01",
+                "kind": "vm",
+                "image": "ubuntu-24.04",
+                "cpu": 2,
+                "memory_mb": 4096,
+                "disk_gb": 30,
+                "nested_virt": false,
+                "packages": [
+                  "mininet",
+                  "openvswitch-switch",
+                  "iperf3",
+                  "tcpdump",
+                  "python3-venv"
+                ],
+                "ssh_keys": [
+                  "<ephemeral Ed25519 public key>"
+                ]
+              },
+              {
+                "name": "sdn-mininet-02",
+                "kind": "vm",
+                "image": "ubuntu-24.04",
+                "cpu": 2,
+                "memory_mb": 4096,
+                "disk_gb": 30,
+                "nested_virt": false,
+                "packages": [
+                  "mininet",
+                  "openvswitch-switch",
+                  "iperf3",
+                  "tcpdump",
+                  "python3-venv"
+                ],
+                "ssh_keys": [
+                  "<ephemeral Ed25519 public key>"
+                ]
+              }
+            ],
+            "networks": [
+              {
+                "name": "sdn-lab-net",
+                "cidr": "10.77.0.0/24"
+              }
+            ],
+            "attachments": [
+              {
+                "machine": "sdn-mininet-01",
+                "network": "sdn-lab-net"
+              },
+              {
+                "machine": "sdn-mininet-02",
+                "network": "sdn-lab-net"
+              }
+            ]
+          },
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "machines": [
+              {
+                "name": "sdn-mininet-01",
+                "kind": "vm",
+                "image": "ubuntu-24.04",
+                "cpu": 2,
+                "memory_mb": 4096,
+                "disk_gb": 30,
+                "nested_virt": false,
+                "swap_mb": 4096,
+                "packages": [
+                  "mininet",
+                  "openvswitch-switch",
+                  "iperf3",
+                  "tcpdump",
+                  "python3-venv"
+                ],
+                "state": "planned",
+                "reserved": false,
+                "requirements": []
+              },
+              {
+                "name": "sdn-mininet-02",
+                "kind": "vm",
+                "image": "ubuntu-24.04",
+                "cpu": 2,
+                "memory_mb": 4096,
+                "disk_gb": 30,
+                "nested_virt": false,
+                "swap_mb": 4096,
+                "packages": [
+                  "mininet",
+                  "openvswitch-switch",
+                  "iperf3",
+                  "tcpdump",
+                  "python3-venv"
+                ],
+                "state": "planned",
+                "reserved": false,
+                "requirements": []
+              }
+            ],
+            "networks": [
+              {
+                "name": "sdn-lab-net",
+                "cidr": "10.77.0.0/24",
+                "mtu": 1450,
+                "state": "planned"
+              }
+            ],
+            "attachments": [
+              {
+                "machine": "sdn-mininet-01",
+                "network": "sdn-lab-net",
+                "nic": 1,
+                "state": "planned"
+              },
+              {
+                "machine": "sdn-mininet-02",
+                "network": "sdn-lab-net",
+                "nic": 1,
+                "state": "planned"
+              }
+            ],
+            "quota_after": {
+              "used": {
+                "vcpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 60,
+                "machines": 2,
+                "ips": 2,
+                "public_ports": 2,
+                "domains": 0,
+                "networks": 1,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40,
+                "machines": 2,
+                "ips": 2,
+                "public_ports": 8,
+                "domains": 10,
+                "networks": 3,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "admission": {
+              "accepted": true,
+              "checked_at": "2026-09-30T16:05:07.985786+00:00",
+              "reserved": false
+            },
+            "requirements": [],
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "apply_order": [
+              "network_create",
+              "machine_create",
+              "machine_nic_attach"
+            ],
+            "limitations": [
+              "No IDs, addresses or ports are reserved; apply rechecks capacity and quota.",
+              "Guest boot, package commands and SSH connectivity are checked only after creation.",
+              "Private L2 NICs require guest IP configuration; no DHCP or gateway."
+            ],
+            "quota_before": {
+              "used": {
+                "vcpu": 0,
+                "memory_mb": 0,
+                "disk_gb": 0,
+                "machines": 0,
+                "ips": 0,
+                "public_ports": 0,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "delta": {
+              "vcpu": 4,
+              "memory_mb": 8192,
+              "disk_gb": 60,
+              "machines": 2,
+              "ips": 2,
+              "public_ports": 2,
+              "networks": 1
+            },
+            "dry_run": true,
+            "state": "planned",
+            "reserved": false,
+            "resource_changes": false,
+            "ready_to_apply": true
+          }
+        }
+      ],
+      "final": "已在 **`iii-edge-ai` 完成 dry-run，預演通過**：配額、主機容量及兩台 VM 的私網網卡配置皆可行。\n\n- **VM**：`sdn-mininet-01`、`sdn-mininet-02`，各 Ubuntu 24.04、2 vCPU、4 GiB RAM、30 GiB 磁碟，適合小型實驗；不需巢狀虛擬化。\n- **軟體**：預計安裝 Mininet、Open vSwitch、iperf3、tcpdump、python3-venv。\n- **私網**：`sdn-lab-net`，`10.77.0.0/24`、MTU 1450，兩台各接一張網卡。無 DHCP／閘道；建議日後手動設定 `.11/24`、`.12/24`。\n- **預計用量**：4 vCPU、8 GiB RAM、60 GiB 磁碟、2 VM、1 私網，另計 2 IP、2 公開連接埠；均在配額內。\n\n**預演無法驗證**：VM 開機、套件安裝、SSH 登入、客體 IP 設定、OVS／Mininet 執行與跨機連通測試；這些必須建立後才能測試。\n\n工具回報 `resource_changes=false`、未預留資源。公鑰僅隨預演傳入，未新增 SSH key；未申請 quota，僅留下工具稽核紀錄。"
+    },
+    {
+      "case": "06_capacity_gpu",
+      "thread_id": "01a0f30f-6966-7df0-b59f-db47c050a4db",
+      "seconds": 41.9,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 110639,
+        "cached_input_tokens": 97650,
+        "cache_write_input_tokens": 12974,
+        "output_tokens": 875,
+        "reasoning_output_tokens": 315
+      },
+      "prompt": "WinLab 現在還剩多少實體 CPU、RAM、磁碟？有沒有 GPU 可以跑 PyTorch？請查目前能取得的即時資料，查不到的就標明，先不要建立機器。\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "username": "zyx1121",
+            "admin": false,
+            "default_tenant": "zyx1121",
+            "tenants": [
+              {
+                "slug": "zyx1121",
+                "kind": "personal",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              },
+              {
+                "slug": "iii-edge-ai",
+                "kind": "project",
+                "status": "active",
+                "quota": {
+                  "used": {
+                    "vcpu": 0,
+                    "memory_mb": 0,
+                    "disk_gb": 0,
+                    "machines": 0,
+                    "ips": 0,
+                    "public_ports": 0,
+                    "domains": 0,
+                    "networks": 0,
+                    "snapshots": 0
+                  },
+                  "limit": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "remaining": {
+                    "vcpu": 8,
+                    "memory_mb": 16384,
+                    "disk_gb": 100,
+                    "machines": 4,
+                    "ips": 4,
+                    "public_ports": 10,
+                    "domains": 10,
+                    "networks": 4,
+                    "snapshots": 4
+                  },
+                  "units": {
+                    "cpu": "vCPU",
+                    "vcpu": "vCPU",
+                    "memory_mb": "MiB",
+                    "swap_mb": "MiB",
+                    "disk_gb": "GiB"
+                  }
+                }
+              }
+            ],
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "catalog_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "images": [
+              {
+                "name": "debian-13",
+                "kind": "vm",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "debian-13",
+                "kind": "ct",
+                "default": true,
+                "support_until": "2030-06-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "vm",
+                "default": false,
+                "support_until": "2029-04-30"
+              },
+              {
+                "name": "ubuntu-24.04",
+                "kind": "ct",
+                "default": false,
+                "support_until": "2029-04-30"
+              }
+            ],
+            "sizes": {
+              "small": {
+                "cpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20
+              },
+              "medium": {
+                "cpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40
+              },
+              "large": {
+                "cpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 80
+              }
+            },
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "capabilities": {
+              "deployment_planning": true,
+              "capacity_summary": true,
+              "capacity_visibility": "aggregate_only",
+              "gpu_allocation": false,
+              "gpu_hardware_inventory": "unknown",
+              "custom_image_upload": false,
+              "custom_image_import": false,
+              "mcp_resources": false
+            }
+          }
+        },
+        {
+          "tool": "capacity_get",
+          "arguments": {},
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "capacity": {
+              "checked_at": "2026-09-30T16:04:53.407991+00:00",
+              "scope": "carrel01; shared with infrastructure and other tenants",
+              "units": {
+                "memory": "GiB",
+                "disk": "GiB",
+                "cpu_utilization": "fraction"
+              },
+              "physical": {
+                "cpu": {
+                  "logical_cpus": 32,
+                  "cores": 16,
+                  "utilization": 0
+                },
+                "memory": {
+                  "total": 187.34125900268555,
+                  "used": 6.432430267333984,
+                  "free": 180.90882873535156
+                },
+                "disk": {
+                  "storage": "local-lvm",
+                  "total": 1522.9140625,
+                  "used": 12.031021093018353,
+                  "free": 1510.8830414069816
+                }
+              },
+              "allocatable": {
+                "vcpu": {
+                  "limit": 128,
+                  "committed": 12,
+                  "remaining": 116
+                },
+                "memory_gib": {
+                  "limit": 161.407133102417,
+                  "committed": 26.5,
+                  "remaining": 134.907133102417
+                },
+                "disk_gib": {
+                  "limit": 2284.37109375,
+                  "committed": 236.01171875,
+                  "remaining": 2048.359375
+                }
+              },
+              "policy": {
+                "cpu_overcommit": 4,
+                "memory_reserve_gib": 8,
+                "memory_fraction": 0.9,
+                "disk_overcommit": 1.5,
+                "disk_usage_ceiling": 0.8,
+                "storage_admission_blocked": false,
+                "disk_accounting": "all_local_lvm_volumes",
+                "cpu_memory_accounting": "running guests plus pending reservations",
+                "tenant_quotas_apply_separately": true,
+                "reserves_capacity": false
+              },
+              "gpu": {
+                "allocation_supported": false,
+                "inventory": "unknown"
+              }
+            }
+          }
+        }
+      ],
+      "final": "即時查詢時間：**2026-10-01 00:04:53（台灣時間）**。資料範圍為共享主機 `carrel01`，含基礎設施與其他租戶。\n\n| 資源 | 實體容量／剩餘 |\n|---|---|\n| CPU | 16 實體核心、32 邏輯 CPU；當下使用率 0%。未提供「剩餘專用核心數」 |\n| RAM | 剩 **180.91 GiB**／總共 187.34 GiB |\n| 磁碟 `local-lvm` | 剩 **1510.88 GiB**／總共 1522.91 GiB |\n\n平台依保留量與超額配置政策，尚可配置 **116 vCPU、134.91 GiB RAM、2048.36 GiB 虛擬磁碟**；這些不是實體剩餘量。你的個人及 `iii-edge-ai` 專案 quota 各剩 **8 vCPU、16 GiB RAM、100 GiB 磁碟**。\n\n**GPU：工具不支援配置，硬體庫存為未知**，因此無法確認有 GPU 可供 PyTorch 使用，也不能據此判定主機沒有 GPU。\n\n本次僅查詢，未建立或變更資源、申請 quota 或新增 SSH key。"
+    },
+    {
+      "case": "07_resume_no_key",
+      "thread_id": "01a0f30e-89b5-7430-9d03-369174f8fcb8",
+      "seconds": 29.6,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 221857,
+        "cached_input_tokens": 205115,
+        "cache_write_input_tokens": 16715,
+        "output_tokens": 1028,
+        "reasoning_output_tokens": 136
+      },
+      "prompt": "這是公鑰：<ephemeral Ed25519 public key>。繼續剛才那台 Ubuntu Docker 的預演，仍然不要真的建立或儲存公鑰。\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "ubuntu-docker",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "size": "small",
+            "packages": [
+              "docker.io"
+            ],
+            "runcmd": [
+              [
+                "systemctl",
+                "enable",
+                "--now",
+                "docker"
+              ]
+            ],
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true
+          },
+          "status": "completed",
+          "result": {
+            "ok": true,
+            "machine": {
+              "name": "ubuntu-docker",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "cpu": 2,
+              "memory_mb": 2048,
+              "disk_gb": 20,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "docker.io"
+              ],
+              "state": "planned",
+              "reserved": false,
+              "requirements": []
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 6,
+                "memory_mb": 14336,
+                "disk_gb": 80,
+                "machines": 3,
+                "ips": 3,
+                "public_ports": 9,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "admission": {
+              "accepted": true,
+              "checked_at": "2026-09-30T16:05:15.030388+00:00",
+              "reserved": false
+            },
+            "requirements": [],
+            "units": {
+              "cpu": "vCPU",
+              "vcpu": "vCPU",
+              "memory_mb": "MiB",
+              "swap_mb": "MiB",
+              "disk_gb": "GiB"
+            },
+            "connection": {
+              "available_after": "create",
+              "public_ssh": true
+            },
+            "quota_before": {
+              "used": {
+                "vcpu": 0,
+                "memory_mb": 0,
+                "disk_gb": 0,
+                "machines": 0,
+                "ips": 0,
+                "public_ports": 0,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "remaining": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4
+              },
+              "units": {
+                "cpu": "vCPU",
+                "vcpu": "vCPU",
+                "memory_mb": "MiB",
+                "swap_mb": "MiB",
+                "disk_gb": "GiB"
+              }
+            },
+            "delta": {
+              "vcpu": 2,
+              "memory_mb": 2048,
+              "disk_gb": 20,
+              "machines": 1,
+              "ips": 1,
+              "public_ports": 1
+            },
+            "dry_run": true,
+            "state": "planned",
+            "reserved": false,
+            "resource_changes": false,
+            "ready_to_apply": true
+          }
+        }
+      ],
+      "final": "已帶入公鑰完成 dry-run，預演通過：`ready_to_apply=true`，無缺少條件。\n\n- `ubuntu-docker`：Ubuntu 24.04 VM、2 vCPU、2 GiB RAM、20 GiB 磁碟，包含 Docker 安裝與啟動設定。\n- `resource_changes=false`、`reserved=false`：未建立或預留資源，未儲存公鑰、未申請 quota。\n- Docker 指令尚未實際執行或驗證。"
+    }
+  ]
+}

@@ -76,6 +76,9 @@ callable compatibility aliases but are omitted from discovery. Custom image stor
 supported, so `images_gb` is hidden from quota responses and requests; stored limits are preserved.
 GPU allocation is unsupported; hardware GPU inventory is unknown.
 
+Snapshots cover disk contents. Rollback can stop the guest; the result reports its actual
+`power_state` and, when stopped, the `machine_power` call needed to start it again.
+
 Implemented: VM/CT lifecycle, stable image templates, public SSH/port grants, tenant HTTPS domains,
 private L2 networks and NICs, explicit cross-tenant TCP grants, snapshots, quota requests/approval,
 audit records, and reconciliation. [PLAN.md](PLAN.md#154-member-platform-deployment) records the
