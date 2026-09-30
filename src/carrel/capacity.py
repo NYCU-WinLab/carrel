@@ -4,10 +4,17 @@ from datetime import UTC, datetime
 
 MIB = 1024**2
 GIB = 1024**3
-UNITS = {"cpu": "vCPU", "vcpu": "vCPU", "memory_mb": "MiB", "swap_mb": "MiB", "disk_gb": "GiB"}
+UNITS = {
+    "cpu": "vCPU",
+    "vcpu": "vCPU",
+    "memory_mb": "MiB",
+    "swap_mb": "MiB",
+    "disk_gb": "GiB",
+    "snapshot_gb": "GiB",
+}
 
 
-def summarize(inventory, reservations=()):
+def summarize(inventory, reservations=(), snapshots=()):
     status, storage = inventory["status"], inventory["storage"]
     guests = [
         g
@@ -28,22 +35,22 @@ def summarize(inventory, reservations=()):
         disk_source = "guest_primary_disks_only"
     for m in reservations:
         guest = by_id.get(m["vmid"], {})
-        # Failed/in-flight creates and resizes retain their durable reservation.
-        active = (
-            m.get("state") in ("provisioning", "error", "needs_owner_fix") or guest.get("status") == "running"
-        )
-        if active:
-            running_guest = guest if guest.get("status") == "running" else {}
-            cpu += max(0, m["cpu"] - running_guest.get("maxcpu", 0))
-            memory += max(0, m["memory_mb"] * MIB - running_guest.get("maxmem", 0))
+        # Every allocated Carrel machine retains CPU/RAM until deletion, even
+        # while stopped. Subtract the running inventory to avoid double charging.
+        running_guest = guest if guest.get("status") == "running" else {}
+        cpu += max(0, m["cpu"] - running_guest.get("maxcpu", 0))
+        memory += max(0, m["memory_mb"] * MIB - running_guest.get("maxmem", 0))
         disk += max(0, m["disk_gb"] * GIB - guest.get("maxdisk", 0))
+    snapshot_reserved = sum(s["disk_gb"] * GIB for s in snapshots)
+    disk += snapshot_reserved
     info = status["cpuinfo"]
     total_memory = status["memory"]["total"]
     total_disk = storage["total"]
     cpu_limit = info["cpus"] * 4
     memory_limit = max(0, (total_memory - 8 * GIB) * 0.9)
     disk_limit = total_disk * 1.5
-    storage_blocked = storage["used"] > total_disk * 0.8
+    metadata_fraction = inventory.get("thin_pool", {}).get("metadata_fraction")
+    storage_blocked = storage["used"] > total_disk * 0.8 or (metadata_fraction or 0) >= 0.8
     used_memory = status["memory"].get("used")
     return {
         "checked_at": datetime.now(UTC).isoformat(),
@@ -65,6 +72,8 @@ def summarize(inventory, reservations=()):
                 "total": total_disk / GIB,
                 "used": storage["used"] / GIB,
                 "free": (total_disk - storage["used"]) / GIB,
+                "metadata_fraction": metadata_fraction,
+                "snapshot_reserved_gib": snapshot_reserved / GIB,
             },
         },
         "allocatable": {
@@ -86,10 +95,14 @@ def summarize(inventory, reservations=()):
             "memory_fraction": 0.9,
             "disk_overcommit": 1.5,
             "disk_usage_ceiling": 0.8,
+            "snapshot_headroom_gib": max(0, total_disk * 0.8 - storage["used"] - snapshot_reserved) / GIB,
             "storage_admission_blocked": storage_blocked,
             "disk_accounting": disk_source,
-            "cpu_memory_accounting": "running guests plus pending reservations",
+            "cpu_memory_accounting": "running unmanaged guests plus all allocated Carrel machines (including stopped)",
             "tenant_quotas_apply_separately": True,
+            "stopped_machines_retain_capacity": True,
+            "cpu_is_shared": True,
+            "quota_is_a_ceiling_not_a_capacity_reservation": True,
             "reserves_capacity": False,
         },
         "gpu": {"allocation_supported": False, "inventory": "unknown"},

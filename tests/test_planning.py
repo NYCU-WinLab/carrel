@@ -80,7 +80,7 @@ async def preview(platform, tool, args, delta, who=None):
         ("port_open", {"machine": "test", "port": 22, "proto": "tcp"}, {}),
         ("port_close", {"id": "ssh"}, {"public_ports": -1}),
         ("domain_add", {"machine": "test", "sub": "www", "target_port": 80}, {"domains": 1}),
-        ("snapshot_create", {"machine": "test", "name": "before"}, {"snapshots": 1, "disk_gb": 20}),
+        ("snapshot_create", {"machine": "test", "name": "before"}, {"snapshots": 1, "snapshot_gb": 20}),
         ("machine_resize", {"machine": "test", "cpu": 4, "disk_gb": 30}, {"vcpu": 2, "disk_gb": 10}),
         ("machine_power", {"machine": "test", "action": "stop"}, {}),
         ("machine_nic_attach", {"machine": "test", "network": "lan"}, {}),
@@ -113,7 +113,10 @@ async def test_preview_deletes_cascades_and_releases_snapshot_disks(platform):
     await preview(platform, "domain_remove", {"name": "www.alice.winlab.tw"}, {"domains": -1})
     await preview(platform, "domain_add", {"machine": "test", "sub": "www", "target_port": 8080}, {})
     await preview(
-        platform, "snapshot_delete", {"machine": "test", "name": "before"}, {"snapshots": -1, "disk_gb": -20}
+        platform,
+        "snapshot_delete",
+        {"machine": "test", "name": "before"},
+        {"snapshots": -1, "snapshot_gb": -20},
     )
     await preview(
         platform, "snapshot_rollback", {"machine": "test", "name": "before", "confirm": "before"}, {}
@@ -125,7 +128,8 @@ async def test_preview_deletes_cascades_and_releases_snapshot_disks(platform):
         {
             "vcpu": -2,
             "memory_mb": -2048,
-            "disk_gb": -40,
+            "disk_gb": -20,
+            "snapshot_gb": -20,
             "machines": -1,
             "ips": -1,
             "public_ports": -1,
@@ -378,16 +382,25 @@ async def test_rollback_updates_actual_power_state_and_restart_guidance(platform
             "configuration": {k: m[k] for k in ("cpu", "memory_mb", "disk_gb", "nics")},
         },
     )
-    platform.backend.call = AsyncMock(return_value={"state": power_state})
+    platform.backend.call = AsyncMock(return_value={"status": power_state, "state": "stopped"})
+
+    async def ready(machine, previous_boot=None):
+        machine["state"] = "ready"
+        platform.store.put("machines", machine["vmid"], 1, machine)
+
+    platform.wait_ready = AsyncMock(side_effect=ready)
     args = {"machine": "test", "name": "before", "confirm": "before"}
     result = await platform.execute("snapshot_rollback", {**args, "dry_run": True}, person())
-    assert result["power_state"] == "may_stop"
+    assert result["power_state"] == "restored_to_previous"
     assert platform.store.objects("machines", 1)[0]["state"] == "ready"
     platform.backend.call.assert_not_awaited()
     result = await platform.execute("snapshot_rollback", args, person())
     assert result["ok"] and result["power_state"] == power_state
-    assert platform.store.objects("machines", 1)[0]["state"] == power_state
-    assert ("next_action" in result) == (power_state == "stopped")
+    assert platform.store.objects("machines", 1)[0]["state"] == (
+        "ready" if power_state == "running" else "stopped"
+    )
+    assert result["power_state_restored"] is True
+    assert platform.wait_ready.await_count == (1 if power_state == "running" else 0)
     assert result["delta"] == {}
 
 

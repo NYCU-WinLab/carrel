@@ -65,9 +65,54 @@ Missing SSH keys are reported as a requirement, so resource planning can still f
 
 For creation, pass your **public** key inline or save it with `ssh_key_add`. Only actual creation
 returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
-Apply a group in order with `network_create`, `machine_create`, then `machine_nic_attach`;
-capacity is rechecked during each operation. Guest boot, packages and connectivity are not verified
-by a plan. Private networks are L2 only; configure IPs in each guest. Never put private SSH keys or tokens in tool
+Apply a group with `deployment_apply` using the same specification as `deployment_plan`.
+Infrastructure mutations return a durable `operation`, initially `queued`; **queued is not a capacity
+reservation or success**. `operation_get` with an ID waits up to 20 seconds for completion (set
+`wait_seconds=0` for an immediate response). Poll at the returned interval, inspect the terminal state,
+and use `operation_retry` to resume a failure. Supply a stable `idempotency_key` when submitting;
+resending identical arguments with that key returns the original job. `on_failure=rollback` (default)
+cleans up only resources introduced by a deployment; `keep` preserves them for diagnosis. Failed
+cleanup retains allocations and reports the remaining resources. Retry `cleanup_failed` to finish
+cleanup, then retry the resulting `rolled_back` job if a fresh deployment is wanted.
+
+Read-only tools do not wait for the infrastructure writer, including during VM provisioning and
+certificate issuance. A single durable infrastructure writer currently serializes mutations to
+preserve node admission and shared network configuration; this is not multi-node scheduling.
+Jobs and node-side request receipts survive service restarts. Cancellation of a client connection
+does not cancel an accepted job. Each retry remains bound to its original resource allocation.
+
+For current VM images, readiness requires SSH **and** completed cloud-init, assigned managed
+private NICs, and any requested `health_checks` (`service`, localhost `http`, or localhost `tcp`).
+Without application checks, the result explicitly says `not_checked`. The fixed guest reporter
+sends only status, check indices and an optional failed command index; no guest command output
+or generic guest execution endpoint is exposed. Failed initialization leaves a standalone VM
+available for owner diagnosis; a deployment follows its chosen failure policy.
+
+Private networks default to `mode=managed`: an RFC1918 /24 or /25, fixed DHCP leases, MTU 1450,
+and no default gateway or DNS override. DHCP runs in a separate unrouted namespace per network;
+private bridge traffic cannot enter the host. New VM images auto-configure matching private NICs;
+CT addresses are applied through Proxmox. Existing raw networks retain their behavior. Select
+`mode=raw_l2` for experiments that manage their own addressing/DHCP, such as Mininet.
+
+CPU/RAM admission counts every allocated Carrel machine, including stopped machines. Deleting or shrinking CPU/RAM while stopped releases the corresponding reservation only after the
+hypervisor confirms the change.
+Tenant quota remains an upper limit, not pre-reserved capacity for uncreated VMs. vCPU is shared,
+not a dedicated physical core. Direct administrator changes outside Carrel can invalidate admission
+assumptions; the capacity endpoint includes unmanaged running infrastructure in its accounting.
+
+Snapshots use separate `snapshot_gb` (default 100 GiB) and `snapshots` (default 4) limits. A 40 GiB
+VM with two snapshots consumes 40 GiB `disk_gb` and 80 GiB `snapshot_gb`. The latter is a worst-case
+reservation, **not a claim about current physical usage**. Snapshot admission also checks safe
+physical headroom; data or metadata pressure blocks new storage allocations. `quota_get` and
+`snapshot_list` expose timestamped actual snapshot-retained bytes, sampled from a held thin metadata
+snapshot as the union of snapshot mappings minus live mappings. Shared blocks are counted once.
+Accounting sample failure does not release reservations. Rollback can briefly stop a VM, restores
+its previous power state, and waits for readiness if it was running. It is still a disk-only rollback.
+
+See the [0.3 reliability acceptance](docs/evaluations/2026-10-01-reliability.md) for live recovery,
+networking, snapshot and native Codex test results.
+
+Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.
 

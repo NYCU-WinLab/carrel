@@ -32,6 +32,7 @@ RESULT = {
                         "forbidden",
                         "invalid",
                         "pending_approval",
+                        "guest_not_ready",
                     ],
                 },
                 "message": TEXT,
@@ -56,6 +57,12 @@ def tool(name, description, properties=None, required=(), account=False):
         "request_reject",
     }
     if mutating:
+        props["idempotency_key"] = {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments.",
+        }
         props["dry_run"] = {
             "type": "boolean",
             "default": False,
@@ -110,7 +117,7 @@ TOOLS = [
     tool("sizes_list", "List machine resource presets.", account=True),
     tool(
         "machine_create",
-        "Create one VM/CT; apply returns SSH after probing it. Use VMs for Docker, OVS, Mininet or databases. Dry-run first: checks quota/capacity even without SSH keys, returning requirements instead. Valid public keys are mandatory for apply, can be passed inline and need not be saved. For multiple resources and NICs use deployment_plan.",
+        "Create one VM/CT; apply returns a queued operation. Use operation_get until complete; SSH alone does not imply guest/application readiness. Use VMs for Docker, OVS, Mininet or databases. Dry-run first: checks quota/capacity even without SSH keys, returning requirements instead. Valid public keys are mandatory for apply, can be passed inline and need not be saved. For multiple resources and NICs use deployment_plan then deployment_apply.",
         {
             "name": LABEL,
             "kind": {"enum": ["vm", "ct"]},
@@ -126,6 +133,33 @@ TOOLS = [
                 "type": "array",
                 "maxItems": 100,
                 "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9+.-]{0,99}$"},
+            },
+            "health_checks": {
+                "type": "array",
+                "maxItems": 20,
+                "description": 'Optional checks after cloud-init. Examples: {"type":"http","port":80,"path":"/","status":200}, {"type":"tcp","port":5432}, {"type":"service","service":"nginx"}. HTTP/TCP always target 127.0.0.1; specify port, not a URL. No checks means application readiness is not verified.',
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"enum": ["service", "http", "tcp"]},
+                        "service": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,99}$"},
+                        "port": PORT,
+                        "path": {"type": "string", "pattern": "^/[^\\r\\n]*$", "maxLength": 512},
+                        "status": {"type": "integer", "minimum": 100, "maximum": 599},
+                    },
+                    "required": ["type"],
+                    "additionalProperties": False,
+                    "allOf": [
+                        {
+                            "if": {"properties": {"type": {"const": "service"}}},
+                            "then": {"required": ["service"]},
+                        },
+                        {
+                            "if": {"properties": {"type": {"enum": ["http", "tcp"]}}},
+                            "then": {"required": ["port"]},
+                        },
+                    ],
+                },
             },
             "runcmd": {
                 "type": "array",
@@ -167,7 +201,7 @@ TOOLS = [
     ),
     tool(
         "machine_resize",
-        "Grow CPU, RAM or disk after quota and physical admission checks. Disk cannot shrink.",
+        "Resize CPU, RAM or disk after quota and capacity checks. CPU/RAM can shrink only while stopped; disk cannot shrink. Capacity is released only after the host confirms the change.",
         {"machine": MACHINE, "cpu": CPU, "memory_mb": MEM, "disk_gb": DISK},
         ["machine"],
     ),
@@ -176,8 +210,8 @@ TOOLS = [
     ),
     tool(
         "network_create",
-        "Create an isolated private L2 network. No gateway, DHCP or assigned IPs; MTU 1450.",
-        {"name": LABEL, "cidr": TEXT},
+        "Create an isolated private network. Default managed mode assigns fixed private IPs automatically using DHCP, no default gateway, MTU 1450. Use raw_l2 for Mininet or owner-managed DHCP.",
+        {"name": LABEL, "cidr": TEXT, "mode": {"enum": ["managed", "raw_l2"]}},
         ["name"],
     ),
     tool("network_list", "List private networks owned by this tenant."),
@@ -189,7 +223,7 @@ TOOLS = [
     ),
     tool(
         "machine_nic_attach",
-        "Attach a raw private L2 NIC from this tenant; configure addresses inside the guest.",
+        "Attach a private NIC. Managed networks automatically configure an IP on current Carrel images; raw_l2 requires owner configuration.",
         {"machine": MACHINE, "network": TEXT},
         ["machine", "network"],
     ),
@@ -233,7 +267,7 @@ TOOLS = [
     tool("peer_revoke", "Revoke an inbound cross-tenant permission.", {"id": TEXT}, ["id"]),
     tool(
         "snapshot_create",
-        "Create a disk snapshot. Reserves a full disk's size against quota.",
+        "Create a disk snapshot. Reserves its worst-case size in the separate snapshot_gb quota, not disk_gb. Actual retained blocks are reported separately when available.",
         {"machine": MACHINE, "name": LABEL},
         ["machine", "name"],
     ),
@@ -246,7 +280,7 @@ TOOLS = [
     ),
     tool(
         "snapshot_rollback",
-        "Roll back disk contents; later changes are lost. Confirm snapshot name. May stop the guest; returns actual power_state and a machine_power start next_action when stopped.",
+        "Roll back disk contents; later changes are lost. Confirm snapshot name. Restores the previous power state and checks guest readiness. Brief downtime is expected; returns a background operation.",
         {"machine": MACHINE, "name": LABEL, "confirm": LABEL},
         ["machine", "name", "confirm"],
     ),
@@ -291,9 +325,9 @@ TOOLS = [t for t in TOOLS if t.name not in {"images_list", "sizes_list"}]
 _machine = {
     k: v
     for k, v in BY_NAME["machine_create"].inputSchema["properties"].items()
-    if k not in ("tenant", "dry_run")
+    if k not in ("tenant", "dry_run", "idempotency_key")
 }
-_network = {"name": LABEL, "cidr": TEXT}
+_network = {"name": LABEL, "cidr": TEXT, "mode": {"enum": ["managed", "raw_l2"]}}
 
 
 def objects(properties, required, maximum):
@@ -311,7 +345,7 @@ def objects(properties, required, maximum):
 
 plan = tool(
     "deployment_plan",
-    "Read-only preview of multiple new machines, private networks and NIC attachments together. Use names as symbolic references to new resources or this tenant's existing names/IDs. Checks aggregate quota, host admission and NIC slots; no reservations or resource writes. Missing public keys become requirements. Apply later with network_create, machine_create, machine_nic_attach; guest configuration is not executed in planning.",
+    "Read-only preview of multiple new machines, private networks and NIC attachments together. Use names as symbolic references to new resources or this tenant's existing names/IDs. Checks aggregate quota, host admission and NIC slots; no reservations or resource writes. Missing public keys become requirements. Apply later with deployment_apply, which reserves the entire group and supports recovery; guest configuration is not executed in planning.",
     {
         "machines": objects(_machine, ["name"], 100),
         "networks": objects(_network, ["name"], 99),
@@ -320,3 +354,26 @@ plan = tool(
 )
 TOOLS.append(plan)
 BY_NAME[plan.name] = plan
+
+apply = tool(
+    "deployment_apply",
+    "Apply a deployment_plan specification as a durable job. Reserves all resources together before provisioning. Default on_failure=rollback removes only resources created by this job; keep preserves them for diagnosis/retry. Queued jobs have not reserved capacity yet. Poll operation_get; resend with the same idempotency_key after a lost response.",
+    {
+        **{k: v for k, v in plan.inputSchema["properties"].items() if k != "tenant"},
+        "on_failure": {"enum": ["rollback", "keep"]},
+    },
+)
+get = tool(
+    "operation_get",
+    "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 20 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup; poll no faster than poll_after_seconds.",
+    {"id": TEXT, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 30, "default": 20}},
+)
+retry = tool(
+    "operation_retry",
+    "Resume a failed operation using its original allocation and durable checkpoints. A rolled-back deployment gets a fresh attempt; cleanup_failed retries cleanup first. Does not repeat a succeeded operation.",
+    {"id": TEXT},
+    ["id"],
+)
+for definition in (apply, get, retry):
+    TOOLS.append(definition)
+    BY_NAME[definition.name] = definition

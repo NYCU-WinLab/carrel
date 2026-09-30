@@ -18,7 +18,7 @@ from starlette.routing import Route
 
 from .auth import OAuth, Verifier
 from .backend import Backend
-from .platform import ADMIN_TOOLS, Platform
+from .platform import ADMIN_TOOLS, Failure, Platform
 from .store import Store
 from .tools import BY_NAME, TOOLS
 
@@ -28,15 +28,19 @@ def build(config, backend=None, verifier=None, store=None):
     issuer = config["issuer"].rstrip("/")
     store = store or Store(config["database"])
     verifier = verifier or Verifier(issuer, "carrel-mcp")
-    platform = Platform(store, backend or Backend(), config)
+    platform = Platform(store, backend or Backend(), {"background_operations": True, **config})
     oauth = OAuth(store, origin, issuer, "carrel-mcp", verifier, config.get("hosted_redirects", []))
     server = Server(
         "carrel",
-        version="0.2.0",
+        version="0.3.0",
         instructions=(
             "WinLab machines; tools only, no MCP resources. Start with whoami for all visible tenants' "
             "used/limit/remaining quotas and capabilities. Use catalog_get for images/sizes, capacity_get "
-            "for shared physical capacity, deployment_plan for multiple machines/networks/NICs. "
+            "for shared physical capacity, deployment_plan then deployment_apply for multiple machines/networks/NICs. "
+            "Mutations return durable queued operations; use operation_get until terminal and inspect result/error. "
+            "Queued jobs have not reserved capacity. Use a stable idempotency_key after a lost submission response. "
+            "Use operation_retry to resume failures, not another create. Managed private networks assign IPs automatically. "
+            "Machine readiness includes cloud-init completion and requested application checks; SSH alone is insufficient. "
             "Use VMs for Docker, Mininet and databases. memory_mb/swap_mb are MiB; disk_gb is GiB. "
             "Dry-run before applying mutations. Previews never reserve or write resources; audit is recorded. "
             "Trust quota_before/delta/quota_after and resource_changes=false; follow-up list/quota/key calls "
@@ -67,10 +71,22 @@ def build(config, backend=None, verifier=None, store=None):
             definition = BY_NAME[name]
             jsonschema.validate(arguments, definition.inputSchema)
             result = await platform.execute(name, arguments, who)
-        except (KeyError, jsonschema.ValidationError):
+        except jsonschema.ValidationError as error:
+            path = ".".join(str(p) for p in error.absolute_path) or "arguments"
             result = {
                 "ok": False,
-                "error": {"code": "invalid", "message": "Unknown tool or invalid arguments"},
+                "error": {
+                    "code": "invalid",
+                    "message": f"Invalid arguments at {path}: {error.validator}",
+                    "argument_path": list(error.absolute_path),
+                    "allowed_fields": list(error.schema.get("properties", {})),
+                    "required_fields": error.schema.get("required", []),
+                },
+            }
+        except KeyError:
+            result = {
+                "ok": False,
+                "error": {"code": "invalid", "message": "Unknown tool or missing required field"},
             }
         except Exception as e:  # noqa: BLE001 - isolate tool failures and keep reconciliation alive
             print(json.dumps({"event": "tool_failure", "tool": name, "type": type(e).__name__}))
@@ -134,6 +150,7 @@ def build(config, backend=None, verifier=None, store=None):
     @asynccontextmanager
     async def lifespan(app):
         async with manager.run():
+            platform.operations.recover()
             task = asyncio.create_task(reconcile_loop())
             yield
             task.cancel()
@@ -141,11 +158,24 @@ def build(config, backend=None, verifier=None, store=None):
                 await task
             except asyncio.CancelledError:
                 pass
+            await platform.operations.close()
 
     async def health(request):
-        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.2.0"})
+        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.3.0"})
 
-    routes = [Route("/healthz", health), Route("/mcp", McpEndpoint())]
+    async def guest_status(request):
+        try:
+            body = await request.json()
+            platform.guest_report(body, request.client.host)
+            return JSONResponse({"ok": True})
+        except (Failure, ValueError, TypeError, AttributeError):
+            return JSONResponse({"ok": False}, status_code=403)
+
+    routes = [
+        Route("/healthz", health),
+        Route("/mcp", McpEndpoint()),
+        Route("/internal/guest-status", guest_status, methods=["POST"]),
+    ]
     for path in [
         "/.well-known/oauth-protected-resource",
         "/.well-known/oauth-protected-resource/mcp",
@@ -171,7 +201,10 @@ def build(config, backend=None, verifier=None, store=None):
             req = Request(scope, receive)
             # All public requests arrive through a fixed trusted reverse proxy.
             # Its forwarded identity is not used for authorization.
-            if req.headers.get("host") != origin.split("//")[1]:
+            internal = scope["path"] == "/internal/guest-status"
+            if internal and (not req.client or not req.client.host.startswith("10.200.")):
+                return await JSONResponse({"error": "forbidden"}, 403)(scope, receive, send)
+            if not internal and req.headers.get("host") != origin.split("//")[1]:
                 return await JSONResponse({"error": "invalid_host"}, 400)(scope, receive, send)
             if req.headers.get("origin") and req.headers["origin"] != origin:
                 return await JSONResponse({"error": "invalid_origin"}, 403)(scope, receive, send)

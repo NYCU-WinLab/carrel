@@ -140,6 +140,7 @@ table inet carrel_infra {
   iifname "wg-carrel" ip saddr 10.10.10.207 ip daddr 10.200.0.2 tcp dport { 80,443 } accept
   oifname "vmbr98" udp dport 53 ip daddr 10.200.0.2 accept
   oifname "vmbr98" tcp dport 53 ip daddr 10.200.0.2 accept
+  oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.3 tcp dport 8080 accept
   oifname "vmbr98" counter drop
  }
  chain postrouting {

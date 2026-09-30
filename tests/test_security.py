@@ -460,6 +460,30 @@ async def test_real_mcp_transport_requires_identity_and_hides_admin_tools():
             },
         )
         assert r.json()["result"]["structuredContent"]["error"]["code"] == "forbidden"
+        r = await client.post(
+            "/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "deployment_plan",
+                    "arguments": {
+                        "machines": [
+                            {
+                                "name": "check",
+                                "health_checks": [{"type": "http", "url": "private-value"}],
+                            }
+                        ]
+                    },
+                },
+            },
+        )
+        error = r.json()["result"]["structuredContent"]["error"]
+        assert error["argument_path"] == ["machines", 0, "health_checks", 0]
+        assert "port" in error["allowed_fields"] + error["required_fields"]
+        assert "private-value" not in str(error)
 
 
 @pytest.mark.asyncio
@@ -535,13 +559,18 @@ async def test_interrupted_snapshot_keeps_disk_reservation(platform):
         },
     )
 
+    original = platform.backend.call
+
     async def interrupted(request):
+        if request["op"] == "inventory":
+            return await original(request)
         raise RuntimeError("adapter interrupted after snapshot creation")
 
     platform.backend.call = interrupted
     r = await platform.execute("snapshot_create", {"machine": "test", "name": "before"}, person())
     assert not r["ok"]
-    assert platform.quota(platform.store.tenant("user:alice"))["used"]["disk_gb"] == 24
+    assert platform.quota(platform.store.tenant("user:alice"))["used"]["disk_gb"] == 12
+    assert platform.quota(platform.store.tenant("user:alice"))["used"]["snapshot_gb"] == 12
     assert platform.store.objects("snapshots", 1)[0]["state"] == "creating"
 
 

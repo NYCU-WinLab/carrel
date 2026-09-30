@@ -10,11 +10,19 @@ import httpx
 
 from .capacity import UNITS, summarize
 from .domains import Domains
+from .lifecycle import Lifecycle
+from .operations import ASYNC_TOOLS, Operations, current_operation, operation_id
 from .store import DEFAULT_QUOTA
 
 QUOTA_DIMENSIONS = tuple(k for k in DEFAULT_QUOTA if k != "images_gb")
 CAPABILITIES = {
     "deployment_planning": True,
+    "background_operations": True,
+    "deployment_apply": True,
+    "managed_private_networks": True,
+    "guest_readiness": True,
+    "stopped_machine_reservations": True,
+    "separate_snapshot_quota": True,
     "capacity_summary": True,
     "capacity_visibility": "aggregate_only",
     "gpu_allocation": False,
@@ -64,10 +72,12 @@ def validate_keys(keys):
             fail("invalid", "Only SSH public keys are accepted")
 
 
-class Platform:
+class Platform(Lifecycle):
     def __init__(self, store, backend, config):
         self.store, self.backend, self.config = store, backend, config
         self.lock = asyncio.Lock()
+        self.registration_lock = asyncio.Lock()
+        self.operations = Operations(self)
         self.domains = Domains(store, config)
 
     async def reserved(self):
@@ -95,6 +105,12 @@ class Platform:
         return [("user:" + who["sub"], who["username"]), *[(g, g.split("/")[1]) for g in who["projects"]]]
 
     async def register_tenants(self, who):
+        if all(self.store.tenant(subject) for subject, _ in self.subjects(who)):
+            return
+        async with self.registration_lock:
+            await self._register_tenants(who)
+
+    async def _register_tenants(self, who):
         # Identity has already passed Keycloak verification. Registration is
         # automatic on first use, serialized by execute's lock and idempotent.
         missing = [(s, name) for s, name in self.subjects(who) if not self.store.tenant(s)]
@@ -154,7 +170,7 @@ class Platform:
             used[dimension] = len(self.store.objects(kind, t["n"]))
         # Snapshots reserve a full virtual disk: conservative until precise thin
         # snapshot accounting is available, rather than making a false promise.
-        used["disk_gb"] += sum(s["disk_gb"] for s in self.store.objects("snapshots", t["n"]))
+        used["snapshot_gb"] = sum(s["disk_gb"] for s in self.store.objects("snapshots", t["n"]))
         return used
 
     def quota(self, t, delta=None):
@@ -183,13 +199,27 @@ class Platform:
             )
         return result
 
+    def snapshot_usage(self, t):
+        samples = self.store.objects("storage_usage", t["n"])
+        return (
+            {k: v for k, v in samples[0].items() if k not in ("tenant_n", "operation_id")}
+            if samples
+            else {
+                "available": False,
+                "retained_snapshot_bytes": None,
+                "accounting": "pending_sample; snapshot_gb reserves worst-case size",
+            }
+        )
+
     async def capacity(self, proposed=None):
         reservations = self.store.objects("machines")
         if proposed:
             reservations = [m for m in reservations if m["vmid"] != proposed["vmid"]] + [proposed]
-        return summarize(await self.backend.call({"op": "inventory"}), reservations)
+        return summarize(
+            await self.backend.call({"op": "inventory"}), reservations, self.store.objects("snapshots")
+        )
 
-    async def admission(self, cpu, memory, disk, proposed=None):
+    async def admission(self, cpu, memory, disk, proposed=None, snapshot=False):
         capacity = await self.capacity(proposed)
         demand = {"vcpu": cpu, "memory_gib": memory / 1024, "disk_gib": disk}
         for key, amount in demand.items():
@@ -202,7 +232,16 @@ class Platform:
                     requested=amount,
                     remaining=capacity["allocatable"][key]["remaining"],
                 )
-        if (disk > 0 or proposed) and capacity["policy"]["storage_admission_blocked"]:
+        if snapshot and disk > capacity["policy"]["snapshot_headroom_gib"]:
+            fail("capacity_exhausted", "Snapshot worst-case reservation exceeds safe physical headroom")
+        growing_disk = disk > 0 or (
+            proposed
+            and any(
+                m["vmid"] == proposed["vmid"] and proposed["disk_gb"] > m["disk_gb"]
+                for m in self.store.objects("machines")
+            )
+        )
+        if growing_disk and capacity["policy"]["storage_admission_blocked"]:
             fail("capacity_exhausted", "Storage usage exceeds admission ceiling")
         return {"accepted": True, "checked_at": capacity["checked_at"], "reserved": False}
 
@@ -219,7 +258,9 @@ class Platform:
         keys = a.get("ssh_keys") or [k["key"] for k in self.store.objects("keys", t["n"])]
         if keys or not dry:
             validate_keys(keys)
-        if kind == "ct" and (a.get("nested_virt") or a.get("packages") or a.get("runcmd")):
+        if kind == "ct" and (
+            a.get("nested_virt") or a.get("packages") or a.get("runcmd") or a.get("health_checks")
+        ):
             fail("invalid", "Use a VM for nested virtualization or cloud-init commands")
         return {
             "name": a["name"],
@@ -231,6 +272,9 @@ class Platform:
             "swap_mb": a.get("swap_mb", 4096 if kind == "vm" else 0),
             "packages": a.get("packages", []),
             "runcmd": a.get("runcmd", []),
+            "health_checks": a.get("health_checks", []),
+            "readiness_token": secrets.token_urlsafe(32) if not dry else None,
+            "guest_management": 1,
             "nics": [],
         }
 
@@ -251,7 +295,18 @@ class Platform:
             k: v
             for k, v in m.items()
             if k
-            in ("name", "kind", "image", "cpu", "memory_mb", "disk_gb", "swap_mb", "nested_virt", "packages")
+            in (
+                "name",
+                "kind",
+                "image",
+                "cpu",
+                "memory_mb",
+                "disk_gb",
+                "swap_mb",
+                "nested_virt",
+                "packages",
+                "health_checks",
+            )
         } | {
             "state": "planned",
             "reserved": False,
@@ -308,7 +363,22 @@ class Platform:
                 # deleting its owned wildcard DNS record.
                 await self.domains.record(tenant, remove=True)
         state["certificates"] = self.domains.bundles(state["domains"])
-        return await self.backend.reconcile(state)
+        result = await self.backend.reconcile(state)
+        await self.refresh_storage_usage()
+        return result
+
+    async def refresh_storage_usage(self):
+        try:
+            samples = await self.backend.call(
+                {"op": "storage_usage", "machines": self.store.objects("machines")}
+            )
+            if isinstance(samples, list):
+                for sample in samples:
+                    self.store.put("storage_usage", sample["tenant_n"], sample["tenant_n"], sample)
+        except (RuntimeError, httpx.HTTPError):
+            # Accounting is observational; reserved worst-case snapshot budgets
+            # continue to enforce limits if a sample is unavailable.
+            pass
 
     async def expire_grants(self):
         for r in self.store.objects("requests"):
@@ -328,12 +398,24 @@ class Platform:
             self.store.put("requests", r["id"], t["n"], r)
             self.store.log("system", t["n"], "quota_expired", {"request": r["id"]}, "ok")
 
-    @staticmethod
-    def public_machine(m, ports):
+    def public_machine(self, m, ports):
         safe = {
             k: v
             for k, v in m.items()
-            if k not in ("ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from")
+            if k not in ("ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token")
+        }
+        reports = [r for r in self.store.objects("guest_reports", m["tenant_n"]) if r["vmid"] == m["vmid"]]
+        report = reports[0] if reports else {}
+        if m["kind"] == "ct" and m.get("state") == "ready":
+            report = {**report, "initialization_status": "complete", "application_status": "not_checked"}
+        safe["readiness"] = {
+            "ssh_ready": m.get("ssh_ready", False),
+            "initialization_status": report.get("initialization_status", "unknown"),
+            "application_status": report.get("application_status", "not_checked"),
+            "checks": report.get("checks", []),
+            "reported_at": report.get("reported_at"),
+            "private_interfaces": report.get("interfaces", []),
+            "failed_step": report.get("failed_step"),
         }
         ssh = next(
             (p for p in ports if p["vmid"] == m["vmid"] and p["port"] == 22 and p["proto"] == "tcp"), None
@@ -347,9 +429,25 @@ class Platform:
         return safe
 
     async def execute(self, tool, args, who):
-        # All reservations and external mutations serialize across tenants. A
-        # crash leaves a charged allocation, not reusable IDs or leaked quota.
-        async with self.lock:
+        try:
+            if self.config.get("background_operations") and tool in ASYNC_TOOLS and not args.get("dry_run"):
+                await self.register_tenants(who)
+                if tool in ADMIN_TOOLS:
+                    if not who["admin"]:
+                        fail("forbidden", "winlab-admin membership required")
+                    t = next((t for t in self.store.tenants() if t["slug"] == args.get("tenant")), None)
+                    t = t or self.tenant(who)
+                else:
+                    t = self.tenant(who, args.get("tenant"))
+                if t["status"] != "active" and tool != "tenant_suspend":
+                    fail("forbidden", "Tenant is suspended")
+                result = self.operations.submit(tool, args, who, t, args.get("idempotency_key"))
+                self.store.log(who["sub"], t["n"], tool, args, "queued")
+                return {"ok": True, **result}
+        except Failure as e:
+            return e.result
+
+        async def dispatch():
             tenant_n = None
             try:
                 result, tenant_n = await self._execute(tool, args, who)
@@ -361,6 +459,11 @@ class Platform:
             except (RuntimeError, httpx.HTTPError) as e:
                 self.store.log(who["sub"], tenant_n, tool, args, "conflict")
                 return {"ok": False, "error": {"code": "conflict", "message": str(e)[:200]}}
+
+        if not args.get("dry_run") and tool in (MUTATIONS | ADMIN_MUTATIONS) - {"operation_retry"}:
+            async with self.lock:
+                return await dispatch()
+        return await dispatch()
 
     async def _execute(self, tool, a, who):
         dry = a.get("dry_run", False)
@@ -418,10 +521,32 @@ class Platform:
 
     async def member(self, tool, a, who, t):
         dry, n = a.get("dry_run", False), t["n"]
+        if tool == "operation_get":
+            if a.get("id"):
+                self.operations.find(t, a["id"])
+                task = self.operations.tasks.get(a["id"])
+                if task and a.get("wait_seconds", 20):
+                    await asyncio.wait({task}, timeout=a.get("wait_seconds", 20))
+            ops = (
+                [self.operations.find(t, a["id"])]
+                if a.get("id")
+                else sorted(self.store.objects("operations", n), key=lambda o: o["created_at"], reverse=True)[
+                    :50
+                ]
+            )
+            return {"operations": [self.operations.public(o) for o in ops]}, n
+        if tool == "operation_retry":
+            if dry:
+                return {"operation": self.operations.public(self.operations.find(t, a["id"]))}, n
+            return self.operations.retry(t, a["id"], who), n
+        if tool == "deployment_apply":
+            if dry:
+                return await self.deployment_plan(t, a), n
+            return await self.deployment_apply(t, a, who), n
         if tool == "deployment_plan":
             return await self.deployment_plan(t, a), n
         if tool == "quota_get":
-            return {"quota": self.quota(t)}, n
+            return {"quota": self.quota(t), "snapshot_storage": self.snapshot_usage(t)}, n
         if tool == "audit_log":
             rows = self.store.db.execute(
                 "SELECT * FROM audit WHERE tenant=? OR (tenant IS NULL AND actor=?) ORDER BY id DESC LIMIT 100",
@@ -455,66 +580,33 @@ class Platform:
                     pub["hypervisor"] = await self.backend.call({"op": "status", "machine": m})
                 out.append(pub)
             return {"machines": out}, n
-        if tool == "machine_retry":
-            m = self.machine(t, a["machine"])
-            if m["state"] not in ("error", "needs_owner_fix", "provisioning"):
-                fail("conflict", "Only an incomplete allocation can be retried")
-            if not dry:
-                await self.reconcile()
-                await self.backend.call({"op": "create", "machine": m})
-                deadline = time.monotonic() + 300
-                while time.monotonic() < deadline:
-                    try:
-                        reader, writer = await asyncio.wait_for(asyncio.open_connection(m["ip"], 22), 3)
-                        banner = await asyncio.wait_for(reader.readline(), 3)
-                        writer.close()
-                        await writer.wait_closed()
-                        if banner.startswith(b"SSH-"):
-                            m["state"] = "ready"
-                            break
-                    except (OSError, TimeoutError):
-                        pass
-                    await asyncio.sleep(2)
-                else:
-                    m["state"] = "needs_owner_fix"
-                self.store.put("machines", m["vmid"], n, m)
-            return {
-                "machine": self.public_machine(m, self.store.objects("ports", n)),
-                "dry_run": dry,
-                "quota_after": self.quota(t),
-            }, n
-        if tool == "machine_create":
-            m = self.machine_spec(t, a, dry)
-            delta = self.machine_delta(m)
-            after = self.quota(t, delta)
-            admission = await self.admission(m["cpu"], m["memory_mb"], m["disk_gb"])
-            used = {m["vmid"] for m in self.store.objects("machines", n)}
-            i = next((i for i in range(100) if 10000 + n * 100 + i not in used), None)
-            if i is None:
-                fail("quota_exceeded", "No machine slots", dimension="machines")
-            vmid = 10000 + n * 100 + i
-            port = self.allocate_port(t)
-            m.update(
-                {
-                    "vmid": vmid,
-                    "tenant_n": n,
-                    "ip": f"10.200.{n}.{10 + i}",
-                    "host": 10 + i,
-                    "mac": f"02:ca:{n:02x}:{i:02x}:00:01",
-                    "state": "provisioning",
-                    "created_at": int(time.time()),
-                    "nics": [],
-                }
+        if tool in ("machine_create", "machine_retry"):
+            existing = next(
+                (
+                    m
+                    for m in self.store.objects("machines", n)
+                    if m["name"] == a.get("name")
+                    and operation_id()
+                    and m.get("operation_id") == operation_id()
+                ),
+                None,
             )
-            grant = {
-                "id": f"{n}-{port}-tcp",
-                "tenant_n": n,
-                "vmid": vmid,
-                "ip": m["ip"],
-                "public_port": port,
-                "port": 22,
-                "proto": "tcp",
-            }
+            if tool == "machine_retry" or existing:
+                m = existing or self.machine(t, a["machine"])
+                if (
+                    m["state"] not in ("error", "needs_owner_fix", "provisioning", "initializing")
+                    and not existing
+                ):
+                    fail("conflict", "Only an incomplete allocation can be retried")
+                if not dry:
+                    await self.provision(m)
+                return {
+                    "machine": self.public_machine(m, self.store.objects("ports", n)),
+                    "quota_after": self.quota(t),
+                }, n
+            m = self.machine_spec(t, a, dry)
+            after = self.quota(t, self.machine_delta(m))
+            admission = await self.admission(m["cpu"], m["memory_mb"], m["disk_gb"])
             if dry:
                 planned = self.planned_machine(m)
                 return {
@@ -525,33 +617,9 @@ class Platform:
                     "units": UNITS,
                     "connection": {"available_after": "create", "public_ssh": True},
                 }, n
-            self.store.put("machines", vmid, n, m)
-            self.store.put("ports", grant["id"], n, grant)
-            try:
-                await self.reconcile()
-                await self.backend.call({"op": "create", "machine": m})
-                # A TCP banner is the only guest probe; no administrator login.
-                deadline = time.monotonic() + 300
-                while time.monotonic() < deadline:
-                    try:
-                        reader, writer = await asyncio.wait_for(asyncio.open_connection(m["ip"], 22), 3)
-                        banner = await asyncio.wait_for(reader.readline(), 3)
-                        writer.close()
-                        await writer.wait_closed()
-                        if banner.startswith(b"SSH-"):
-                            m["state"] = "ready"
-                            break
-                    except (OSError, TimeoutError):
-                        pass
-                    await asyncio.sleep(2)
-                else:
-                    m["state"] = "needs_owner_fix"
-                    m["reason"] = "SSH did not become ready within 5 minutes"
-            except Exception:
-                m["state"] = "error"
-                self.store.put("machines", vmid, n, m)
-                raise
-            self.store.put("machines", vmid, n, m)
+            with self.store.transaction():
+                m, grant = self.allocate_machine(t, m)
+            await self.provision(m)
             return {"machine": self.public_machine(m, [grant]), "quota_after": self.quota(t)}, n
         if tool in ["machine_power", "machine_delete", "machine_resize", "machine_metrics"]:
             m = self.machine(t, a["machine"])
@@ -572,77 +640,81 @@ class Platform:
                     owned = [x for x in self.store.objects(kind, n) if x["vmid"] == m["vmid"]]
                     delta[dim] = -len(owned)
                     if kind == "snapshots":
-                        delta["disk_gb"] -= sum(x["disk_gb"] for x in owned)
+                        delta["snapshot_gb"] = -sum(x["disk_gb"] for x in owned)
             elif tool == "machine_power":
                 request["action"] = a["action"]
                 if a["action"] in ("start", "reboot"):
                     self.quota(t, {})
-                if a["action"] == "start":
-                    await self.admission(0, 0, 0, proposed={**m, "state": "provisioning"})
+                # CPU/RAM remain reserved while stopped; starting adds no demand.
             else:
                 spec = {k: a.get(k, m[k]) for k in ("cpu", "memory_mb", "disk_gb")}
-                if any(spec[k] < m[k] for k in spec):
-                    fail("invalid", "Resize only grows resources")
+                if spec["disk_gb"] < m["disk_gb"]:
+                    fail("invalid", "Virtual disks cannot shrink")
+                shrinking = any(spec[k] < m[k] for k in ("cpu", "memory_mb"))
+                if shrinking and not dry:
+                    status = await self.backend.call({"op": "status", "machine": m})
+                    if status.get("status", status.get("state")) != "stopped":
+                        fail("conflict", "Stop the machine before reducing CPU or RAM")
                 delta = {
                     "vcpu": spec["cpu"] - m["cpu"],
                     "memory_mb": spec["memory_mb"] - m["memory_mb"],
                     "disk_gb": spec["disk_gb"] - m["disk_gb"],
                 }
                 self.quota(t, delta)
-                await self.admission(0, 0, 0, proposed={**m, **spec})
+                if any(value > 0 for value in delta.values()):
+                    await self.admission(0, 0, 0, proposed={**m, **spec})
                 request.update(action="resize", **spec)
             if not dry:
                 if tool == "machine_resize":
                     m.setdefault("resize_from", {k: m[k] for k in spec})
-                    m.update(spec)
+                    m.update({k: max(m[k], value) for k, value in spec.items()})
                     self.store.put("machines", m["vmid"], n, m)
                 await self.backend.call(request)
                 if tool == "machine_delete":
-                    had_domains = bool(self.store.objects("domains", n))
-                    for kind in ["ports", "domains", "snapshots"]:
-                        for obj in self.store.objects(kind, n):
-                            if obj["vmid"] == m["vmid"]:
-                                self.store.remove(kind, obj["id"])
-                    for peer in self.store.objects("peers"):
-                        if peer["target"] == m["ip"] or peer["source"] == m["ip"] + "/32":
-                            self.store.remove("peers", peer["id"])
-                    self.store.remove("machines", m["vmid"])
+                    m["state"] = "deleting"
+                    self.store.put("machines", m["vmid"], n, m)
+                    # Hold IDs/quota until both node and edge have removed grants.
                     await self.reconcile()
-                    if had_domains and not self.store.objects("domains", n):
-                        await self.domains.record(t, remove=True)
+                    with self.store.transaction():
+                        for kind in ["ports", "domains", "snapshots", "guest_reports"]:
+                            for obj in self.store.objects(kind, n):
+                                if obj["vmid"] == m["vmid"]:
+                                    self.store.remove(kind, obj.get("id", obj["vmid"]))
+                        for peer in self.store.objects("peers"):
+                            if peer["target"] == m["ip"] or peer["source"] == m["ip"] + "/32":
+                                self.store.remove("peers", peer["id"])
+                        self.store.remove("machines", m["vmid"])
                 elif tool == "machine_resize":
+                    m.update(spec)
                     m.pop("resize_from", None)
                     self.store.put("machines", m["vmid"], n, m)
                 else:
                     m["state"] = "stopped" if a["action"] in ("stop", "shutdown") else "running"
+                    m["power_state"] = m["state"]
+                    m["ssh_ready"] = False
                     self.store.put("machines", m["vmid"], n, m)
-            return {"dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}, n
+            result = {"dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}
+            if tool == "machine_resize" and dry and shrinking:
+                result["requirements"] = ["machine_stopped"]
+                result["ready_to_apply"] = m.get("state") == "stopped"
+            return result, n
         if tool.startswith("network_"):
             nets = self.store.objects("networks", n)
             if tool == "network_list":
                 return {"networks": nets}, n
             if tool == "network_create":
-                if any(x["name"] == a["name"] for x in nets):
+                old = next((x for x in nets if x["name"] == a["name"]), None)
+                if old and (not operation_id() or old.get("operation_id") != operation_id()):
                     fail("conflict", "Network name already exists")
-                delta = {"networks": 1}
+                delta = {} if old else {"networks": 1}
                 self.quota(t, delta)
-                self.validate_network(a)
-                k = next((k for k in range(1, 100) if k not in {v["serial"] for v in nets}), None)
-                if k is None:
-                    fail("quota_exceeded", "No network slots", dimension="networks")
-                net = {
-                    "id": f"p{n:03d}{k:02d}",
-                    "tenant_n": n,
-                    "serial": k,
-                    "name": a["name"],
-                    "cidr": a.get("cidr"),
-                    "mtu": 1450,
-                }
+                net = old or self.network_spec(t, a)
                 if not dry:
                     self.store.put("networks", net["id"], n, net)
                     await self.reconcile()
                 else:
-                    net = {"name": net["name"], "cidr": net["cidr"], "mtu": 1450, "state": "planned"}
+                    net = {k: v for k, v in net.items() if k not in ("id", "serial", "tenant_n")}
+                    net["state"] = "planned"
             else:
                 net = next((v for v in nets if v["name"] == a["network"] or v["id"] == a["network"]), None)
                 if not net:
@@ -657,8 +729,10 @@ class Platform:
                 ):
                     fail("conflict", "Network still has attached NICs")
                 if not dry:
-                    self.store.remove("networks", net["id"])
+                    net["state"] = "deleting"
+                    self.store.put("networks", net["id"], n, net)
                     await self.reconcile()
+                    self.store.remove("networks", net["id"])
             return {"network": net, "dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}, n
         if tool in ["machine_nic_attach", "machine_nic_detach"]:
             m = self.machine(t, a["machine"])
@@ -669,24 +743,44 @@ class Platform:
                 )
                 if not net:
                     fail("not_found", "Network not found in this tenant")
-                if any(nic["network"] == net["id"] for nic in m["nics"]):
+                existing = next((nic for nic in m["nics"] if nic["network"] == net["id"]), None)
+                if existing and (not operation_id() or existing.get("operation_id") != operation_id()):
                     fail("conflict", "Machine already attached to this network")
-                i = next((i for i in range(1, 8) if i not in {v["index"] for v in m["nics"]}), None)
+                i = (
+                    existing["index"]
+                    if existing
+                    else next((i for i in range(1, 8) if i not in {v["index"] for v in m["nics"]}), None)
+                )
                 if i is None:
                     fail("quota_exceeded", "Machine already has 8 NICs")
-                req = {"action": "nic_attach", "index": i, "serial": net["serial"]}
-                nics = [*m["nics"], {"index": i, "network": net["id"]}]
+                nic = existing or self.nic_spec(m, net, i)
+                req = {"action": "nic_attach", "index": i, "serial": net["serial"], "nic": nic}
+                nics = m["nics"] if existing else [*m["nics"], nic]
             else:
                 i = a["nic"]
                 if i == 0 or i not in {v["index"] for v in m["nics"]}:
+                    if operation_id() and i != 0:
+                        await self.reconcile()
+                        return {"nics": m["nics"], "quota_after": self.quota(t)}, n
                     fail("invalid", "Only attached private NICs can be detached")
                 req = {"action": "nic_detach", "index": i}
                 nics = [v for v in m["nics"] if v["index"] != i]
             if not dry:
+                if tool == "machine_nic_attach":
+                    m["nics"] = nics
+                    self.store.put("machines", m["vmid"], n, m)
+                    await self.reconcile()
                 await self.backend.call({"op": "action", "machine": m, **req})
                 m["nics"] = nics
+                if tool == "machine_nic_attach" and nic.get("ip") and m["kind"] == "vm":
+                    m["state"] = "initializing"
                 self.store.put("machines", m["vmid"], n, m)
-            return {"nics": nics, "dry_run": dry, "quota_after": self.quota(t)}, n
+                if tool == "machine_nic_detach":
+                    await self.reconcile()
+            result = {"nics": nics, "dry_run": dry, "quota_after": self.quota(t)}
+            if not dry:
+                result["machine"] = self.public_machine(m, self.store.objects("ports", n))
+            return result, n
         if tool.startswith("port_"):
             ports = self.store.objects("ports", n)
             if tool == "port_list":
@@ -702,6 +796,8 @@ class Platform:
                     None,
                 )
                 if existing:
+                    if not dry:
+                        await self.reconcile()
                     return {"port": existing, "quota_after": self.quota(t)}, n
                 delta = {"public_ports": 1}
                 self.quota(t, delta)
@@ -726,8 +822,10 @@ class Platform:
                     fail("not_found", "Port grant not found")
                 delta = {"public_ports": -1}
                 if not dry:
-                    self.store.remove("ports", grant["id"])
+                    grant["state"] = "deleting"
+                    self.store.put("ports", grant["id"], n, grant)
                     await self.reconcile()
+                    self.store.remove("ports", grant["id"])
             return {"port": grant, "dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}, n
         if tool.startswith("domain_"):
             domains = self.store.objects("domains", n)
@@ -770,10 +868,10 @@ class Platform:
                     fail("not_found", "Domain not found in this tenant")
                 delta = {"domains": -1}
                 if not dry:
-                    self.store.remove("domains", domain["id"])
+                    domain["state"] = "deleting"
+                    self.store.put("domains", domain["id"], n, domain)
                     await self.reconcile()
-                    if not self.store.objects("domains", n):
-                        await self.domains.record(t, remove=True)
+                    self.store.remove("domains", domain["id"])
             return {"domain": domain, "dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}, n
         if tool.startswith("peer_"):
             if tool == "peer_list":
@@ -786,8 +884,16 @@ class Platform:
                 src = f"10.200.{source['n']}.0/24"
                 if a.get("from_machine"):
                     src = self.machine(source, a["from_machine"])["ip"] + "/32"
+                old = next(
+                    (
+                        p
+                        for p in self.store.objects("peers", n)
+                        if p["source"] == src and p["target"] == m["ip"] and p["port"] == a["port"]
+                    ),
+                    None,
+                )
                 grant = {
-                    "id": secrets.token_hex(8),
+                    "id": old["id"] if old else secrets.token_hex(8),
                     "tenant_n": n,
                     "source": src,
                     "target": m["ip"],
@@ -803,8 +909,10 @@ class Platform:
                 if not grant:
                     fail("not_found", "Peer grant not found")
                 if not dry:
-                    self.store.remove("peers", grant["id"])
+                    grant["state"] = "deleting"
+                    self.store.put("peers", grant["id"], n, grant)
                     await self.reconcile()
+                    self.store.remove("peers", grant["id"])
             return {"peer": grant, "dry_run": dry, "quota_after": self.quota(t)}, n
         if tool.startswith("snapshot_"):
             m = self.machine(t, a["machine"])
@@ -812,16 +920,18 @@ class Platform:
                 fail("conflict", "Finish the pending machine_resize before snapshot operations")
             snapshots = [s for s in self.store.objects("snapshots", n) if s["vmid"] == m["vmid"]]
             if tool == "snapshot_list":
-                return {"snapshots": snapshots}, n
+                return {"snapshots": snapshots, "snapshot_storage": self.snapshot_usage(t)}, n
             id = f"{m['vmid']}-{a['name']}"
             snap = next((s for s in snapshots if s["name"] == a["name"]), None)
             delta = None
             if tool == "snapshot_create":
-                if snap:
+                if snap and (not operation_id() or snap.get("operation_id") != operation_id()):
                     fail("conflict", "Snapshot exists")
-                delta = {"snapshots": 1, "disk_gb": m["disk_gb"]}
+                delta = {} if snap else {"snapshots": 1, "snapshot_gb": m["disk_gb"]}
                 self.quota(t, delta)
-                snap = {
+                if not snap:
+                    await self.admission(0, 0, m["disk_gb"], snapshot=True)
+                snap = snap or {
                     "id": id,
                     "vmid": m["vmid"],
                     "name": a["name"],
@@ -831,7 +941,7 @@ class Platform:
             elif not snap:
                 fail("not_found", "Snapshot not found")
             elif tool == "snapshot_delete":
-                delta = {"snapshots": -1, "disk_gb": -snap["disk_gb"]}
+                delta = {"snapshots": -1, "snapshot_gb": -snap["disk_gb"]}
             if tool == "snapshot_rollback" and snap.get("configuration") != {
                 k: m[k] for k in ("cpu", "memory_mb", "disk_gb", "nics")
             }:
@@ -842,8 +952,24 @@ class Platform:
                 fail("invalid", "confirm must equal snapshot name")
             effects = {}
             if tool == "snapshot_rollback":
-                effects = {"power_state": "may_stop", "restart_tool": "machine_power"}
+                effects = {"power_state": "restored_to_previous", "downtime_expected": True}
             if not dry:
+                if tool == "snapshot_rollback":
+                    context = current_operation.get()
+                    record = context["record"] if context else {}
+                    restore = record.get("rollback_restore")
+                    if restore is None:
+                        status = await self.backend.call({"op": "status", "machine": m})
+                        reports = [
+                            r for r in self.store.objects("guest_reports", n) if r["vmid"] == m["vmid"]
+                        ]
+                        restore = {
+                            "running": status.get("status") == "running",
+                            "boot_id": reports[0].get("boot_id") if reports else None,
+                        }
+                        record["rollback_restore"] = restore
+                        if context:
+                            self.operations.save(record)
                 if tool == "snapshot_create":
                     # Keep the disk reservation if the adapter or process dies
                     # after creating the hypervisor snapshot.
@@ -867,18 +993,20 @@ class Platform:
                 elif tool == "snapshot_delete":
                     self.store.remove("snapshots", id)
                 else:
-                    # Disk-only rollback can leave a previously running VM stopped.
                     state = action_result.get("state", action_result.get("status"))
-                    if state not in ("running", "stopped"):
-                        fail("conflict", "Rollback completed but power state is unknown; use machine_get")
-                    m["state"] = state
-                    self.store.put("machines", m["vmid"], n, m)
-                    effects = {"power_state": state}
-                    if state == "stopped":
-                        effects["next_action"] = {
-                            "tool": "machine_power",
-                            "arguments": {"tenant": t["slug"], "machine": m["name"], "action": "start"},
-                        }
+                    if restore["running"]:
+                        await self.backend.call({"op": "action", "machine": m, "action": "start"})
+                        m["state"] = "initializing"
+                        self.store.put("machines", m["vmid"], n, m)
+                        await self.wait_ready(m, previous_boot=restore["boot_id"])
+                        state = "running"
+                    else:
+                        m["state"] = "stopped"
+                        m["ssh_ready"] = False
+                        self.store.put("machines", m["vmid"], n, m)
+                        state = "stopped"
+                    effects = {"power_state": state, "power_state_restored": True}
+                await self.refresh_storage_usage()
             if dry and tool == "snapshot_create":
                 snap = {
                     "name": snap["name"],
@@ -888,6 +1016,7 @@ class Platform:
                 }
             return {
                 "snapshot": snap,
+                "snapshot_storage": self.snapshot_usage(t),
                 "dry_run": dry,
                 "quota_after": self.quota(t, delta if dry else None),
                 **effects,
@@ -928,6 +1057,7 @@ class Platform:
         machines, networks, attachments = [], [], []
         existing_m = self.store.objects("machines", t["n"])
         existing_n = self.store.objects("networks", t["n"])
+        simulated_n = list(existing_n)
         by_machine = {ref: m for m in existing_m for ref in (m["name"], str(m["vmid"]))}
         by_network = {ref: net for net in existing_n for ref in (net["name"], net["id"])}
         delta = {}
@@ -942,9 +1072,11 @@ class Platform:
         for requested in a.get("networks", []):
             if requested["name"] in by_network:
                 fail("conflict", "Duplicate or existing network name", name=requested["name"])
-            self.validate_network(requested)
-            net = {"name": requested["name"], "cidr": requested.get("cidr"), "mtu": 1450, "state": "planned"}
-            networks.append(net)
+            net = self.network_spec(t, requested, simulated_n)
+            simulated_n.append(net)
+            networks.append(
+                {k: v for k, v in net.items() if k not in ("id", "serial", "tenant_n")} | {"state": "planned"}
+            )
             by_network[net["name"]] = net
         if networks:
             delta["networks"] = len(networks)
@@ -986,11 +1118,18 @@ class Platform:
                 "admission": admission,
                 "requirements": requirements,
                 "units": UNITS,
-                "apply_order": ["network_create", "machine_create", "machine_nic_attach"],
+                "apply_tool": "deployment_apply",
+                "apply_order": [
+                    "reserve_all",
+                    "network_create",
+                    "machine_create",
+                    "machine_nic_attach",
+                    "readiness_checks",
+                ],
                 "limitations": [
                     "No IDs, addresses or ports are reserved; apply rechecks capacity and quota.",
                     "Guest boot, package commands and SSH connectivity are checked only after creation.",
-                    "Private L2 NICs require guest IP configuration; no DHCP or gateway.",
+                    "Managed networks configure private IPs automatically; raw_l2 requires owner configuration.",
                 ],
             },
             True,
@@ -1087,7 +1226,15 @@ class Platform:
         return {"dry_run": dry, "quota_after": self.quota(t)}
 
 
-ADMIN_MUTATIONS = {"quota_set", "tenant_suspend", "request_approve", "request_reject", "reconcile_run"}
+ADMIN_MUTATIONS = {
+    "deployment_apply",
+    "operation_retry",
+    "quota_set",
+    "tenant_suspend",
+    "request_approve",
+    "request_reject",
+    "reconcile_run",
+}
 ADMIN_TOOLS = {
     "tenant_list",
     "node_list",
@@ -1100,6 +1247,8 @@ ADMIN_TOOLS = {
     "request_list_all",
 }
 MUTATIONS = {
+    "deployment_apply",
+    "operation_retry",
     "machine_create",
     "machine_retry",
     "machine_delete",

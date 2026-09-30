@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 DEFAULT_QUOTA = {
@@ -16,6 +17,7 @@ DEFAULT_QUOTA = {
     "domains": 10,
     "networks": 4,
     "snapshots": 4,
+    "snapshot_gb": 100,
     "images_gb": 20,
 }
 
@@ -68,7 +70,17 @@ CREATE TABLE IF NOT EXISTS oauth (
     def _tenant(row):
         if not row:
             return None
-        return {**dict(row), "quota": json.loads(row["quota"])}
+        return {**dict(row), "quota": {**DEFAULT_QUOTA, **json.loads(row["quota"])}}
+
+    @contextmanager
+    def transaction(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
 
     def tenant(self, subject):
         return self._tenant(self.db.execute("SELECT * FROM tenants WHERE subject=?", (subject,)).fetchone())
@@ -94,6 +106,16 @@ CREATE TABLE IF NOT EXISTS oauth (
         return [json.loads(r[0]) for r in rows]
 
     def put(self, kind, id, tenant, value):
+        from .operations import operation_id
+
+        if kind not in ("operations", "guest_reports", "requests", "certificates") and operation_id():
+            old = self.db.execute(
+                "SELECT data FROM objects WHERE kind=? AND id=?", (kind, str(id))
+            ).fetchone()
+            if not old:
+                value = {**value, "operation_id": operation_id()}
+            elif json.loads(old[0]).get("operation_id"):
+                value = {"operation_id": json.loads(old[0])["operation_id"], **value}
         self.db.execute(
             "INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data",
             (kind, str(id), tenant, json.dumps(value)),
@@ -129,7 +151,19 @@ CREATE TABLE IF NOT EXISTS oauth (
         self.db.execute("DELETE FROM oauth WHERE expires<?", (int(time.time()),))
 
     def desired(self):
-        return {
+        state = {
             "tenants": self.tenants(),
             **{k: self.objects(k) for k in ["machines", "networks", "ports", "peers", "domains"]},
         }
+        deleting = {m["vmid"] for m in state["machines"] if m.get("state") == "deleting"}
+        addresses = {m["ip"] for m in state["machines"] if m["vmid"] in deleting}
+        for kind in ("machines", "networks", "ports", "peers", "domains"):
+            state[kind] = [
+                o
+                for o in state[kind]
+                if o.get("state") != "deleting"
+                and o.get("vmid") not in deleting
+                and o.get("target") not in addresses
+                and o.get("source", "").removesuffix("/32") not in addresses
+            ]
+        return state

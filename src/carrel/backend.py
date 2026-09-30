@@ -1,5 +1,8 @@
 import asyncio
+import hashlib
 import json
+
+from .operations import current_operation
 
 
 class Backend:
@@ -7,6 +10,15 @@ class Backend:
         self.ssh_config = ssh_config
 
     async def call(self, request, target="carrel-node"):
+        context = current_operation.get()
+        if context and request["op"] in ("create", "action"):
+            identity = {k: v for k, v in request.items() if k != "machine"}
+            identity["vmid"] = request.get("machine", {}).get("vmid")
+            key = [context["id"], context["generation"], target, identity]
+            request = {
+                **request,
+                "request_id": hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(),
+            }
         proc = await asyncio.create_subprocess_exec(
             "ssh",
             "-F",

@@ -7,6 +7,8 @@ control plane owns authorization and quotas; this boundary owns host integrity.
 """
 
 import fcntl
+import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -84,12 +86,22 @@ def machine(m):
     return vmid
 
 
-def owned(m):
+def provision_marker(m):
+    return "carrel-provision-" + hashlib.sha256(str(m.get("readiness_token", m["name"])).encode()).hexdigest()
+
+
+def owned(m, allow_provisioning=False):
     vmid = machine(m)
     kind = "qemu" if m["kind"] == "vm" else "lxc"
     cfg = api("get", f"/nodes/{NODE}/{kind}/{vmid}/config")
     tags = cfg.get("tags", "").split(";")
     if "carrel" not in tags or f"tenant-{m['tenant_n']}" not in tags:
+        manifest = STATE / f"create-{vmid}.json"
+        if allow_provisioning and kind == "qemu" and manifest.exists():
+            saved = json.loads(manifest.read_text())
+            marker = provision_marker(m)
+            if saved.get("marker") == marker and cfg.get("description") == marker:
+                return cfg
         raise ValueError("refusing unowned VMID")
     return cfg
 
@@ -106,6 +118,123 @@ def ensure(path, key, value, **params):
         return False
     api("create", path, **{key: value}, **params)
     return True
+
+
+
+def private_dhcp(state):
+    """Each DHCP server lives in its own unrouted namespace, never on the host LAN."""
+    infra_path = Path("/etc/carrel/infra.nft")
+    if infra_path.exists():
+        infra = infra_path.read_text()
+        reporter_rule = '  oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.3 tcp dport 8080 accept\n'
+        if reporter_rule not in infra:
+            anchor = '  oifname "vmbr98" counter drop\n'
+            if anchor not in infra:
+                raise RuntimeError("unrecognized infrastructure firewall; reporter rule not installed")
+            proposed = infra.replace(anchor, reporter_rule + anchor)
+            write("/etc/carrel/infra.nft.next", proposed)
+            run("nft", "-c", "-f", "/etc/carrel/infra.nft.next")
+            write(infra_path, proposed)
+            run("nft", "-f", str(infra_path))
+    unit = """[Unit]
+Description=Carrel isolated DHCP %i
+After=network.target
+[Service]
+ExecStart=/usr/sbin/ip netns exec carrel-%i /usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/carrel/private-%i.conf --user=root
+Restart=on-failure
+RestartSec=3
+"""
+    if write("/etc/systemd/system/carrel-private-dhcp@.service", unit):
+        run("systemctl", "daemon-reload")
+    wanted = {net["id"] for net in state["networks"] if net.get("mode") == "managed"}
+    existing = {path.stem.removeprefix("private-") for path in Path("/etc/carrel").glob("private-p*.conf")}
+    existing.update(path.name.removeprefix("carrel-") for path in Path("/run/netns").glob("carrel-p*"))
+    existing.update(path.name.removeprefix("d") for path in Path("/sys/class/net").glob("dp*"))
+    for id in sorted(existing):
+        if not re.fullmatch(r"p[0-9]{5}", id) or id in wanted:
+            continue
+        run("systemctl", "stop", f"carrel-private-dhcp@{id}")
+        # Removing a namespace also asynchronously removes its veth peer. Delete
+        # the host end first to avoid racing that removal on a subsequent command.
+        if Path("/sys/class/net/d" + id).exists():
+            run("ip", "link", "delete", "d" + id)
+        if Path("/run/netns/carrel-" + id).exists():
+            run("ip", "netns", "delete", "carrel-" + id)
+        Path(f"/etc/carrel/private-{id}.conf").unlink(missing_ok=True)
+        (STATE / f"{id}.leases").unlink(missing_ok=True)
+    for net in state["networks"]:
+        n, serial = integer(net["tenant_n"], 1, 254), integer(net["serial"], 1, 99)
+        id = f"p{n:03d}{serial:02d}"
+        # Private bridges carry guest traffic only; the host has no IP on them.
+        ipv6 = Path(f"/proc/sys/net/ipv6/conf/{id}/disable_ipv6")
+        if ipv6.exists():
+            ipv6.write_text("1")
+        if net.get("mode") != "managed":
+            continue
+        subnet = ipaddress.IPv4Network(net["cidr"])
+        if subnet.prefixlen not in (24, 25) or not subnet.is_private:
+            raise ValueError("invalid managed subnet")
+        ns, uplink, interface = "carrel-" + id, "d" + id, "h" + id
+        if not Path("/run/netns/" + ns).exists():
+            run("ip", "netns", "add", ns)
+        if not Path("/sys/class/net/" + uplink).exists():
+            run("ip", "link", "add", uplink, "type", "veth", "peer", "name", interface)
+            run("ip", "link", "set", interface, "netns", ns)
+        run("ip", "link", "set", uplink, "master", id)
+        run("ip", "link", "set", uplink, "mtu", 1450, "up")
+        run("ip", "netns", "exec", ns, "ip", "link", "set", "lo", "up")
+        run("ip", "netns", "exec", ns, "ip", "link", "set", interface, "mtu", 1450, "up")
+        address = str(subnet.network_address + 1)
+        run("ip", "netns", "exec", ns, "ip", "address", "replace", f"{address}/{subnet.prefixlen}", "dev", interface)
+        conf = ["port=0", "bind-interfaces", "dhcp-authoritative", "log-dhcp", f"interface={interface}",
+                f"dhcp-leasefile=/var/lib/carrel/{id}.leases", f"dhcp-range={subnet.network_address},static,{subnet.netmask},12h",
+                "dhcp-option=option:router", "dhcp-option=option:dns-server", "dhcp-option=option:mtu,1450"]
+        for m in state["machines"]:
+            for nic in m["nics"]:
+                if nic["network"] == id and nic.get("ip"):
+                    ip = ipaddress.IPv4Address(nic["ip"])
+                    if ip not in subnet or not re.fullmatch(r"02:cb:[0-9a-f:]{11}", nic["mac"]):
+                        raise ValueError("invalid private lease")
+                    conf.append(f"dhcp-host={nic['mac']},{ip},12h")
+        changed = write(f"/etc/carrel/private-{id}.conf", "\n".join(conf) + "\n")
+        run("dnsmasq", "--test", "--conf-file=" + f"/etc/carrel/private-{id}.conf")
+        run("systemctl", "restart" if changed else "start", f"carrel-private-dhcp@{id}")
+    bridges = [f'"p{integer(n["tenant_n"], 1, 254):03d}{integer(n["serial"], 1, 99):02d}"' for n in state["networks"]]
+    rule = "meta ibrname { " + ", ".join(bridges) + " } drop" if bridges else ""
+    nft = "add table bridge carrel_private_host\nflush table bridge carrel_private_host\n"
+    nft += "table bridge carrel_private_host {\n chain input {\n type filter hook input priority -200; policy accept;\n " + rule + "\n }\n}\n"
+    write("/etc/carrel/private-host.nft", nft)
+    run("nft", "-c", "-f", "/etc/carrel/private-host.nft")
+    run("nft", "-f", "/etc/carrel/private-host.nft")
+    firewall_unit = """[Unit]
+Description=Carrel private bridges cannot reach the host
+After=network.target
+Before=pve-guests.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/carrel/private-host.nft
+[Install]
+WantedBy=multi-user.target
+"""
+    if write("/etc/systemd/system/carrel-private-host.service", firewall_unit):
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "carrel-private-host")
+
+
+def nic_value(m, nic):
+    index = integer(nic["index"], 1, 7)
+    network = nic["network"]
+    if not re.fullmatch(f"p{m['tenant_n']:03d}[0-9]{{2}}", network):
+        raise ValueError("invalid private network")
+    mac = nic["mac"]
+    if not re.fullmatch(r"02:c[bc]:[0-9a-f:]{11}", mac):
+        raise ValueError("invalid private MAC")
+    base = f"bridge={network},firewall=0,rate=100"
+    if m["kind"] == "vm":
+        return f"virtio={mac},{base},mtu=1"
+    address = f"{ipaddress.IPv4Address(nic['ip'])}/{integer(nic['prefix'], 24, 25)}" if nic.get("ip") else "manual"
+    return f"name=eth{index},type=veth,hwaddr={mac},mtu=1450,ip={address},{base}"
 
 
 def reconcile(state):
@@ -260,6 +389,7 @@ table inet carrel_conntrack {{
             "OUT DROP -source 0.0.0.0",
             "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
             "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
+            "OUT ACCEPT -dest 10.200.0.3 -p tcp -dport 8080",
         ]
         for peer in state["peers"]:
             # Peering is a grant by the destination owner, scoped to one port.
@@ -360,6 +490,7 @@ table inet carrel_conntrack {{
                 "/etc/caddy/Caddyfile",
             )
             run("pct", "exec", "101", "--", "systemctl", "reload", "caddy")
+    private_dhcp(state)
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     return {"changed": changed}
 
@@ -409,6 +540,31 @@ def cloud_init(m):
             *m.get("runcmd", []),
         ],
     }
+    if m.get("readiness_token"):
+        private_macs = " ".join(f"02:cb:{m['tenant_n']:02x}:{m['host']-10:02x}:{i:02x}:01" for i in range(1, 8))
+        reporter = Path("/usr/local/lib/carrel/guest-report.py").read_text()
+        commands = "import json,subprocess\nfrom pathlib import Path\np=Path('/var/lib/carrel-bootstrap.json')\n"
+        commands += "subprocess.run(['networkctl','reload'],check=True)\n"
+        commands += "for interface in json.loads(subprocess.check_output(['ip','-j','link'])):\n"
+        commands += " if interface.get('address','').startswith('02:cb:'):\n  subprocess.run(['networkctl','reconfigure',interface['ifname']],check=True)\n"
+        commands += "for i,command in enumerate(json.loads(" + repr(json.dumps(m.get("runcmd", []))) + ")):\n"
+        commands += " p.write_text(json.dumps({'state':'running','step':i}))\n result=subprocess.run(command,check=False)\n"
+        commands += " if result.returncode:\n  p.write_text(json.dumps({'state':'failed','step':i}))\n  raise SystemExit(result.returncode)\n"
+        commands += "p.write_text(json.dumps({'state':'complete'}))\n"
+        data["write_files"] += [
+            {"path": "/usr/local/lib/carrel/guest-report.py", "content": reporter, "permissions": "0755"},
+            {"path": "/etc/carrel/guest.json", "content": json.dumps({"vmid": m["vmid"], "token": m["readiness_token"], "health_checks": m.get("health_checks", [])}), "permissions": "0600"},
+            {"path": "/usr/local/lib/carrel/bootstrap.py", "content": commands, "permissions": "0700"},
+            {"path": "/etc/systemd/system/carrel-guest-report.service", "content": "[Unit]\nAfter=cloud-final.service\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 /usr/local/lib/carrel/guest-report.py\n"},
+            {"path": "/etc/systemd/system/carrel-guest-report.timer", "content": "[Unit]\nDescription=Carrel boot and application status\n[Timer]\nOnBootSec=20s\nOnUnitActiveSec=15s\n[Install]\nWantedBy=timers.target\n"},
+            {"path": "/etc/systemd/network/20-carrel-private.network", "content": "[Match]\nMACAddress=" + private_macs + "\n[Link]\nMTUBytes=1450\n[Network]\nDHCP=ipv4\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n[DHCPv4]\nUseRoutes=no\nUseDNS=no\nUseNTP=no\nUseHostname=no\n"},
+        ]
+        data["runcmd"] = [
+            ["systemctl", "daemon-reload"],
+            ["systemctl", "enable", "--now", "systemd-networkd", "carrel-guest-report.timer", "qemu-guest-agent", "fstrim.timer"],
+            ["sysctl", "--system"],
+            ["python3", "/usr/local/lib/carrel/bootstrap.py"],
+        ]
     if m.get("swap_mb", 4096):
         data["swap"] = {
             "filename": "/swapfile",
@@ -417,15 +573,36 @@ def cloud_init(m):
         }
     name = f"carrel-{m['vmid']}-user.json"
     write("/var/lib/vz/snippets/" + name, "#cloud-config\n" + json.dumps(data), 0o600)
-    return "user=local:snippets/" + name
+    network_name = f"carrel-{m['vmid']}-network.json"
+    network = {"version": 2, "ethernets": {"primary": {
+        "match": {"macaddress": m["mac"]}, "addresses": [m["ip"] + "/24"],
+        "routes": [{"to": "0.0.0.0/0", "via": f"10.200.{m['tenant_n']}.1"}],
+        "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": 1450,
+    }}}
+    write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
+    return "user=local:snippets/" + name + ",network=local:snippets/" + network_name
 
 
 def create(m):
     vmid = machine(m)
-    for kind in ["qemu-server", "lxc"]:
-        if Path(f"/etc/pve/{kind}/{vmid}.conf").exists():
+    manifest = STATE / f"create-{vmid}.json"
+    marker = provision_marker(m)
+    exists = any(Path(f"/etc/pve/{kind}/{vmid}.conf").exists() for kind in ("qemu-server", "lxc"))
+    saved = json.loads(manifest.read_text()) if manifest.exists() else {}
+    if exists:
+        try:
             owned(m)
+        except ValueError:
+            cfg = api("get", f"/nodes/{NODE}/qemu/{vmid}/config")
+            if saved.get("marker") != marker or cfg.get("description") != marker:
+                raise
+        if saved.get("complete") and saved.get("marker") == marker:
             return {"state": "exists", "vmid": vmid}
+        if saved.get("marker") != marker:
+            # Older, already handed-over guests are never reconfigured by retry.
+            return {"state": "exists", "vmid": vmid}
+    else:
+        write(manifest, json.dumps({"marker": marker, "complete": False}), 0o600)
     integer(m["cpu"], 1, 64)
     integer(m["memory_mb"], 512, 131072)
     integer(m["disk_gb"], 10, 1000)
@@ -438,7 +615,8 @@ def create(m):
         templates = {"debian-13": 9000, "ubuntu-24.04": 9001}
         if m["image"] not in templates:
             raise ValueError("image not installed")
-        run("qm", "clone", templates[m["image"]], vmid, "--full", "1", "--name", m["name"], timeout=600)
+        if not exists:
+            run("qm", "clone", templates[m["image"]], vmid, "--full", "1", "--name", m["name"], "--description", marker, timeout=600)
         run(
             "qm",
             "set",
@@ -471,48 +649,55 @@ def create(m):
             "order=20,up=3",
         )
         run("qm", "resize", vmid, "scsi0", f"{m['disk_gb']}G")
-        run("qm", "start", vmid)
+        for nic in m["nics"]:
+            run("qm", "set", vmid, f"--net{integer(nic['index'], 1, 7)}", nic_value(m, nic))
+        if "running" not in run("qm", "status", vmid):
+            run("qm", "start", vmid)
     else:
         images = {
             "debian-13": "debian-13-standard_13.1-2_amd64.tar.zst",
             "ubuntu-24.04": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst",
         }
         template = images[m["image"]]
-        run(
-            "pct",
-            "create",
-            vmid,
-            "local:vztmpl/" + template,
-            "--hostname",
-            m["name"],
-            "--unprivileged",
-            "1",
-            "--features",
-            "nesting=1",
-            "--cores",
-            m["cpu"],
-            "--memory",
-            m["memory_mb"],
-            "--swap",
-            m.get("swap_mb", 0),
-            "--rootfs",
-            f"local-lvm:{m['disk_gb']}",
-            "--net0",
-            net + f",name=eth0,ip={m['ip']}/24,gw=10.200.{n}.1,type=veth",
-            "--nameserver",
-            "10.200.0.2",
-            "--ssh-public-keys",
-            keyfile,
-            "--tags",
-            tags,
-            "--onboot",
-            "1",
-            "--startup",
-            "order=20,up=3",
-            timeout=600,
-        )
+        if not exists:
+            run(
+                "pct",
+                "create",
+                vmid,
+                "local:vztmpl/" + template,
+                "--hostname",
+                m["name"],
+                "--unprivileged",
+                "1",
+                "--features",
+                "nesting=1",
+                "--cores",
+                m["cpu"],
+                "--memory",
+                m["memory_mb"],
+                "--swap",
+                m.get("swap_mb", 0),
+                "--rootfs",
+                f"local-lvm:{m['disk_gb']}",
+                "--net0",
+                net + f",name=eth0,ip={m['ip']}/24,gw=10.200.{n}.1,type=veth",
+                "--nameserver",
+                "10.200.0.2",
+                "--ssh-public-keys",
+                keyfile,
+                "--tags",
+                tags,
+                "--onboot",
+                "1",
+                "--startup",
+                "order=20,up=3",
+                timeout=600,
+            )
         # Bootstrap hardening before handover, never a general guest execution API.
-        run("pct", "start", vmid)
+        for nic in m["nics"]:
+            run("pct", "set", vmid, f"--net{integer(nic['index'], 1, 7)}", nic_value(m, nic))
+        if "running" not in run("pct", "status", vmid):
+            run("pct", "start", vmid)
         run("pct", "exec", vmid, "--", "mkdir", "-p", "/etc/systemd/system/systemd-journald.service.d")
         fix = STATE / "journald.conf"
         write(fix, "[Service]\nImportCredential=\n")
@@ -520,13 +705,16 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "daemon-reload")
         run("pct", "exec", vmid, "--", "systemctl", "reset-failed", "systemd-journald")
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
+    write(manifest, json.dumps({"marker": marker, "complete": True}), 0o600)
     keyfile.unlink(missing_ok=True)
     return {"state": "running", "vmid": vmid}
 
 
 def action(req):
     m = req["machine"]
-    cfg = owned(m)
+    if req["action"] == "delete" and not any(Path(f"/etc/pve/{kind}/{machine(m)}.conf").exists() for kind in ("qemu-server", "lxc")):
+        return {"state": "absent"}
+    cfg = owned(m, allow_provisioning=req["action"] == "delete")
     cmd = "qm" if m["kind"] == "vm" else "pct"
     vmid = m["vmid"]
     op = req["action"]
@@ -543,10 +731,14 @@ def action(req):
         run(cmd, "destroy", vmid, "--purge", "1")
         Path(f"/etc/pve/firewall/{vmid}.fw").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-user.json").unlink(missing_ok=True)
+        Path(f"/var/lib/vz/snippets/carrel-{vmid}-network.json").unlink(missing_ok=True)
+        (STATE / f"create-{vmid}.json").unlink(missing_ok=True)
     elif op == "resize":
-        cpu = integer(req["cpu"], int(cfg.get("cores", 1)), 64)
-        mem = integer(req["memory_mb"], int(cfg["memory"]), 131072)
+        cpu = integer(req["cpu"], 1, 64)
+        mem = integer(req["memory_mb"], 512, 131072)
         disk = integer(req["disk_gb"], m["disk_gb"], 1000)
+        if (cpu < int(cfg.get("cores", 1)) or mem < int(cfg["memory"])) and "running" in run(cmd, "status", vmid):
+            raise ValueError("CPU/RAM shrink requires a stopped machine")
         volume = "scsi0" if cmd == "qm" else "rootfs"
         size = re.search(r"(?:^|,)size=(\d+(?:\.\d+)?)([KMGT])(?:,|$)", cfg[volume])
         if not size:
@@ -559,23 +751,27 @@ def action(req):
             run(cmd, "resize", vmid, volume, f"{disk}G")
     elif op in ["snapshot", "delsnapshot", "rollback"]:
         name = label(req["name"])
-        if op == "delsnapshot":
+        if op in ("snapshot", "delsnapshot"):
             kind = "qemu" if cmd == "qm" else "lxc"
             snapshots = api("get", f"/nodes/{NODE}/{kind}/{vmid}/snapshot")
-            if not any(s["name"] == name for s in snapshots):
-                return {"state": "absent"}
+            exists = any(s["name"] == name for s in snapshots)
+            if (op == "delsnapshot" and not exists) or (op == "snapshot" and exists):
+                return {"state": "exists" if exists else "absent"}
+        if op == "rollback" and "running" in run(cmd, "status", vmid):
+            run(cmd, "stop", vmid)
         run(cmd, op, vmid, name, timeout=600)
         if op == "rollback":
             return {"state": "running" if "running" in run(cmd, "status", vmid) else "stopped"}
     elif op in ["nic_attach", "nic_detach"]:
         index = integer(req["index"], 1, 7)
         if op == "nic_detach":
-            run(cmd, "set", vmid, "--delete", f"net{index}")
+            if f"net{index}" in cfg:
+                run(cmd, "set", vmid, "--delete", f"net{index}")
         else:
             serial = integer(req["serial"], 1, 99)
             net = f"bridge=p{m['tenant_n']:03d}{serial:02d},firewall=0,rate=100"
             net = "virtio," + net + ",mtu=1" if cmd == "qm" else f"name=eth{index},type=veth,mtu=1450," + net
-            run(cmd, "set", vmid, f"--net{index}", net)
+            run(cmd, "set", vmid, f"--net{index}", nic_value(m, req["nic"]) if req.get("nic") else net)
     else:
         raise ValueError("unsupported machine operation")
     return {"state": "done"}
@@ -583,13 +779,22 @@ def action(req):
 
 def main():
     STATE.mkdir(parents=True, exist_ok=True)
+    data = sys.stdin.buffer.read(2_000_001)
+    if len(data) > 2_000_000:
+        raise ValueError("request too large")
+    req = json.loads(data)
+    op = req["op"]
     with (STATE / "node.lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        data = sys.stdin.buffer.read(2_000_001)
-        if len(data) > 2_000_000:
-            raise ValueError("request too large")
-        req = json.loads(data)
-        op = req["op"]
+        if op not in ("inventory", "status", "metrics"):
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        journal = None
+        if req.get("request_id") and op in ("create", "action"):
+            if not re.fullmatch(r"[a-f0-9]{64}", req["request_id"]):
+                raise ValueError("invalid request ID")
+            journal = STATE / "requests" / (req["request_id"] + ".json")
+            if journal.exists():
+                print(journal.read_text())
+                return
         if op == "reconcile":
             out = reconcile(req["state"])
         elif op == "create":
@@ -600,13 +805,24 @@ def main():
             # Guest maxdisk omits secondary disks. Count all thin volumes,
             # including templates and unused disks, for conservative admission.
             volumes = api("get", f"/nodes/{NODE}/storage/local-lvm/content")
+            pools = json.loads(run("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o", "lv_name,data_percent,metadata_percent", "pve/data"))["report"][0]["lv"]
+            pool = pools[0]
             out = {
+                "thin_pool": {"data_fraction": float(pool["data_percent"] or 0) / 100,
+                              "metadata_fraction": float(pool["metadata_percent"] or 0) / 100},
                 "node": NODE,
                 "resources": api("get", "/cluster/resources"),
                 "storage": api("get", f"/nodes/{NODE}/storage/local-lvm/status"),
                 "status": api("get", f"/nodes/{NODE}/status"),
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
             }
+        elif op == "storage_usage":
+            for m in req["machines"]:
+                machine(m)
+            spec = importlib.util.spec_from_file_location("thin_usage", "/usr/local/lib/carrel/thin-usage.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            out = module.collect(req["machines"])
         elif op == "status":
             m = req["machine"]
             owned(m)
@@ -619,7 +835,10 @@ def main():
             out = api("get", f"/nodes/{NODE}/{kind}/{m['vmid']}/rrddata", timeframe="hour")
         else:
             raise ValueError("unknown operation")
-        print(json.dumps({"ok": True, "result": out}))
+        response = json.dumps({"ok": True, "result": out})
+        if journal:
+            write(journal, response, 0o600)
+        print(response)
 
 
 if __name__ == "__main__":
