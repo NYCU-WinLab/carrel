@@ -57,7 +57,7 @@ def main():
     clients = [Client(a.tokens, i) for i in range(2)]
     if a.phase == "create":
         for c in clients:
-            assert c.call("whoami", {"accept_policy": True})["ok"]
+            assert c.call("whoami")["ok"]
         forbidden = clients[0].call("quota_get", {"tenant": "carrel-test-b-0930"})
         assert forbidden["error"]["code"] == "forbidden"
         key = a.key.with_suffix(".pub").read_text().strip()

@@ -209,7 +209,7 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 
 | Skill | Intent | What it steers |
 |---|---|---|
-| `getting-started` | first contact | `whoami`, the use policy, uploading the member's public key, writing `~/.ssh/config` |
+| `getting-started` | first contact | sign in, automatic tenant registration, `whoami`, uploading the member's public key, writing `~/.ssh/config` |
 | `choose-machine` | "I need a machine for X" | VM or CT, image, size, `nested_virt`; Docker, OVS and Mininet always get a VM |
 | `sdn-coursework` | SDN and NFV homework | Ubuntu LTS VM with `nested_virt`, Mininet, Open vSwitch and a controller, and the address ranges to avoid inside the VM |
 | `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port, names outside the tenant's subtree through `domain_request` |
@@ -462,7 +462,7 @@ One compromised tenant machine can get the lab's public address blocked by the c
   cap with the Proxmox `rate` option. `rate` limits both directions of one NIC, so it guards the
   node, not the tenant. Values in open decision 13.4.
 - Connection-rate alerts for scanning patterns.
-- An acceptable use policy in the README, accepted on first `whoami`.
+- An acceptable use policy in the README, accepted by signing in. Eligible tenants are registered automatically on first use; no separate acknowledgement is required.
 
 ### 6.7 Internal DNS
 

@@ -47,7 +47,11 @@ Other MCP clients can use the same URL and OAuth discovery. Dynamic registration
 loopback callbacks and the explicitly configured ChatGPT callback. A new hosted client's callback
 must be added by an administrator; arbitrary callback origins are refused.
 
-Start with `whoami`, accept the use policy, add a **public** SSH key with `ssh_key_add`, and
+Signing in accepts the lab use rules; eligible personal and project tenants are created automatically
+on first use. There is no separate policy acknowledgement or registration step.
+Use Carrel only for authorized lab work; abuse, scanning other tenants and outbound SMTP are prohibited.
+
+Start with `whoami`, add a **public** SSH key with `ssh_key_add`, and
 check `quota_get`. Dry-run `machine_create` before creating a VM. Its result contains the actual
 public SSH command. VM user: `user`; CT user: `root`. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.

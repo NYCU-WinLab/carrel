@@ -4,6 +4,7 @@ import hashlib
 import re
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -16,7 +17,7 @@ from carrel.auth import OAuth, Verifier, challenge, digest, identity
 from carrel.pages import consent_page
 from carrel.platform import Platform
 from carrel.server import build
-from carrel.store import Store, mask
+from carrel.store import DEFAULT_QUOTA, Store, mask
 
 
 def person(name="alice", admin=False, projects=()):
@@ -106,6 +107,94 @@ async def test_tenant_idor_and_admin_tools(platform):
         "quota_get", {"tenant": "shared"}, person(projects=["winlab-projects/shared"])
     )
     assert result["ok"]
+
+
+@pytest.mark.asyncio
+async def test_first_authenticated_quota_call_registers_without_policy(monkeypatch):
+    class TestVerifier:
+        async def verify(self, token):
+            if token != "test":
+                raise ValueError("invalid")
+            return person(projects=["winlab-projects/shared"])
+
+    store = Store(":memory:")
+    reserved = AsyncMock(return_value=set())
+    monkeypatch.setattr(Platform, "reserved", reserved)
+    app = build(
+        {"origin": "https://carrel.test", "issuer": "https://issuer.test", "database": ":memory:"},
+        backend=Backend(),
+        verifier=TestVerifier(),
+        store=store,
+    )
+    async with (
+        app.app.router.lifespan_context(app.app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="https://carrel.test") as client,
+    ):
+        call = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "quota_get", "arguments": {}},
+        }
+        headers = {"Accept": "application/json, text/event-stream", "Authorization": "Bearer invalid"}
+        assert (await client.post("/mcp", json=call, headers=headers)).status_code == 401
+        assert not store.tenants()
+        headers["Authorization"] = "Bearer test"
+        result = (await client.post("/mcp", json=call, headers=headers)).json()["result"]["structuredContent"]
+        assert result["ok"]
+        assert result["quota"] == {"used": dict.fromkeys(DEFAULT_QUOTA, 0), "limit": DEFAULT_QUOTA}
+        assert {t["slug"] for t in store.tenants()} == {"alice", "shared"}
+
+        call["params"]["name"] = "whoami"
+        result = (await client.post("/mcp", json=call, headers=headers)).json()["result"]["structuredContent"]
+        assert result["ok"] and len(result["tenants"]) == 2
+        assert "policy" not in result and "registration_required" not in result
+        reserved.assert_awaited_once()
+        response = await client.post(
+            "/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+        )
+        whoami = next(t for t in response.json()["result"]["tools"] if t["name"] == "whoami")
+        assert whoami["inputSchema"]["properties"] == {}
+
+
+@pytest.mark.asyncio
+async def test_automatic_registration_is_idempotent_and_preserves_suspension(monkeypatch):
+    platform = Platform(Store(":memory:"), Backend(), {})
+    reserved = AsyncMock(side_effect=lambda: set())
+    monkeypatch.setattr(platform, "reserved", reserved)
+    who = person(projects=["winlab-projects/shared"])
+    results = await asyncio.gather(*[platform.execute("whoami", {}, who) for _ in range(4)])
+    assert all(r["ok"] for r in results)
+    assert len(platform.store.tenants()) == 2
+    reserved.assert_awaited_once()
+    platform.store.db.execute("UPDATE tenants SET status='suspended' WHERE subject='user:alice'")
+    platform.store.db.execute(
+        "UPDATE tenants SET quota=json_set(quota, '$.vcpu', 12) WHERE subject='user:alice'"
+    )
+    quota = await platform.execute("quota_get", {}, who)
+    assert quota["quota"]["limit"]["vcpu"] == 12
+    blocked = await platform.execute("network_create", {"name": "lan"}, who)
+    assert blocked["error"]["code"] == "forbidden"
+    assert platform.store.tenant("user:alice")["status"] == "suspended"
+    assert not platform.backend.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collision", ["dns", "tenant", "same_batch"])
+async def test_automatic_registration_preserves_namespace_ownership(monkeypatch, collision):
+    platform = Platform(Store(":memory:"), Backend(), {})
+    if collision == "tenant":
+        platform.store.register("user:bob", "shared")
+    monkeypatch.setattr(
+        platform, "reserved", AsyncMock(return_value={"shared"} if collision == "dns" else set())
+    )
+    who = person(
+        projects=["winlab-projects/alice" if collision == "same_batch" else "winlab-projects/shared"]
+    )
+    result = await platform.execute("whoami", {}, who)
+    assert result["error"]["code"] == "conflict"
+    assert not platform.store.tenant("user:alice")
+    assert not platform.store.tenant(who["projects"][0])
 
 
 @pytest.mark.asyncio

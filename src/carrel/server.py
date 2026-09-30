@@ -33,7 +33,7 @@ def build(config, backend=None, verifier=None, store=None):
     server = Server(
         "carrel",
         version="0.2.0",
-        instructions="WinLab pet machines. Start with whoami; accept the use policy before registration, add your public SSH key, inspect quotas and dry-run before mutations. Use VMs for Docker, Mininet and databases. Tenant identity is checked from Keycloak on every request.",
+        instructions="WinLab pet machines. Eligible tenants are created automatically on first use after sign-in. Start with whoami, add your public SSH key, inspect quotas and dry-run before mutations. Use VMs for Docker, Mininet and databases. Tenant identity is checked from Keycloak on every request.",
     )
 
     @server.list_tools()

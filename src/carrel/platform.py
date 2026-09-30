@@ -81,6 +81,25 @@ class Platform:
     def subjects(self, who):
         return [("user:" + who["sub"], who["username"]), *[(g, g.split("/")[1]) for g in who["projects"]]]
 
+    async def register_tenants(self, who):
+        # Identity has already passed Keycloak verification. Registration is
+        # automatic on first use, serialized by execute's lock and idempotent.
+        missing = [(s, name) for s, name in self.subjects(who) if not self.store.tenant(s)]
+        if not missing:
+            return
+        reserved = await self.reserved()
+        reserved.update(t["slug"] for t in self.store.tenants())
+        registrations = []
+        for subject, name in missing:
+            name = slug(name)
+            if name in reserved:
+                fail("conflict", "Tenant slug is already owned; administrator alias required", slug=name)
+            reserved.add(name)
+            registrations.append((subject, name))
+        for subject, name in registrations:
+            t = self.store.register(subject, name)
+            self.store.log(who["sub"], t["n"], "tenant_register", {}, "ok")
+
     def tenant(self, who, name=None):
         allowed = [self.store.tenant(s) for s, _ in self.subjects(who)]
         allowed = [t for t in allowed if t]
@@ -229,29 +248,6 @@ class Platform:
 
     async def _execute(self, tool, a, who):
         dry = a.get("dry_run", False)
-        if tool == "whoami":
-            subjects = self.subjects(who)
-            if a.get("accept_policy"):
-                reserved = await self.reserved()
-                for subject, name in subjects:
-                    if self.store.tenant(subject):
-                        continue
-                    name = slug(name)
-                    if name in reserved or any(t["slug"] == name for t in self.store.tenants()):
-                        fail(
-                            "conflict",
-                            "Tenant slug is already owned; administrator alias required",
-                            slug=name,
-                        )
-                    self.store.register(subject, name)
-            tenants = [self.store.tenant(s) for s, _ in subjects]
-            return {
-                "username": who["username"],
-                "admin": who["admin"],
-                "tenants": [t for t in tenants if t],
-                "policy": "Use only authorized lab work. No abuse, scanning other tenants or outbound SMTP. Hypervisor administrators can technically read disks; carrel does not enter tenant machines.",
-                "registration_required": any(t is None for t in tenants),
-            }, None
         if tool == "images_list":
             return {"images": [i for i in IMAGES if not a.get("kind") or i["kind"] == a["kind"]]}, None
         if tool == "sizes_list":
@@ -260,6 +256,13 @@ class Platform:
             if not who["admin"]:
                 fail("forbidden", "winlab-admin membership required")
             return await self.admin(tool, a, who), None
+        await self.register_tenants(who)
+        if tool == "whoami":
+            return {
+                "username": who["username"],
+                "admin": who["admin"],
+                "tenants": [self.store.tenant(s) for s, _ in self.subjects(who)],
+            }, None
         t = self.tenant(who, a.get("tenant"))
         n = t["n"]
         if tool in MUTATIONS and t["status"] != "active":

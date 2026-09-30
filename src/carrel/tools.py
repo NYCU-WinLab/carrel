@@ -85,8 +85,7 @@ def tool(name, description, properties=None, required=(), account=False):
 TOOLS = [
     tool(
         "whoami",
-        "Read verified Keycloak identity and available tenants. Set accept_policy=true once to register eligible tenants.",
-        {"accept_policy": BOOL},
+        "Read verified Keycloak identity and available tenants. Eligible personal and project tenants are created automatically on first use.",
         account=True,
     ),
     tool("quota_get", "Read tenant allocation and quota."),
