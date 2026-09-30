@@ -2,19 +2,18 @@
 
 from mcp.types import Tool
 
-from .platform import MUTATIONS
-from .store import DEFAULT_QUOTA
+from .platform import MUTATIONS, QUOTA_DIMENSIONS
 
 TEXT = {"type": "string", "minLength": 1, "maxLength": 256}
 LABEL = {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}
 MACHINE = {"type": "string", "minLength": 1, "maxLength": 32}
 PORT = {"type": "integer", "minimum": 1, "maximum": 65535}
-CPU = {"type": "integer", "minimum": 1, "maximum": 64}
-MEM = {"type": "integer", "minimum": 512, "maximum": 131072}
-DISK = {"type": "integer", "minimum": 10, "maximum": 1000}
+CPU = {"type": "integer", "minimum": 1, "maximum": 64, "description": "Virtual CPUs (vCPU)."}
+MEM = {"type": "integer", "minimum": 512, "maximum": 131072, "description": "RAM in MiB (1024 MiB = 1 GiB)."}
+DISK = {"type": "integer", "minimum": 10, "maximum": 1000, "description": "Virtual disk capacity in GiB."}
 BOOL = {"type": "boolean"}
 KEY = {"type": "string", "minLength": 40, "maxLength": 16000}
-DIM = {"type": "string", "enum": list(DEFAULT_QUOTA)}
+DIM = {"type": "string", "enum": list(QUOTA_DIMENSIONS)}
 AMOUNT = {"type": "integer", "minimum": 0, "maximum": 1000000}
 RESULT = {
     "type": "object",
@@ -60,7 +59,7 @@ def tool(name, description, properties=None, required=(), account=False):
         props["dry_run"] = {
             "type": "boolean",
             "default": False,
-            "description": "Validate and preview without changing state.",
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes.",
         }
     from mcp.types import ToolAnnotations
 
@@ -85,10 +84,23 @@ def tool(name, description, properties=None, required=(), account=False):
 TOOLS = [
     tool(
         "whoami",
-        "Read verified Keycloak identity and available tenants. Eligible personal and project tenants are created automatically on first use.",
+        "Get identity, default tenant, capabilities and every visible tenant's used/limit/remaining quota in one call. Eligible tenants register automatically. No quota_get needed for this overview.",
         account=True,
     ),
-    tool("quota_get", "Read tenant allocation and quota."),
+    tool(
+        "quota_get",
+        "Refresh one tenant's used/limit/remaining quota; whoami already includes all visible tenants.",
+    ),
+    tool(
+        "catalog_get",
+        "Get installed images, size presets, MiB/GiB units and supported capabilities together.",
+        account=True,
+    ),
+    tool(
+        "capacity_get",
+        "Get live aggregate physical CPU/RAM/storage, admission headroom and policy. Shared capacity is separate from tenant quota; no other tenants' guest details. GPU allocation is unsupported, GPU hardware inventory unknown.",
+        account=True,
+    ),
     tool(
         "images_list",
         "List installed stable images and support dates.",
@@ -98,7 +110,7 @@ TOOLS = [
     tool("sizes_list", "List machine resource presets.", account=True),
     tool(
         "machine_create",
-        "Create a pet VM or unprivileged container; returns an SSH line after probing SSH. Use a VM for Docker, OVS, Mininet, databases and nested virtualization. Dry-run first. Only supply your public keys.",
+        "Create one VM/CT; apply returns SSH after probing it. Use VMs for Docker, OVS, Mininet or databases. Dry-run first: checks quota/capacity even without SSH keys, returning requirements instead. Valid public keys are mandatory for apply, can be passed inline and need not be saved. For multiple resources and NICs use deployment_plan.",
         {
             "name": LABEL,
             "kind": {"enum": ["vm", "ct"]},
@@ -109,7 +121,7 @@ TOOLS = [
             "disk_gb": DISK,
             "ssh_keys": {"type": "array", "items": KEY, "maxItems": 20},
             "nested_virt": BOOL,
-            "swap_mb": {"type": "integer", "minimum": 0, "maximum": 65536},
+            "swap_mb": {"type": "integer", "minimum": 0, "maximum": 65536, "description": "Swap in MiB."},
             "packages": {
                 "type": "array",
                 "maxItems": 100,
@@ -273,3 +285,38 @@ TOOLS = [
     tool("request_reject", "Admin: reject a pending quota request.", {"id": TEXT}, ["id"], account=True),
 ]
 BY_NAME = {t.name: t for t in TOOLS}
+
+# Keep callable aliases for existing clients, but do not advertise redundant tools.
+TOOLS = [t for t in TOOLS if t.name not in {"images_list", "sizes_list"}]
+_machine = {
+    k: v
+    for k, v in BY_NAME["machine_create"].inputSchema["properties"].items()
+    if k not in ("tenant", "dry_run")
+}
+_network = {"name": LABEL, "cidr": TEXT}
+
+
+def objects(properties, required, maximum):
+    return {
+        "type": "array",
+        "maxItems": maximum,
+        "items": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": False,
+        },
+    }
+
+
+plan = tool(
+    "deployment_plan",
+    "Read-only preview of multiple new machines, private networks and NIC attachments together. Use names as symbolic references to new resources or this tenant's existing names/IDs. Checks aggregate quota, host admission and NIC slots; no reservations or resource writes. Missing public keys become requirements. Apply later with network_create, machine_create, machine_nic_attach; guest configuration is not executed in planning.",
+    {
+        "machines": objects(_machine, ["name"], 100),
+        "networks": objects(_network, ["name"], 99),
+        "attachments": objects({"machine": MACHINE, "network": TEXT}, ["machine", "network"], 700),
+    },
+)
+TOOLS.append(plan)
+BY_NAME[plan.name] = plan

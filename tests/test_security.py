@@ -15,7 +15,7 @@ from starlette.requests import Request
 
 from carrel.auth import OAuth, Verifier, challenge, digest, identity
 from carrel.pages import consent_page
-from carrel.platform import Platform
+from carrel.platform import QUOTA_DIMENSIONS, Platform
 from carrel.server import build
 from carrel.store import DEFAULT_QUOTA, Store, mask
 
@@ -142,7 +142,9 @@ async def test_first_authenticated_quota_call_registers_without_policy(monkeypat
         headers["Authorization"] = "Bearer test"
         result = (await client.post("/mcp", json=call, headers=headers)).json()["result"]["structuredContent"]
         assert result["ok"]
-        assert result["quota"] == {"used": dict.fromkeys(DEFAULT_QUOTA, 0), "limit": DEFAULT_QUOTA}
+        visible = {k: DEFAULT_QUOTA[k] for k in QUOTA_DIMENSIONS}
+        assert result["quota"]["used"] == dict.fromkeys(visible, 0)
+        assert result["quota"]["limit"] == result["quota"]["remaining"] == visible
         assert {t["slug"] for t in store.tenants()} == {"alice", "shared"}
 
         call["params"]["name"] = "whoami"

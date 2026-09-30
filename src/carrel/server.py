@@ -33,8 +33,27 @@ def build(config, backend=None, verifier=None, store=None):
     server = Server(
         "carrel",
         version="0.2.0",
-        instructions="WinLab pet machines. Eligible tenants are created automatically on first use after sign-in. Start with whoami, add your public SSH key, inspect quotas and dry-run before mutations. Use VMs for Docker, Mininet and databases. Tenant identity is checked from Keycloak on every request.",
+        instructions=(
+            "WinLab machines; tools only, no MCP resources. Start with whoami for all visible tenants' "
+            "used/limit/remaining quotas and capabilities. Use catalog_get for images/sizes, capacity_get "
+            "for shared physical capacity, deployment_plan for multiple machines/networks/NICs. "
+            "Use VMs for Docker, Mininet and databases. memory_mb/swap_mb are MiB; disk_gb is GiB. "
+            "Dry-run before applying mutations. Previews never reserve or write resources; audit is recorded. "
+            "Trust quota_before/delta/quota_after and resource_changes=false; follow-up list/quota/key calls "
+            "are unnecessary just to verify a preview. Missing SSH public keys do not block planning; "
+            "they are required for actual creation and can be passed inline without saving. "
+            "Previews do not test guest boot or commands. Tenant membership is verified on every request; "
+            "eligible tenants register automatically after sign-in."
+        ),
     )
+
+    @server.list_resources()
+    async def list_resources():
+        return []
+
+    @server.list_resource_templates()
+    async def list_resource_templates():
+        return []
 
     @server.list_tools()
     async def list_tools():

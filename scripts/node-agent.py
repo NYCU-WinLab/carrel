@@ -595,11 +595,15 @@ def main():
         elif op == "action":
             out = action(req)
         elif op == "inventory":
+            # Guest maxdisk omits secondary disks. Count all thin volumes,
+            # including templates and unused disks, for conservative admission.
+            volumes = api("get", f"/nodes/{NODE}/storage/local-lvm/content")
             out = {
                 "node": NODE,
                 "resources": api("get", "/cluster/resources"),
                 "storage": api("get", f"/nodes/{NODE}/storage/local-lvm/status"),
                 "status": api("get", f"/nodes/{NODE}/status"),
+                "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
             }
         elif op == "status":
             m = req["machine"]

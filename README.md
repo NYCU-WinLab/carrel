@@ -18,8 +18,8 @@ endpoint, signs in with the lab Keycloak account, and the platform does the rest
 
 ```
 > "Open a VM on winlab for my SDN homework"
-  ⚡ machine_create { kind: "vm", image: "ubuntu-24.04", size: "medium", nested_virt: true }
-✓ sdn-hw ready: ssh -p 20170 ubuntu@<public address>
+  ⚡ machine_create { name: "sdn-hw", kind: "vm", image: "ubuntu-24.04", size: "medium", dry_run: true }
+✓ Planned: 4 vCPU, 8 GiB RAM, 40 GiB disk. Quota and capacity fit; supply a public key to create.
 ```
 
 ## Status and connection
@@ -51,11 +51,30 @@ Signing in accepts the lab use rules; eligible personal and project tenants are 
 on first use. There is no separate policy acknowledgement or registration step.
 Use Carrel only for authorized lab work; abuse, scanning other tenants and outbound SMTP are prohibited.
 
-Start with `whoami`, add a **public** SSH key with `ssh_key_add`, and
-check `quota_get`. Dry-run `machine_create` before creating a VM. Its result contains the actual
-public SSH command. VM user: `user`; CT user: `root`. Never put private SSH keys or tokens in tool
+Start with `whoami` for your default tenant, capabilities and all personal/project quotas, including
+used, limit and remaining. `catalog_get` combines images and size presets; `capacity_get` reports
+shared physical capacity and admission headroom without exposing other tenants' machines.
+`quota_get` refreshes one tenant. `memory_mb` and `swap_mb` mean **MiB**; `disk_gb` means **GiB**.
+
+Dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
+machines, networks and NIC attachments. Plans resolve names within the selected tenant and check
+their aggregate quota and capacity. Previews return `quota_before`, `delta`, `quota_after`,
+`requirements` and `ready_to_apply`; they reserve nothing and write no resources. They record an
+audit entry. No follow-up list or quota call is needed to establish that a preview did not create anything.
+Missing SSH keys are reported as a requirement, so resource planning can still finish.
+
+For creation, pass your **public** key inline or save it with `ssh_key_add`. Only actual creation
+returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
+Apply a group in order with `network_create`, `machine_create`, then `machine_nic_attach`;
+capacity is rechecked during each operation. Guest boot, packages and connectivity are not verified
+by a plan. Private networks are L2 only; configure IPs in each guest. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.
+
+The server offers tools and empty MCP resource discovery. `images_list` and `sizes_list` remain
+callable compatibility aliases but are omitted from discovery. Custom image storage is not yet
+supported, so `images_gb` is hidden from quota responses and requests; stored limits are preserved.
+GPU allocation is unsupported; hardware GPU inventory is unknown.
 
 Implemented: VM/CT lifecycle, stable image templates, public SSH/port grants, tenant HTTPS domains,
 private L2 networks and NICs, explicit cross-tenant TCP grants, snapshots, quota requests/approval,
