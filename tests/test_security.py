@@ -1,6 +1,10 @@
 import asyncio
+import base64
+import hashlib
+import re
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import jwt
@@ -9,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.requests import Request
 
 from carrel.auth import OAuth, Verifier, challenge, digest, identity
+from carrel.pages import consent_page
 from carrel.platform import Platform
 from carrel.server import build
 from carrel.store import Store, mask
@@ -204,6 +209,124 @@ def test_audit_redaction():
     assert mask(
         {"password": "secret", "nested": {"refresh_token": "secret"}, "runcmd": [["echo", "secret"]]}
     ) == {"password": "[redacted]", "nested": {"refresh_token": "[redacted]"}, "runcmd": "[redacted]"}
+
+
+@pytest.mark.asyncio
+async def test_browser_consent_referrer_policy_and_csrf_boundaries():
+    store = Store(":memory:")
+    origin = "https://carrel.test"
+    app = build(
+        {"origin": origin, "issuer": "https://issuer.test", "database": ":memory:"},
+        backend=Backend(),
+        store=store,
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url=origin) as client:
+        client.cookies.set("carrel_oauth", "browser-cookie", domain="carrel.test", path="/oauth")
+
+        async def begin():
+            store.oauth_put(
+                "state",
+                "state",
+                {
+                    "client": "desktop",
+                    "name": '<script>alert("x")</script>',
+                    "redirect": "http://127.0.0.1:12345/callback",
+                    "state": "client-state",
+                    "challenge": challenge("v" * 50),
+                    "cookie": digest("browser-cookie"),
+                },
+                300,
+            )
+            page = await client.get(
+                "/oauth/callback",
+                params={"state": "state", "code": "upstream-code", "iss": "https://issuer.test"},
+            )
+            assert page.status_code == 200
+            # no-referrer causes browser navigation POSTs to send Origin: null.
+            # Preserve an origin-only referrer and the strict origin guard.
+            assert page.headers["referrer-policy"] == "strict-origin"
+            assert page.headers["cache-control"] == "no-store"
+            assert '<script>alert("x")</script>' not in page.text
+            assert "&lt;script&gt;" in page.text
+            assert "upstream-code" not in page.text
+            css = re.search(r"<style>(.*?)</style>", page.text, re.DOTALL)[1]
+            css_hash = base64.b64encode(hashlib.sha256(css.encode()).digest()).decode()
+            assert f"style-src 'sha256-{css_hash}'" in page.headers["content-security-policy"]
+            assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
+            assert "form-action 'self' http://127.0.0.1:12345;" in page.headers["content-security-policy"]
+            return re.search(r'name="consent" value="([^"]+)"', page.text)[1]
+
+        nonce = await begin()
+        for bad_origin in ["https://evil.test", "null"]:
+            result = await client.post(
+                "/oauth/consent",
+                data={"consent": nonce, "allow": "yes"},
+                headers={"Origin": bad_origin},
+            )
+            assert result.status_code == 403
+            assert not store.oauth_get("code", digest("upstream-code"))
+            assert store.oauth_get("consent", nonce)
+
+        result = await client.post(
+            "/oauth/consent", data={"consent": nonce, "allow": "yes"}, headers={"Origin": origin}
+        )
+        assert result.status_code == 302
+        query = parse_qs(urlsplit(result.headers["location"]).query)
+        assert query == {"state": ["client-state"], "iss": [origin], "code": ["upstream-code"]}
+        result = await client.post(
+            "/oauth/consent", data={"consent": nonce, "allow": "yes"}, headers={"Origin": origin}
+        )
+        assert result.status_code == 400  # consent is one-use
+        store.oauth_pop("code", digest("upstream-code"))
+
+        nonce = await begin()
+        result = await client.post("/oauth/consent", data={"consent": nonce, "allow": "yes"})
+        assert result.status_code == 400  # absent Origin does not bypass the guard
+
+        nonce = await begin()
+        client.cookies.set("carrel_oauth", "another-browser", domain="carrel.test", path="/oauth")
+        result = await client.post(
+            "/oauth/consent", data={"consent": nonce, "allow": "yes"}, headers={"Origin": origin}
+        )
+        assert result.status_code == 400  # origin alone is not authorization
+        assert not store.oauth_get("code", digest("upstream-code"))
+
+        client.cookies.set("carrel_oauth", "browser-cookie", domain="carrel.test", path="/oauth")
+        nonce = await begin()
+        result = await client.post(
+            "/oauth/consent", data={"consent": nonce, "allow": "no"}, headers={"Origin": origin}
+        )
+        assert result.status_code == 302
+        assert parse_qs(urlsplit(result.headers["location"]).query)["error"] == ["access_denied"]
+        assert not store.oauth_get("code", digest("upstream-code"))
+
+
+@pytest.mark.parametrize(
+    ("redirect", "origin"),
+    [
+        ("http://localhost:1234/callback", "http://localhost:1234"),
+        ("http://[::1]:1234/callback", "http://[::1]:1234"),
+        ("https://client.test/cb?next=;script-src%20*", "https://client.test"),
+    ],
+)
+def test_consent_csp_allows_only_registered_callback_origin(redirect, origin):
+    policy = consent_page("client", redirect, "nonce").headers["content-security-policy"]
+    assert f"form-action 'self' {origin};" in policy
+    assert "script-src" not in policy
+
+
+@pytest.mark.parametrize(
+    "redirect",
+    [
+        "https://client.test;script-src*/cb",
+        "http://[::1%zone;script-src*]:1234/cb",
+        "javascript:alert(1)",
+        "https://user@client.test/cb",
+    ],
+)
+def test_consent_csp_rejects_invalid_origin(redirect):
+    with pytest.raises(ValueError):
+        consent_page("client", redirect, "nonce")
 
 
 @pytest.mark.asyncio

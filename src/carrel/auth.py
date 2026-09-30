@@ -9,14 +9,15 @@ accepted without the carrel audience, issuer and authorized party.
 import asyncio
 import base64
 import hashlib
-import html
 import re
 import secrets
 from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jwt
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse
+
+from .pages import consent_page
 
 ACTIVE = {"112", "113", "114", "115", "master", "doctoral", "undergrad", "assistant", "teacher"}
 
@@ -198,19 +199,7 @@ class OAuth:
             consent = secrets.token_urlsafe(32)
             txn["code"] = q["code"]
             self.store.oauth_put("consent", consent, txn, 300)
-            body = f"""<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width">
-<title>Carrel 授權</title><main><h1>連接 Carrel</h1><p>允許 {html.escape(txn["name"])} 管理你在 WinLab 的機器？</p>
-<p>登入結果會送回 {html.escape(txn["redirect"])}。</p><form method="post" action="/oauth/consent">
-<input type="hidden" name="consent" value="{consent}"><button name="allow" value="yes">允許連接</button>
-<button name="allow" value="no">取消</button></form></main></html>"""
-            return HTMLResponse(
-                body,
-                headers={
-                    "Cache-Control": "no-store",
-                    "Referrer-Policy": "no-referrer",
-                    "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-                },
-            )
+            return consent_page(txn["name"], txn["redirect"], consent)
         if path == "/oauth/consent" and method == "POST":
             data = await request.form()
             txn = self.store.oauth_pop("consent", str(data.get("consent", "")))

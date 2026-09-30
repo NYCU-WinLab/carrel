@@ -25,12 +25,23 @@ endpoint, signs in with the lab Keycloak account, and the platform does the rest
 ## Status and connection
 
 The first B09 deployment is running at **https://carrel.winlab.tw/mcp** (Streamable HTTP,
-OAuth through the WinLab Keycloak realm). In Claude Code:
+OAuth through the WinLab Keycloak realm). Install for all projects in Claude Code:
 
 ```sh
-claude mcp add --transport http carrel https://carrel.winlab.tw/mcp
-# Open /mcp, select carrel, and authenticate with your own WinLab account.
+claude mcp add --scope user --transport http carrel https://carrel.winlab.tw/mcp
+claude mcp login carrel
 ```
+
+Or install in Codex:
+
+```sh
+codex mcp add carrel --url https://carrel.winlab.tw/mcp --oauth-client-registration dcr
+codex mcp login carrel --oauth-client-registration dcr
+```
+
+Run login in an interactive terminal, sign in with your WinLab account, and allow the application
+in the browser. Complete each client's login before starting the next. Start a new client session
+after setup so it loads the new MCP configuration.
 
 Other MCP clients can use the same URL and OAuth discovery. Dynamic registration accepts
 loopback callbacks and the explicitly configured ChatGPT callback. A new hosted client's callback
