@@ -363,6 +363,34 @@ async def test_start_does_not_double_count_pending_reservation(platform):
     assert result["ok"]
 
 
+@pytest.mark.parametrize("power_state", ["running", "stopped"])
+async def test_rollback_updates_actual_power_state_and_restart_guidance(platform, power_state):
+    m = seed(platform)
+    platform.store.put(
+        "snapshots",
+        "10100-before",
+        1,
+        {
+            "id": "10100-before",
+            "vmid": 10100,
+            "name": "before",
+            "disk_gb": 20,
+            "configuration": {k: m[k] for k in ("cpu", "memory_mb", "disk_gb", "nics")},
+        },
+    )
+    platform.backend.call = AsyncMock(return_value={"state": power_state})
+    args = {"machine": "test", "name": "before", "confirm": "before"}
+    result = await platform.execute("snapshot_rollback", {**args, "dry_run": True}, person())
+    assert result["power_state"] == "may_stop"
+    assert platform.store.objects("machines", 1)[0]["state"] == "ready"
+    platform.backend.call.assert_not_awaited()
+    result = await platform.execute("snapshot_rollback", args, person())
+    assert result["ok"] and result["power_state"] == power_state
+    assert platform.store.objects("machines", 1)[0]["state"] == power_state
+    assert ("next_action" in result) == (power_state == "stopped")
+    assert result["delta"] == {}
+
+
 async def test_admin_quota_previews_change_limits_without_writing(platform):
     r = await preview(
         platform, "quota_set", {"tenant": "alice", "dimension": "vcpu", "amount": 16}, {}, person(admin=True)

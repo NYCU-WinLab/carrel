@@ -246,7 +246,7 @@ TOOLS = [
     ),
     tool(
         "snapshot_rollback",
-        "Roll back a snapshot; changes since it was created are lost. Confirm snapshot name.",
+        "Roll back disk contents; later changes are lost. Confirm snapshot name. May stop the guest; returns actual power_state and a machine_power start next_action when stopped.",
         {"machine": MACHINE, "name": LABEL, "confirm": LABEL},
         ["machine", "name", "confirm"],
     ),

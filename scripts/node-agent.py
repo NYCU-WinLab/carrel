@@ -565,6 +565,8 @@ def action(req):
             if not any(s["name"] == name for s in snapshots):
                 return {"state": "absent"}
         run(cmd, op, vmid, name, timeout=600)
+        if op == "rollback":
+            return {"state": "running" if "running" in run(cmd, "status", vmid) else "stopped"}
     elif op in ["nic_attach", "nic_detach"]:
         index = integer(req["index"], 1, 7)
         if op == "nic_detach":

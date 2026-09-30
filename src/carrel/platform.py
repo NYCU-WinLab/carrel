@@ -840,13 +840,16 @@ class Platform:
                 )
             if tool == "snapshot_rollback" and a["confirm"] != a["name"]:
                 fail("invalid", "confirm must equal snapshot name")
+            effects = {}
+            if tool == "snapshot_rollback":
+                effects = {"power_state": "may_stop", "restart_tool": "machine_power"}
             if not dry:
                 if tool == "snapshot_create":
                     # Keep the disk reservation if the adapter or process dies
                     # after creating the hypervisor snapshot.
                     snap["state"] = "creating"
                     self.store.put("snapshots", id, n, snap)
-                await self.backend.call(
+                action_result = await self.backend.call(
                     {
                         "op": "action",
                         "machine": m,
@@ -863,6 +866,19 @@ class Platform:
                     self.store.put("snapshots", id, n, snap)
                 elif tool == "snapshot_delete":
                     self.store.remove("snapshots", id)
+                else:
+                    # Disk-only rollback can leave a previously running VM stopped.
+                    state = action_result.get("state", action_result.get("status"))
+                    if state not in ("running", "stopped"):
+                        fail("conflict", "Rollback completed but power state is unknown; use machine_get")
+                    m["state"] = state
+                    self.store.put("machines", m["vmid"], n, m)
+                    effects = {"power_state": state}
+                    if state == "stopped":
+                        effects["next_action"] = {
+                            "tool": "machine_power",
+                            "arguments": {"tenant": t["slug"], "machine": m["name"], "action": "start"},
+                        }
             if dry and tool == "snapshot_create":
                 snap = {
                     "name": snap["name"],
@@ -870,7 +886,12 @@ class Platform:
                     "disk_gb": snap["disk_gb"],
                     "state": "planned",
                 }
-            return {"snapshot": snap, "dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}, n
+            return {
+                "snapshot": snap,
+                "dry_run": dry,
+                "quota_after": self.quota(t, delta if dry else None),
+                **effects,
+            }, n
         if tool == "quota_request":
             if a["dimension"] not in QUOTA_DIMENSIONS:
                 fail("invalid", "Quota dimension is not available")
