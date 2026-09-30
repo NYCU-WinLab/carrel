@@ -15,15 +15,40 @@
     "decision": "approved"
   },
   "ingress": {
-    "public_address": null,
-    "forwarded_tcp_ports": [],
-    "forwarded_udp_ports": [],
-    "mode": "private"
+    "public_address": "140.113.194.229",
+    "mode": "external-pve-wireguard",
+    "mcp_url": "https://carrel.winlab.tw/mcp",
+    "edge_host": "pve",
+    "tls_gateway_ct": 200,
+    "proxy_ct": 207,
+    "tunnel": "wg-carrel",
+    "forwarded_tcp_ports": [
+      80,
+      443
+    ],
+    "tenant_port_range": "20010-22549 (explicit grants only)",
+    "wireguard_udp_port": 51890
   },
   "cluster": {
     "name": null,
     "corosync_interface": null,
     "underlay_interface": null,
     "peers": []
+  },
+  "infrastructure": {
+    "bridge": "vmbr98",
+    "subnet": "10.200.0.0/24",
+    "control": {
+      "vmid": 100,
+      "address": "10.200.0.3"
+    },
+    "gateway": {
+      "vmid": 101,
+      "address": "10.200.0.2"
+    },
+    "templates": [
+      9000,
+      9001
+    ]
   }
 }

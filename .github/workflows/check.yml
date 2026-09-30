@@ -1,0 +1,21 @@
+name: checks
+on:
+  pull_request:
+  push:
+    branches: [main, codex/carrel01-bootstrap]
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.28"
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run pytest -q
+        env:
+          PYTHONPATH: src
+      - run: python -m compileall -q scripts

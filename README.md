@@ -22,17 +22,77 @@ endpoint, signs in with the lab Keycloak account, and the platform does the rest
 ✓ sdn-hw ready: ssh -p 20170 ubuntu@<public address>
 ```
 
-## Status
+## Status and connection
 
-Private bootstrap deployed on 2026-09-30. [PLAN.md](PLAN.md) remains the only design document: scope, decisions,
-address plan, tool surface, milestones and the B09 rollout record (section 15). The first host
-is `carrel01` in site `b09`, using LVM-thin. The MCP server and member-facing platform are not
-implemented yet. B09 currently has no assigned public ingress.
+The first B09 deployment is running at **https://carrel.winlab.tw/mcp** (Streamable HTTP,
+OAuth through the WinLab Keycloak realm). In Claude Code:
 
-The scripts in `scripts/` prepare **admin-only staging**. They are not a complete `install.sh`
-and do not establish M0 or M1 acceptance. Run them on the PVE host after reviewing the node
-inventory; credentials and administrator private keys never belong in this repository.
-[sites/b09/ssh-config.example](sites/b09/ssh-config.example) contains the administrator SSH aliases.
+```sh
+claude mcp add --transport http carrel https://carrel.winlab.tw/mcp
+# Open /mcp, select carrel, and authenticate with your own WinLab account.
+```
+
+Other MCP clients can use the same URL and OAuth discovery. Dynamic registration accepts
+loopback callbacks and the explicitly configured ChatGPT callback. A new hosted client's callback
+must be added by an administrator; arbitrary callback origins are refused.
+
+Start with `whoami`, accept the use policy, add a **public** SSH key with `ssh_key_add`, and
+check `quota_get`. Dry-run `machine_create` before creating a VM. Its result contains the actual
+public SSH command. VM user: `user`; CT user: `root`. Never put private SSH keys or tokens in tool
+arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
+Project membership selects shared project tenants. All administrator tools check the admin group.
+
+Implemented: VM/CT lifecycle, stable image templates, public SSH/port grants, tenant HTTPS domains,
+private L2 networks and NICs, explicit cross-tenant TCP grants, snapshots, quota requests/approval,
+audit records, and reconciliation. [PLAN.md](PLAN.md#154-member-platform-deployment) records the
+implementation and remaining milestones. This is an initial single-node deployment, not completion
+of the entire product plan: custom images/imports, console/access recovery, special names, skills,
+PBS/observability, alumni scheduling and multiple nodes remain to be implemented or accepted.
+
+`carrel01` is `192.168.13.159`, with ext4 + hardware RAID + LVM-thin. The old PVE remains outside
+its cluster. Public traffic uses its existing TLS gateway → new CT 207 proxy → WireGuard → B09.
+CT 100 hosts the control plane; CT 101 provides tenant HTTP routing and DNS. Tenant SSH does not use
+the management jump account. The new proxy holds no Keycloak or Cloudflare credentials.
+
+[sites/b09/ssh-config.example](sites/b09/ssh-config.example) contains administrator aliases.
+[sites/b09/platform-verification.json](sites/b09/platform-verification.json) records actual acceptance
+checks. Hypervisor administrators can technically read disks; Carrel exposes no general guest
+execution or file-reading API. Verification uses disposable guests and their owner's SSH key.
+
+## Development and deployment
+
+```sh
+uv sync --locked
+PYTHONPATH=src uv run pytest -q
+uv run ruff check src tests
+python3 -m compileall -q scripts
+```
+
+The scripts are site-specific administrator operations, not the planned general `install.sh`.
+The deployment order is documented in [PLAN 15.4](PLAN.md#154-member-platform-deployment): prepare
+owned infrastructure, install networking/templates, connect the edge, upgrade the new proxies,
+then deploy and publish. For an existing deployment with SSH aliases `carrel01` and `pve`:
+
+```sh
+python3 scripts/deploy-control.py
+```
+
+Deployment installs hashed dependencies exported from `uv.lock` and preserves existing route/NAT
+state. Secrets travel through SSH stdin and protected files. Never save a complete iptables ruleset
+on the old host: its existing services and tailnet routes are independent of Carrel.
+
+The `carrel-backup.timer` makes a consistent SQLite backup with config, service key and certificates
+each day and stores 14 daily archives under `/var/lib/carrel-edge/backups` on the old PVE, mode 0600.
+These are sensitive archives. They do not contain tenant disks and are not a replacement for PBS.
+For restoration, stop the control service, restore `carrel.db` (remove stale `-wal`/`-shm` files),
+`etc/carrel/`, and `certificates/` to their original locations, set the documented ownership,
+then start the service and run `reconcile_run`. The backup's database was restored to a temporary
+location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
+
+## Private staging bootstrap
+
+The following scripts prepare admin-only nested staging and preserve its existing disks. They do
+not establish the CI installation acceptance for M0.
 
 ```sh
 python3 scripts/host-preflight.py --config sites/b09/carrel01.json

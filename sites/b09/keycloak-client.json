@@ -1,0 +1,27 @@
+{
+  "clientId": "carrel-mcp",
+  "name": "Carrel MCP",
+  "enabled": true,
+  "publicClient": true,
+  "protocol": "openid-connect",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": false,
+  "redirectUris": ["https://carrel.winlab.tw/oauth/callback"],
+  "webOrigins": ["https://carrel.winlab.tw"],
+  "attributes": {"pkce.code.challenge.method": "S256"},
+  "protocolMappers": [
+    {
+      "name": "carrel-audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {"included.client.audience": "carrel-mcp", "access.token.claim": "true", "id.token.claim": "false"}
+    },
+    {
+      "name": "carrel-groups",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-group-membership-mapper",
+      "config": {"claim.name": "groups", "full.path": "true", "access.token.claim": "true", "id.token.claim": "false", "userinfo.token.claim": "true"}
+    }
+  ]
+}
