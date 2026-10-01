@@ -30,6 +30,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
   lab projects.
 - Not a place where admins look inside tenant machines (section 7.7).
 - Not a human web UI. The one browser page carrel serves is the machine console (section 7.8).
+  OAuth login also has a small consent page that binds a registered MCP client to its callback.
   Onboarding is the README.
 - Not a home for services tied to hardware or to a room (Bluetooth, Wi-Fi uplinks, USB devices),
   nor for tailnet infrastructure such as the DERP relay. They live outside carrel (section 10.7).
@@ -54,13 +55,31 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-27 | carrel ignores the Keycloak groups `vm-users` and `vm-sudoers` |
 | 2026-09-27 | Admin notifications and alerts go by email |
 | 2026-09-27 | The old host keeps running outside carrel. Selected guests move; the rest stay, with the room-bound services, the DERP relay and the tailnet subnet router (section 10.7) |
+| 2026-09-30 | B09 first node is `carrel01` at `192.168.13.159`; future nodes get distinct names instead of reusing the room name as an SSH alias |
+| 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it |
+| 2026-09-30 | B09 has no allocated public ingress. Use the old PVE public address, existing CT 200 TLS gateway, a new CT 207 proxy, and a dedicated WireGuard link to B09; the old PVE stays outside the cluster |
+
+### 1.6 Current core and deferred work
+
+The first release is accepted around three member outcomes: create one VM/CT and SSH into it;
+publish an application on an existing machine; create an app/database pair with only the declared
+connection allowed. Agents provide machine, connection and publication intent through the existing
+`deployment_plan` / `deployment_apply` tools. Physical nodes, bridges and ingress hops are operator
+implementation details. Advanced L2 tools remain available for network experiments.
+
+Reliability, tenant isolation, ownership-safe retries, quota accounting and cleanup are core work.
+The longer catalog below is a roadmap, not a claim that every tool exists or a requirement to ship
+all of it before the core is useful. Custom ISO/image import, legacy workload migration, special
+names/ports, a full skill catalog, issue workflow, alumni scheduling and multiple nodes are deferred
+until there is a concrete need. This change adds no scheduler, workflow language or separate intent
+service. Live tool discovery and the acceptance reports are the authority for implemented features.
 
 ## 2. Object model
 
 | Object | What it is | Key |
 |---|---|---|
 | Site | One Proxmox cluster in one room. Sites never share a corosync ring | `site` slug |
-| Node | One Proxmox host in a site | node name (`pve1`, `pve2`, ...) |
+| Node | One Proxmox host in a site | stable node name (`carrel01`, `carrel02`, ...) |
 | Tenant | A member or a project. Owns quota, networks, machines, images, ports and domains | serial `N`, slug |
 | Machine | A VM or an unprivileged CT owned by one tenant | VMID |
 | Network | A private layer 2 segment owned by one tenant (section 6.8) | VNet id |
@@ -126,13 +145,15 @@ protocol error.
 ### 4.2 Conventions for every tool that changes state
 
 - `dry_run: true` validates, prices the change against quota and returns what would happen.
-- Success returns `quota_after`.
+- Completed mutations return `quota_after`. Infrastructure changes first return a durable operation;
+  `queued` means accepted, not reserved or complete. Poll `operation_get` and follow `next_action`.
 - Failure returns one of a closed set of codes: `quota_exceeded` (with the dimension),
   `capacity_exhausted` (with the member's idle machines), `not_found`, `conflict`, `forbidden`,
   `invalid`, `pending_approval`.
-- A call that has to wait for a budget or a slot returns `queued` with `ready_at`, an estimate
-  (sections 6.4 and 7.8). The call ends there; carrel keeps the work and finishes it when the
-  budget or slot frees, without another call, and the matching list tool shows it as queued.
+- A certificate-budget wait persists `waiting` with `ready_at`, releases the infrastructure writer
+  and resumes automatically. A domain is `ready` only after certificate, DNS and route application.
+  `operation_retry` resumes failed work against its original allocations. Deployment rollback removes
+  only its own new resources; incomplete cleanup stays charged until cleanup succeeds.
 - Every call is written to the audit log with arguments, and values named like secrets are masked
   before the write.
 - `tenant` is optional. It defaults to the member and may name a project the member belongs to.
@@ -149,13 +170,15 @@ protocol error.
 | | `sizes_list` | presets `small`, `medium`, `large` |
 | Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
 | | `machine_get`, `machine_list` | state, primary address, SSH line, image support status |
-| | `machine_resize` | grow only; disk never shrinks |
+| | `machine_resize` | CPU/RAM may shrink while stopped; disk only grows |
 | | `machine_power` | `start \| stop \| shutdown \| reboot` |
 | | `machine_rebuild` | new `image`; keeps address, ports and domains |
 | | `machine_delete` | `confirm: <name>` |
 | | `machine_media` | `machine`, `iso` or `none`; insert or eject an ISO |
 | | `machine_console_url` | `machine`; a single-use browser console link, bound to the requester's Keycloak login, valid 15 minutes (section 7.8) |
-| Networks | `network_create` | `name`, `cidr` (for reference only) |
+| Deployments | `deployment_plan`, `deployment_apply` | `machines`, `connections`, `publications`; optional experiment `networks`, `attachments` |
+| Operations | `operation_get`, `operation_retry` | durable job state, endpoints, failure and next action |
+| Networks | `network_create` | `name`, `mode: managed \| raw_l2`, optional `cidr` |
 | | `network_list`, `network_delete` | `network_delete` needs `confirm: <name>` and no attached NIC |
 | | `machine_nic_attach` | `machine`, `network`, `ip` (optional static address through cloud-init) |
 | | `machine_nic_detach` | `machine`, `nic` |
@@ -181,10 +204,11 @@ protocol error.
 | | `issue_comment` | `id`, `body`; more detail or "same here" |
 | | `issue_confirm` | `id`, `works: true \| false`; the reporter checks a fix, which closes or reopens the issue |
 
-`machine_create` returns only after SSH answers, and returns the line to paste into
-`~/.ssh/config`. The agent sends the member's public key. The platform never generates or returns
-a private key. Machines installed from an ISO are the exception: they return in state
-`installing` (section 7.8).
+`machine_create` returns a durable operation immediately. Success requires SSH readiness,
+initialization completion and requested guest health checks, and includes the SSH command. The
+agent sends the member's public key; Carrel never generates or returns a private key. ISO support
+is deferred (section 7.8). Public endpoint results report `routing_configured`; application reachability
+from outside still needs a client-side check.
 
 ### 4.4 Admin tools
 
@@ -205,7 +229,7 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 
 | Skill | Intent | What it steers |
 |---|---|---|
-| `getting-started` | first contact | `whoami`, the use policy, uploading the member's public key, writing `~/.ssh/config` |
+| `getting-started` | first contact | sign in, automatic tenant registration, `whoami`, uploading the member's public key, writing `~/.ssh/config` |
 | `choose-machine` | "I need a machine for X" | VM or CT, image, size, `nested_virt`; Docker, OVS and Mininet always get a VM |
 | `sdn-coursework` | SDN and NFV homework | Ubuntu LTS VM with `nested_virt`, Mininet, Open vSwitch and a controller, and the address ranges to avoid inside the VM |
 | `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port, names outside the tenant's subtree through `domain_request` |
@@ -313,18 +337,20 @@ search first, read how it was solved, and file only what is new.
 ### 5.1 Dimensions
 
 `vcpu`, `memory_mb`, `disk_gb`, `machines`, `ips`, `public_ports`, `domains`, `snapshots`,
-`networks`, `images_gb`. Every dimension exists for member tenants and project tenants alike.
+`snapshot_gb`, `networks`. Member and project tenants use the same dimensions. `images_gb` is
+reserved for deferred image support and hidden from the current API. Each snapshot reserves the
+machine disk size against `snapshot_gb`; measured retained bytes are reported separately.
 Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
 
 ### 5.2 Quota versus admission
 
-Quota is a promise. Admission is physics. They are checked separately.
+Quota is a ceiling, not a guarantee of unused physical capacity. Admission is checked separately.
 
 | Layer | Rule (initial values, tuned after the hardware inventory) |
 |---|---|
 | Quota | The sum of all quotas may exceed capacity, because most tenants are idle most of the time |
-| CPU admission | Allocated vCPU of running machines at most 4 times the host threads |
-| Memory admission | Memory of running machines at most 90 percent of host memory after the host reserve. Stopped machines do not count |
+| CPU admission | All allocated Carrel machines, including stopped ones, reserve vCPU; shared vCPU at most 4 times host threads |
+| Memory admission | All allocated Carrel machines, including stopped ones, reserve RAM; unmanaged running infrastructure also counts |
 | Disk admission | Allocated disk at most 1.5 times the pool. Alert at 80 percent real use |
 | Addresses, ports, domains | Fixed allocations, never oversubscribed |
 
@@ -339,13 +365,15 @@ Three kinds share one flow: `quota_request` (more of a dimension), `domain_reque
 2. Admins are notified by email.
 3. An admin approves or rejects with a tool call. The result appears in the member's next tool
    response and in `request_list`.
-4. A request with `until` becomes a temporary grant and is withdrawn on that date. Machines that
-   no longer fit are stopped, never deleted.
+4. A request with `until` becomes a temporary grant and restores its previous limit on that date.
+   Existing machines keep running. `over_limit` reports excess; growth in that dimension is blocked,
+   while cleanup/reduction remains available. Stopping a tenant requires explicit admin suspension.
 
 ### 5.4 Idle machines
 
-A machine with near-zero CPU and network for 14 days is announced to its owner, then stopped 7 days
-later. Stopping frees memory admission. Nothing is deleted automatically.
+Idle shutdown scheduling is deferred. Stopping an allocated machine does not release its CPU/RAM
+admission reservation; deletion or a confirmed reduction while stopped does. Nothing is deleted
+automatically.
 
 ## 6. Network
 
@@ -363,8 +391,8 @@ later. Stopping frees memory admission. Nothing is deleted automatically.
 | Public ports | `20000 + N * 10`, 10 per tenant | `20170` to `20179` |
 | Domains | `<sub>.<slug>.winlab.tw` | `hw1.zyx1121.winlab.tw` |
 | Infra | `10.200.0.0/24`, VMIDs `100` to `199` | Caddy gateway machine `10.200.0.2` |
-| Fetch network | `N = 255`: `10.200.255.0/24`, VNet `t255`, no machines; node `k` uses `.10 + k` | `10.200.255.11` on `pve1` |
-| Templates | VMIDs `9000` to `9099`, 20 per node | `9000` to `9019` on `pve1` |
+| Fetch network | `N = 255`: `10.200.255.0/24`, VNet `t255`, no machines; node `k` uses `.10 + k` | `10.200.255.11` on `carrel01` |
+| Templates | VMIDs `9000` to `9099`, 20 per node | `9000` to `9019` on `carrel01` |
 
 Why these ranges:
 
@@ -394,7 +422,10 @@ networks run at MTU 1450 unless the underlay carries jumbo frames. Every VM NIC 
 
 Every tenant machine gets the security group of its tenant:
 
-1. Accept to its own `/24`.
+1. Default `network_access=tenant` accepts same-tenant traffic. Explicit `restricted` ingress accepts
+   only declared source/protocol/port connections, public grants and platform access. Connections
+   in deployment intent require a restricted destination. Restricted machines cannot attach
+   unfiltered experiment NICs. Egress policy remains the same.
 2. Accept DNS to the infra resolver.
 3. Accept the peer rules granted to it (section 4.3), inserted above the drops.
 4. Drop every private and internal range: the rest of `10.200.0.0/16`, all of `10.0.0.0/8`,
@@ -458,7 +489,7 @@ One compromised tenant machine can get the lab's public address blocked by the c
   cap with the Proxmox `rate` option. `rate` limits both directions of one NIC, so it guards the
   node, not the tenant. Values in open decision 13.4.
 - Connection-rate alerts for scanning patterns.
-- An acceptable use policy in the README, accepted on first `whoami`.
+- An acceptable use policy in the README, accepted by signing in. Eligible tenants are registered automatically on first use; no separate acknowledgement is required.
 
 ### 6.7 Internal DNS
 
@@ -474,12 +505,11 @@ routing, SDN and other network experiments.
   SSH line, egress and domains, and it cannot be removed. A machine that must stay off the internet
   brings `net0` down inside the guest.
 - **Private networks**: `network_create` makes a segment in the `private` zone owned by one tenant.
-  It has no gateway, no NAT, no DHCP and no address on any node, and the underlay filter of
-  section 6.3 keeps injected frames out, so nothing outside the tenant's machines reaches it, the
-  nodes included.
-- **Addresses**: carrel assigns none. `machine_nic_attach` with `ip` writes a static address
-  through cloud-init; without `ip` the NIC is raw layer 2, and bridges, Open vSwitch and VLAN tags
-  inside the guest all work.
+  It has no gateway, NAT or host-routable address. Default `managed` mode supplies fixed DHCP
+  leases from an isolated, unrouted namespace, without a default route or DNS override.
+- **Addresses**: managed segments use an RFC1918 /24 or /25; current images configure assigned
+  addresses and MTU 1450. Choose `raw_l2` for guest-controlled addressing, DHCP, bridges, Open
+  vSwitch and VLAN experiments. Existing raw segments retain their behavior.
 - **Filtering**: private NICs run without the firewall, `ipfilter` or MAC filtering, so bridging
   and address experiments work. The blast radius is the tenant's own segment. Private NICs get
   their own `rate` cap, higher than the primary NIC's, so a loop inside a topology cannot flood the
@@ -642,10 +672,12 @@ key injection, the SSH check and graceful shutdown.
   cannot hold a slot; at 2 MB/s a 20 GB file still finishes inside 3 hours.
 - **Storage**: a root step on the node, not the fetcher, checks each accepted file against the
   checksum in the database and moves it, read-only, from staging into `carrel-images`. That storage
-  is a ZFS dataset with its own hard quota, so a server that lies about size cannot fill a node, and
-  it is set with `is_mountpoint`, so Proxmox never writes into the root file system when the dataset
-  is missing. A full dataset makes new imports on that node return `capacity_exhausted`. When a
-  machine lands on a node that lacks its image, carrel copies the file from a node that has it, over
+  is a dedicated, size-limited logical volume with its own ext4 filesystem, separate from the root
+  filesystem, so a server that lies about size cannot fill the root filesystem. It is configured
+  with `is_mountpoint`, so Proxmox refuses writes when the volume is not mounted. Physical thin-pool
+  space still needs admission and monitoring (5.2, 9.3); a volume size limit alone does not reserve
+  pool capacity. A full image volume makes new imports on that node return `capacity_exhausted`.
+  When a machine lands on a node that lacks its image, carrel copies it from a node that has it, over
   the nodes' own SSH trust, the way templates keep one copy per node (section 7.2); copies do not
   count again against `images_gb`. The checksum is checked again before every copy and every
   `import-from`, so a swapped file is caught.
@@ -694,8 +726,8 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
 
 | Item | Decision |
 |---|---|
-| Node names and management addresses | neutral names `pve1`, `pve2`; fixed addresses |
-| Storage | ZFS, same storage id on every node (`local-zfs`), so replication and migration work |
+| Node names and management addresses | stable names `carrel01`, `carrel02`; fixed management addresses; site `b09` identifies the room |
+| Storage | LVM-thin on the existing hardware RAID, with storage id `local-lvm` on every B09 node. Migrations copy local disks. No ZFS replication; recovery uses independent backups |
 | Tenant networks | EVPN zone for primary networks, VXLAN zone for private networks (section 6.2) |
 | VMIDs and templates | site-unique ranges (section 6.1) |
 | Data model | site then node from day one (section 2) |
@@ -706,7 +738,10 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
    redundancy. VXLAN and BGP between nodes use the second link or a NIC of their own, never the
    dedicated corosync link, because tenants control that traffic (section 6.3).
 2. Same Proxmox VE version on every node.
-3. Two nodes need a QDevice outside the cluster. Three or more nodes can enable HA.
+3. Two nodes need a QDevice outside the cluster. Three or more nodes can provide quorum for
+   HA, but local LVM-thin alone cannot restart a failed node's guests elsewhere: their disks are
+   still on that failed node. Planned migrations copy disks while the source is healthy; host
+   failure recovery uses independent backups until shared storage is supplied and tested.
 4. The exit node is a single point for ingress. A second public address as a VIP removes it.
 5. `/etc/pve` is shared by the cluster (firewall, SDN, pools, permissions, storage definitions).
    Interfaces, disks, templates and NAT are per node, and the installer keeps them identical.
@@ -875,7 +910,7 @@ old host.
 | Milestone | Done when |
 |---|---|
 | M0 Staging | CI installs a nested node from scratch and the install is idempotent: a second run changes nothing |
-| M1 Host baseline | A bare host after `install.sh` has ZFS, both SDN zones, the infra network, the firewall, DHCP reservations, the gateway and all templates; a tenant address cannot reach host port 8006, a guest set to DHCP receives exactly its reserved address, and a VXLAN or BGP packet is dropped when it comes from an address that is not a node or carries a forged node address on the public interface |
+| M1 Host baseline | A bare host after `install.sh` has the configured LVM-thin storage, both SDN zones, the infra network, the firewall, DHCP reservations, the gateway and all templates; a tenant address cannot reach host port 8006, a guest set to DHCP receives exactly its reserved address, and a VXLAN or BGP packet is dropped when it comes from an address that is not a node or carries a forged node address on the public interface |
 | M2 Control plane | A clean agent with only the MCP connector, given "Open a VM on winlab for my SDN homework", signs in through Keycloak and ends with a working SSH session |
 | M3 Access | The same agent opens a port and a domain under the tenant's wildcard certificate, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas and requests | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date; the project requests a name that already exists, such as `afc.winlab.tw` (its twin in the staging zone on staging), an admin approves it with `adopt: true`, and the site answers over HTTPS on that name |
@@ -904,14 +939,14 @@ old host.
 1. Resolved 2026-09-27: carrel ignores `vm-users` and `vm-sudoers`.
 2. Default quota per `lab-member` subgroup and per project. Needs the hardware inventory.
 3. Resolved 2026-09-27: admin notifications and alerts go by email.
-4. Egress rate limit per tenant.
+4. Initial B09 limit: 100 Mbit/s aggregate IPv4 tenant egress, plus 12.5 MB/s primary NIC limits. Private experiment NICs have a 100 MB/s limit. Revisit after real usage.
 5. How `machine_console_log` captures serial output: a QEMU chardev log file, or a capture of the
    Proxmox terminal proxy.
 6. Whether the campus offers IPv6 for the new host. With it, every machine could have a public
    address and port NAT becomes optional.
-7. Where the carrel database lives and how it is backed up before Proxmox Backup Server exists.
-8. How admins reach the new site's admin network: Tailscale on the new node itself, or a route
-   through the old host's tailnet subnet router, which stays where it is (section 10.7).
+7. Resolved for B09: SQLite/WAL in CT 100. Daily consistent database/config/certificate backups go to the independent old PVE, with 14 daily archives. Full guest backups still need PBS.
+8. Resolved 2026-09-30 for B09: admin SSH uses ProxyJump through the B09 jump host. This is
+   separate from member-facing ingress (13.13).
 9. Resolved 2026-09-27: the old host stays outside carrel and does not join the site.
 10. Which of the old host's guests move, and their owners (section 10.7). Decided guest by guest.
 11. Which DNS zone staging uses (section 10.5). It must not be `winlab.tw`, and its token must not
@@ -920,6 +955,12 @@ old host.
     `winlab.tw` zone, the exposure section 6.4 keeps off carrel's gateway, and it stays while both
     gateways run. Keep it, scope it down, or move DNS changes for the old host's names into carrel's
     control plane.
+13. Resolved 2026-09-30: public TLS and explicit tenant port grants on `140.113.194.229`,
+    through CT 207 and WireGuard. The management ProxyJump account is not member ingress.
+    Real OAuth, public SSH and tenant HTTPS were verified; see 15.4.
+14. B09 additional-node links: only `nic1` (1 Gbit/s) is connected on the first node. Dedicated
+    corosync and underlay links, a QDevice for two nodes, and backup storage must be supplied before
+    expansion.
 
 ## 14. Vocabulary
 
@@ -940,3 +981,177 @@ old host.
 | special domain, special port | a name or public port outside the tenant's own subtree or block, granted by an admin (section 6.10) |
 | tenant | a member or a project |
 | unmanaged machine | a machine installed from an ISO: quota and metrics work, key injection and the SSH check do not |
+
+## 15. B09 rollout record
+
+### 15.1 Inventory (2026-09-30)
+
+- Node `carrel01`, formerly `server-d3`, in site `b09`; SSH alias `carrel01` via `b09-jump`.
+- Management `192.168.13.159/24` on `vmbr0` / `nic1`, gateway and DNS `192.168.13.254`.
+- Dell PowerEdge R640, Xeon Gold 5218, 32 CPU threads, about 187 GiB usable memory.
+- PERC H730P Mini exposes one approximately 1.6 TiB logical disk. Installed storage is
+  ext4 root plus a roughly 1.5 TiB `local-lvm` thin pool. RAID level / physical disk health
+  have not been verified. No guest or template existed at handover.
+- PVE 9.1.1, kernel 6.17.2-1-pve, nested virtualization enabled. No cluster configured.
+- One management NIC connected; the other seven NICs are not connected.
+- Outbound HTTPS was verified against Debian. Public inbound reachability is not assigned
+  or verified. Never infer a usable public endpoint from a NAT egress address.
+
+`sites/b09/carrel01.json` is the non-secret deployment inventory. Run
+`scripts/host-preflight.py --config sites/b09/carrel01.json` on the node to recheck it.
+The report is a prerequisite check, not a claim that M0/M1, isolation or MCP are ready.
+
+### 15.2 Private bootstrap scope
+
+Admin-only nested staging is running as VM `190`, `carrel-stg01`, with 8 vCPU, 24 GiB RAM,
+a 32 GiB boot disk and a 160 GiB data disk (150 GiB usable thin pool). Its
+management subnet is `172.31.255.0/24` on an isolated host bridge, separate from the tenant
+address plan. Access uses the administrator's SSH key and ProxyJump. Staging receives no
+production DNS, Keycloak client secrets or Cloudflare credentials.
+
+This was the initial private stage. The member-facing implementation now follows in 15.4.
+The old lab host remains outside the B09 cluster and provides the external ingress.
+
+### 15.3 Verified bootstrap and remaining work
+
+`sites/b09/bootstrap-verification.json` records the checks after rebooting the physical host:
+
+- The physical node and staging VM start automatically, with no failed systemd services.
+- Both PVE HTTPS endpoints validate against their own CA, and both LVM-thin stores are active.
+- Staging starts a nested KVM process and reaches public HTTPS.
+- Staging cannot initiate connections to physical-host SSH or port 8006, through either the
+  staging bridge or the B09 management address, nor to the jump host's private SSH address.
+- Both bootstrap scripts report `changed: []` on a second apply after the reboot.
+
+The physical host remains on PVE 9.1.1 / kernel 6.17.2-1-pve. The separate nested test node uses
+PVE 9.2.21 / kernel 7.0.14-19-pve from the current no-subscription repository. Align the supported
+PVE version before production acceptance; these nodes are not members of the same cluster.
+
+These earlier results verify the private bootstrap only. The platform work in 15.4 supersedes
+the earlier MCP/network/ingress blockers. No entire milestone in 11.3 is marked complete by
+the bootstrap checks or by the component checks alone.
+
+
+### 15.4 Member platform deployment
+
+Historical initial rollout. Current contracts and acceptance are in sections 1.6, 4.2, 5 and 15.6;
+the later releases supersede the initial DHCP, quota-expiry and operation behavior below.
+
+The public endpoint is `https://carrel.winlab.tw/mcp`. The dedicated public Keycloak client is
+`carrel-mcp` in realm `winlab`: authorization code + PKCE S256 only, exact callback
+`https://carrel.winlab.tw/oauth/callback`, access-token audience `carrel-mcp`, and full-path group
+claims. `sites/b09/keycloak-client.json` is the non-secret client definition. The existing
+`api-manager` client has user-management rights, not client-management rights; it was not broadened.
+The client was created using the operator's authenticated Keycloak administrator browser session.
+
+The MCP OAuth facade stores client registrations, fixed redirects, browser state/cookie binding,
+consent, one-use code binding and refresh bindings in SQLite. Every MCP request verifies RS256,
+issuer, expiry, audience and authorized party. Personal tenancy uses stable Keycloak subject IDs;
+project tenancy uses exact project groups. Alumni-only users and legacy VM groups do not authorize
+access. New hosted callback origins require an explicit allowlist change.
+
+| Component | Placement |
+|---|---|
+| Control plane | B09 CT 100, `carrel-control`, `10.200.0.3:8080`, service user `carrel` |
+| Tenant HTTP and recursive/internal DNS | B09 CT 101, `carrel-gateway`, `10.200.0.2` |
+| Public proxy | Old PVE CT 207, `carrel-proxy`, `10.10.10.207`, Caddy 2.11.4 |
+| Public TLS | Existing old PVE CT 200, one managed Carrel import alongside existing sites |
+| Tunnel | `wg-carrel`, old PVE `10.254.200.1`, B09 `.2`, UDP 51890, MTU 1420 |
+| Infrastructure bridge | B09 `vmbr98`, `10.200.0.1/24`, MTU 1450 |
+| Templates | Key-free Debian 13 VM 9000, Ubuntu 24.04 VM 9001; Debian/Ubuntu CT templates |
+| Database | `/var/lib/carrel/carrel.db`, WAL; systemd service and periodic reconciliation |
+| Backup | Daily consistent SQLite + config + certificates, old PVE `/var/lib/carrel-edge/backups`, 14 days |
+
+Tenant primary networks use the `tenants` EVPN zone and private networks use the `private` VXLAN
+zone. Both are single-node today. `N` determines `10.200.N.0/24`, VMIDs and public port block;
+private VNets have no gateway or DHCP. Tagged machines and bounded JSON adapters are the only
+operations exposed through forced SSH commands. There is no shell or arbitrary PVE passthrough.
+Separate owned nftables tables preserve pre-existing Proxmox, staging and old-host rules.
+
+Two deployment details are required with this PVE setup: cross-VRF reentry uses connection-tracking
+zone 1 plus a default route through `xvrfp_tenants`; DHCP's `0.0.0.0` source is included in the
+primary IP set, then rejected by ordinary output rules after PVE's DHCP exception. Host DHCP is
+allowed on the tenant VRF. These were discovered and verified with real guests, not inferred from
+configuration alone. The DNS service waits for networking, binds dynamically and retries while its
+address is unavailable; a second full host reboot verified the corrected startup ordering. The normal host dnsmasq service is masked; `carrel-dhcp` owns only tenant
+reservations. New Caddy proxies use the pinned official 2.11.4 binary because packaged 2.6.2 panicked
+during a live route reload. Service restart policies and readable config permissions are installed.
+
+Tenant wildcard DNS is ownership-marked. DNS-01 and wildcard issuance/renewal run in CT 100, with
+an initial 30-new-certificates-per-seven-days budget. Only certificate bundles go to the existing
+TLS terminator; the new public proxy holds no DNS or Keycloak credentials. Exact tenant routes go
+through both new proxies, with a 404 fallback. Removing a tenant's final domain removes its owned
+wildcard DNS record. The old gateway's existing Cloudflare token exposure remains open decision 12.
+
+Administrator deployment order (scripts have fixed B09 IDs/addresses and refuse occupied IDs):
+
+1. Run `bootstrap-platform.py --role site --admin-key <public-key-path>` on `carrel01`, and role
+   `edge` on the old PVE. This creates only owned CTs and installs their required packages.
+2. Run `install-network.py` and `build-templates.py` on `carrel01`.
+3. Exchange the hosts' `/etc/wireguard/carrel.pub` values with `configure-link.py site|edge <peer-public-key>`.
+4. From the workstation with the administrator SSH aliases, run `upgrade-proxies.py`,
+   `deploy-control.py`, and `publish-entry.py`. Deploy uses hashed lockfile dependencies and preserves
+   dynamic routes. Publish initializes empty NAT state only on a new installation.
+5. Create/verify the Keycloak client definition through an authorized administrator; use disposable
+   member accounts with `verify-oauth.py` and `verify-platform.py` for acceptance.
+
+The current quota is a conservative shared default: 8 vCPU, 16 GiB RAM, 100 GiB allocated disk,
+4 machines/IPs, 10 public ports/domains, 4 private networks and 4 snapshots. Project/subgroup-specific
+policy remains open decision 2. Snapshots reserve a full disk size before adapter work; rollback refuses changed NIC or
+resource configuration. Interrupted disk growth keeps the larger quota reservation and can be
+retried with the same `machine_resize` arguments. Temporary quota expiry stops over-limit machines and prevents restarting
+until allocations fit. Mutations currently serialize through one process-wide lock; long image or
+certificate work therefore delays other mutations.
+
+`sites/b09/platform-verification.json` records acceptance facts and limitations. Tests use temporary
+users/guests, never existing members' machines. Their permanent tenant serials are retired after
+cleanup. This release implements the MCP/identity/network core of M1–M5. It does not claim full
+milestone acceptance: M0 clean nested CI install, M2 real agent-driven acceptance, M3 console/key
+recovery, M4 special domains/ports, M5 multi-node cases, M6 images/ISOs, M7 skills, M8 PBS/telemetry/
+notifications/alumni lifecycle, M9 import and M10 cluster expansion remain. TLS renewal exists in
+code; a real expiry/renewal cycle still needs acceptance. The database backup restore check does
+not substitute for a full disaster-recovery exercise. No email was sent during this deployment.
+
+### 15.5 MCP planning and Codex acceptance (2026-10-01)
+
+Historical 0.2 acceptance. The 0.3 reliability report and 15.6 supersede its tool/test counts and
+snapshot power-state behavior. These numbers describe that run, not the latest release.
+
+Member discovery now has 37 tools plus 9 admin-only tools. `whoami` returns all visible tenant
+quotas with remaining amounts, default tenant and capabilities; `catalog_get` combines image/size
+queries. The two previous list names remain callable compatibility aliases. Unsupported image
+quota fields are hidden without deleting their stored values; units are MiB/GiB throughout.
+
+Mutation previews share before/delta/after quota accounting and never reserve resource identifiers.
+Missing SSH keys become planning requirements; actual creates still require valid public keys.
+`deployment_plan` validates aggregate machines, networks and symbolic NIC attachments without
+resource writes. `capacity_get` exposes aggregate hardware and admission policy, with no other
+tenants' guest details. Admission counts all local-lvm volumes and incomplete reservations.
+MCP resources and resource-template discovery return empty lists.
+
+59 automated tests pass. Six fresh native Codex sessions and one resumed prompt use the same
+inputs as the baseline: 48 to 21 MCP calls, no unexpected tool failures, one expected quota
+rejection. These runs perform reads/previews only, with no shell or resource changes. See
+[the evaluation and evidence](docs/evaluations/2026-10-01-codex-mcp.md) for per-case results and
+separate disposable-VM lifecycle acceptance. This does not establish multi-node or full M2
+acceptance; unsupported features remain tracked in the product plan.
+
+The subsequent disposable Ubuntu VM check also found and fixed rollback reporting: disk-only
+snapshot rollback may stop a guest, and now returns/persists its actual power state with an
+explicit start action. See the evaluation for public SSH/HTTPS, rollback and cleanup evidence.
+
+
+### 15.6 Intent and reliability acceptance (0.4, 2026-10-01)
+
+The member path is machine, connection and publication intent on `deployment_plan` / `deployment_apply`.
+Explicit restricted ingress enforces exact source/protocol/port rules and prevents unfiltered NIC bypass.
+The same deployment can publish an existing application. The five reliability fixes in sections 4.2,
+5.3 and 1.6 are deployed: DNS failure isolation, quota expiry without blanket stopping, durable
+certificate waits, independent tenant onboarding and immediate suspension admission blocking.
+
+114 local tests pass; live OAuth/MCP acceptance passed with three restricted VMs and a separate tenant
+CT, public SSH/HTTPS/TCP HTTP, designated database access, negative source/port/protocol checks,
+publication reuse and complete cleanup. Member tools remain 40; admin tools remain 9. The public
+service reports 0.4.0 and final installed hashes match. See the
+[intent acceptance report](docs/evaluations/2026-10-01-intent.md) and the preceding
+[0.3 reliability report](docs/evaluations/2026-10-01-reliability.md) for evidence and limits.

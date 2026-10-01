@@ -1,0 +1,949 @@
+{
+  "date": "2026-09-30",
+  "code_commit": "5afb545",
+  "client": "codex-cli 0.159.2",
+  "model": "gpt-6-astra",
+  "provider": "github_copilot",
+  "reasoning_effort": "xhigh",
+  "environment": "user config; fresh workspaces outside repository; existing Carrel OAuth; read-only shell; prompts permit only reads and dry-runs",
+  "sessions": 6,
+  "turns": 7,
+  "total_mcp_calls": 48,
+  "limits": "Single run per case; no actual provisioning, SSH, package execution, destructive actions, or admin role tested. Token counts are cumulative per-turn CLI usage including cached input; latency includes startup and model time.",
+  "post_check": {
+    "zyx1121": {
+      "object_counts": {}
+    },
+    "iii-edge-ai": {
+      "object_counts": {}
+    }
+  },
+  "cases": [
+    {
+      "case": "01_quota",
+      "thread_id": "01a0f2f5-d179-7d10-aa88-e82a7c7274e1",
+      "seconds": 39.8,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 109712,
+        "cached_input_tokens": 84646,
+        "cache_write_input_tokens": 25051,
+        "output_tokens": 814,
+        "reasoning_output_tokens": 315
+      },
+      "prompt": "幫我看 WinLab 的個人和專案資源配額，各用了多少、還剩多少？\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        }
+      ],
+      "final": "個人 **zyx1121** 與專案 **iii-edge-ai** 的配額相同，目前各項使用量皆為 **0**。以下數字適用於兩者各自的配額：\n\n| 資源 | 已用 | 剩餘（即總配額） |\n|---|---:|---:|\n| vCPU | 0 | 8 |\n| 記憶體 | 0 | 16,384 MB |\n| 磁碟 | 0 | 100 GB |\n| 機器 | 0 | 4 |\n| IP | 0 | 4 |\n| 公開連接埠 | 0 | 10 |\n| 網域 | 0 | 10 |\n| 私有網路 | 0 | 4 |\n| 快照 | 0 | 4 |\n| 映像儲存空間 | 0 | 20 GB |\n\n僅執行 `whoami` 與 `quota_get` 查詢，未進行任何修改、配額申請或 SSH key 新增。"
+    },
+    {
+      "case": "02_create_no_key",
+      "thread_id": "01a0f2f6-428b-7dd3-9a4d-b774ab8a9492",
+      "seconds": 37.6,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 103657,
+        "cached_input_tokens": 93314,
+        "cache_write_input_tokens": 10328,
+        "output_tokens": 816,
+        "reasoning_output_tokens": 229
+      },
+      "prompt": "幫我在 WinLab 開一台 Ubuntu 跑 Docker，先預演，不要真的建立。\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "images_list",
+          "arguments": {
+            "kind": "vm"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "sizes_list",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "ssh_key_list",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "ubuntu-docker",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "size": "small",
+            "packages": [
+              "docker.io"
+            ],
+            "runcmd": [
+              [
+                "systemctl",
+                "enable",
+                "--now",
+                "docker"
+              ]
+            ],
+            "dry_run": true
+          },
+          "status": "failed",
+          "ok": false,
+          "error": {
+            "code": "invalid",
+            "message": "Supply 1 to 20 SSH public keys"
+          },
+          "preview_result": {
+            "ok": false,
+            "error": {
+              "code": "invalid",
+              "message": "Supply 1 to 20 SSH public keys"
+            }
+          }
+        }
+      ],
+      "final": "已執行 dry-run，但驗證未通過：租戶未登錄 SSH 公鑰，工具要求提供 1–20 把公鑰。\n\n預演配置：`zyx1121/ubuntu-docker`，Ubuntu 24.04 VM、2 vCPU、2 GB RAM、20 GB 磁碟，安裝並啟用 Docker。配額足夠。\n\n未建立、修改或刪除遠端資源；未申請 quota、未新增金鑰，也未讀取本機帳密或私鑰。"
+    },
+    {
+      "case": "03_project_vm",
+      "thread_id": "01a0f2f6-d570-7932-87f9-1c7eb80dc537",
+      "seconds": 54.1,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 171640,
+        "cached_input_tokens": 156643,
+        "cache_write_input_tokens": 14976,
+        "output_tokens": 725,
+        "reasoning_output_tokens": 79
+      },
+      "prompt": "幫我在 iii-edge-ai 專案開一台 Ubuntu 24.04 跑 Docker，名稱 eval-docker，4 vCPU、8 GiB RAM、40 GiB 磁碟。請實際預演後告訴我能不能開，不要真的建立。這把是本次測試用 SSH 公鑰：<ephemeral Ed25519 public key>\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "images_list",
+          "arguments": {
+            "kind": "vm"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "name": "eval-docker",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "cpu": 4,
+            "memory_mb": 8192,
+            "disk_gb": 40,
+            "packages": [
+              "docker.io"
+            ],
+            "runcmd": [
+              [
+                "systemctl",
+                "enable",
+                "--now",
+                "docker"
+              ]
+            ],
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true
+          },
+          "status": "completed",
+          "ok": true,
+          "preview_result": {
+            "ok": true,
+            "dry_run": true,
+            "machine": {
+              "vmid": 10400,
+              "tenant_n": 4,
+              "name": "eval-docker",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "ip": "10.200.4.10",
+              "host": 10,
+              "mac": "02:ca:04:00:00:01",
+              "cpu": 4,
+              "memory_mb": 8192,
+              "disk_gb": 40,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "docker.io"
+              ],
+              "state": "provisioning",
+              "created_at": 1790782688,
+              "nics": [],
+              "ssh": "ssh -p 20040 user@carrel.winlab.tw",
+              "ssh_config": "Host eval-docker-carrel\n  HostName carrel.winlab.tw\n  User user\n  Port 20040\n"
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 4,
+                "memory_mb": 8192,
+                "disk_gb": 40,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0,
+                "images_gb": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4,
+                "images_gb": 20
+              }
+            }
+          }
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        }
+      ],
+      "final": "可以，實際 dry-run 已通過（`ok: true`、`dry_run: true`）。\n\n- 專案／名稱：`iii-edge-ai`／`eval-docker`\n- Ubuntu 24.04 VM，4 vCPU、8 GiB RAM、40 GiB 磁碟\n- 預演包含安裝並啟動 Docker，以及你提供的 SSH 公鑰\n\n預演後再次查詢：VM 清單仍空白、配額用量仍為 0。未實際建立或修改遠端資源、未新增 SSH key、未提出 quota 申請。"
+    },
+    {
+      "case": "04_quota_exceeded",
+      "thread_id": "01a0f2f6-b1fd-7310-b167-b3bc2dcca5b9",
+      "seconds": 41.7,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 175171,
+        "cached_input_tokens": 159321,
+        "cache_write_input_tokens": 15829,
+        "output_tokens": 852,
+        "reasoning_output_tokens": 189
+      },
+      "prompt": "我想在個人空間開 eval-big，16 vCPU、32 GiB RAM、100 GiB 磁碟，用 Ubuntu 24.04。先實際預演看看可不可行，不要真的建立或送額度申請。SSH 公鑰：<ephemeral Ed25519 public key>\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "sizes_list",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "images_list",
+          "arguments": {
+            "kind": "vm"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "eval-big",
+            "kind": "vm",
+            "cpu": 16,
+            "memory_mb": 32768,
+            "disk_gb": 100,
+            "image": "ubuntu-24.04",
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true
+          },
+          "status": "failed",
+          "ok": false,
+          "error": {
+            "code": "quota_exceeded",
+            "message": "Tenant quota would be exceeded",
+            "dimension": "vcpu",
+            "used": 16,
+            "limit": 8
+          },
+          "preview_result": {
+            "ok": false,
+            "error": {
+              "code": "quota_exceeded",
+              "message": "Tenant quota would be exceeded",
+              "dimension": "vcpu",
+              "used": 16,
+              "limit": 8
+            }
+          }
+        }
+      ],
+      "final": "已在個人空間 `zyx1121` 實際 dry-run `eval-big`，結果為 **`quota_exceeded`，目前不可行**。\n\n| 資源 | 需求 | 可用額度 |\n|---|---:|---:|\n| vCPU | 16 | 8 |\n| RAM | 32 GiB | 16 GiB |\n| 磁碟 | 100 GiB | 100 GiB |\n\n工具首先回報 vCPU 超額；RAM 也超出額度。Ubuntu 24.04 映像可用。\n\n全程僅查詢與 dry-run；公鑰僅作預演參數，未新增 SSH key、未變更遠端資源，也未送出額度申請。"
+    },
+    {
+      "case": "05_mininet",
+      "thread_id": "01a0f2f7-54ec-7f81-9de0-297f2292ad0b",
+      "seconds": 83.2,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 201946,
+        "cached_input_tokens": 185078,
+        "cache_write_input_tokens": 16844,
+        "output_tokens": 2271,
+        "reasoning_output_tokens": 885
+      },
+      "prompt": "我想做 Mininet 加 Open vSwitch 的 SDN 實驗，打算在 WinLab 開兩台 Ubuntu 虛擬機並接一條私人網路，放在 iii-edge-ai 專案。幫我選規格並預演，預演辦不到的步驟請說清楚，不要真的建立。SSH 公鑰：<ephemeral Ed25519 public key>\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "sizes_list",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "images_list",
+          "arguments": {
+            "kind": "vm"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "network_list",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "cpu": 2,
+            "memory_mb": 4096,
+            "disk_gb": 20,
+            "nested_virt": false,
+            "packages": [
+              "mininet",
+              "openvswitch-switch",
+              "iperf3",
+              "tcpdump",
+              "python3",
+              "python3-venv"
+            ],
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true,
+            "name": "sdn-01"
+          },
+          "status": "completed",
+          "ok": true,
+          "preview_result": {
+            "ok": true,
+            "dry_run": true,
+            "machine": {
+              "vmid": 10400,
+              "tenant_n": 4,
+              "name": "sdn-01",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "ip": "10.200.4.10",
+              "host": 10,
+              "mac": "02:ca:04:00:00:01",
+              "cpu": 2,
+              "memory_mb": 4096,
+              "disk_gb": 20,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "mininet",
+                "openvswitch-switch",
+                "iperf3",
+                "tcpdump",
+                "python3",
+                "python3-venv"
+              ],
+              "state": "provisioning",
+              "created_at": 1790782736,
+              "nics": [],
+              "ssh": "ssh -p 20040 user@carrel.winlab.tw",
+              "ssh_config": "Host sdn-01-carrel\n  HostName carrel.winlab.tw\n  User user\n  Port 20040\n"
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 2,
+                "memory_mb": 4096,
+                "disk_gb": 20,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0,
+                "images_gb": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4,
+                "images_gb": 20
+              }
+            }
+          }
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "cpu": 2,
+            "memory_mb": 4096,
+            "disk_gb": 20,
+            "nested_virt": false,
+            "packages": [
+              "mininet",
+              "openvswitch-switch",
+              "iperf3",
+              "tcpdump",
+              "python3",
+              "python3-venv"
+            ],
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true,
+            "name": "sdn-02"
+          },
+          "status": "completed",
+          "ok": true,
+          "preview_result": {
+            "ok": true,
+            "dry_run": true,
+            "machine": {
+              "vmid": 10400,
+              "tenant_n": 4,
+              "name": "sdn-02",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "ip": "10.200.4.10",
+              "host": 10,
+              "mac": "02:ca:04:00:00:01",
+              "cpu": 2,
+              "memory_mb": 4096,
+              "disk_gb": 20,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "mininet",
+                "openvswitch-switch",
+                "iperf3",
+                "tcpdump",
+                "python3",
+                "python3-venv"
+              ],
+              "state": "provisioning",
+              "created_at": 1790782739,
+              "nics": [],
+              "ssh": "ssh -p 20040 user@carrel.winlab.tw",
+              "ssh_config": "Host sdn-02-carrel\n  HostName carrel.winlab.tw\n  User user\n  Port 20040\n"
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 2,
+                "memory_mb": 4096,
+                "disk_gb": 20,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0,
+                "images_gb": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4,
+                "images_gb": 20
+              }
+            }
+          }
+        },
+        {
+          "tool": "network_create",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "name": "sdn-lab",
+            "cidr": "10.77.0.0/24",
+            "dry_run": true
+          },
+          "status": "completed",
+          "ok": true,
+          "preview_result": {
+            "ok": true,
+            "network": {
+              "id": "p00401",
+              "tenant_n": 4,
+              "serial": 1,
+              "name": "sdn-lab",
+              "cidr": "10.77.0.0/24",
+              "mtu": 1450
+            },
+            "dry_run": true,
+            "quota_after": {
+              "used": {
+                "vcpu": 0,
+                "memory_mb": 0,
+                "disk_gb": 0,
+                "machines": 0,
+                "ips": 0,
+                "public_ports": 0,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0,
+                "images_gb": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4,
+                "images_gb": 20
+              }
+            }
+          }
+        },
+        {
+          "tool": "machine_nic_attach",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "machine": "sdn-01",
+            "network": "sdn-lab",
+            "dry_run": true
+          },
+          "status": "failed",
+          "ok": false,
+          "error": {
+            "code": "not_found",
+            "message": "Machine not found in this tenant"
+          },
+          "preview_result": {
+            "ok": false,
+            "error": {
+              "code": "not_found",
+              "message": "Machine not found in this tenant"
+            }
+          }
+        },
+        {
+          "tool": "machine_nic_attach",
+          "arguments": {
+            "tenant": "iii-edge-ai",
+            "machine": "sdn-02",
+            "network": "sdn-lab",
+            "dry_run": true
+          },
+          "status": "failed",
+          "ok": false,
+          "error": {
+            "code": "not_found",
+            "message": "Machine not found in this tenant"
+          },
+          "preview_result": {
+            "ok": false,
+            "error": {
+              "code": "not_found",
+              "message": "Machine not found in this tenant"
+            }
+          }
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "network_list",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        }
+      ],
+      "final": "已在 `iii-edge-ai` 完成查詢與 dry-run，**沒有實際建立資源**。\n\n| 項目 | 建議配置 |\n|---|---|\n| `sdn-01`、`sdn-02` | 各 Ubuntu 24.04 VM、2 vCPU、4 GiB RAM、20 GB 磁碟 |\n| 軟體 | Mininet、Open vSwitch、iperf3、tcpdump |\n| 私人網路 `sdn-lab` | `10.77.0.0/24`、MTU 1450 |\n\n此規格適合小型 SDN 實驗，不需巢狀虛擬化。兩台合計 4 vCPU、8 GiB RAM、40 GB 磁碟，符合目前專案配額。\n\n- **通過**：兩台 VM 與私人網路的建立 dry-run。\n- **無法完成**：兩次網卡掛接 dry-run 均回報 `not_found`，因為預演沒有真正建立 VM。\n- **尚未驗證**：套件安裝、OVS 執行、控制器連線與跨機流量。私人網路沒有 DHCP／閘道；未來需在客體設定靜態 IP，例如 `.11/24`、`.12/24`。\n- 各次預演獨立，不累計或保留資源；回傳的 VMID、IP、SSH 埠只是預估。\n\n事後確認 VM／網路清單仍為空、配額使用量仍為零。公鑰僅傳入 dry-run，未新增 SSH key，也未提出 quota 申請。"
+    },
+    {
+      "case": "06_capacity_gpu",
+      "thread_id": "01a0f2f8-99ff-7ae2-9116-a77ddd76509b",
+      "seconds": 52.6,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 139468,
+        "cached_input_tokens": 125831,
+        "cache_write_input_tokens": 13619,
+        "output_tokens": 1446,
+        "reasoning_output_tokens": 702
+      },
+      "prompt": "WinLab 現在還剩多少實體 CPU、RAM、磁碟？有沒有 GPU 可以跑 PyTorch？請查目前能取得的即時資料，查不到的就標明，先不要建立機器。\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "whoami",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "iii-edge-ai"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "list_mcp_resources",
+          "arguments": {
+            "server": "carrel"
+          },
+          "status": "failed",
+          "transport_error": {
+            "message": "resources/list failed: resources/list failed for `carrel`: Mcp error: -32601: Method not found"
+          }
+        },
+        {
+          "tool": "list_mcp_resource_templates",
+          "arguments": {
+            "server": "carrel"
+          },
+          "status": "failed",
+          "transport_error": {
+            "message": "resources/templates/list failed: resources/templates/list failed for `carrel`: Mcp error: -32601: Method not found"
+          }
+        },
+        {
+          "tool": "sizes_list",
+          "arguments": {},
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "capacity-probe",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "size": "small",
+            "dry_run": true
+          },
+          "status": "failed",
+          "ok": false,
+          "error": {
+            "code": "invalid",
+            "message": "Supply 1 to 20 SSH public keys"
+          },
+          "preview_result": {
+            "ok": false,
+            "error": {
+              "code": "invalid",
+              "message": "Supply 1 to 20 SSH public keys"
+            }
+          }
+        }
+      ],
+      "final": "目前即時查詢結果：\n\n| 項目 | 結果 |\n|---|---|\n| 實體 CPU、RAM、磁碟剩餘量 | **查不到**，現有工具未提供實體容量查詢 |\n| GPU 能否跑 PyTorch | **無法確認**，未提供 GPU 庫存、型號或 CUDA 狀態 |\n| 租戶剩餘配額 | `zyx1121`、`iii-edge-ai` 各剩 **8 vCPU、16,384 MB RAM、100 GB 磁碟**，目前用量皆為 0 |\n\n配額不代表實體可用容量。另嘗試 small VM 的 dry-run，但因缺少 SSH 公鑰而遭拒，未取得容量檢查結果。\n\n僅執行查詢與 dry-run，未建立機器、變更資源、申請 quota 或新增 SSH key。"
+    },
+    {
+      "case": "07_resume_no_key",
+      "thread_id": "01a0f2f6-428b-7dd3-9a4d-b774ab8a9492",
+      "seconds": 26.5,
+      "exit_code": 0,
+      "usage": {
+        "input_tokens": 177672,
+        "cached_input_tokens": 165387,
+        "cache_write_input_tokens": 12261,
+        "output_tokens": 1328,
+        "reasoning_output_tokens": 287
+      },
+      "prompt": "這是公鑰：<ephemeral Ed25519 public key>。繼續剛才那台 Ubuntu Docker 的預演，仍然不要真的建立或儲存公鑰。\n\n這是實際工具使用測試：只允許查詢與 dry-run，不得建立、修改或刪除遠端資源，不要提出 quota 申請，不要新增 SSH key。不要讀本機帳密或私鑰，不要用 SSH／直接 API 繞過工具，也不要派遣子代理。回覆用繁體中文，精簡。",
+      "calls": [
+        {
+          "tool": "machine_create",
+          "arguments": {
+            "tenant": "zyx1121",
+            "name": "ubuntu-docker",
+            "kind": "vm",
+            "image": "ubuntu-24.04",
+            "size": "small",
+            "packages": [
+              "docker.io"
+            ],
+            "runcmd": [
+              [
+                "systemctl",
+                "enable",
+                "--now",
+                "docker"
+              ]
+            ],
+            "ssh_keys": [
+              "<ephemeral Ed25519 public key>"
+            ],
+            "dry_run": true
+          },
+          "status": "completed",
+          "ok": true,
+          "preview_result": {
+            "ok": true,
+            "dry_run": true,
+            "machine": {
+              "vmid": 10300,
+              "tenant_n": 3,
+              "name": "ubuntu-docker",
+              "kind": "vm",
+              "image": "ubuntu-24.04",
+              "ip": "10.200.3.10",
+              "host": 10,
+              "mac": "02:ca:03:00:00:01",
+              "cpu": 2,
+              "memory_mb": 2048,
+              "disk_gb": 20,
+              "nested_virt": false,
+              "swap_mb": 4096,
+              "packages": [
+                "docker.io"
+              ],
+              "state": "provisioning",
+              "created_at": 1790782886,
+              "nics": [],
+              "ssh": "ssh -p 20030 user@carrel.winlab.tw",
+              "ssh_config": "Host ubuntu-docker-carrel\n  HostName carrel.winlab.tw\n  User user\n  Port 20030\n"
+            },
+            "quota_after": {
+              "used": {
+                "vcpu": 2,
+                "memory_mb": 2048,
+                "disk_gb": 20,
+                "machines": 1,
+                "ips": 1,
+                "public_ports": 1,
+                "domains": 0,
+                "networks": 0,
+                "snapshots": 0,
+                "images_gb": 0
+              },
+              "limit": {
+                "vcpu": 8,
+                "memory_mb": 16384,
+                "disk_gb": 100,
+                "machines": 4,
+                "ips": 4,
+                "public_ports": 10,
+                "domains": 10,
+                "networks": 4,
+                "snapshots": 4,
+                "images_gb": 20
+              }
+            }
+          }
+        },
+        {
+          "tool": "machine_list",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "quota_get",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        },
+        {
+          "tool": "ssh_key_list",
+          "arguments": {
+            "tenant": "zyx1121"
+          },
+          "status": "completed",
+          "ok": true
+        }
+      ],
+      "final": "Dry-run 成功，配額檢查通過。\n\n- 主機：`zyx1121/ubuntu-docker`\n- 配置：Ubuntu 24.04 VM、2 vCPU、2 GB RAM、20 GB 磁碟\n- 預定安裝 `docker.io` 並啟用 Docker\n\n已再次查詢確認：主機與儲存公鑰清單皆為空，配額使用量仍為 0。未實際建立主機、儲存公鑰或申請 quota。"
+    }
+  ]
+}

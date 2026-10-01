@@ -1,0 +1,57 @@
+{
+  "date": "2026-09-30",
+  "site": "b09",
+  "node": "carrel01",
+  "version": "0.2.0",
+  "endpoint": "https://carrel.winlab.tw/mcp",
+  "automated_tests": 13,
+  "checks": {
+    "keycloak_oauth": "Two disposable lab-member accounts completed real code + S256 + consent + token validation.",
+    "public_mcp": "Unauthorized requests return 401 with resource metadata; authenticated MCP creates VM and CT.",
+    "external_health": "200 from check-host probes in Switzerland, Iran and Russia; report 4e3fa09ckd83.",
+    "ssh": "Real owner-key login through public ports 20010 and 20020.",
+    "fresh_cloud_init": "Debian 13 VM status done, QGA active; guest-exec, guest-file-* and password-setting RPCs disabled.",
+    "dhcp": "VM switched from static config to DHCP and received exactly 10.200.1.10, gateway 10.200.1.1, DNS 10.200.0.2; MTU 1450.",
+    "isolation": "Other tenant SSH, physical/jump management, old PVE SSH and old gateway blocked; internet HTTPS allowed.",
+    "peering": "TCP 8080 works only after destination-owner peer_allow; new connections time out after peer_revoke.",
+    "private_routing": "Two CT endpoints on separate private VNets communicate through an owned router VM; 1450-byte IPv4 packets pass without fragmentation.",
+    "private_broadcast": {
+      "private_broadcast_visible_to_router": 5,
+      "private_broadcast_visible_to_other_tenant": 0,
+      "spoofed_primary_ip_blocked": true
+    },
+    "underlay": {
+      "vxlan_drop_delta": 1,
+      "bgp_drop_delta": 1,
+      "guessed_vni_frames_in_guest": 0,
+      "spoofed_node_source_included": true,
+      "accept_local": 0,
+      "note": "Foreign source hits explicit drops; forged local node source is rejected by Linux source validation before input hook."
+    },
+    "https": "Real wildcard certificate issued; exact test host returns 200; unconfigured host and removed route return 404.",
+    "route_reload": "A second domain was added and removed through MCP while all proxy layers reloaded, after upgrading new proxies to Caddy 2.11.4.",
+    "public_port": "TCP 8080 published on 20021, real HTTP verified, then closed; new TCP connection blocked.",
+    "snapshots": "LVM-thin CT snapshot create/delete succeeded; disk quota increased/decreased by reserved disk size.",
+    "backup": "Daily database/config/certificate archive on independent old PVE, mode 0600. Restored SQLite copy reports integrity_check=ok.",
+    "restart": "Two physical B09 reboots; final reboot recovered MCP, DNS, DHCP reservation, HTTP route, WireGuard and tenant primary networking. A CT explicitly shut down via MCP remained stopped (onboot=0). New CT 207 also rebooted successfully. Final physical boot ID dfee6905-d808-498e-b6c3-8ffb6c49c820.",
+    "cleanup": "Both disposable Keycloak accounts deleted; 4 guests, 2 private networks, all test domain/port/peer/snapshot grants removed. Test certificate material, OAuth registrations/refresh bindings and local credentials removed. Tenant serials 1 and 2 retired permanently, with their primary address ranges reserved. Safari temporary admin hook restored/cleared. Fresh backup taken after cleanup.",
+    "disk_growth": "CT disk grew from 10 to 11 GiB; repeating the same resize succeeded without double allocation.",
+    "deployed_source": "All installed Python module hashes and both forced-command adapters match the reviewed repository source; deployment excludes macOS resource forks and bytecode."
+  },
+  "fixed_during_acceptance": [
+    "SDN dnsmasq service dependency and actual bridge existence checks.",
+    "Cross-VRF NAT replies use distinct connection-tracking zone plus persistent VRF default route.",
+    "Primary anti-spoofing permits DHCP initial address only through DHCP rules.",
+    "New proxy Caddy 2.6.2 panic on live reload; pinned 2.11.4 with automatic restart.",
+    "Idempotent tc filter uses an explicit handle; repeated deployment preserves dynamic routes and port grants.",
+    "DNS starts after networking, binds dynamically and retries if addresses arrive late."
+  ],
+  "limitations": [
+    "Private routed topology uses two CT endpoints and one router VM on one node; the full M5 VM/multi-node acceptance remains.",
+    "No clean-room nested installation CI or autonomous Claude Code/Codex scenario acceptance yet.",
+    "Certificate renewal path implemented; expiry/renewal cycle not exercised.",
+    "SQLite/config restore checked; full infrastructure and tenant-disk disaster restore/PBS pending.",
+    "Old PVE host itself was not rebooted; its new CT 207 was rebooted and existing production services stayed running.",
+    "No custom-image/ISO import, guest migration, console/access recovery, special domains/ports, skills, email notification, telemetry, alumni scheduling or multi-node lifecycle yet."
+  ]
+}

@@ -1,0 +1,268 @@
+{
+  "date": "2026-10-01",
+  "planning_commit": "4b8ed4c",
+  "final_code_commit": "271640a",
+  "type": "Separate live acceptance orchestrated through authenticated Carrel MCP and owner SSH; not part of the seven read-only Codex prompts",
+  "guest": {
+    "name": "carrel-eval-1001",
+    "tenant": "zyx1121",
+    "image": "ubuntu-24.04",
+    "cpu": 1,
+    "memory_mib": 1024,
+    "disk_gib": 12
+  },
+  "checks": {
+    "owner_ssh": true,
+    "cloud_init_complete": true,
+    "nginx_active": true,
+    "public_http": true,
+    "public_https_certificate_verified": true,
+    "private_nic_visible": true,
+    "private_nic_mtu": 1450,
+    "private_ip_configured": true,
+    "post_snapshot_marker_restored": true,
+    "rollback_stopped_state_reported_and_persisted": true,
+    "restart_restores_ssh_and_https": true,
+    "vm_removed": true,
+    "private_network_removed": true,
+    "virtual_disks_removed": true,
+    "public_ports_closed": true,
+    "temporary_owner_key_destroyed": true
+  },
+  "post_cleanup": {
+    "tenants": [
+      {
+        "slug": "zyx1121",
+        "used": {
+          "vcpu": 0,
+          "memory_mb": 0,
+          "disk_gb": 0,
+          "machines": 0,
+          "ips": 0,
+          "public_ports": 0,
+          "domains": 0,
+          "networks": 0,
+          "snapshots": 0
+        }
+      },
+      {
+        "slug": "iii-edge-ai",
+        "used": {
+          "vcpu": 0,
+          "memory_mb": 0,
+          "disk_gb": 0,
+          "machines": 0,
+          "ips": 0,
+          "public_ports": 0,
+          "domains": 0,
+          "networks": 0,
+          "snapshots": 0
+        }
+      }
+    ],
+    "retained_metadata": "Normal audit records and one reusable tenant TLS certificate cache remain; no allocated machines/networks/ports/domains/snapshots or saved test SSH keys."
+  },
+  "limitations": "One disposable Ubuntu VM; no CT, cross-tenant peering, cross-VM private traffic or multi-node acceptance in this run.",
+  "operations": [
+    {
+      "tool": "machine_create",
+      "phase": "preview",
+      "ok": true
+    },
+    {
+      "tool": "machine_create",
+      "phase": "apply",
+      "ok": true
+    },
+    {
+      "tool": "network_create",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "networks": 1
+      },
+      "applied_delta": {
+        "networks": 1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "machine_nic_attach",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {},
+      "applied_delta": {},
+      "quota_matches": true
+    },
+    {
+      "tool": "port_open",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "public_ports": 1
+      },
+      "applied_delta": {
+        "public_ports": 1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "domain_add",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "domains": 1
+      },
+      "applied_delta": {
+        "domains": 1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "snapshot_create",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "disk_gb": 12,
+        "snapshots": 1
+      },
+      "applied_delta": {
+        "disk_gb": 12,
+        "snapshots": 1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "snapshot_rollback",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {},
+      "applied_delta": {},
+      "quota_matches": true
+    },
+    {
+      "tool": "machine_get",
+      "phase": "post_rollback",
+      "ok": true,
+      "reported_state": "ready",
+      "hypervisor_state": "stopped"
+    },
+    {
+      "tool": "machine_power",
+      "phase": "start_after_initial_rollback",
+      "ok": true,
+      "preview_delta": {},
+      "applied_delta": {},
+      "quota_matches": true
+    },
+    {
+      "tool": "snapshot_rollback",
+      "phase": "fixed",
+      "ok": true,
+      "preview_delta": {},
+      "applied_delta": {},
+      "quota_matches": true,
+      "power_state": "stopped",
+      "next_action": {
+        "tool": "machine_power",
+        "arguments": {
+          "tenant": "zyx1121",
+          "machine": "carrel-eval-1001",
+          "action": "start"
+        }
+      }
+    },
+    {
+      "tool": "machine_get",
+      "phase": "fixed_post_rollback",
+      "ok": true,
+      "reported_state": "stopped",
+      "hypervisor_state": "stopped"
+    },
+    {
+      "tool": "machine_power",
+      "phase": "fixed_restart",
+      "ok": true
+    },
+    {
+      "tool": "snapshot_delete",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "disk_gb": -12,
+        "snapshots": -1
+      },
+      "applied_delta": {
+        "disk_gb": -12,
+        "snapshots": -1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "machine_nic_detach",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {},
+      "applied_delta": {},
+      "quota_matches": true
+    },
+    {
+      "tool": "network_delete",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "networks": -1
+      },
+      "applied_delta": {
+        "networks": -1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "port_close",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "public_ports": -1
+      },
+      "applied_delta": {
+        "public_ports": -1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "domain_remove",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "domains": -1
+      },
+      "applied_delta": {
+        "domains": -1
+      },
+      "quota_matches": true
+    },
+    {
+      "tool": "machine_delete",
+      "phase": "preview_then_apply",
+      "ok": true,
+      "preview_delta": {
+        "vcpu": -1,
+        "memory_mb": -1024,
+        "disk_gb": -12,
+        "machines": -1,
+        "ips": -1,
+        "public_ports": -1
+      },
+      "applied_delta": {
+        "vcpu": -1,
+        "memory_mb": -1024,
+        "disk_gb": -12,
+        "machines": -1,
+        "ips": -1,
+        "public_ports": -1
+      },
+      "quota_matches": true
+    }
+  ]
+}
