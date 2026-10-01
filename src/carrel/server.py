@@ -32,7 +32,7 @@ def build(config, backend=None, verifier=None, store=None):
     oauth = OAuth(store, origin, issuer, "carrel-mcp", verifier, config.get("hosted_redirects", []))
     server = Server(
         "carrel",
-        version="0.4.0",
+        version="0.4.1",
         instructions=(
             "WinLab machines; tools only, no MCP resources. Start with whoami for all visible tenants' "
             "used/limit/remaining quotas and capabilities. Use catalog_get for images/sizes, capacity_get "
@@ -127,6 +127,10 @@ def build(config, backend=None, verifier=None, store=None):
                 if not authorization.startswith("Bearer "):
                     raise ValueError("missing token")
                 scope["carrel.identity"] = await verifier.verify(authorization[7:])
+            except jwt.PyJWKClientConnectionError:
+                response = JSONResponse({"error": "temporarily_unavailable"}, status_code=503)
+                await response(scope, receive, send)
+                return
             except (jwt.PyJWTError, ValueError, OSError):
                 response = JSONResponse(
                     {"error": "invalid_token"},
@@ -166,7 +170,7 @@ def build(config, backend=None, verifier=None, store=None):
             await platform.operations.close()
 
     async def health(request):
-        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.4.0"})
+        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.4.1"})
 
     async def guest_status(request):
         try:
@@ -191,6 +195,7 @@ def build(config, backend=None, verifier=None, store=None):
         "/oauth/callback",
         "/oauth/consent",
         "/oauth/token",
+        "/oauth/revoke",
     ]:
         routes.append(Route(path, oauth.route, methods=["GET", "POST"]))
     app = Starlette(routes=routes, lifespan=lifespan)

@@ -43,6 +43,16 @@ Run login in an interactive terminal, sign in with your WinLab account, and allo
 in the browser. Complete each client's login before starting the next. Start a new client session
 after setup so it loads the new MCP configuration.
 
+Login persists across browser and Carrel restarts. Access tokens last five minutes; the client
+automatically renews them with a Keycloak offline token. Carrel does not impose a fixed expiry on
+that token or its authorized client registration. Keycloak still enforces its offline session idle
+and revocation policies; revoking Carrel in the [WinLab account console](https://auth.winlab.tw/realms/winlab/account/)
+ends renewal. Removing lab membership blocks renewal; issued access tokens expire after five minutes
+(with a small clock-skew allowance).
+Signing out of the browser alone does not revoke offline access. Client logout removes its saved credentials;
+clients supporting OAuth revocation can also call the advertised revocation endpoint.
+Existing logins created before 0.4.1 need one new login to obtain offline access.
+
 Other MCP clients can use the same URL and OAuth discovery. Dynamic registration accepts
 loopback callbacks and the explicitly configured ChatGPT callback. A new hosted client's callback
 must be added by an administrator; arbitrary callback origins are refused.

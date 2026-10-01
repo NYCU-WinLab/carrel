@@ -20,6 +20,8 @@ from starlette.responses import JSONResponse, RedirectResponse
 from .pages import consent_page
 
 ACTIVE = {"112", "113", "114", "115", "master", "doctoral", "undergrad", "assistant", "teacher"}
+SCOPES = ["openid", "profile", "email", "offline_access"]
+CLIENT_TTL = 86400 * 90
 
 
 def digest(value):
@@ -102,7 +104,7 @@ class OAuth:
                 {
                     "resource": self.resource,
                     "authorization_servers": [self.origin],
-                    "scopes_supported": ["openid", "profile", "email"],
+                    "scopes_supported": SCOPES,
                     "bearer_methods_supported": ["header"],
                 }
             )
@@ -116,12 +118,14 @@ class OAuth:
                     "authorization_endpoint": self.origin + "/oauth/authorize",
                     "token_endpoint": self.origin + "/oauth/token",
                     "registration_endpoint": self.origin + "/oauth/register",
+                    "revocation_endpoint": self.origin + "/oauth/revoke",
+                    "revocation_endpoint_auth_methods_supported": ["none"],
                     "response_types_supported": ["code"],
                     "grant_types_supported": ["authorization_code", "refresh_token"],
                     "code_challenge_methods_supported": ["S256"],
                     "token_endpoint_auth_methods_supported": ["none"],
                     "authorization_response_iss_parameter_supported": True,
-                    "scopes_supported": ["openid", "profile", "email"],
+                    "scopes_supported": SCOPES,
                 }
             )
         if path == "/oauth/register" and method == "POST":
@@ -142,7 +146,7 @@ class OAuth:
                     "grant_types": ["authorization_code", "refresh_token"],
                     "response_types": ["code"],
                 }
-                self.store.oauth_put("client", client["client_id"], client, 86400 * 90)
+                self.store.oauth_put("client", client["client_id"], client, CLIENT_TTL)
                 return JSONResponse(client, status_code=201, headers={"Cache-Control": "no-store"})
             except (ValueError, KeyError, TypeError):
                 return self.error()
@@ -173,7 +177,9 @@ class OAuth:
                 "client_id": self.client_id,
                 "redirect_uri": self.callback,
                 "response_type": "code",
-                "scope": "openid profile email",
+                # MCP clients need to work after the browser SSO session ends.
+                # The local consent page explains this continuing access.
+                "scope": " ".join(SCOPES),
                 "state": state,
                 "code_challenge": txn["challenge"],
                 "code_challenge_method": "S256",
@@ -218,6 +224,30 @@ class OAuth:
             return RedirectResponse(
                 txn["redirect"] + ("&" if "?" in txn["redirect"] else "?") + urlencode(out), status_code=302
             )
+        if path == "/oauth/revoke" and method == "POST":
+            data = await request.form()
+            cid, token = str(data.get("client_id", "")), str(data.get("token", ""))
+            if not self.store.oauth_get("client", cid):
+                return self.error("invalid_client")
+            txn = self.store.oauth_get("refresh", digest(token))
+            if txn and txn["client"] == cid:
+                try:
+                    async with httpx.AsyncClient(timeout=15) as http:
+                        r = await http.post(
+                            self.issuer + "/protocol/openid-connect/revoke",
+                            data={
+                                "client_id": self.client_id,
+                                "token": token,
+                                "token_type_hint": "refresh_token",
+                            },
+                        )
+                    if r.status_code != 200:
+                        return self.error("temporarily_unavailable", 503)
+                except httpx.HTTPError:
+                    return self.error("temporarily_unavailable", 503)
+                self.store.oauth_pop("refresh", digest(token))
+            # RFC 7009: do not disclose whether an unknown/foreign token exists.
+            return JSONResponse({}, headers={"Cache-Control": "no-store"})
         if path == "/oauth/token" and method == "POST":
             data = await request.form()
             cid = str(data.get("client_id", ""))
@@ -238,7 +268,6 @@ class OAuth:
                     or not secrets.compare_digest(challenge(verifier), txn["challenge"])
                 ):
                     return self.error("invalid_grant")
-                self.store.oauth_pop("code", digest(code))
                 body.update(code=code, code_verifier=verifier, redirect_uri=self.callback)
             elif grant == "refresh_token":
                 refresh = str(data.get("refresh_token", ""))
@@ -251,20 +280,52 @@ class OAuth:
             try:
                 async with httpx.AsyncClient(timeout=15) as http:
                     r = await http.post(self.issuer + "/protocol/openid-connect/token", data=body)
-                if r.status_code != 200:
-                    return self.error("invalid_grant")
-                tokens = r.json()
-                await self.verifier.verify(tokens["access_token"])
-                if tokens.get("refresh_token"):
-                    self.store.oauth_put(
-                        "refresh",
-                        digest(tokens["refresh_token"]),
-                        {"client": cid},
-                        min(tokens.get("refresh_expires_in", 1800), 86400 * 30),
+                error = r.json() if r.status_code == 400 else {}
+                if isinstance(error, dict) and error.get("error") == "invalid_grant":
+                    self.store.oauth_pop(
+                        "refresh" if grant == "refresh_token" else "code",
+                        digest(body.get("refresh_token", body.get("code"))),
                     )
-                if grant == "refresh_token" and body["refresh_token"] != tokens.get("refresh_token"):
-                    self.store.oauth_pop("refresh", digest(body["refresh_token"]))
+                    return self.error("invalid_grant")
+                if r.status_code != 200:
+                    # A timeout, rate limit or issuer outage must not tell a
+                    # client to discard a still-valid stored login.
+                    return self.error("temporarily_unavailable", 503)
+                tokens = r.json()
+                if not isinstance(tokens, dict):
+                    return self.error("temporarily_unavailable", 503)
+                try:
+                    await self.verifier.verify(tokens["access_token"])
+                except jwt.PyJWKClientConnectionError:
+                    return self.error("temporarily_unavailable", 503)
+                except (jwt.PyJWTError, ValueError):
+                    return self.error("invalid_grant")
+                scope = tokens.get("scope", "offline_access" if txn.get("offline") else "")
+                if not isinstance(scope, str):
+                    return self.error("temporarily_unavailable", 503)
+                offline = "offline_access" in scope.split()
+                if tokens.get("refresh_token"):
+                    ttl = int(tokens.get("refresh_expires_in", 1800))
+                    if ttl < 0 or (ttl == 0 and not offline):
+                        return self.error("temporarily_unavailable", 503)
+                with self.store.transaction():
+                    if tokens.get("refresh_token"):
+                        self.store.oauth_put(
+                            "refresh",
+                            digest(tokens["refresh_token"]),
+                            {"client": cid, "offline": offline},
+                            # Zero means no fixed expiry for Keycloak offline
+                            # tokens; upstream still enforces idle/revocation.
+                            None if ttl == 0 else ttl,
+                        )
+                    if grant == "authorization_code":
+                        self.store.oauth_pop("code", digest(code))
+                    elif tokens.get("refresh_token") and body["refresh_token"] != tokens["refresh_token"]:
+                        self.store.oauth_pop("refresh", digest(body["refresh_token"]))
+                    # An authorized offline session must not outlive its DCR
+                    # record. Unused registrations expire; online clients slide.
+                    self.store.oauth_put("client", cid, client, None if offline else CLIENT_TTL)
                 return JSONResponse(tokens, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
-            except (httpx.HTTPError, jwt.PyJWTError, ValueError, KeyError):
-                return self.error("access_denied")
+            except (httpx.HTTPError, jwt.PyJWTError, ValueError, KeyError, TypeError):
+                return self.error("temporarily_unavailable", 503)
         return self.error("invalid_request", 404)

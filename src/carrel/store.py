@@ -132,14 +132,15 @@ CREATE TABLE IF NOT EXISTS oauth (
 
     def oauth_get(self, kind, id):
         r = self.db.execute(
-            "SELECT data FROM oauth WHERE kind=? AND id=? AND expires>?", (kind, id, int(time.time()))
+            "SELECT data FROM oauth WHERE kind=? AND id=? AND (expires=0 OR expires>?)",
+            (kind, id, int(time.time())),
         ).fetchone()
         return json.loads(r[0]) if r else None
 
     def oauth_put(self, kind, id, data, ttl):
         self.db.execute(
             "INSERT OR REPLACE INTO oauth VALUES(?,?,?,?)",
-            (kind, id, json.dumps(data), int(time.time()) + ttl),
+            (kind, id, json.dumps(data), 0 if ttl is None else int(time.time()) + ttl),
         )
 
     def oauth_pop(self, kind, id):
@@ -148,7 +149,7 @@ CREATE TABLE IF NOT EXISTS oauth (
         return r
 
     def purge_oauth(self):
-        self.db.execute("DELETE FROM oauth WHERE expires<?", (int(time.time()),))
+        self.db.execute("DELETE FROM oauth WHERE expires!=0 AND expires<=?", (int(time.time()),))
 
     def desired(self):
         state = {

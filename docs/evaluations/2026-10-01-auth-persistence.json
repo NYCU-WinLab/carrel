@@ -1,0 +1,86 @@
+{
+  "version": "0.4.1",
+  "unit_tests": 133,
+  "live": {
+    "access_lifetime_seconds": 300,
+    "refresh_lifetime_seconds": 0,
+    "offline_scope": true,
+    "started_at": 1790833439,
+    "mcp_tools_before_restart": 40,
+    "immediate_refresh": true,
+    "refresh_after_service_restart": true,
+    "mcp_tools_after_restart": 40,
+    "expired_access_token_rejected": true,
+    "refresh_after_actual_access_expiry": true,
+    "offline_refresh_survives_sso_logout": true,
+    "foreign_client_cannot_revoke": true,
+    "membership_removal_blocks_renewal": true,
+    "revocation_blocks_facade_and_keycloak_renewal": true,
+    "finished_at": 1790833757
+  },
+  "codex": [
+    {
+      "name": "carrel",
+      "authStatus": "oAuth",
+      "runtimeStatus": null,
+      "serverInfo": {
+        "name": "carrel",
+        "title": null,
+        "version": "0.4.1",
+        "description": null,
+        "icons": null,
+        "websiteUrl": null
+      },
+      "tool_count": 40
+    }
+  ],
+  "codex_after_expiry": {
+    "elapsed_since_initial_seconds": 312,
+    "fresh_codex_process": true,
+    "result": [
+      {
+        "name": "carrel",
+        "authStatus": "oAuth",
+        "runtimeStatus": null,
+        "serverInfo": {
+          "name": "carrel",
+          "title": null,
+          "version": "0.4.1",
+          "description": null,
+          "icons": null,
+          "websiteUrl": null
+        },
+        "tool_count": 40
+      }
+    ]
+  },
+  "cleanup": {
+    "temporary_user_removed": true,
+    "test_clients_removed": 3,
+    "test_bindings_removed": true,
+    "local_test_credentials_removed": true,
+    "test_resources_created": false,
+    "vm_190_running": true
+  },
+  "deployment": {
+    "version": "0.4.1",
+    "stamp": "20261001-054329",
+    "wheel_sha256": "35ef149acd353ecf6c749267bd2ac4ec38ccb30383ee52e63a1021a430b2a479",
+    "control_backup": "/opt/carrel/rollback/auth-20261001-054329.tar.gz"
+  },
+  "installed_hashes": {
+    "installed": {
+      "auth.py": "72b59e0ad8c99b359e4109d1a17aee09031c8ddf23011cc3a752f4e7fa359e3a",
+      "store.py": "6cafcb051fedaf61b9c1ecc542287875f6b8eed051fdf8ccccd00bb737e1320e",
+      "server.py": "dbc7c3c9cd73694795ff0400219eace32a000cce5968376d316c3ab372866936",
+      "pages.py": "e79e57775d6e69cb7567e4652eabc51e76013ddb60d86915e1df498b66b7815a"
+    },
+    "source": {
+      "auth.py": "72b59e0ad8c99b359e4109d1a17aee09031c8ddf23011cc3a752f4e7fa359e3a",
+      "store.py": "6cafcb051fedaf61b9c1ecc542287875f6b8eed051fdf8ccccd00bb737e1320e",
+      "server.py": "dbc7c3c9cd73694795ff0400219eace32a000cce5968376d316c3ab372866936",
+      "pages.py": "e79e57775d6e69cb7567e4652eabc51e76013ddb60d86915e1df498b66b7815a"
+    },
+    "codex_offline_binding": true
+  }
+}

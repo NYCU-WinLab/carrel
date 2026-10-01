@@ -60,7 +60,7 @@ def login(user, origin):
         code_challenge_method="S256",
         state=state,
         resource=origin + "/mcp",
-        scope="openid profile email",
+        scope="openid profile email offline_access",
     )
     r = client.get(origin + "/oauth/authorize", params=query)
     assert r.status_code == 302

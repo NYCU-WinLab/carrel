@@ -60,6 +60,7 @@ def consent_page(client_name, redirect_uri, consent):
 <body><main><section aria-labelledby="title">
 <h1 id="title">連接 Carrel</h1>
 <p>允許 <strong>{name}</strong> 以你的帳號權限管理 Carrel 資源。</p>
+<p>登入會持續保留，關閉瀏覽器後仍可使用。你可以在 WinLab 帳號的應用程式頁面撤銷存取。</p>
 <form method="post" action="/oauth/consent">
 <input type="hidden" name="consent" value="{nonce}"><div class="actions">
 <button name="allow" value="no">取消</button>
