@@ -128,6 +128,11 @@ TOOLS = [
             "disk_gb": DISK,
             "ssh_keys": {"type": "array", "items": KEY, "maxItems": 20},
             "nested_virt": BOOL,
+            "network_access": {
+                "enum": ["tenant", "restricted"],
+                "default": "tenant",
+                "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs.",
+            },
             "swap_mb": {"type": "integer", "minimum": 0, "maximum": 65536, "description": "Swap in MiB."},
             "packages": {
                 "type": "array",
@@ -238,7 +243,7 @@ TOOLS = [
     tool("ssh_key_remove", "Remove a saved key; existing machines are unchanged.", {"id": TEXT}, ["id"]),
     tool(
         "port_open",
-        "Publish a TCP/UDP guest port through the external PVE edge, using the tenant's permanent port block.",
+        "Publish a guest TCP/UDP port and return its public endpoint. HTTPS websites should use domain_add or deployment publications.",
         {"machine": MACHINE, "port": PORT, "proto": {"enum": ["tcp", "udp"]}},
         ["machine", "port", "proto"],
     ),
@@ -246,7 +251,7 @@ TOOLS = [
     tool("port_close", "Remove a public port grant.", {"id": TEXT}, ["id"]),
     tool(
         "domain_add",
-        "Publish HTTPS at <sub>.<tenant>.winlab.tw using a tenant wildcard certificate issued by the control plane.",
+        "Publish HTTPS at <sub>.<tenant>.winlab.tw. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check.",
         {"machine": MACHINE, "sub": LABEL, "target_port": PORT},
         ["machine", "sub", "target_port"],
     ),
@@ -345,11 +350,26 @@ def objects(properties, required, maximum):
 
 plan = tool(
     "deployment_plan",
-    "Read-only preview of multiple new machines, private networks and NIC attachments together. Use names as symbolic references to new resources or this tenant's existing names/IDs. Checks aggregate quota, host admission and NIC slots; no reservations or resource writes. Missing public keys become requirements. Apply later with deployment_apply, which reserves the entire group and supports recovery; guest configuration is not executed in planning.",
+    "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. Apply the same specification with deployment_apply.",
     {
         "machines": objects(_machine, ["name"], 100),
         "networks": objects(_network, ["name"], 99),
         "attachments": objects({"machine": MACHINE, "network": TEXT}, ["machine", "network"], 700),
+        "connections": objects(
+            {
+                "from": MACHINE,
+                "to": MACHINE,
+                "port": PORT,
+                "protocol": {"enum": ["tcp", "udp"], "default": "tcp"},
+            },
+            ["from", "to", "port"],
+            1000,
+        ),
+        "publications": objects(
+            {"machine": MACHINE, "protocol": {"enum": ["https", "tcp", "udp"]}, "port": PORT, "sub": LABEL},
+            ["machine", "protocol", "port"],
+            100,
+        ),
     },
 )
 TOOLS.append(plan)
@@ -357,7 +377,7 @@ BY_NAME[plan.name] = plan
 
 apply = tool(
     "deployment_apply",
-    "Apply a deployment_plan specification as a durable job. Reserves all resources together before provisioning. Default on_failure=rollback removes only resources created by this job; keep preserves them for diagnosis/retry. Queued jobs have not reserved capacity yet. Poll operation_get; resend with the same idempotency_key after a lost response.",
+    "Apply the same deployment_plan specification, including connections and publications. Reserves the entire group, returns one durable operation, then SSH entries and public endpoints on completion. Default rollback removes only newly created resources; keep retains them for repair. Poll operation_get; waiting dependencies resume automatically. Reuse idempotency_key after a lost response.",
     {
         **{k: v for k, v in plan.inputSchema["properties"].items() if k != "tenant"},
         "on_failure": {"enum": ["rollback", "keep"]},

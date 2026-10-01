@@ -94,6 +94,11 @@ class Lifecycle:
         }
 
     def nic_spec(self, m, net, index):
+        if m.get("network_access") == "restricted":
+            fail(
+                "invalid",
+                "Restricted machines cannot attach unfiltered experiment NICs; use declared connections",
+            )
         managed = net.get("mode") == "managed"
         if managed and m["kind"] == "vm" and not m.get("guest_management"):
             fail("conflict", "This older VM lacks automatic private networking; use raw_l2 or a new VM")
@@ -112,6 +117,7 @@ class Lifecycle:
         return nic
 
     async def provision(self, m, *, reconciled=False):
+        self.require_active(m["tenant_n"])
         if current_operation.get():
             op = current_operation.get()["record"]
             op.update(phase="provisioning", current_resource=m["name"])
@@ -133,6 +139,7 @@ class Lifecycle:
         timeout = self.config.get("guest_ready_timeout", 900)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            self.require_active(m["tenant_n"])
             ssh = False
             try:
                 reader, writer = await asyncio.wait_for(asyncio.open_connection(m["ip"], 22), 3)
@@ -184,6 +191,11 @@ class Lifecycle:
         )
         self.store.put("machines", m["vmid"], m["tenant_n"], m)
         fail("guest_not_ready", m["reason"], machine=m["name"])
+
+    def require_active(self, tenant_n):
+        tenant = next(t for t in self.store.tenants() if t["n"] == tenant_n)
+        if tenant["status"] != "active":
+            fail("forbidden", "Tenant is suspended or suspension is pending")
 
     def guest_report(self, body, source):
         m = next((m for m in self.store.objects("machines") if m["vmid"] == body.get("vmid")), None)
@@ -274,14 +286,39 @@ class Lifecycle:
                     m["nics"].append(nic)
                     self.store.put("machines", m["vmid"], t["n"], m)
                     added_nics.append({"vmid": m["vmid"], "index": index, "network": net["id"]})
-                op["deployment"] = {"machines": created_m, "networks": created_n, "nics": added_nics}
-                op.update(reserved=True, resource_changes=True, phase="resources_reserved")
-                self.operations.save(op)
-        await self.reconcile()
+                deployment = {"machines": created_m, "networks": created_n, "nics": added_nics}
+                grants, bindings, references = self.reserve_access(t, plan)
+                for vmid in set(created_m) | {nic["vmid"] for nic in added_nics}:
+                    m = self.machine(t, str(vmid))
+                    bindings[str(vmid)] = [m.get("allocation_id"), m.get("created_at"), m.get("operation_id")]
+                network_ids = set(created_n) | {nic["network"] for nic in added_nics}
+                network_bindings = {
+                    net["id"]: net.get("operation_id")
+                    for net in self.store.objects("networks", t["n"])
+                    if net["id"] in network_ids
+                }
+                deployment.update(
+                    grants=grants, bindings=bindings, references=references, network_bindings=network_bindings
+                )
+                reserved_op = dict(
+                    op,
+                    deployment=deployment,
+                    reserved=True,
+                    resource_changes=True,
+                    phase="resources_reserved",
+                )
+                self.operations.save(reserved_op)
+            # Do not retain phantom allocations in the worker after a rollback.
+            op.update(reserved_op)
         deployment = op["deployment"]
+        self.check_bindings(t, deployment)
+        await self.reconcile()
         for vmid in deployment["machines"]:
             m = self.machine(t, str(vmid))
-            await self.provision(m, reconciled=True)
+            if m["state"] not in ("ready", "initializing"):
+                await self.provision(m, reconciled=True)
+            if m["state"] == "initializing":
+                await self.wait_ready(m)
         for attachment in deployment["nics"]:
             if attachment["vmid"] in deployment["machines"]:
                 continue
@@ -302,11 +339,39 @@ class Lifecycle:
                 m["state"] = "initializing"
                 self.store.put("machines", m["vmid"], t["n"], m)
                 await self.wait_ready(m)
-        return {"deployment": deployment, "quota_after": self.quota(t)}
+        # Only this operation's publications need work. Reused routes are not
+        # reissued or overwritten. A certificate budget wait releases the writer.
+        for id in deployment.get("grants", {}).get("domains", []):
+            self.require_active(t["n"])
+            d = next((d for d in self.store.objects("domains", t["n"]) if d["id"] == id), None)
+            if not d or d.get("operation_id") != op["id"]:
+                fail("conflict", "Deployment publication was removed or replaced; retry refused")
+            op.update(phase="publishing", current_resource=d["name"])
+            self.operations.save(op)
+            await self.member(
+                "domain_add",
+                {"machine": str(d["vmid"]), "sub": d["sub"], "target_port": d["target_port"]},
+                who,
+                t,
+            )
+        return {"deployment": deployment, "quota_after": self.quota(t), **self.access_result(t, a)}
 
     async def cleanup_deployment(self, op, who):
         t = next(t for t in self.store.tenants() if t["n"] == op["tenant_n"])
         failures = []
+        # Remove only newly introduced grants, including grants on pre-existing
+        # machines. Never touch a reused route or permission.
+        for kind, tool, field in (
+            ("domains", "domain_remove", "name"),
+            ("ports", "port_close", "id"),
+            ("peers", "peer_revoke", "id"),
+        ):
+            for grant in self.store.objects(kind, t["n"]):
+                if grant.get("operation_id") == op["id"]:
+                    try:
+                        await self.member(tool, {field: grant[field]}, who, t)
+                    except Exception:  # noqa: BLE001 - keep independent cleanup attempts running
+                        failures.append({"kind": kind, "id": grant["id"]})
         for m in self.store.objects("machines", t["n"]):
             if m.get("operation_id") == op["id"]:
                 try:
@@ -330,4 +395,8 @@ class Lifecycle:
                     )
                 except Exception:  # noqa: BLE001 - retain network for an explicit cleanup retry
                     failures.append({"kind": "network", "name": net["name"]})
-        return failures
+        return [
+            f
+            for f in failures
+            if "id" not in f or any(o["id"] == f["id"] for o in self.store.objects(f["kind"], t["n"]))
+        ]

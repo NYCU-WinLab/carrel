@@ -59,6 +59,21 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it |
 | 2026-09-30 | B09 has no allocated public ingress. Use the old PVE public address, existing CT 200 TLS gateway, a new CT 207 proxy, and a dedicated WireGuard link to B09; the old PVE stays outside the cluster |
 
+### 1.6 Current core and deferred work
+
+The first release is accepted around three member outcomes: create one VM/CT and SSH into it;
+publish an application on an existing machine; create an app/database pair with only the declared
+connection allowed. Agents provide machine, connection and publication intent through the existing
+`deployment_plan` / `deployment_apply` tools. Physical nodes, bridges and ingress hops are operator
+implementation details. Advanced L2 tools remain available for network experiments.
+
+Reliability, tenant isolation, ownership-safe retries, quota accounting and cleanup are core work.
+The longer catalog below is a roadmap, not a claim that every tool exists or a requirement to ship
+all of it before the core is useful. Custom ISO/image import, legacy workload migration, special
+names/ports, a full skill catalog, issue workflow, alumni scheduling and multiple nodes are deferred
+until there is a concrete need. This change adds no scheduler, workflow language or separate intent
+service. Live tool discovery and the acceptance reports are the authority for implemented features.
+
 ## 2. Object model
 
 | Object | What it is | Key |
@@ -130,13 +145,15 @@ protocol error.
 ### 4.2 Conventions for every tool that changes state
 
 - `dry_run: true` validates, prices the change against quota and returns what would happen.
-- Success returns `quota_after`.
+- Completed mutations return `quota_after`. Infrastructure changes first return a durable operation;
+  `queued` means accepted, not reserved or complete. Poll `operation_get` and follow `next_action`.
 - Failure returns one of a closed set of codes: `quota_exceeded` (with the dimension),
   `capacity_exhausted` (with the member's idle machines), `not_found`, `conflict`, `forbidden`,
   `invalid`, `pending_approval`.
-- A call that has to wait for a budget or a slot returns `queued` with `ready_at`, an estimate
-  (sections 6.4 and 7.8). The call ends there; carrel keeps the work and finishes it when the
-  budget or slot frees, without another call, and the matching list tool shows it as queued.
+- A certificate-budget wait persists `waiting` with `ready_at`, releases the infrastructure writer
+  and resumes automatically. A domain is `ready` only after certificate, DNS and route application.
+  `operation_retry` resumes failed work against its original allocations. Deployment rollback removes
+  only its own new resources; incomplete cleanup stays charged until cleanup succeeds.
 - Every call is written to the audit log with arguments, and values named like secrets are masked
   before the write.
 - `tenant` is optional. It defaults to the member and may name a project the member belongs to.
@@ -153,13 +170,15 @@ protocol error.
 | | `sizes_list` | presets `small`, `medium`, `large` |
 | Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
 | | `machine_get`, `machine_list` | state, primary address, SSH line, image support status |
-| | `machine_resize` | grow only; disk never shrinks |
+| | `machine_resize` | CPU/RAM may shrink while stopped; disk only grows |
 | | `machine_power` | `start \| stop \| shutdown \| reboot` |
 | | `machine_rebuild` | new `image`; keeps address, ports and domains |
 | | `machine_delete` | `confirm: <name>` |
 | | `machine_media` | `machine`, `iso` or `none`; insert or eject an ISO |
 | | `machine_console_url` | `machine`; a single-use browser console link, bound to the requester's Keycloak login, valid 15 minutes (section 7.8) |
-| Networks | `network_create` | `name`, `cidr` (for reference only) |
+| Deployments | `deployment_plan`, `deployment_apply` | `machines`, `connections`, `publications`; optional experiment `networks`, `attachments` |
+| Operations | `operation_get`, `operation_retry` | durable job state, endpoints, failure and next action |
+| Networks | `network_create` | `name`, `mode: managed \| raw_l2`, optional `cidr` |
 | | `network_list`, `network_delete` | `network_delete` needs `confirm: <name>` and no attached NIC |
 | | `machine_nic_attach` | `machine`, `network`, `ip` (optional static address through cloud-init) |
 | | `machine_nic_detach` | `machine`, `nic` |
@@ -185,10 +204,11 @@ protocol error.
 | | `issue_comment` | `id`, `body`; more detail or "same here" |
 | | `issue_confirm` | `id`, `works: true \| false`; the reporter checks a fix, which closes or reopens the issue |
 
-`machine_create` returns only after SSH answers, and returns the line to paste into
-`~/.ssh/config`. The agent sends the member's public key. The platform never generates or returns
-a private key. Machines installed from an ISO are the exception: they return in state
-`installing` (section 7.8).
+`machine_create` returns a durable operation immediately. Success requires SSH readiness,
+initialization completion and requested guest health checks, and includes the SSH command. The
+agent sends the member's public key; Carrel never generates or returns a private key. ISO support
+is deferred (section 7.8). Public endpoint results report `routing_configured`; application reachability
+from outside still needs a client-side check.
 
 ### 4.4 Admin tools
 
@@ -317,18 +337,20 @@ search first, read how it was solved, and file only what is new.
 ### 5.1 Dimensions
 
 `vcpu`, `memory_mb`, `disk_gb`, `machines`, `ips`, `public_ports`, `domains`, `snapshots`,
-`networks`, `images_gb`. Every dimension exists for member tenants and project tenants alike.
+`snapshot_gb`, `networks`. Member and project tenants use the same dimensions. `images_gb` is
+reserved for deferred image support and hidden from the current API. Each snapshot reserves the
+machine disk size against `snapshot_gb`; measured retained bytes are reported separately.
 Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
 
 ### 5.2 Quota versus admission
 
-Quota is a promise. Admission is physics. They are checked separately.
+Quota is a ceiling, not a guarantee of unused physical capacity. Admission is checked separately.
 
 | Layer | Rule (initial values, tuned after the hardware inventory) |
 |---|---|
 | Quota | The sum of all quotas may exceed capacity, because most tenants are idle most of the time |
-| CPU admission | Allocated vCPU of running machines at most 4 times the host threads |
-| Memory admission | Memory of running machines at most 90 percent of host memory after the host reserve. Stopped machines do not count |
+| CPU admission | All allocated Carrel machines, including stopped ones, reserve vCPU; shared vCPU at most 4 times host threads |
+| Memory admission | All allocated Carrel machines, including stopped ones, reserve RAM; unmanaged running infrastructure also counts |
 | Disk admission | Allocated disk at most 1.5 times the pool. Alert at 80 percent real use |
 | Addresses, ports, domains | Fixed allocations, never oversubscribed |
 
@@ -343,13 +365,15 @@ Three kinds share one flow: `quota_request` (more of a dimension), `domain_reque
 2. Admins are notified by email.
 3. An admin approves or rejects with a tool call. The result appears in the member's next tool
    response and in `request_list`.
-4. A request with `until` becomes a temporary grant and is withdrawn on that date. Machines that
-   no longer fit are stopped, never deleted.
+4. A request with `until` becomes a temporary grant and restores its previous limit on that date.
+   Existing machines keep running. `over_limit` reports excess; growth in that dimension is blocked,
+   while cleanup/reduction remains available. Stopping a tenant requires explicit admin suspension.
 
 ### 5.4 Idle machines
 
-A machine with near-zero CPU and network for 14 days is announced to its owner, then stopped 7 days
-later. Stopping frees memory admission. Nothing is deleted automatically.
+Idle shutdown scheduling is deferred. Stopping an allocated machine does not release its CPU/RAM
+admission reservation; deletion or a confirmed reduction while stopped does. Nothing is deleted
+automatically.
 
 ## 6. Network
 
@@ -398,7 +422,10 @@ networks run at MTU 1450 unless the underlay carries jumbo frames. Every VM NIC 
 
 Every tenant machine gets the security group of its tenant:
 
-1. Accept to its own `/24`.
+1. Default `network_access=tenant` accepts same-tenant traffic. Explicit `restricted` ingress accepts
+   only declared source/protocol/port connections, public grants and platform access. Connections
+   in deployment intent require a restricted destination. Restricted machines cannot attach
+   unfiltered experiment NICs. Egress policy remains the same.
 2. Accept DNS to the infra resolver.
 3. Accept the peer rules granted to it (section 4.3), inserted above the drops.
 4. Drop every private and internal range: the rest of `10.200.0.0/16`, all of `10.0.0.0/8`,
@@ -478,12 +505,11 @@ routing, SDN and other network experiments.
   SSH line, egress and domains, and it cannot be removed. A machine that must stay off the internet
   brings `net0` down inside the guest.
 - **Private networks**: `network_create` makes a segment in the `private` zone owned by one tenant.
-  It has no gateway, no NAT, no DHCP and no address on any node, and the underlay filter of
-  section 6.3 keeps injected frames out, so nothing outside the tenant's machines reaches it, the
-  nodes included.
-- **Addresses**: carrel assigns none. `machine_nic_attach` with `ip` writes a static address
-  through cloud-init; without `ip` the NIC is raw layer 2, and bridges, Open vSwitch and VLAN tags
-  inside the guest all work.
+  It has no gateway, NAT or host-routable address. Default `managed` mode supplies fixed DHCP
+  leases from an isolated, unrouted namespace, without a default route or DNS override.
+- **Addresses**: managed segments use an RFC1918 /24 or /25; current images configure assigned
+  addresses and MTU 1450. Choose `raw_l2` for guest-controlled addressing, DHCP, bridges, Open
+  vSwitch and VLAN experiments. Existing raw segments retain their behavior.
 - **Filtering**: private NICs run without the firewall, `ipfilter` or MAC filtering, so bridging
   and address experiments work. The blast radius is the tenant's own segment. Private NICs get
   their own `rate` cap, higher than the primary NIC's, so a loop inside a topology cannot flood the
@@ -1008,6 +1034,9 @@ the bootstrap checks or by the component checks alone.
 
 ### 15.4 Member platform deployment
 
+Historical initial rollout. Current contracts and acceptance are in sections 1.6, 4.2, 5 and 15.6;
+the later releases supersede the initial DHCP, quota-expiry and operation behavior below.
+
 The public endpoint is `https://carrel.winlab.tw/mcp`. The dedicated public Keycloak client is
 `carrel-mcp` in realm `winlab`: authorization code + PKCE S256 only, exact callback
 `https://carrel.winlab.tw/oauth/callback`, access-token audience `carrel-mcp`, and full-path group
@@ -1085,6 +1114,9 @@ not substitute for a full disaster-recovery exercise. No email was sent during t
 
 ### 15.5 MCP planning and Codex acceptance (2026-10-01)
 
+Historical 0.2 acceptance. The 0.3 reliability report and 15.6 supersede its tool/test counts and
+snapshot power-state behavior. These numbers describe that run, not the latest release.
+
 Member discovery now has 37 tools plus 9 admin-only tools. `whoami` returns all visible tenant
 quotas with remaining amounts, default tenant and capabilities; `catalog_get` combines image/size
 queries. The two previous list names remain callable compatibility aliases. Unsupported image
@@ -1107,3 +1139,19 @@ acceptance; unsupported features remain tracked in the product plan.
 The subsequent disposable Ubuntu VM check also found and fixed rollback reporting: disk-only
 snapshot rollback may stop a guest, and now returns/persists its actual power state with an
 explicit start action. See the evaluation for public SSH/HTTPS, rollback and cleanup evidence.
+
+
+### 15.6 Intent and reliability acceptance (0.4, 2026-10-01)
+
+The member path is machine, connection and publication intent on `deployment_plan` / `deployment_apply`.
+Explicit restricted ingress enforces exact source/protocol/port rules and prevents unfiltered NIC bypass.
+The same deployment can publish an existing application. The five reliability fixes in sections 4.2,
+5.3 and 1.6 are deployed: DNS failure isolation, quota expiry without blanket stopping, durable
+certificate waits, independent tenant onboarding and immediate suspension admission blocking.
+
+114 local tests pass; live OAuth/MCP acceptance passed with three restricted VMs and a separate tenant
+CT, public SSH/HTTPS/TCP HTTP, designated database access, negative source/port/protocol checks,
+publication reuse and complete cleanup. Member tools remain 40; admin tools remain 9. The public
+service reports 0.4.0 and final installed hashes match. See the
+[intent acceptance report](docs/evaluations/2026-10-01-intent.md) and the preceding
+[0.3 reliability report](docs/evaluations/2026-10-01-reliability.md) for evidence and limits.

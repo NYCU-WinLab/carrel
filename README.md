@@ -9,7 +9,7 @@
 
 # carrel
 
-> Ask your agent for a machine. Get an SSH line back.
+> Describe the machines and connections you need. Get SSH commands and service URLs back.
 
 A carrel is the desk a library sets aside for one graduate student. This is the lab's version: every
 WinLab member gets their own corner of a Proxmox VE cluster, with a quota, a private network, public
@@ -57,11 +57,38 @@ shared physical capacity and admission headroom without exposing other tenants' 
 `quota_get` refreshes one tenant. `memory_mb` and `swap_mb` mean **MiB**; `disk_gb` means **GiB**.
 
 Dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
-machines, networks and NIC attachments. Plans resolve names within the selected tenant and check
+machines, allowed connections and public endpoints. Plans resolve names within the selected tenant and check
 their aggregate quota and capacity. Previews return `quota_before`, `delta`, `quota_after`,
 `requirements` and `ready_to_apply`; they reserve nothing and write no resources. They record an
 audit entry. No follow-up list or quota call is needed to establish that a preview did not create anything.
 Missing SSH keys are reported as a requirement, so resource planning can still finish.
+
+For example, “an app and a database; only the app can connect to database TCP 5432;
+publish the app over HTTPS” becomes this `deployment_plan` specification:
+
+```json
+{
+  "machines": [
+    {"name": "app", "kind": "vm", "image": "ubuntu-24.04", "network_access": "restricted"},
+    {"name": "db", "kind": "vm", "image": "debian-13", "network_access": "restricted"}
+  ],
+  "connections": [{"from": "app", "to": "db", "protocol": "tcp", "port": 5432}],
+  "publications": [{"machine": "app", "protocol": "https", "port": 80, "sub": "web"}]
+}
+```
+
+Use that same specification with `deployment_apply` after supplying a public SSH key and the
+application setup (`packages`, `runcmd`, optional `health_checks`). No application is installed by
+this networking example. Publications can also reference an existing machine, or use `tcp`/`udp`
+to request an assigned public port. Machine names belong to the selected tenant; no host, bridge,
+VLAN, gateway or proxy selection is needed. The result includes SSH commands, connection rules and
+public endpoints. `verification: routing_configured` means routing and TLS setup succeeded;
+the agent must still test the actual application from its intended client.
+
+`network_access=restricted` accepts declared connections, public port/domain grants and platform
+access. Internet egress remains available. It does not allow extra experiment NICs, which would
+bypass ingress filtering. The compatible default, `tenant`, allows traffic within the tenant.
+Choose `restricted` explicitly when only designated callers should reach a service.
 
 For creation, pass your **public** key inline or save it with `ssh_key_add`. Only actual creation
 returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
@@ -69,7 +96,9 @@ Apply a group with `deployment_apply` using the same specification as `deploymen
 Infrastructure mutations return a durable `operation`, initially `queued`; **queued is not a capacity
 reservation or success**. `operation_get` with an ID waits up to 20 seconds for completion (set
 `wait_seconds=0` for an immediate response). Poll at the returned interval, inspect the terminal state,
-and use `operation_retry` to resume a failure. Supply a stable `idempotency_key` when submitting;
+and follow `next_action`. Certificate-budget waits return `waiting` and `ready_at`, release the
+infrastructure writer and resume automatically. Use `operation_retry` to resume a failure.
+Supply a stable `idempotency_key` when submitting;
 resending identical arguments with that key returns the original job. `on_failure=rollback` (default)
 cleans up only resources introduced by a deployment; `keep` preserves them for diagnosis. Failed
 cleanup retains allocations and reports the remaining resources. Retry `cleanup_failed` to finish
@@ -93,12 +122,17 @@ and no default gateway or DNS override. DHCP runs in a separate unrouted namespa
 private bridge traffic cannot enter the host. New VM images auto-configure matching private NICs;
 CT addresses are applied through Proxmox. Existing raw networks retain their behavior. Select
 `mode=raw_l2` for experiments that manage their own addressing/DHCP, such as Mininet.
+These topology tools are for routing experiments; ordinary app-to-database connections use the
+deployment specification above.
 
 CPU/RAM admission counts every allocated Carrel machine, including stopped machines. Deleting or shrinking CPU/RAM while stopped releases the corresponding reservation only after the
 hypervisor confirms the change.
 Tenant quota remains an upper limit, not pre-reserved capacity for uncreated VMs. vCPU is shared,
 not a dedicated physical core. Direct administrator changes outside Carrel can invalidate admission
 assumptions; the capacity endpoint includes unmanaged running infrastructure in its accounting.
+When a temporary quota grant expires, the limit returns to its previous value and `over_limit`
+reports any excess. Existing machines keep running. Growth in the exceeded dimension is blocked;
+cleanup and reductions remain available. Administrator suspension is a separate explicit action.
 
 Snapshots use separate `snapshot_gb` (default 100 GiB) and `snapshots` (default 4) limits. A 40 GiB
 VM with two snapshots consumes 40 GiB `disk_gb` and 80 GiB `snapshot_gb`. The latter is a worst-case
@@ -111,6 +145,8 @@ its previous power state, and waits for readiness if it was running. It is still
 
 See the [0.3 reliability acceptance](docs/evaluations/2026-10-01-reliability.md) for live recovery,
 networking, snapshot and native Codex test results.
+The [0.4 intent acceptance](docs/evaluations/2026-10-01-intent.md) records the composed deployment
+and restricted connectivity checks.
 
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.

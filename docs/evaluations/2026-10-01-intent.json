@@ -1,0 +1,154 @@
+{
+  "version": "0.4.0",
+  "date": "2026-10-01",
+  "local_tests": 114,
+  "member_tools": 40,
+  "admin_tools": 9,
+  "checks": [
+    "intent_plan_has_no_reservations",
+    "composed_deployment_and_public_ssh_to_three_restricted_vms",
+    "idempotent_submission_keeps_one_deployment",
+    "external_https_valid_certificate_and_public_tcp_http",
+    "positive_controls_all_probe_ports_and_protocols_are_listening",
+    "only_declared_source_tcp_5432_allowed_wrong_port_udp_and_sibling_blocked",
+    "publish_existing_machine_reuses_ready_https_route",
+    "restricted_machine_rejects_experiment_nic_bypass",
+    "standalone_restricted_ct_public_ssh_and_cross_tenant_block",
+    "all_disposable_resources_removed_and_both_quotas_zero"
+  ],
+  "operations": [
+    {
+      "id": "e2de63a90993cb747eb501537aec3204",
+      "tool": "deployment_apply",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    },
+    {
+      "id": "07b7d728a1f6a601b4944c184fde9454",
+      "tool": "deployment_apply",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    },
+    {
+      "id": "43c2cf40f389d035da053cd5c279d21d",
+      "tool": "machine_create",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    },
+    {
+      "id": "9027fea41235c1c6163156a8b3a93576",
+      "tool": "machine_delete",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    },
+    {
+      "id": "2dbecd850779a435edd2ee65e1f42950",
+      "tool": "machine_delete",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    },
+    {
+      "id": "01108d92dbace976d55222bbdfebeb73",
+      "tool": "machine_delete",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    },
+    {
+      "id": "68c48b0e55dda71bb020a5ee94ac3b3e",
+      "tool": "machine_delete",
+      "state": "succeeded",
+      "attempts": 1,
+      "error": null
+    }
+  ],
+  "final_used": {
+    "a": {
+      "vcpu": 0,
+      "memory_mb": 0,
+      "disk_gb": 0,
+      "machines": 0,
+      "ips": 0,
+      "public_ports": 0,
+      "domains": 0,
+      "networks": 0,
+      "snapshots": 0,
+      "snapshot_gb": 0
+    },
+    "b": {
+      "vcpu": 0,
+      "memory_mb": 0,
+      "disk_gb": 0,
+      "machines": 0,
+      "ips": 0,
+      "public_ports": 0,
+      "domains": 0,
+      "networks": 0,
+      "snapshots": 0,
+      "snapshot_gb": 0
+    }
+  },
+  "cleanup": {
+    "test_keycloak_users_deleted": true,
+    "test_tenants_suspended": true,
+    "wildcard_dns_removed": true,
+    "test_oauth_clients_removed": true,
+    "local_oauth_ssh_credentials_deleted": true,
+    "certificate_budget_history_retained": true
+  },
+  "ct_probe_control": {
+    "timeout_and_bash_available": true,
+    "probe_command_successfully_executes": true
+  },
+  "final_verification": {
+    "health": {
+      "status": "ok",
+      "service": "carrel",
+      "version": "0.4.0"
+    },
+    "package_and_source_hashes_match": true,
+    "node_helper_hash_matches": true,
+    "active_operations": 0,
+    "allocated_member_resources": 0,
+    "staging_vm_190": "running",
+    "source_sha256": {
+      "intent.py": "bcde48103009c96d9b40eff94ba959b7ab77a02c518cda92fbf7c12ff0ece366",
+      "auth.py": "200e06a6c71625c6da0f7d7a9b408e56b2eee1e909d60696d20aa4ee0a2d632f",
+      "store.py": "b99803e8184c8f8781ec632993882481ee5405989985e416128f60ce38cbb7a1",
+      "backup.py": "9d59f35455dc76a143783486a4deaa2ffa340fe2043e6ac93786e8a4687cd900",
+      "server.py": "6221d608e7439e926de5535455f16622cb17c51b6a2d6625afb5b29d54ba3d22",
+      "capacity.py": "0fb6196b5bae4b248af9b31a35254f88356f5cf166e35a9a504e6aa1e004be7b",
+      "backend.py": "1ca9f6a59e672464b6d7f9fb99017a23c9b431c991a36c41a5a629f7672ff9c8",
+      "tools.py": "d9e5ccd5c41161980e259cf4e1df38a89f0bb140b2d21953a0ceb774e539eb46",
+      "domains.py": "a01b0626db0036ec671c97a712c1c209a092b67fc2f2f1a3779547f451c4a0cd",
+      "__init__.py": "b87e39784b70601d2079551d80b82e82b945ac323199d1f223f002c269c4bd43",
+      "platform.py": "26da8844cf654a49dfb801e2c08842e4d84a8e2f4b6e9fade8871945071dcfc2",
+      "operations.py": "accead34df31ee79372867bf24d7b8beb07eaee3cec2d9da7add73c0d10f12ad",
+      "pages.py": "c070a275ac75ae57188d16bc572695f871a0aabcf6b5febeb584ffdcfa48ce30",
+      "lifecycle.py": "ff5bb1a94658586b0e20953834b856655e44b6c8341aa4be64129a094df7c624"
+    },
+    "node_sha256": "ab16e5b3ba343228aa0ff55c8b0942e72693407d28acdd39ebd5565a4904c101"
+  },
+  "live_run_deployment": {
+    "version": "0.4.0",
+    "stamp": "20261001-023111",
+    "wheel_sha256": "4162f3b4425eacd42316fb9d47dcb7a80dadec59cc54633467a40124f3d298fa",
+    "node_sha256": "ab16e5b3ba343228aa0ff55c8b0942e72693407d28acdd39ebd5565a4904c101",
+    "control_backup": "/opt/carrel/rollback/intent-20261001-023111.tar.gz",
+    "node_backup": "/var/lib/carrel/rollback/intent-20261001-023111-node.tar.gz"
+  },
+  "final_deployment": {
+    "version": "0.4.0",
+    "stamp": "20261001-024138",
+    "wheel_sha256": "307bac08595d8562ba2f6f48725812ab00b9dd464fffdb36233102f44b03272c",
+    "node_sha256": "ab16e5b3ba343228aa0ff55c8b0942e72693407d28acdd39ebd5565a4904c101",
+    "control_backup": "/opt/carrel/rollback/intent-20261001-024138.tar.gz",
+    "node_backup": "/var/lib/carrel/rollback/intent-20261001-024138-node.tar.gz"
+  },
+  "final_build_refinements": "TCP/UDP coexistence for peer_allow, bounded operation_retry, and accurate publishing phase. Covered by the final regression suite; firewall helper is identical to the live-tested build."
+}

@@ -122,11 +122,11 @@ class Domains:
             )
         return bundles
 
-    async def renew(self):
+    async def renew(self, tenant=None):
         from cryptography import x509
 
         wanted = {d["tenant_n"] for d in self.store.objects("domains")}
-        for t in self.store.tenants():
+        for t in [tenant] if tenant else self.store.tenants():
             path = self.base / "config" / "live" / t["slug"] / "fullchain.pem"
             if t["n"] in wanted and path.exists():
                 cert = x509.load_pem_x509_certificate(path.read_bytes())

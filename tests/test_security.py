@@ -145,13 +145,13 @@ async def test_first_authenticated_quota_call_registers_without_policy(monkeypat
         visible = {k: DEFAULT_QUOTA[k] for k in QUOTA_DIMENSIONS}
         assert result["quota"]["used"] == dict.fromkeys(visible, 0)
         assert result["quota"]["limit"] == result["quota"]["remaining"] == visible
-        assert {t["slug"] for t in store.tenants()} == {"alice", "shared"}
+        assert {t["slug"] for t in store.tenants()} == {"alice"}
 
         call["params"]["name"] = "whoami"
         result = (await client.post("/mcp", json=call, headers=headers)).json()["result"]["structuredContent"]
         assert result["ok"] and len(result["tenants"]) == 2
         assert "policy" not in result and "registration_required" not in result
-        reserved.assert_awaited_once()
+        assert reserved.await_count == 2
         response = await client.post(
             "/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         )
@@ -194,8 +194,8 @@ async def test_automatic_registration_preserves_namespace_ownership(monkeypatch,
         projects=["winlab-projects/alice" if collision == "same_batch" else "winlab-projects/shared"]
     )
     result = await platform.execute("whoami", {}, who)
-    assert result["error"]["code"] == "conflict"
-    assert not platform.store.tenant("user:alice")
+    assert result["ok"] and result["onboarding"][0]["code"] == "conflict"
+    assert platform.store.tenant("user:alice")
     assert not platform.store.tenant(who["projects"][0])
 
 
@@ -487,7 +487,7 @@ async def test_real_mcp_transport_requires_identity_and_hides_admin_tools():
 
 
 @pytest.mark.asyncio
-async def test_expired_quota_blocks_restart_until_allocations_fit(platform):
+async def test_expired_quota_does_not_block_restart_of_reserved_machine(platform):
     platform.store.put(
         "machines",
         10100,
@@ -503,8 +503,8 @@ async def test_expired_quota_blocks_restart_until_allocations_fit(platform):
         },
     )
     r = await platform.execute("machine_power", {"machine": "test", "action": "start"}, person())
-    assert r["error"]["code"] == "quota_exceeded"
-    assert not platform.backend.calls
+    assert r["ok"]
+    assert platform.backend.calls[0]["action"] == "start"
 
 
 @pytest.mark.asyncio

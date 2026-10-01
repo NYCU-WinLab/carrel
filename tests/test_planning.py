@@ -97,7 +97,12 @@ async def test_preview_contract(platform, tool, args, delta):
 
 async def test_preview_deletes_cascades_and_releases_snapshot_disks(platform):
     m = seed(platform)
-    platform.store.put("domains", "domain", 1, {"id": "domain", "vmid": 10100, "name": "www.alice.winlab.tw"})
+    platform.store.put(
+        "domains",
+        "domain",
+        1,
+        {"id": "domain", "vmid": 10100, "name": "www.alice.winlab.tw", "target_port": 8080, "state": "ready"},
+    )
     platform.store.put(
         "snapshots",
         "10100-before",

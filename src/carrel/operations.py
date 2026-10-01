@@ -35,6 +35,13 @@ ASYNC_TOOLS = {
 TERMINAL = {"succeeded", "failed", "rolled_back", "cleanup_failed"}
 
 
+class Waiting(Exception):
+    """A durable dependency wait, resumed automatically without holding the writer."""
+
+    def __init__(self, phase, ready_at):
+        self.phase, self.ready_at = phase, ready_at
+
+
 def operation_id():
     op = current_operation.get()
     return op["id"] if op else None
@@ -69,8 +76,18 @@ class Operations:
                 "reserved",
                 "resource_changes",
                 "current_resource",
+                "ready_at",
             }
-        } | {"poll_after_seconds": 5 if op["state"] not in TERMINAL else None}
+        } | {
+            "poll_after_seconds": max(5, min(60, int(op.get("ready_at", 0) - time.time())))
+            if op["state"] not in TERMINAL
+            else None,
+            "next_action": "use_result"
+            if op["state"] == "succeeded"
+            else "operation_retry"
+            if op["state"] in TERMINAL
+            else "operation_get",
+        }
 
     def find(self, tenant, id):
         from .platform import fail
@@ -92,6 +109,11 @@ class Operations:
                     if old["fingerprint"] != fingerprint:
                         fail("conflict", "Idempotency key was already used for different arguments")
                     return {"operation": self.public(old)}
+        pending = self.check_queue_capacity(tenant, tool)
+        if tool == "tenant_suspend":
+            old = next((o for o in pending if o["tenant_n"] == tenant["n"] and o["tool"] == tool), None)
+            if old:
+                return {"operation": self.public(old)}
         op = {
             "id": secrets.token_hex(16),
             "tenant_n": tenant["n"],
@@ -112,6 +134,18 @@ class Operations:
         self.save(op)
         self.start(op)
         return {"operation": self.public(op)}
+
+    def check_queue_capacity(self, tenant, tool):
+        from .platform import fail
+
+        pending = [o for o in self.store.objects("operations") if o["state"] not in TERMINAL]
+        if tool != "tenant_suspend" and (
+            len(pending) >= self.platform.config.get("max_pending_operations", 256)
+            or sum(o["tenant_n"] == tenant["n"] for o in pending)
+            >= self.platform.config.get("max_tenant_pending_operations", 16)
+        ):
+            fail("conflict", "Operation queue is full; wait for an existing operation", retryable=True)
+        return pending
 
     def bind_machine(self, op, tenant):
         from .platform import fail
@@ -209,6 +243,22 @@ class Operations:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def run(self, id):
+        while True:
+            op = next(o for o in self.store.objects("operations") if o["id"] == id)
+            if op["state"] == "waiting":
+                delay = max(0, op.get("ready_at", 0) - time.time())
+                tenant = next(t for t in self.store.tenants() if t["n"] == op["tenant_n"])
+                if tenant["status"] != "active" and op["phase"] != "waiting_for_priority_operation":
+                    delay = 0
+                if delay:
+                    await asyncio.sleep(min(delay, 30))
+                    continue
+            await self.step(id)
+            op = next(o for o in self.store.objects("operations") if o["id"] == id)
+            if op["state"] != "waiting":
+                return
+
+    async def step(self, id):
         from .platform import Failure
 
         # A single infrastructure writer deliberately preserves admission order.
@@ -216,6 +266,15 @@ class Operations:
         # returned immediately, before waiting for this worker.
         async with self.platform.lock:
             op = next(o for o in self.store.objects("operations") if o["id"] == id)
+            if op["tool"] != "tenant_suspend" and any(
+                o["tool"] == "tenant_suspend" and o["state"] not in TERMINAL
+                for o in self.store.objects("operations")
+            ):
+                op.update(
+                    state="waiting", phase="waiting_for_priority_operation", ready_at=time.time() + 0.05
+                )
+                self.save(op)
+                return
             cleanup_only = op["state"] == "cleaning_up" or op.pop("resume_cleanup", False)
             context = current_operation.set(
                 {"id": id, "generation": op["generation"], "store": self.store, "record": op}
@@ -224,7 +283,7 @@ class Operations:
             self.save(op)
             try:
                 tenant = next(t for t in self.store.tenants() if t["n"] == op["tenant_n"])
-                if tenant["status"] != "active" and op["tool"] != "tenant_suspend":
+                if tenant["status"] != "active" and op["tool"] != "tenant_suspend" and not cleanup_only:
                     raise Failure("forbidden", "Tenant is suspended")
                 if cleanup_only:
                     cleanup = await self.platform.cleanup_deployment(op, op["who"])
@@ -275,6 +334,9 @@ class Operations:
                     result={"ok": True, **result},
                     resource_changes=True,
                 )
+                op.pop("ready_at", None)
+            except Waiting as exc:
+                op.update(state="waiting", phase=exc.phase, ready_at=exc.ready_at)
             except asyncio.CancelledError:
                 # Leave the durable running state for recovery at the next startup.
                 raise
@@ -307,14 +369,14 @@ class Operations:
                 current_operation.reset(context)
             op["reserved"] = any(
                 o.get("operation_id") == id
-                for kind in ("machines", "networks", "snapshots")
+                for kind in ("machines", "networks", "snapshots", "ports", "domains", "peers")
                 for o in self.store.objects(kind, op["tenant_n"])
             )
             self.save(op)
             self.store.log(
                 op["who"]["sub"],
                 op["tenant_n"],
-                "operation_finished",
+                "operation_finished" if op["state"] in TERMINAL else "operation_waiting",
                 {"operation": id, "tool": op["tool"]},
                 op["state"],
             )
@@ -322,6 +384,7 @@ class Operations:
     def retry(self, tenant, id, who):
         op = self.find(tenant, id)
         if op["state"] in TERMINAL - {"succeeded"}:
+            self.check_queue_capacity(tenant, op["tool"])
             if op["state"] == "cleanup_failed":
                 op["resume_cleanup"] = True
             if op["state"] == "rolled_back":
@@ -330,6 +393,7 @@ class Operations:
             op.update(state="queued", phase="retry_queued", who=who, queued_at=time.time())
             op.pop("error", None)
             op.pop("result", None)
+            op.pop("ready_at", None)
             self.save(op)
             self.start(op)
         return {"operation": self.public(op)}

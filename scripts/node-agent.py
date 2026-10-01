@@ -24,6 +24,80 @@ NODE = socket.gethostname().split(".")[0]
 CONFIG = Path("/etc/carrel/node.json")
 
 
+def guest_firewall(m, state, config):
+    machine(m)
+    if m.get("network_access") == "restricted" and m.get("nics"):
+        raise ValueError("restricted machines cannot have experiment NICs")
+    n = m["tenant_n"]
+    rules = [
+        "[OPTIONS]",
+        "enable: 1",
+        "ipfilter: 1",
+        "macfilter: 1",
+        "dhcp: 1",
+        "ndp: 0",
+        "radv: 0",
+        "policy_in: DROP",
+        "policy_out: ACCEPT",
+        "",
+        "[IPSET ipfilter-net0]",
+        m["ip"],
+        "0.0.0.0",
+        "",
+        "[RULES]",
+        "OUT DROP -dest ::/0",
+        "IN DROP -source ::/0",
+        "OUT DROP -source 0.0.0.0",
+        "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
+        "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
+        "OUT ACCEPT -dest 10.200.0.3 -p tcp -dport 8080",
+    ]
+    for peer in state["peers"]:
+        # Peering is a grant by the destination owner, scoped to one port.
+        src = str(ipaddress.IPv4Network(peer["source"], strict=False))
+        dst = str(ipaddress.IPv4Address(peer["target"]))
+        port = integer(peer["port"], 1, 65535)
+        proto = peer.get("proto", "tcp")
+        if proto not in ("tcp", "udp"):
+            raise ValueError("invalid peer protocol")
+        if ipaddress.ip_address(m["ip"]) in ipaddress.ip_network(src):
+            rules.append(f"OUT ACCEPT -dest {dst} -p {proto} -dport {port}")
+        if dst == m["ip"]:
+            rules.append(f"IN ACCEPT -source {src} -p {proto} -dport {port}")
+    rules += [
+        f"OUT DROP -dest 10.200.{n}.1",
+        f"OUT ACCEPT -dest 10.200.{n}.0/24",
+    ]
+    if m.get("network_access", "tenant") == "tenant":
+        rules.append(f"IN ACCEPT -source 10.200.{n}.0/24")
+    for block in [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+        "169.254.0.0/16",
+        "127.0.0.0/8",
+        "224.0.0.0/4",
+        *config["protected_addresses"],
+    ]:
+        rules.append(f"OUT DROP -dest {ipaddress.ip_network(block, strict=False)}")
+    rules += ["OUT DROP -p tcp -dport 25"]
+    for grant in state["ports"]:
+        if grant["vmid"] == m["vmid"]:
+            port = integer(grant["port"], 1, 65535)
+            proto = grant["proto"]
+            if proto not in ("tcp", "udp"):
+                raise ValueError("invalid protocol")
+            rules.append(f"IN ACCEPT -source 10.254.200.1 -p {proto} -dport {port}")
+    for domain in state.get("domains", []):
+        if domain["vmid"] == m["vmid"]:
+            port = integer(domain["target_port"], 1, 65535)
+            rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
+    # Reachability probes only, from the authenticated control plane.
+    rules.append("IN ACCEPT -source 10.200.0.3 -p tcp -dport 22")
+    return "\n".join(rules) + "\n"
+
+
 def run(*args, timeout=180):
     p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout)
     if p.returncode:
@@ -366,71 +440,7 @@ table inet carrel_conntrack {{
     # Per-guest filtering protects routed and same-node bridged paths. Private
     # experiment NICs deliberately have firewall=0; primary NIC is mandatory.
     for m in state["machines"]:
-        machine(m)
-        n = m["tenant_n"]
-        rules = [
-            "[OPTIONS]",
-            "enable: 1",
-            "ipfilter: 1",
-            "macfilter: 1",
-            "dhcp: 1",
-            "ndp: 0",
-            "radv: 0",
-            "policy_in: DROP",
-            "policy_out: ACCEPT",
-            "",
-            "[IPSET ipfilter-net0]",
-            m["ip"],
-            "0.0.0.0",
-            "",
-            "[RULES]",
-            "OUT DROP -dest ::/0",
-            "IN DROP -source ::/0",
-            "OUT DROP -source 0.0.0.0",
-            "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
-            "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
-            "OUT ACCEPT -dest 10.200.0.3 -p tcp -dport 8080",
-        ]
-        for peer in state["peers"]:
-            # Peering is a grant by the destination owner, scoped to one port.
-            src = str(ipaddress.IPv4Network(peer["source"], strict=False))
-            dst = str(ipaddress.IPv4Address(peer["target"]))
-            port = integer(peer["port"], 1, 65535)
-            if ipaddress.ip_address(m["ip"]) in ipaddress.ip_network(src):
-                rules.append(f"OUT ACCEPT -dest {dst} -p tcp -dport {port}")
-            if dst == m["ip"]:
-                rules.append(f"IN ACCEPT -source {src} -p tcp -dport {port}")
-        rules += [
-            f"OUT DROP -dest 10.200.{n}.1",
-            f"OUT ACCEPT -dest 10.200.{n}.0/24",
-            f"IN ACCEPT -source 10.200.{n}.0/24",
-        ]
-        for block in [
-            "10.0.0.0/8",
-            "172.16.0.0/12",
-            "192.168.0.0/16",
-            "100.64.0.0/10",
-            "169.254.0.0/16",
-            "127.0.0.0/8",
-            "224.0.0.0/4",
-            *config["protected_addresses"],
-        ]:
-            rules.append(f"OUT DROP -dest {ipaddress.ip_network(block, strict=False)}")
-        rules += ["OUT DROP -p tcp -dport 25"]
-        for grant in state["ports"]:
-            if grant["vmid"] == m["vmid"]:
-                port = integer(grant["port"], 1, 65535)
-                proto = grant["proto"]
-                if proto not in ("tcp", "udp"):
-                    raise ValueError("invalid protocol")
-                rules.append(f"IN ACCEPT -source 10.254.200.1 -p {proto} -dport {port}")
-        for domain in state.get("domains", []):
-            if domain["vmid"] == m["vmid"]:
-                port = integer(domain["target_port"], 1, 65535)
-                rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
-        # Reachability probes only, from the authenticated control plane.
-        rules.append("IN ACCEPT -source 10.200.0.3 -p tcp -dport 22")
-        write(f"/etc/pve/firewall/{m['vmid']}.fw", "\n".join(rules) + "\n")
+        write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, state, config))
     dhcp = [
         "port=0",
         "bind-dynamic",

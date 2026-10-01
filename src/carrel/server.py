@@ -32,13 +32,18 @@ def build(config, backend=None, verifier=None, store=None):
     oauth = OAuth(store, origin, issuer, "carrel-mcp", verifier, config.get("hosted_redirects", []))
     server = Server(
         "carrel",
-        version="0.3.0",
+        version="0.4.0",
         instructions=(
             "WinLab machines; tools only, no MCP resources. Start with whoami for all visible tenants' "
             "used/limit/remaining quotas and capabilities. Use catalog_get for images/sizes, capacity_get "
-            "for shared physical capacity, deployment_plan then deployment_apply for multiple machines/networks/NICs. "
+            "only when asked about shared physical capacity. Use deployment_plan then deployment_apply to describe "
+            "machines, connections (from/to/port), and publications (machine/protocol/port/sub for HTTPS) together. "
+            "Use network_access=restricted for destinations that should accept only declared service connections. "
+            "The default tenant mode allows all same-tenant traffic; extra networks/NICs are advanced unfiltered L2 experiments. "
             "Mutations return durable queued operations; use operation_get until terminal and inspect result/error. "
             "Queued jobs have not reserved capacity. Use a stable idempotency_key after a lost submission response. "
+            "Waiting jobs resume automatically; follow next_action. Completion returns SSH entries and public endpoints. "
+            "Publication verification=routing_configured does not verify an application's external HTTP response. "
             "Use operation_retry to resume failures, not another create. Managed private networks assign IPs automatically. "
             "Machine readiness includes cloud-init completion and requested application checks; SSH alone is insufficient. "
             "Use VMs for Docker, Mininet and databases. memory_mb/swap_mb are MiB; disk_gb is GiB. "
@@ -140,8 +145,8 @@ def build(config, backend=None, verifier=None, store=None):
                 async with platform.lock:
                     if store.tenants():
                         await platform.expire_grants()
-                        await platform.domains.renew()
                         await platform.reconcile()
+                        await platform.maintain_domains()
                     store.purge_oauth()
             except Exception as e:  # noqa: BLE001 - isolate tool failures and keep reconciliation alive
                 print(json.dumps({"event": "reconcile_failed", "type": type(e).__name__}))
@@ -161,7 +166,7 @@ def build(config, backend=None, verifier=None, store=None):
             await platform.operations.close()
 
     async def health(request):
-        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.3.0"})
+        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.4.0"})
 
     async def guest_status(request):
         try:

@@ -10,8 +10,9 @@ import httpx
 
 from .capacity import UNITS, summarize
 from .domains import Domains
+from .intent import Intent
 from .lifecycle import Lifecycle
-from .operations import ASYNC_TOOLS, Operations, current_operation, operation_id
+from .operations import ASYNC_TOOLS, Operations, Waiting, current_operation, operation_id
 from .store import DEFAULT_QUOTA
 
 QUOTA_DIMENSIONS = tuple(k for k in DEFAULT_QUOTA if k != "images_gb")
@@ -19,6 +20,9 @@ CAPABILITIES = {
     "deployment_planning": True,
     "background_operations": True,
     "deployment_apply": True,
+    "deployment_connections": True,
+    "deployment_publications": True,
+    "restricted_machine_ingress": True,
     "managed_private_networks": True,
     "guest_readiness": True,
     "stopped_machine_reservations": True,
@@ -72,7 +76,7 @@ def validate_keys(keys):
             fail("invalid", "Only SSH public keys are accepted")
 
 
-class Platform(Lifecycle):
+class Platform(Lifecycle, Intent):
     def __init__(self, store, backend, config):
         self.store, self.backend, self.config = store, backend, config
         self.lock = asyncio.Lock()
@@ -104,30 +108,54 @@ class Platform(Lifecycle):
     def subjects(self, who):
         return [("user:" + who["sub"], who["username"]), *[(g, g.split("/")[1]) for g in who["projects"]]]
 
-    async def register_tenants(self, who):
-        if all(self.store.tenant(subject) for subject, _ in self.subjects(who)):
-            return
-        async with self.registration_lock:
-            await self._register_tenants(who)
-
-    async def _register_tenants(self, who):
-        # Identity has already passed Keycloak verification. Registration is
-        # automatic on first use, serialized by execute's lock and idempotent.
-        missing = [(s, name) for s, name in self.subjects(who) if not self.store.tenant(s)]
+    async def register_tenants(self, who, name=None, overview=False):
+        subjects = self.subjects(who)
+        if not overview:
+            if name:
+                existing = [self.store.tenant(s) for s, _ in subjects]
+                if any(t and t["slug"] == name for t in existing):
+                    return []
+                subjects = [
+                    (s, label)
+                    for s, label in subjects
+                    if re.sub("-+", "-", label.lower().replace("_", "-").replace(".", "-")).strip("-") == name
+                ]
+                if not subjects:
+                    fail("forbidden", "Tenant is not in your current Keycloak memberships")
+            else:
+                subjects = subjects[:1]
+        missing = [(s, label) for s, label in subjects if not self.store.tenant(s)]
         if not missing:
-            return
-        reserved = await self.reserved()
+            return []
+        async with self.registration_lock:
+            return await self._register_tenants(who, missing, overview)
+
+    async def _register_tenants(self, who, subjects, overview):
+        missing = [(s, name) for s, name in subjects if not self.store.tenant(s)]
+        if not missing:
+            return []
+        try:
+            reserved = await self.reserved()
+        except (Failure, RuntimeError, httpx.HTTPError):
+            if not overview:
+                raise
+            return [{"name": name, "code": "registration_unavailable"} for _, name in missing]
         reserved.update(t["slug"] for t in self.store.tenants())
-        registrations = []
+        problems = []
         for subject, name in missing:
-            name = slug(name)
-            if name in reserved:
-                fail("conflict", "Tenant slug is already owned; administrator alias required", slug=name)
-            reserved.add(name)
-            registrations.append((subject, name))
-        for subject, name in registrations:
-            t = self.store.register(subject, name)
+            try:
+                label = slug(name)
+                if label in reserved:
+                    fail("conflict", "Tenant slug is already owned; administrator alias required")
+                t = self.store.register(subject, label)
+            except Failure as exc:
+                if not overview:
+                    raise
+                problems.append({"name": name, **exc.result["error"]})
+                continue
+            reserved.add(label)
             self.store.log(who["sub"], t["n"], "tenant_register", {}, "ok")
+        return problems
 
     def tenant(self, who, name=None):
         allowed = [self.store.tenant(s) for s, _ in self.subjects(who)]
@@ -183,6 +211,7 @@ class Platform(Lifecycle):
             "limit": limits,
             "remaining": {k: limits[k] - usage[k] for k in limits},
             "units": UNITS,
+            "over_limit": [k for k in limits if usage[k] > limits[k]],
         }
         exceeded = [
             {"dimension": k, "used": v, "limit": limits[k]}
@@ -273,6 +302,7 @@ class Platform(Lifecycle):
             "packages": a.get("packages", []),
             "runcmd": a.get("runcmd", []),
             "health_checks": a.get("health_checks", []),
+            "network_access": a.get("network_access", "tenant"),
             "readiness_token": secrets.token_urlsafe(32) if not dry else None,
             "guest_management": 1,
             "nics": [],
@@ -306,6 +336,7 @@ class Platform(Lifecycle):
                 "nested_virt",
                 "packages",
                 "health_checks",
+                "network_access",
             )
         } | {
             "state": "planned",
@@ -347,25 +378,62 @@ class Platform(Lifecycle):
         return result
 
     async def reconcile(self):
-        for domain in self.store.objects("domains"):
-            if domain["state"] == "queued" and domain.get("ready_at", 0) <= time.time():
-                t = next(t for t in self.store.tenants() if t["n"] == domain["tenant_n"])
-                domain.update(await self.domains.ensure(t))
-                self.store.put("domains", domain["id"], t["n"], domain)
+        # Local network/edge convergence never makes a DNS-provider request.
+        # Certificate issuance and DNS retries belong to their own domain jobs.
         state = self.store.desired()
-        ready = {d["tenant_n"] for d in state["domains"] if d["state"] == "ready"}
-        issued = {c["tenant_n"] for c in self.store.objects("certificates")}
-        for tenant in state["tenants"]:
-            if tenant["n"] in ready:
-                await self.domains.record(tenant)
-            elif tenant["n"] in issued and not any(d["tenant_n"] == tenant["n"] for d in state["domains"]):
-                # Also recover a crash between deleting the final route and
-                # deleting its owned wildcard DNS record.
-                await self.domains.record(tenant, remove=True)
+        state["domains"] = [
+            dict(d, state="ready") if d["state"] == "configuring" else d for d in state["domains"]
+        ]
         state["certificates"] = self.domains.bundles(state["domains"])
         result = await self.backend.reconcile(state)
         await self.refresh_storage_usage()
         return result
+
+    async def maintain_domains(self):
+        # One tenant's DNS/ACME failure must not skip other tenants or the
+        # network reconciler. Active jobs own their pending publication state.
+        for tenant in self.store.tenants():
+            domains = [d for d in self.store.objects("domains", tenant["n"]) if d["state"] != "deleting"]
+            issued = self.store.objects("certificates", tenant["n"])
+            if not domains and not issued:
+                continue
+            try:
+                active = {
+                    o["id"]
+                    for o in self.store.objects("operations", tenant["n"])
+                    if o["state"] not in {"succeeded", "failed", "rolled_back", "cleanup_failed"}
+                }
+                for domain in domains:
+                    # Older releases could finish a job while its certificate
+                    # remained queued. Keep those legacy routes recoverable.
+                    if (
+                        domain["state"] in ("queued", "configuring")
+                        and domain.get("operation_id") not in active
+                        and domain.get("ready_at", 0) <= time.time()
+                    ):
+                        await self.member(
+                            "domain_add",
+                            {
+                                "machine": str(domain["vmid"]),
+                                "sub": domain["sub"],
+                                "target_port": domain["target_port"],
+                            },
+                            {"sub": "system"},
+                            tenant,
+                        )
+                if issued or any(d["state"] == "ready" for d in domains):
+                    await self.domains.record(tenant, remove=not domains)
+                await self.domains.renew(tenant)
+                status = {"state": "ready", "checked_at": time.time()}
+            except Waiting as exc:
+                status = {"state": "waiting", "ready_at": exc.ready_at, "checked_at": time.time()}
+            except (Failure, RuntimeError, OSError, httpx.HTTPError):
+                status = {
+                    "state": "retrying",
+                    "checked_at": time.time(),
+                    "error": "DNS or certificate maintenance failed",
+                }
+            self.store.put("domain_status", str(tenant["n"]), tenant["n"], status)
 
     async def refresh_storage_usage(self):
         try:
@@ -389,11 +457,9 @@ class Platform(Lifecycle):
             t = next(t for t in self.store.tenants() if t["n"] == r["tenant_n"])
             t["quota"][r["dimension"]] = r["previous_limit"]
             self.store.db.execute("UPDATE tenants SET quota=? WHERE n=?", (json.dumps(t["quota"]), t["n"]))
-            if self.usage(t)[r["dimension"]] > r["previous_limit"]:
-                for m in self.store.objects("machines", t["n"]):
-                    await self.backend.call({"op": "action", "machine": m, "action": "stop"})
-                    m["state"] = "stopped"
-                    self.store.put("machines", m["vmid"], t["n"], m)
+            # Expiry restores the ceiling; it does not reclaim allocations.
+            # Only growth in an exceeded dimension is blocked. Deletion,
+            # shrinking and unrelated repairs remain available.
             r["status"] = "expired"
             self.store.put("requests", r["id"], t["n"], r)
             self.store.log("system", t["n"], "quota_expired", {"request": r["id"]}, "ok")
@@ -417,6 +483,21 @@ class Platform(Lifecycle):
             "private_interfaces": report.get("interfaces", []),
             "failed_step": report.get("failed_step"),
         }
+        safe["access"] = {
+            "inbound": m.get("network_access", "tenant"),
+            "private_nics": "not_allowed"
+            if m.get("network_access") == "restricted"
+            else "unfiltered_experiment_networks",
+            "allowed_connections": [
+                {
+                    "from": p.get("from_machine", p["source"]),
+                    "port": p["port"],
+                    "protocol": p.get("proto", "tcp"),
+                }
+                for p in self.store.objects("peers", m["tenant_n"])
+                if p.get("target") == m["ip"]
+            ],
+        }
         ssh = next(
             (p for p in ports if p["vmid"] == m["vmid"] and p["port"] == 22 and p["proto"] == "tcp"), None
         )
@@ -431,17 +512,25 @@ class Platform(Lifecycle):
     async def execute(self, tool, args, who):
         try:
             if self.config.get("background_operations") and tool in ASYNC_TOOLS and not args.get("dry_run"):
-                await self.register_tenants(who)
                 if tool in ADMIN_TOOLS:
                     if not who["admin"]:
                         fail("forbidden", "winlab-admin membership required")
                     t = next((t for t in self.store.tenants() if t["slug"] == args.get("tenant")), None)
-                    t = t or self.tenant(who)
+                    if not t and tool == "tenant_suspend":
+                        fail("not_found", "Tenant not found")
+                    if not t:
+                        await self.register_tenants(who)
+                        t = self.tenant(who)
                 else:
+                    await self.register_tenants(who, args.get("tenant"))
                     t = self.tenant(who, args.get("tenant"))
                 if t["status"] != "active" and tool != "tenant_suspend":
                     fail("forbidden", "Tenant is suspended")
                 result = self.operations.submit(tool, args, who, t, args.get("idempotency_key"))
+                if tool == "tenant_suspend":
+                    self.store.db.execute(
+                        "UPDATE tenants SET status='suspending' WHERE n=? AND status='active'", (t["n"],)
+                    )
                 self.store.log(who["sub"], t["n"], tool, args, "queued")
                 return {"ok": True, **result}
         except Failure as e:
@@ -492,12 +581,13 @@ class Platform(Lifecycle):
             elif tool == "reconcile_run" and dry:
                 result.update(state="planned", reserved=False, resource_changes=False)
             return result, t["n"] if t else None
-        await self.register_tenants(who)
+        onboarding = await self.register_tenants(who, a.get("tenant"), overview=tool == "whoami")
         if tool == "whoami":
             return {
                 "username": who["username"],
                 "admin": who["admin"],
-                "default_tenant": self.tenant(who)["slug"],
+                "default_tenant": (self.store.tenant("user:" + who["sub"]) or {}).get("slug"),
+                "onboarding": onboarding,
                 "tenants": [
                     {
                         "slug": t["slug"],
@@ -644,7 +734,7 @@ class Platform(Lifecycle):
             elif tool == "machine_power":
                 request["action"] = a["action"]
                 if a["action"] in ("start", "reboot"):
-                    self.quota(t, {})
+                    self.quota(t, {k: 0 for k in QUOTA_DIMENSIONS})
                 # CPU/RAM remain reserved while stopped; starting adds no demand.
             else:
                 spec = {k: a.get(k, m[k]) for k in ("cpu", "memory_mb", "disk_gb")}
@@ -835,10 +925,12 @@ class Platform(Lifecycle):
                 m = self.machine(t, a["machine"])
                 name = a["sub"] + "." + t["slug"] + ".winlab.tw"
                 old = next((d for d in domains if d["name"] == name), None)
+                if old and (old["vmid"] != m["vmid"] or old["target_port"] != a["target_port"]):
+                    fail("conflict", "Domain already targets a different service; remove it explicitly first")
                 delta = {"domains": 0 if old else 1}
                 if not old:
                     self.quota(t, {"domains": 1})
-                domain = {
+                domain = old or {
                     "id": old["id"] if old else secrets.token_hex(8),
                     "tenant_n": n,
                     "vmid": m["vmid"],
@@ -850,11 +942,29 @@ class Platform(Lifecycle):
                     "ready_at": int(time.time()),
                 }
                 if not dry:
-                    # Persist first; a crash cannot leave an unowned DNS record.
+                    context = current_operation.get()
+                    if context and context["record"]["tool"] == "domain_add":
+                        op = context["record"]
+                        identity = [domain["id"], old.get("operation_id") if old else operation_id()]
+                        if op.get("domain_target", identity) != identity:
+                            fail("conflict", "Domain was replaced; retry refused")
+                        op["domain_target"] = identity
+                        self.operations.save(op)
+                    # Check retry ownership before saving or touching DNS.
                     self.store.put("domains", domain["id"], n, domain)
-                    domain.update(await self.domains.ensure(t))
+                    if domain["state"] not in ("ready", "configuring"):
+                        if domain.get("ready_at", 0) > time.time():
+                            raise Waiting("waiting_for_certificate", domain["ready_at"])
+                        domain.update(await self.domains.ensure(t))
+                        if domain["state"] == "ready":
+                            domain["state"] = "configuring"
                     self.store.put("domains", domain["id"], n, domain)
+                    if domain["state"] not in ("ready", "configuring"):
+                        raise Waiting("waiting_for_certificate", domain["ready_at"])
+                    await self.domains.record(t)
                     await self.reconcile()
+                    domain["state"] = "ready"
+                    self.store.put("domains", domain["id"], n, domain)
                 else:
                     domain = {
                         "name": name,
@@ -871,6 +981,8 @@ class Platform(Lifecycle):
                     domain["state"] = "deleting"
                     self.store.put("domains", domain["id"], n, domain)
                     await self.reconcile()
+                    if not any(d["id"] != domain["id"] and d.get("state") != "deleting" for d in domains):
+                        await self.domains.record(t, remove=True)
                     self.store.remove("domains", domain["id"])
             return {"domain": domain, "dry_run": dry, "quota_after": self.quota(t, delta if dry else None)}, n
         if tool.startswith("peer_"):
@@ -888,16 +1000,20 @@ class Platform(Lifecycle):
                     (
                         p
                         for p in self.store.objects("peers", n)
-                        if p["source"] == src and p["target"] == m["ip"] and p["port"] == a["port"]
+                        if p["source"] == src
+                        and p["target"] == m["ip"]
+                        and p["port"] == a["port"]
+                        and p.get("proto", "tcp") == "tcp"
                     ),
                     None,
                 )
-                grant = {
-                    "id": old["id"] if old else secrets.token_hex(8),
+                grant = old or {
+                    "id": secrets.token_hex(8),
                     "tenant_n": n,
                     "source": src,
                     "target": m["ip"],
                     "port": a["port"],
+                    "proto": "tcp",
                 }
                 if not dry:
                     self.store.put("peers", grant["id"], n, grant)
@@ -1080,8 +1196,8 @@ class Platform(Lifecycle):
             by_network[net["name"]] = net
         if networks:
             delta["networks"] = len(networks)
-        if not machines and not networks and not a.get("attachments"):
-            fail("invalid", "Plan must contain a machine, network or attachment")
+        if not any(a.get(k) for k in ("machines", "networks", "attachments", "connections", "publications")):
+            fail("invalid", "Plan must contain machines, networks, connections or publications")
         if len(existing_m) + len(machines) > 100 or len(existing_n) + len(networks) > 99:
             fail("quota_exceeded", "Plan exceeds tenant address slots")
         if len(self.store.objects("ports", t["n"])) + len(machines) > 10:
@@ -1092,6 +1208,12 @@ class Platform(Lifecycle):
             net = by_network.get(requested["network"])
             if not m or not net:
                 fail("not_found", "Attachment must reference this tenant's existing or planned resources")
+            if m.get("network_access") == "restricted":
+                fail(
+                    "invalid",
+                    "Restricted machines use declared connections; experiment NICs require network_access=tenant",
+                    machine=m["name"],
+                )
             network_ref = net.get("id", net["name"])
             if any(nic["network"] == network_ref for nic in m["nics"]):
                 fail("conflict", "Machine already attached to this network")
@@ -1102,6 +1224,11 @@ class Platform(Lifecycle):
             attachments.append(
                 {"machine": m["name"], "network": net["name"], "nic": index, "state": "planned"}
             )
+        connections, publications, access_delta = self.plan_access(t, a, by_machine)
+        for key, value in access_delta.items():
+            delta[key] = delta.get(key, 0) + value
+        if len(self.store.objects("ports", t["n"])) + delta.get("public_ports", 0) > 10:
+            fail("quota_exceeded", "Public port block is full", dimension="public_ports")
         before, after = self.quota(t), self.quota(t, delta or None)
         admission = await self.admission(
             delta.get("vcpu", 0), delta.get("memory_mb", 0), delta.get("disk_gb", 0)
@@ -1114,6 +1241,8 @@ class Platform(Lifecycle):
                 "machines": planned,
                 "networks": networks,
                 "attachments": attachments,
+                "connections": connections,
+                "publications": publications,
                 "quota_after": after,
                 "admission": admission,
                 "requirements": requirements,
@@ -1130,6 +1259,8 @@ class Platform(Lifecycle):
                     "No IDs, addresses or ports are reserved; apply rechecks capacity and quota.",
                     "Guest boot, package commands and SSH connectivity are checked only after creation.",
                     "Managed networks configure private IPs automatically; raw_l2 requires owner configuration.",
+                    "network_access=tenant allows all same-tenant primary traffic. Use restricted and connections for service isolation.",
+                    "Publication success confirms routing and TLS configuration; end-to-end application responses require an external check.",
                 ],
             },
             True,
@@ -1221,6 +1352,8 @@ class Platform(Lifecycle):
             if not dry:
                 for m in self.store.objects("machines", t["n"]):
                     await self.backend.call({"op": "action", "machine": m, "action": "stop"})
+                    m.update(state="stopped", power_state="stopped", ssh_ready=False)
+                    self.store.put("machines", m["vmid"], t["n"], m)
                 self.store.db.execute("UPDATE tenants SET status='suspended' WHERE n=?", (t["n"],))
         self.store.log(who["sub"], t["n"], tool, a, "dry_run" if dry else "ok")
         return {"dry_run": dry, "quota_after": self.quota(t)}
