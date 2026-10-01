@@ -261,6 +261,42 @@ async def test_existing_machine_publication_and_retry_do_not_duplicate_resources
     assert len(platform.store.objects("machines", 1)) == 1
 
 
+async def test_preview_guides_missing_requirements_then_one_apply(platform):
+    spec = web_stack()
+    for m in spec["machines"]:
+        m.pop("ssh_keys")
+    result = await platform.execute("deployment_plan", spec, person())
+    assert result["ok"] and not result["ready_to_apply"]
+    assert result["next_action"] == "provide_requirements"
+    assert {r["machine"] for r in result["requirements"]} == {"app", "db"}
+    result = await platform.execute("deployment_plan", web_stack(), person())
+    assert result["ready_to_apply"] and result["next_action"] == "deployment_apply"
+    assert not platform.store.objects("machines", 1)
+    assert not platform.store.objects("operations", 1)
+
+
+async def test_invalid_unreserved_job_requires_revised_request(platform):
+    submitted = await platform.execute(
+        "machine_create", {"name": "web", "kind": "ct", "ssh_keys": [KEY], "packages": ["nginx"]}, person()
+    )
+    op = await finish(platform, submitted)
+    assert op["state"] == "failed" and not op["reserved"]
+    assert platform.operations.public(op)["next_action"] == "revise_request"
+    assert not platform.store.objects("machines", 1)
+    corrected = await platform.execute(
+        "machine_create", {"name": "web", "kind": "vm", "ssh_keys": [KEY], "packages": ["nginx"]}, person()
+    )
+    op = await finish(platform, corrected)
+    assert op["state"] == "succeeded"
+    assert platform.operations.public(op)["next_action"] == "use_result"
+
+
+def test_reserved_or_cleanup_failure_keeps_recovery_path(platform):
+    for state, reserved in [("failed", True), ("cleanup_failed", False)]:
+        op = {"state": state, "reserved": reserved, "error": {"code": "invalid"}}
+        assert platform.operations.public(op)["next_action"] == "operation_retry"
+
+
 @pytest.mark.parametrize("change", ["foreign", "unrestricted", "extra_nic", "duplicate", "ports_quota"])
 async def test_invalid_intents_fail_before_reservation(platform, change):
     spec = web_stack()

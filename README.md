@@ -61,10 +61,12 @@ Signing in accepts the lab use rules; eligible personal and project tenants are 
 on first use. There is no separate policy acknowledgement or registration step.
 Use Carrel only for authorized lab work; abuse, scanning other tenants and outbound SMTP are prohibited.
 
-Start with `whoami` for your default tenant, capabilities and all personal/project quotas, including
-used, limit and remaining. `catalog_get` combines images and size presets; `capacity_get` reports
+Start with `whoami` for the running `service.version`, your default tenant, capabilities and all personal/project quotas, including
+used, limit and remaining. `catalog_get` also returns the version, images, size presets and VM/CT restrictions; `capacity_get` reports
 shared physical capacity and admission headroom without exposing other tenants' machines.
 `quota_get` refreshes one tenant. `memory_mb` and `swap_mb` mean **MiB**; `disk_gb` means **GiB**.
+`machine_get` returns readiness, access rules, SSH and timestamped `runtime` power state/uptime;
+it does not return the raw hypervisor payload. Use `machine_metrics` for detailed usage.
 
 Dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
 machines, allowed connections and public endpoints. Plans resolve names within the selected tenant and check
@@ -72,6 +74,8 @@ their aggregate quota and capacity. Previews return `quota_before`, `delta`, `qu
 `requirements` and `ready_to_apply`; they reserve nothing and write no resources. They record an
 audit entry. No follow-up list or quota call is needed to establish that a preview did not create anything.
 Missing SSH keys are reported as a requirement, so resource planning can still finish.
+`next_action` identifies missing requirements or directs the agent to `deployment_apply`.
+`deployment_plan` is already the complete preview; no second `deployment_apply(dry_run=true)` is needed.
 
 For example, “an app and a database; only the app can connect to database TCP 5432;
 publish the app over HTTPS” becomes this `deployment_plan` specification:
@@ -108,6 +112,8 @@ reservation or success**. `operation_get` with an ID waits up to 20 seconds for 
 `wait_seconds=0` for an immediate response). Poll at the returned interval, inspect the terminal state,
 and follow `next_action`. Certificate-budget waits return `waiting` and `ready_at`, release the
 infrastructure writer and resume automatically. Use `operation_retry` to resume a failure.
+An invalid request with no remaining reservations returns `next_action=revise_request` instead:
+correct the input, preview it and submit a new request. Retrying the old operation repeats its original arguments.
 Supply a stable `idempotency_key` when submitting;
 resending identical arguments with that key returns the original job. `on_failure=rollback` (default)
 cleans up only resources introduced by a deployment; `keep` preserves them for diagnosis. Failed
@@ -126,6 +132,8 @@ Without application checks, the result explicitly says `not_checked`. The fixed 
 sends only status, check indices and an optional failed command index; no guest command output
 or generic guest execution endpoint is exposed. Failed initialization leaves a standalone VM
 available for owner diagnosis; a deployment follows its chosen failure policy.
+CTs do not support `packages`, `runcmd`, `health_checks` or nested virtualization; configure their
+applications over SSH after creation, or choose a VM for automatic application setup and checks.
 
 Private networks default to `mode=managed`: an RFC1918 /24 or /25, fixed DHCP leases, MTU 1450,
 and no default gateway or DNS override. DHCP runs in a separate unrouted namespace per network;
@@ -157,6 +165,8 @@ See the [0.3 reliability acceptance](docs/evaluations/2026-10-01-reliability.md)
 networking, snapshot and native Codex test results.
 The [0.4 intent acceptance](docs/evaluations/2026-10-01-intent.md) records the composed deployment
 and restricted connectivity checks.
+The [0.4.2 native agent acceptance](docs/evaluations/2026-10-01-agent-intent.md) records natural-language
+discovery, previews, actual VM/publication/connection workflows and independent connectivity probes.
 
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.

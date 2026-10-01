@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from . import __version__
 from .auth import OAuth, Verifier
 from .backend import Backend
 from .platform import ADMIN_TOOLS, Failure, Platform
@@ -32,10 +33,10 @@ def build(config, backend=None, verifier=None, store=None):
     oauth = OAuth(store, origin, issuer, "carrel-mcp", verifier, config.get("hosted_redirects", []))
     server = Server(
         "carrel",
-        version="0.4.1",
+        version=__version__,
         instructions=(
             "WinLab machines; tools only, no MCP resources. Start with whoami for all visible tenants' "
-            "used/limit/remaining quotas and capabilities. Use catalog_get for images/sizes, capacity_get "
+            "used/limit/remaining quotas, service.version and capabilities. These are authoritative; capability questions do not need deployment previews. Use catalog_get for images/sizes, capacity_get "
             "only when asked about shared physical capacity. Use deployment_plan then deployment_apply to describe "
             "machines, connections (from/to/port), and publications (machine/protocol/port/sub for HTTPS) together. "
             "Use network_access=restricted for destinations that should accept only declared service connections. "
@@ -44,10 +45,10 @@ def build(config, backend=None, verifier=None, store=None):
             "Queued jobs have not reserved capacity. Use a stable idempotency_key after a lost submission response. "
             "Waiting jobs resume automatically; follow next_action. Completion returns SSH entries and public endpoints. "
             "Publication verification=routing_configured does not verify an application's external HTTP response. "
-            "Use operation_retry to resume failures, not another create. Managed private networks assign IPs automatically. "
+            "Follow next_action for failures: operation_retry preserves allocations; revise_request means fix invalid inputs before a new submission. Managed private networks assign IPs automatically. "
             "Machine readiness includes cloud-init completion and requested application checks; SSH alone is insufficient. "
             "Use VMs for Docker, Mininet and databases. memory_mb/swap_mb are MiB; disk_gb is GiB. "
-            "Dry-run before applying mutations. Previews never reserve or write resources; audit is recorded. "
+            "Preview before applying mutations. deployment_plan is the complete preview; do not repeat it with deployment_apply(dry_run=true) or manually execute its resources one by one. Previews never reserve or write resources; audit is recorded. "
             "Trust quota_before/delta/quota_after and resource_changes=false; follow-up list/quota/key calls "
             "are unnecessary just to verify a preview. Missing SSH public keys do not block planning; "
             "they are required for actual creation and can be passed inline without saving. "
@@ -170,7 +171,7 @@ def build(config, backend=None, verifier=None, store=None):
             await platform.operations.close()
 
     async def health(request):
-        return JSONResponse({"status": "ok", "service": "carrel", "version": "0.4.1"})
+        return JSONResponse({"status": "ok", "service": "carrel", "version": __version__})
 
     async def guest_status(request):
         try:

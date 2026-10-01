@@ -1,4 +1,6 @@
 import json
+import tomllib
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
@@ -6,6 +8,7 @@ import jsonschema
 import pytest
 from test_security import Backend, person
 
+from carrel import __version__
 from carrel.capacity import GIB, summarize
 from carrel.platform import Platform
 from carrel.server import build
@@ -52,6 +55,37 @@ def resource_state(platform):
         table: list(map(tuple, platform.store.db.execute(f"SELECT * FROM {table}")))
         for table in ("objects", "tenants")
     }
+
+
+async def test_version_available_without_mcp_handshake(platform):
+    package = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    assert __version__ == package["project"]["version"]
+    for name in ("whoami", "catalog_get"):
+        result = await platform.execute(name, {}, person())
+        assert result["service"] == {"name": "carrel", "version": __version__}
+        assert result["capabilities"]["deployment_connections"]
+
+
+async def test_machine_query_exposes_current_runtime_without_host_internals(platform):
+    seed(platform)
+    platform.backend.call = AsyncMock(
+        return_value={
+            "status": "stopped",
+            "uptime": 0,
+            "pid": 123,
+            "blockstat": {"scsi0": {"rd_operations": 99}},
+            "nics": {"tap10100i0": {}},
+            "running-qemu": "private-version",
+        }
+    )
+    result = await platform.execute("machine_get", {"machine": "test"}, person())
+    m = result["machines"][0]
+    assert m["runtime"]["power_state"] == "stopped"
+    assert m["runtime"]["uptime_seconds"] == 0
+    assert m["runtime"]["observed_at"]
+    assert m["ssh"] and m["state"] == "ready"
+    assert "hypervisor" not in m
+    assert not any(value in json.dumps(m) for value in ("blockstat", "tap10100i0", "private-version"))
 
 
 async def preview(platform, tool, args, delta, who=None):

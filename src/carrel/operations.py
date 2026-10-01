@@ -58,7 +58,12 @@ class Operations:
         self.store.put("operations", op["id"], op["tenant_n"], op)
 
     def public(self, op):
-        return {
+        revise = (
+            op["state"] in {"failed", "rolled_back"}
+            and not op.get("reserved")
+            and op.get("error", {}).get("code") == "invalid"
+        )
+        result = {
             k: v
             for k, v in op.items()
             if k
@@ -78,16 +83,21 @@ class Operations:
                 "current_resource",
                 "ready_at",
             }
-        } | {
-            "poll_after_seconds": max(5, min(60, int(op.get("ready_at", 0) - time.time())))
-            if op["state"] not in TERMINAL
-            else None,
-            "next_action": "use_result"
-            if op["state"] == "succeeded"
-            else "operation_retry"
-            if op["state"] in TERMINAL
-            else "operation_get",
         }
+        result["poll_after_seconds"] = (
+            max(5, min(60, int(op.get("ready_at", 0) - time.time()))) if op["state"] not in TERMINAL else None
+        )
+        if op["state"] == "succeeded":
+            result["next_action"] = "use_result"
+        elif revise:
+            result["next_action"] = "revise_request"
+            result["next_action_detail"] = (
+                "No resources remain reserved. Correct the request, preview it, then submit with a new "
+                "idempotency_key; retrying this operation reuses the invalid arguments."
+            )
+        else:
+            result["next_action"] = "operation_retry" if op["state"] in TERMINAL else "operation_get"
+        return result
 
     def find(self, tenant, id):
         from .platform import fail

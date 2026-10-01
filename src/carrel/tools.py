@@ -91,7 +91,7 @@ def tool(name, description, properties=None, required=(), account=False):
 TOOLS = [
     tool(
         "whoami",
-        "Get identity, default tenant, capabilities and every visible tenant's used/limit/remaining quota in one call. Eligible tenants register automatically. No quota_get needed for this overview.",
+        "Get exact service.version, identity, default tenant, supported capabilities and every visible tenant's used/limit/remaining quota in one call. Eligible tenants register automatically. No quota_get or deployment previews needed for this overview.",
         account=True,
     ),
     tool(
@@ -100,7 +100,7 @@ TOOLS = [
     ),
     tool(
         "catalog_get",
-        "Get installed images, size presets, MiB/GiB units and supported capabilities together.",
+        "Get exact service.version, installed images, size presets, VM/CT restrictions, MiB/GiB units and supported capabilities together. No deployment preview needed to discover support.",
         account=True,
     ),
     tool(
@@ -117,7 +117,7 @@ TOOLS = [
     tool("sizes_list", "List machine resource presets.", account=True),
     tool(
         "machine_create",
-        "Create one VM/CT; apply returns a queued operation. Use operation_get until complete; SSH alone does not imply guest/application readiness. Use VMs for Docker, OVS, Mininet or databases. Dry-run first: checks quota/capacity even without SSH keys, returning requirements instead. Valid public keys are mandatory for apply, can be passed inline and need not be saved. For multiple resources and NICs use deployment_plan then deployment_apply.",
+        "Create one VM/CT; apply returns a queued operation. Use operation_get until complete; SSH alone does not imply guest/application readiness. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt; configure them over SSH. Dry-run first: checks quota/capacity even without SSH keys, returning requirements instead. Valid public keys are mandatory for apply, can be passed inline and need not be saved. For multiple resources and NICs use deployment_plan then deployment_apply.",
         {
             "name": LABEL,
             "kind": {"enum": ["vm", "ct"]},
@@ -182,7 +182,7 @@ TOOLS = [
     tool("machine_list", "List this tenant's allocated machines."),
     tool(
         "machine_get",
-        "Get a machine, hypervisor status and its public SSH entry.",
+        "Get a machine's specification, readiness, allowed connections, public SSH entry and current runtime power state/uptime. Use machine_metrics for detailed usage.",
         {"machine": MACHINE},
         ["machine"],
     ),
@@ -350,7 +350,7 @@ def objects(properties, required, maximum):
 
 plan = tool(
     "deployment_plan",
-    "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. Apply the same specification with deployment_apply.",
+    "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. This is the complete preview: apply the same specification once with deployment_apply when authorized; do not repeat a dry-run or create each resource separately. Publications can reference existing machine names with no machines array.",
     {
         "machines": objects(_machine, ["name"], 100),
         "networks": objects(_network, ["name"], 99),
@@ -385,7 +385,7 @@ apply = tool(
 )
 get = tool(
     "operation_get",
-    "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 20 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup; poll no faster than poll_after_seconds.",
+    "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 20 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup and follow next_action (revise_request means invalid inputs must be corrected, not retried); poll no faster than poll_after_seconds.",
     {"id": TEXT, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 30, "default": 20}},
 )
 retry = tool(

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from . import __version__
 from .capacity import UNITS, summarize
 from .domains import Domains
 from .intent import Intent
@@ -557,7 +558,17 @@ class Platform(Lifecycle, Intent):
     async def _execute(self, tool, a, who):
         dry = a.get("dry_run", False)
         if tool == "catalog_get":
-            return {"images": IMAGES, "sizes": SIZES, "units": UNITS, "capabilities": CAPABILITIES}, None
+            return {
+                "service": {"name": "carrel", "version": __version__},
+                "images": IMAGES,
+                "sizes": SIZES,
+                "units": UNITS,
+                "capabilities": CAPABILITIES,
+                "machine_kinds": {
+                    "vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.",
+                    "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation.",
+                },
+            }, None
         if tool == "images_list":
             return {"images": [i for i in IMAGES if not a.get("kind") or i["kind"] == a["kind"]]}, None
         if tool == "sizes_list":
@@ -584,6 +595,7 @@ class Platform(Lifecycle, Intent):
         onboarding = await self.register_tenants(who, a.get("tenant"), overview=tool == "whoami")
         if tool == "whoami":
             return {
+                "service": {"name": "carrel", "version": __version__},
                 "username": who["username"],
                 "admin": who["admin"],
                 "default_tenant": (self.store.tenant("user:" + who["sub"]) or {}).get("slug"),
@@ -667,7 +679,12 @@ class Platform(Lifecycle, Intent):
             for m in ms:
                 pub = self.public_machine(m, self.store.objects("ports", n))
                 if tool == "machine_get":
-                    pub["hypervisor"] = await self.backend.call({"op": "status", "machine": m})
+                    status = await self.backend.call({"op": "status", "machine": m})
+                    pub["runtime"] = {
+                        "power_state": status.get("status", status.get("state", "unknown")),
+                        "uptime_seconds": status.get("uptime"),
+                        "observed_at": datetime.now(UTC).isoformat(),
+                    }
                 out.append(pub)
             return {"machines": out}, n
         if tool in ("machine_create", "machine_retry"):
@@ -1248,13 +1265,12 @@ class Platform(Lifecycle, Intent):
                 "requirements": requirements,
                 "units": UNITS,
                 "apply_tool": "deployment_apply",
-                "apply_order": [
-                    "reserve_all",
-                    "network_create",
-                    "machine_create",
-                    "machine_nic_attach",
-                    "readiness_checks",
-                ],
+                "next_action": "provide_requirements" if requirements else "deployment_apply",
+                "next_action_detail": (
+                    "Supply the listed requirements, then preview the updated specification."
+                    if requirements
+                    else "When execution is authorized, submit the same specification once with deployment_apply. This is already the complete preview; do not repeat with dry_run."
+                ),
                 "limitations": [
                     "No IDs, addresses or ports are reserved; apply rechecks capacity and quota.",
                     "Guest boot, package commands and SSH connectivity are checked only after creation.",

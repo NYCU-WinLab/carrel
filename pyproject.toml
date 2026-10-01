@@ -1,6 +1,6 @@
 [project]
 name = "carrel"
-version = "0.4.1"
+version = "0.4.2"
 description = "WinLab self-service Proxmox machines over MCP"
 requires-python = ">=3.13"
 dependencies = [
