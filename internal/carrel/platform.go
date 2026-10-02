@@ -257,6 +257,30 @@ func (e *Execution) SnapshotUsage(t D) D {
 	}
 	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample; snapshot_gb reserves worst-case size"}
 }
+
+const maxBootstrapArgumentBytes = 64 * 1024
+
+func validateBootstrapArguments(tool string, args D) {
+	var machines []D
+	switch tool {
+	case "machine_create":
+		machines = []D{args}
+	case "deployment_plan", "deployment_apply":
+		machines = dicts(args["machines"])
+	default:
+		return
+	}
+	for _, machine := range machines {
+		for commandIndex, command := range arr(machine["runcmd"]) {
+			for argumentIndex, argument := range arr(command) {
+				if size := len(str(argument)); size > maxBootstrapArgumentBytes {
+					fail("invalid", "runcmd argument exceeds 65536 UTF-8 bytes; transfer larger files over SSH after creation", D{"machine": machine["name"], "command_index": commandIndex, "argument_index": argumentIndex, "actual_bytes": size, "max_bytes": maxBootstrapArgumentBytes})
+				}
+			}
+		}
+	}
+}
+
 func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["name"] == a["name"] }) != nil {
 		fail("conflict", "Machine name is already allocated")

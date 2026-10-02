@@ -72,11 +72,18 @@ for project dependencies. CTs keep their minimal distribution environment; use a
 creation, so discovery and previews are optional. The call waits up to 55 seconds for SSH and
 initialization readiness. If still pending, use the returned operation ID to continue waiting.
 
+VM `runcmd` accepts command argument arrays with up to 64 KiB of UTF-8 data per argument.
+The complete MCP HTTP request remains limited to 256 KiB. Small bootstrap scripts can include
+application files directly; transfer larger projects over SSH with scp or rsync after creation.
+Oversized arguments are rejected before queueing or reserving resources, including in previews.
+
 ### Everyday requests
 
 Use the known machine name directly. Normal member work does not need operator memories,
 infrastructure runbooks, hypervisor access, or a preliminary list/quota/catalog call.
 Choose the tenant only for project resources or an explicitly selected account.
+For feature questions, use `catalog_get`. If tool discovery is necessary, list names first and
+inspect only the relevant tool definitions instead of dumping every description and repeated instructions.
 
 | Request | Direct tool call |
 |---|---|
@@ -96,7 +103,9 @@ call. Inspect the returned operation. A successful result needs no extra poll/li
 Only pending jobs need `operation_get`. Set `wait_seconds=0` for immediate submission.
 Successful responses default to a concise outcome, machine/access details and nonempty resource
 delta. Use `detail="full"` for complete accounting and internal identifiers; durable results always
-retain those details. Previews, errors, partial cleanup and recovery instructions are preserved.
+retain those details. Successful deployment summaries omit internal allocation bindings and cleanup
+receipts; machine access, declared connections and public endpoints remain. Previews, errors, partial
+cleanup and recovery instructions are preserved.
 `machine_list` reports recorded state; `machine_get` observes live power state.
 
 Start also resumes a paused VM. Start, resume and reboot wait for SSH and initialization readiness;
