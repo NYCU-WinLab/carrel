@@ -6,7 +6,6 @@ passthrough operations. Only tagged carrel tenant VMIDs may be changed. The
 control plane owns authorization and quotas; this boundary owns host integrity.
 """
 
-from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hashlib
 import importlib.util
@@ -99,8 +98,8 @@ def guest_firewall(m, state, config):
     return "\n".join(rules) + "\n"
 
 
-def run(*args, timeout=180):
-    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout)
+def run(*args, timeout=180, input=None):
+    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout, input=input)
     if p.returncode:
         raise RuntimeError(f"{args[0]} {args[1]} failed: {p.stderr[-1200:]}")
     return p.stdout.strip()
@@ -317,14 +316,10 @@ def nic_value(m, nic):
 def reconcile(state):
     config = json.loads(CONFIG.read_text())
     changed = []
-    # Read topology once per reconciliation. Subnet reads are independent; all
-    # mutations remain serialized by the node adapter's infrastructure lock.
-    vnets = api("get", "/cluster/sdn/vnets")
-    existing_tenants = [tenant_config(t)[1] for t in state["tenants"]
-                        if any(v["vnet"] == tenant_config(t)[1] for v in vnets)]
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        subnets_by_vnet = dict(zip(existing_tenants, pool.map(
-            lambda vnet: api("get", f"/cluster/sdn/vnets/{vnet}/subnets"), existing_tenants)))
+    # One fresh observation per reconciliation, without repeated pvesh startup.
+    # Mutations remain serialized by the node adapter's infrastructure lock.
+    topology = json.loads(run("/usr/local/lib/carrel/pve-read.pl", "topology"))
+    vnets, subnets_by_vnet = topology["vnets"], topology["subnets"]
     for t in state["tenants"]:
         n, vnet = tenant_config(t)
         if ensure(
@@ -477,10 +472,6 @@ table inet carrel_conntrack {{
     if NODE == "carrel01":
         slugs = {t["n"]: label(t["slug"]) for t in state["tenants"]}
         hosts = "".join(f"{m['ip']} {m['name']}.{slugs[m['tenant_n']]}.internal\n" for m in state["machines"])
-        write(STATE / "dns.hosts", hosts)
-        if run("pct", "exec", "101", "--", "cat", "/etc/carrel-hosts") != hosts.strip():
-            run("pct", "push", "101", STATE / "dns.hosts", "/etc/carrel-hosts")
-            run("pct", "exec", "101", "--", "systemctl", "restart", "carrel-dns")
         routes = ["{", " auto_https off", "}", ":80 {"]
         for domain in state.get("domains", []):
             if domain.get("state") != "ready":
@@ -498,20 +489,9 @@ table inet carrel_conntrack {{
             ]
         routes += [" handle {", "  respond 404", " }", "}"]
         caddy = "\n".join(routes) + "\n"
-        if run("pct", "exec", "101", "--", "cat", "/etc/caddy/Caddyfile") != caddy.strip():
-            write(STATE / "gateway.Caddyfile", caddy)
-            run("pct", "push", "101", STATE / "gateway.Caddyfile", "/etc/caddy/Caddyfile", "--perms", "644")
-            run(
-                "pct",
-                "exec",
-                "101",
-                "--",
-                "/usr/local/bin/caddy",
-                "validate",
-                "--config",
-                "/etc/caddy/Caddyfile",
-            )
-            run("pct", "exec", "101", "--", "systemctl", "reload", "caddy")
+        run("pct", "exec", "101", "--", "python3", "-c",
+            Path("/usr/local/lib/carrel/gateway-sync.py").read_text(),
+            input=json.dumps({"hosts": hosts, "caddy": caddy}))
     private_dhcp(state)
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     return {"changed": changed}
@@ -843,16 +823,15 @@ def main():
         elif op == "inventory":
             # Guest maxdisk omits secondary disks. Count all thin volumes,
             # including templates and unused disks, for conservative admission.
-            volumes = api("get", f"/nodes/{NODE}/storage/local-lvm/content")
+            observed = json.loads(run("/usr/local/lib/carrel/pve-read.pl", "inventory"))
+            volumes = observed.pop("volumes")
             pools = json.loads(run("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o", "lv_name,data_percent,metadata_percent", "pve/data"))["report"][0]["lv"]
             pool = pools[0]
             out = {
                 "thin_pool": {"data_fraction": float(pool["data_percent"] or 0) / 100,
                               "metadata_fraction": float(pool["metadata_percent"] or 0) / 100},
                 "node": NODE,
-                "resources": api("get", "/cluster/resources"),
-                "storage": api("get", f"/nodes/{NODE}/storage/local-lvm/status"),
-                "status": api("get", f"/nodes/{NODE}/status"),
+                **observed,
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
             }
         elif op == "storage_usage":

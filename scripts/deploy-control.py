@@ -116,8 +116,9 @@ Host carrel-edge
         line = prefix + f'restrict,command="/usr/local/lib/carrel/{adapter}-agent.py" ' + key + "\n"
         program = "from pathlib import Path; import sys; p=Path('/root/.ssh/authorized_keys'); s=p.read_text(); line=sys.stdin.read(); p.write_text(s if line.strip() in s else s+'\\n'+line)"
         ssh(host, "python3 -c " + shlex.quote(program), line)
-    for helper in ("guest-report.py", "thin-usage.py"):
+    for helper in ("guest-report.py", "thin-usage.py", "pve-read.pl", "gateway-sync.py"):
         run(["scp", str(ROOT / "scripts" / helper), "carrel01:/usr/local/lib/carrel/" + helper])
+    ssh("carrel01", "chmod 755 /usr/local/lib/carrel/pve-read.pl")
     # Read the pre-existing gateway token without emitting its value.
     env = ssh("pve", "pct exec 200 -- cat /home/user/gateway/.env", capture=True)
     token = next(
