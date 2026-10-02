@@ -18,8 +18,9 @@ endpoint, signs in with the lab Keycloak account, and the platform does the rest
 
 ```
 > "Open a VM on winlab for my SDN homework"
-  ⚡ machine_create { name: "sdn-hw", kind: "vm", image: "ubuntu-24.04", size: "medium", dry_run: true }
-✓ Planned: 4 vCPU, 8 GiB RAM, 40 GiB disk. Quota and capacity fit; supply a public key to create.
+  ⚡ machine_create { name: "sdn-hw", image: "ubuntu-24.04", ssh_keys: ["ssh-ed25519 ..."] }
+✓ Ready: 2 vCPU, 2 GiB RAM, 20 GiB disk. SSH and initialization verified.
+  ssh sdn-hw.<you>  # after installing the returned SSH config once
 ```
 
 ## Status and connection
@@ -61,14 +62,24 @@ Signing in accepts the lab use rules; eligible personal and project tenants are 
 on first use. There is no separate policy acknowledgement or registration step.
 Use Carrel only for authorized lab work; abuse, scanning other tenants and outbound SMTP are prohibited.
 
-Start with `whoami` for the running `service.version`, your default tenant, capabilities and all personal/project quotas, including
+A request for one machine needs only `machine_create` with a name and public key (or previously saved keys).
+It defaults to a Debian 13 VM with 2 vCPU, 2 GiB RAM and 20 GiB disk.
+Prepared VM images include GCC/G++, make, CMake, Python with pip/venv, Node.js 24 LTS with npm,
+Docker with Compose, Git, curl, jq, unzip and pkg-config. Docker starts automatically; the VM user
+belongs to the docker group (equivalent to root access within their own VM). Use a Python venv
+for project dependencies. CTs keep their minimal distribution environment; use a VM for Docker.
+`catalog_get.vm_environment` identifies the environment installed at the current site. Admission checks run within
+creation, so discovery and previews are optional. The call waits up to 45 seconds for SSH and
+initialization readiness. If still pending, use the returned operation ID to continue waiting.
+
+Use `whoami` for the running `service.version`, your default tenant, capabilities and all personal/project quotas, including
 used, limit and remaining. `catalog_get` also returns the version, images, size presets and VM/CT restrictions; `capacity_get` reports
 shared physical capacity and admission headroom without exposing other tenants' machines.
 `quota_get` refreshes one tenant. `memory_mb` and `swap_mb` mean **MiB**; `disk_gb` means **GiB**.
 `machine_get` returns readiness, access rules, SSH and timestamped `runtime` power state/uptime;
 it does not return the raw hypervisor payload. Use `machine_metrics` for detailed usage.
 
-Dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
+When a preview is wanted, dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
 machines, allowed connections and public endpoints. Plans resolve names within the selected tenant and check
 their aggregate quota and capacity. Previews return `quota_before`, `delta`, `quota_after`,
 `requirements` and `ready_to_apply`; they reserve nothing and write no resources. They record an
@@ -106,19 +117,30 @@ Choose `restricted` explicitly when only designated callers should reach a servi
 
 For creation, pass your **public** key inline or save it with `ssh_key_add`. Only actual creation
 returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
-Apply a group with `deployment_apply` using the same specification as `deployment_plan`.
-Infrastructure mutations return a durable `operation`, initially `queued`; **queued is not a capacity
-reservation or success**. `operation_get` with an ID waits up to 20 seconds for completion (set
-`wait_seconds=0` for an immediate response). Poll at the returned interval, inspect the terminal state,
+For an authorized group, call `deployment_apply` directly, or apply the same specification as a previous
+`deployment_plan`. Creation returns a durable `operation` and waits up to 45 seconds by default.
+Set `wait_seconds=0` for immediate submission. Other infrastructure mutations return immediately.
+**Queued is not a capacity reservation or success**. A completed creation includes SSH and readiness in
+`operation.result`; no polling call is needed. Otherwise, `operation_get` with an ID waits up to 45 seconds
+(set `wait_seconds=0` for an immediate status). Poll at the returned interval, inspect the terminal state,
 and follow `next_action`. Certificate-budget waits return `waiting` and `ready_at`, release the
 infrastructure writer and resume automatically. Use `operation_retry` to resume a failure.
 An invalid request with no remaining reservations returns `next_action=revise_request` instead:
 correct the input, preview it and submit a new request. Retrying the old operation repeats its original arguments.
 Supply a stable `idempotency_key` when submitting;
-resending identical arguments with that key returns the original job. `on_failure=rollback` (default)
+resending identical arguments with that key returns the original job. Changing only `wait_seconds`
+does not change the operation identity. `on_failure=rollback` (default)
 cleans up only resources introduced by a deployment; `keep` preserves them for diagnosis. Failed
 cleanup retains allocations and reports the remaining resources. Retry `cleanup_failed` to finish
 cleanup, then retry the resulting `rolled_back` job if a fresh deployment is wanted.
+
+Each machine also returns `ssh_config` and `ssh_short`. Install the stanza once in the connecting
+client's `~/.ssh/config` (or an included file) to use `ssh <machine>.<tenant>` or
+`ssh <machine>.<tenant>.winlab.tw`. These aliases select the existing public SSH port and guest user;
+they do not require DNS records. The direct `ssh -p ... user@carrel.winlab.tw` command remains available
+without setup. Verify the alias with `ssh -G` before presenting it as ready to use. Machine deletion and
+name reuse can change its port and host key; refresh its stanza and verify the new host identity.
+A bare SSH connection does not provision machines; creation remains authenticated through MCP.
 
 Read-only tools do not wait for the infrastructure writer, including during VM provisioning and
 certificate issuance. A single durable infrastructure writer currently serializes mutations to
@@ -205,6 +227,18 @@ PYTHONPATH=src uv run pytest -q
 uv run ruff check src tests
 python3 -m compileall -q scripts
 ```
+
+Prepared VM templates move operating-system updates and base-package installation out of the member
+creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
+SHA-256. It installs current updates and the development environment, verifies the official Node.js archive,
+retains unattended security updates, removes machine
+identity and SSH keys, and emits a hashed manifest. Copy both prepared images/manifests to the node,
+then run `scripts/build-templates.py --prepared-dir <directory> --vmid-base <fresh-id>` there.
+After verifying the candidates, install the generated `templates.json` as `/etc/carrel/templates.json`.
+Keep previous generations for rollback. Existing template IDs are never overwritten.
+New VM disks use LVM-thin linked clones; guest writes remain isolated. Requested extra packages still
+refresh APT and install during initialization. Daily unattended security updates stay enabled.
+Without a prepared manifest, the original templates retain their first-boot package installation.
 
 The scripts are site-specific administrator operations, not the planned general `install.sh`.
 The deployment order is documented in [PLAN 15.4](PLAN.md#154-member-platform-deployment): prepare

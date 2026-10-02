@@ -1155,3 +1155,29 @@ publication reuse and complete cleanup. Member tools remain 40; admin tools rema
 service reports 0.4.0 and final installed hashes match. See the
 [intent acceptance report](docs/evaluations/2026-10-01-intent.md) and the preceding
 [0.3 reliability report](docs/evaluations/2026-10-01-reliability.md) for evidence and limits.
+
+
+### 15.7 Direct creation and prepared development VMs (0.5, 2026-10-02)
+
+An authorized single-machine request uses `machine_create` directly. Discovery and previews remain
+available when requested. Creation calls wait up to 45 seconds for verified readiness; a bounded
+wait or client disconnect preserves the durable worker. `wait_seconds` is response policy, excluded
+from idempotency identity. Pending work is continued with `operation_get`.
+
+New VM disks use linked LVM-thin clones of immutable templates. Prepared Debian 13 and Ubuntu 24.04
+images contain current OS updates, GCC/G++, make, CMake, Python with pip/venv, Node.js 24 LTS with npm,
+Docker with Compose, Git and common command-line utilities. Package installation moves to the template
+build; user-requested packages still refresh APT and install at first boot. Daily unattended OS security
+updates remain enabled. Node.js point releases are pinned by archive digest at template build time.
+CTs retain their minimal distribution environment. No warm pool or SSH provisioning gateway is added.
+
+Template preparation runs in the development sandbox with libguestfs. New template generations use fresh
+VMIDs and hashed manifests; activation is a separate node configuration change. Existing guests and
+previous templates remain intact. A creation receipt pins its template generation across retries.
+Template sanitation removes SSH keys, guest status credentials, cloud-init state and machine identity.
+
+Results include tenant-scoped SSH aliases and the client stanza required to use them. An alias can look
+like `<machine>.<tenant>.winlab.tw`, but it selects the allocated port through local SSH configuration.
+DNS alone cannot select guests sharing an IPv4 address and port because SSH sends no destination-hostname
+routing field. Direct public-port commands remain available without client setup. Pure SSH provisioning
+and subsecond warm capacity are separate product decisions, not claims of this release.

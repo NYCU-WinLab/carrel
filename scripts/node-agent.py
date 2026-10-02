@@ -520,7 +520,7 @@ def keys(values):
     return "\n".join(values) + "\n"
 
 
-def cloud_init(m):
+def cloud_init(m, *, prepared=False):
     keys(m["ssh_keys"])
     blocked = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
     data = {
@@ -533,13 +533,14 @@ def cloud_init(m):
                 "shell": "/bin/bash",
                 "sudo": "ALL=(ALL) NOPASSWD:ALL",
                 "ssh_authorized_keys": m["ssh_keys"],
+                **({"groups": ["docker"]} if prepared else {}),
             }
         ],
         "disable_root": True,
         "ssh_pwauth": False,
         "timezone": "Asia/Taipei",
-        "package_update": True,
-        "packages": ["qemu-guest-agent", "unattended-upgrades", *m.get("packages", [])],
+        "package_update": bool(m.get("packages")) or not prepared,
+        "packages": ([] if prepared else ["qemu-guest-agent", "unattended-upgrades"]) + m.get("packages", []),
         "write_files": [
             {"path": "/etc/qemu/qemu-ga.conf", "content": "[general]\nblock-rpcs=" + blocked + "\n"},
             {"path": "/etc/sysctl.d/90-carrel.conf", "content": "vm.swappiness=10\n"},
@@ -566,7 +567,7 @@ def cloud_init(m):
             {"path": "/etc/carrel/guest.json", "content": json.dumps({"vmid": m["vmid"], "token": m["readiness_token"], "health_checks": m.get("health_checks", [])}), "permissions": "0600"},
             {"path": "/usr/local/lib/carrel/bootstrap.py", "content": commands, "permissions": "0700"},
             {"path": "/etc/systemd/system/carrel-guest-report.service", "content": "[Unit]\nAfter=cloud-final.service\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 /usr/local/lib/carrel/guest-report.py\n"},
-            {"path": "/etc/systemd/system/carrel-guest-report.timer", "content": "[Unit]\nDescription=Carrel boot and application status\n[Timer]\nOnBootSec=20s\nOnUnitActiveSec=15s\n[Install]\nWantedBy=timers.target\n"},
+            {"path": "/etc/systemd/system/carrel-guest-report.timer", "content": "[Unit]\nDescription=Carrel boot and application status\n[Timer]\nOnBootSec=1s\nOnUnitActiveSec=15s\n[Install]\nWantedBy=timers.target\n"},
             {"path": "/etc/systemd/network/20-carrel-private.network", "content": "[Match]\nMACAddress=" + private_macs + "\n[Link]\nMTUBytes=1450\n[Network]\nDHCP=ipv4\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n[DHCPv4]\nUseRoutes=no\nUseDNS=no\nUseNTP=no\nUseHostname=no\n"},
         ]
         data["runcmd"] = [
@@ -593,6 +594,16 @@ def cloud_init(m):
     return "user=local:snippets/" + name + ",network=local:snippets/" + network_name
 
 
+def vm_template(image):
+    defaults = {"debian-13": 9000, "ubuntu-24.04": 9001}
+    if image not in defaults:
+        raise ValueError("image not installed")
+    path = Path("/etc/carrel/templates.json")
+    configured = json.loads(path.read_text()) if path.exists() else {}
+    value = configured.get(image, {"vmid": defaults[image], "prepared": False})
+    return {"vmid": integer(value["vmid"], 9000, 9999), "prepared": value.get("prepared") is True}
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -612,7 +623,10 @@ def create(m):
             # Older, already handed-over guests are never reconfigured by retry.
             return {"state": "exists", "vmid": vmid}
     else:
-        write(manifest, json.dumps({"marker": marker, "complete": False}), 0o600)
+        saved = {"marker": marker, "complete": False}
+        if m["kind"] == "vm":
+            saved["template"] = vm_template(m["image"])
+        write(manifest, json.dumps(saved), 0o600)
     integer(m["cpu"], 1, 64)
     integer(m["memory_mb"], 512, 131072)
     integer(m["disk_gb"], 10, 1000)
@@ -622,11 +636,12 @@ def create(m):
     write(keyfile, keys(m["ssh_keys"]), 0o600)
     net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450,rate=12.5"
     if m["kind"] == "vm":
-        templates = {"debian-13": 9000, "ubuntu-24.04": 9001}
-        if m["image"] not in templates:
-            raise ValueError("image not installed")
+        template = saved.get("template", {"prepared": False})
         if not exists:
-            run("qm", "clone", templates[m["image"]], vmid, "--full", "1", "--name", m["name"], "--description", marker, timeout=600)
+            cfg = api("get", f"/nodes/{NODE}/qemu/{template['vmid']}/config")
+            if not cfg.get("template") or not cfg.get("scsi0", "").startswith("local-lvm:base-"):
+                raise ValueError("expected an immutable LVM-thin template")
+            run("qm", "clone", template["vmid"], vmid, "--full", "0", "--name", m["name"], "--description", marker, timeout=600)
         run(
             "qm",
             "set",
@@ -648,7 +663,7 @@ def create(m):
             "--nameserver",
             "10.200.0.2",
             "--cicustom",
-            cloud_init(m),
+            cloud_init(m, prepared=template["prepared"]),
             "--ciuser",
             "user",
             "--sshkeys",
@@ -715,7 +730,7 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "daemon-reload")
         run("pct", "exec", vmid, "--", "systemctl", "reset-failed", "systemd-journald")
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
-    write(manifest, json.dumps({"marker": marker, "complete": True}), 0o600)
+    write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
     keyfile.unlink(missing_ok=True)
     return {"state": "running", "vmid": vmid}
 

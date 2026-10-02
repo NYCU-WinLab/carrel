@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build key-free templates from vendor images. Never changes an existing template."""
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -52,6 +53,29 @@ def build(vmid, name, path):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prepared-dir", type=Path)
+    parser.add_argument("--vmid-base", type=int, default=9010)
+    args = parser.parse_args()
+    if args.prepared_dir:
+        if not 9010 <= args.vmid_base <= 9998:
+            parser.error("use fresh template IDs from 9010 through 9998")
+        candidates = {}
+        for offset, image in enumerate(("debian-13", "ubuntu-24.04")):
+            manifest = json.loads((args.prepared_dir / (image + ".json")).read_text())
+            path = args.prepared_dir / (image + ".qcow2")
+            if manifest["image"] != image or manifest.get("prepared") is not True:
+                raise RuntimeError("expected a prepared image manifest")
+            with path.open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != manifest["sha256"]:
+                    raise RuntimeError("prepared image digest mismatch")
+            vmid = args.vmid_base + offset
+            build(vmid, image + "-" + manifest["sha256"][:12], path)
+            candidates[image] = {"vmid": vmid, "prepared": True, **manifest}
+        # Activation is separate so administrators can retain the previous generation.
+        (args.prepared_dir / "templates.json").write_text(json.dumps(candidates, indent=2) + "\n")
+        print(json.dumps(candidates))
+        return
     cache = Path("/var/lib/carrel/bootstrap")
     cache.mkdir(parents=True, exist_ok=True)
     debian = cache / "debian-13-genericcloud-amd64-20260914-2601.qcow2"

@@ -99,6 +99,14 @@ class Operations:
             result["next_action"] = "operation_retry" if op["state"] in TERMINAL else "operation_get"
         return result
 
+    async def wait(self, tenant, id, seconds):
+        self.find(tenant, id)
+        task = self.tasks.get(id)
+        if task and seconds:
+            # asyncio.wait leaves the durable worker alive if this request is cancelled.
+            await asyncio.wait({task}, timeout=seconds)
+        return self.public(self.find(tenant, id))
+
     def find(self, tenant, id):
         from .platform import fail
 
@@ -110,7 +118,7 @@ class Operations:
     def submit(self, tool, args, who, tenant, key=None):
         from .platform import fail
 
-        args = {k: v for k, v in args.items() if k not in ("dry_run", "idempotency_key")}
+        args = {k: v for k, v in args.items() if k not in ("dry_run", "idempotency_key", "wait_seconds")}
         fingerprint = hashlib.sha256(json.dumps([tool, args], sort_keys=True).encode()).hexdigest()
         # The caller supplies a stable key when it needs deduplication after a lost response.
         if key:
