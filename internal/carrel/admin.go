@@ -1,0 +1,127 @@
+package carrel
+
+import "time"
+
+func (e *Execution) Admin(tool string, a, w D) D {
+	dry := boolean(a["dry_run"])
+	switch tool {
+	case "tenant_list", "usage_report":
+		out := []D{}
+		for _, t := range e.S.Tenants() {
+			if tool == "tenant_list" {
+				out = append(out, merge(t, D{"quota": e.Quota(t)}))
+			} else {
+				out = append(out, D{"slug": t["slug"], "quota": e.Quota(t)})
+			}
+		}
+		return D{"tenants": out}
+	case "node_list":
+		return D{"inventory": e.Call(D{"op": "inventory"})}
+	case "reconcile_run":
+		if dry {
+			counts := D{}
+			for k, v := range e.S.Desired() {
+				counts[k] = len(arr(v))
+			}
+			return D{"dry_run": true, "result": counts}
+		}
+		r := e.Reconcile()
+		e.RefreshStorage()
+		return D{"dry_run": false, "result": r}
+	case "request_list_all":
+		return D{"requests": e.S.Objects("requests")}
+	case "request_approve", "request_reject":
+		r := e.S.Get("requests", str(a["id"]))
+		if r == nil {
+			fail("not_found", "Request not found")
+		}
+		if r["status"] != "pending" {
+			fail("conflict", "Request is already decided")
+		}
+		t := e.S.TenantN(integer(r["tenant_n"]))
+		limits := obj(t["quota"])
+		dim := str(r["dimension"])
+		if tool == "request_approve" {
+			validateDimension(dim)
+			hard := D{"public_ports": 10, "networks": 99, "machines": 100, "ips": 100}
+			if num(r["amount"]) > num(fallback(hard, dim, 1000000)) || num(r["amount"]) < num(limits[dim]) {
+				fail("invalid", "Requested limit must increase quota within the address plan")
+			}
+			e.checkExpiring(t, dim)
+		}
+		if !dry {
+			if tool == "request_approve" {
+				r["previous_limit"] = limits[dim]
+				limits[dim] = r["amount"]
+				e.S.Exec("UPDATE tenants SET quota=? WHERE n=?", string(encoded(limits)), t["n"])
+				r["status"] = "approved"
+			} else {
+				r["status"] = "rejected"
+			}
+			r["decided_by"] = w["sub"]
+			e.Put("requests", r["id"], integer(t["n"]), r)
+		} else if tool == "request_approve" {
+			limits[dim] = r["amount"]
+			r["status"] = "planned_approval"
+		} else {
+			r["status"] = "planned_rejection"
+		}
+		return D{"request": r, "dry_run": dry, "quota_after": e.Quota(t)}
+	}
+	t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
+	if t == nil {
+		fail("not_found", "Tenant not found")
+	}
+	switch tool {
+	case "quota_set":
+		dim := str(a["dimension"])
+		validateDimension(dim)
+		e.checkExpiring(t, dim)
+		limits := merge(obj(t["quota"]), D{dim: a["amount"]})
+		if num(limits["public_ports"]) > 10 || num(limits["networks"]) > 99 || num(limits["machines"]) > 100 {
+			fail("invalid", "Quota exceeds address plan")
+		}
+		if num(limits[dim]) < num(e.Usage(t)[dim]) {
+			fail("conflict", "New limit is below existing allocations")
+		}
+		if !dry {
+			e.S.Exec("UPDATE tenants SET quota=? WHERE n=?", string(encoded(limits)), t["n"])
+		}
+		t["quota"] = limits
+	case "tenant_suspend":
+		if !dry {
+			for _, m := range e.S.Objects("machines", integer(t["n"])) {
+				e.Call(D{"op": "action", "machine": m, "action": "stop"})
+				m = merge(m, D{"state": "stopped", "power_state": "stopped", "ssh_ready": false})
+				e.Put("machines", m["vmid"], integer(t["n"]), m)
+				e.P.notifyReport(integer(m["vmid"]))
+			}
+			e.S.Exec("UPDATE tenants SET status='suspended' WHERE n=?", t["n"])
+			e.P.inventory.Invalidate()
+		}
+	}
+	return D{"dry_run": dry, "quota_after": e.Quota(t)}
+}
+func validateDimension(dim string) {
+	if _, ok := DefaultQuota[dim]; !ok || dim == "images_gb" {
+		fail("invalid", "Quota dimension is not available")
+	}
+}
+func (e *Execution) checkExpiring(t D, dim string) {
+	if find(e.S.Objects("requests", integer(t["n"])), func(r D) bool { return r["status"] == "approved" && str(r["until"]) != "" && r["dimension"] == dim }) != nil {
+		fail("conflict", "An expiring grant controls this dimension")
+	}
+}
+func (e *Execution) ExpireGrants() {
+	for _, r := range e.S.Objects("requests") {
+		if r["status"] != "approved" || str(r["until"]) == "" || parseExpiry(str(r["until"])).After(time.Now()) {
+			continue
+		}
+		t := e.S.TenantN(integer(r["tenant_n"]))
+		obj(t["quota"])[str(r["dimension"])] = r["previous_limit"]
+		e.S.Exec("UPDATE tenants SET quota=? WHERE n=?", string(encoded(t["quota"])), t["n"])
+		r["status"] = "expired"
+		e.Put("requests", r["id"], integer(t["n"]), r)
+		e.S.Log("system", t["n"], "quota_expired", D{"request": r["id"]}, "ok")
+	}
+}

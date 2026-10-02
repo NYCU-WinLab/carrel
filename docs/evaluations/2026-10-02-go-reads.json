@@ -1,0 +1,342 @@
+{
+  "validation": {
+    "inventory": {
+      "same_data": true,
+      "signature": "30d5837ecb2eb9dc98a24cc7470f58da746f9db042015903b1ef3b2c698e5141",
+      "volumes": 15
+    },
+    "topology": {
+      "same_data": true,
+      "signature": "af9af69dd36716a02cccf68557e9980b72cc3af5d8c856b3c82016d70a4dc9a5"
+    }
+  },
+  "records": [
+    {
+      "trial": 0,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.24808523801038973
+    },
+    {
+      "trial": 0,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.015779751003719866
+    },
+    {
+      "trial": 0,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.320244510017801
+    },
+    {
+      "trial": 0,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9861638809961732
+    },
+    {
+      "trial": 1,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.24823632100014947
+    },
+    {
+      "trial": 1,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.01595886002178304
+    },
+    {
+      "trial": 1,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9850130749982782
+    },
+    {
+      "trial": 1,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.3386582470266148
+    },
+    {
+      "trial": 2,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.24945227499119937
+    },
+    {
+      "trial": 2,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.3545644510013517
+    },
+    {
+      "trial": 2,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.01659482202376239
+    },
+    {
+      "trial": 2,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9976631769968662
+    },
+    {
+      "trial": 3,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.987668201996712
+    },
+    {
+      "trial": 3,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.33844866999425
+    },
+    {
+      "trial": 3,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.24874410801567137
+    },
+    {
+      "trial": 3,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.01596996100852266
+    },
+    {
+      "trial": 4,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.3179078639950603
+    },
+    {
+      "trial": 4,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.22192010399885476
+    },
+    {
+      "trial": 4,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9923106100177392
+    },
+    {
+      "trial": 4,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.01661227800650522
+    },
+    {
+      "trial": 5,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9977612310030963
+    },
+    {
+      "trial": 5,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.3217714210040867
+    },
+    {
+      "trial": 5,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.017461343988543376
+    },
+    {
+      "trial": 5,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.24494307598797604
+    },
+    {
+      "trial": 6,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.3055211110040545
+    },
+    {
+      "trial": 6,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9954882090096362
+    },
+    {
+      "trial": 6,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.19431494700256735
+    },
+    {
+      "trial": 6,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.016007160971639678
+    },
+    {
+      "trial": 7,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.013724752003327012
+    },
+    {
+      "trial": 7,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.22108827799092978
+    },
+    {
+      "trial": 7,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.2625464259763248
+    },
+    {
+      "trial": 7,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9841641589882784
+    },
+    {
+      "trial": 8,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9858538509870414
+    },
+    {
+      "trial": 8,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.241239843016956
+    },
+    {
+      "trial": 8,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.016570064006373286
+    },
+    {
+      "trial": 8,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.2030075710208621
+    },
+    {
+      "trial": 9,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.0158019220107235
+    },
+    {
+      "trial": 9,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9890239160158671
+    },
+    {
+      "trial": 9,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.25368063399218954
+    },
+    {
+      "trial": 9,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.3208453169791028
+    },
+    {
+      "trial": 10,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.016397137980675325
+    },
+    {
+      "trial": 10,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.2886117490124889
+    },
+    {
+      "trial": 10,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.23544176100404002
+    },
+    {
+      "trial": 10,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.98876904201461
+    },
+    {
+      "trial": 11,
+      "method": "current_perl",
+      "workload": "topology",
+      "seconds": 0.9859249099972658
+    },
+    {
+      "trial": 11,
+      "method": "go_https",
+      "workload": "topology",
+      "seconds": 0.016671878984197974
+    },
+    {
+      "trial": 11,
+      "method": "go_https",
+      "workload": "inventory",
+      "seconds": 0.19779325101990253
+    },
+    {
+      "trial": 11,
+      "method": "current_perl",
+      "workload": "inventory",
+      "seconds": 1.2571871750114951
+    }
+  ],
+  "summary": {
+    "inventory": {
+      "current_perl": {
+        "n": 12,
+        "median": 1.3190761870064307,
+        "min": 1.241239843016956,
+        "max": 1.3545644510013517,
+        "q1": 1.2690627567353658,
+        "q3": 1.3342793577467091
+      },
+      "go_https": {
+        "n": 12,
+        "median": 0.24019241849600803,
+        "min": 0.19431494700256735,
+        "max": 0.25368063399218954,
+        "q1": 0.207527747763379,
+        "q3": 0.2486171612617909
+      }
+    },
+    "topology": {
+      "current_perl": {
+        "n": 12,
+        "median": 0.988218622005661,
+        "min": 0.9841641589882784,
+        "max": 0.9977612310030963,
+        "q1": 0.9858716157395975,
+        "q3": 0.994693809261662
+      },
+      "go_https": {
+        "n": 12,
+        "median": 0.0162021494761575,
+        "min": 0.013724752003327012,
+        "max": 0.017461343988543376,
+        "q1": 0.015841156513488386,
+        "q3": 0.016607914010819513
+      }
+    }
+  },
+  "go_binary_sha256": "7a5bbe9f5ea68d1bb3eee9779b31937b01175c453c05f0cda7a14917ccda82da"
+}

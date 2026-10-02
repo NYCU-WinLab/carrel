@@ -1,0 +1,245 @@
+package carrel
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/santhosh-tekuri/jsonschema/v6"
+)
+
+type identityKey struct{}
+type App struct {
+	Platform *Platform
+	handler  http.Handler
+	verifier IdentityVerifier
+	mu       sync.Mutex
+	minute   int64
+	requests int
+	schemas  map[string]*jsonschema.Schema
+}
+
+func NewApp(p *Platform, verifier IdentityVerifier) *App {
+	origin := strings.TrimRight(str(p.Config["origin"]), "/")
+	issuer := strings.TrimRight(str(p.Config["issuer"]), "/")
+	if verifier == nil {
+		verifier = NewVerifier(issuer)
+	}
+	a := &App{Platform: p, verifier: verifier, schemas: map[string]*jsonschema.Schema{}}
+	compiler := jsonschema.NewCompiler()
+	for _, d := range dicts(Contract["tools"]) {
+		name := str(d["name"])
+		must(compiler.AddResource("https://carrel.invalid/schema/"+name, d["inputSchema"]))
+		schema, err := compiler.Compile("https://carrel.invalid/schema/" + name)
+		must(err)
+		a.schemas[name] = schema
+	}
+	servers := map[bool]*mcp.Server{}
+	for _, admin := range []bool{false, true} {
+		server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: str(Contract["instructions"])})
+		for _, definition := range dicts(Contract["tools"]) {
+			name := str(definition["name"])
+			if !admin && named("admin_tools", name) {
+				continue
+			}
+			var tool mcp.Tool
+			must(json.Unmarshal(encoded(definition), &tool))
+			server.AddTool(&tool, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				args := D{}
+				var result D
+				if len(request.Params.Arguments) > 0 {
+					if json.Unmarshal(request.Params.Arguments, &args) != nil {
+						result = D{"ok": false, "error": D{"code": "invalid", "message": "Invalid arguments"}}
+					}
+				}
+				if result == nil {
+					result = a.Call(ctx, name, args, obj(ctx.Value(identityKey{})))
+				}
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}, nil
+			})
+		}
+		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+				result, err := next(ctx, method, request)
+				if listed, ok := result.(*mcp.ListToolsResult); ok && err == nil {
+					visible := make([]*mcp.Tool, 0, len(listed.Tools))
+					for _, tool := range listed.Tools {
+						if contains(Contract["visible"], tool.Name) {
+							visible = append(visible, tool)
+						}
+					}
+					listed.Tools = visible
+				}
+				return result, err
+			}
+		})
+		servers[admin] = server
+	}
+	stream := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		return servers[boolean(obj(r.Context().Value(identityKey{}))["admin"])]
+	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 262144})
+	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: "carrel-mcp", Hosted: []string{}, Verifier: verifier, HTTP: &http.Client{Timeout: 15 * time.Second}}
+	for _, v := range arr(p.Config["hosted_redirects"]) {
+		oauth.Hosted = append(oauth.Hosted, str(v))
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/oauth/", oauth)
+	mux.Handle("/.well-known/", oauth)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, 200, D{"status": "ok", "service": "carrel", "version": Version})
+	})
+	mux.HandleFunc("/internal/guest-status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		var body D
+		err := attempt(func() {
+			must(json.NewDecoder(r.Body).Decode(&body))
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			p.execution(r.Context()).GuestReport(body, host)
+		})
+		if err != nil {
+			jsonResponse(w, 403, D{"ok": false})
+		} else {
+			jsonResponse(w, 200, D{"ok": true})
+		}
+	})
+	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization := r.Header.Get("Authorization")
+		var who D
+		var err error
+		if !strings.HasPrefix(authorization, "Bearer ") {
+			err = errors.New("missing token")
+		} else {
+			who, err = verifier.Verify(r.Context(), authorization[7:])
+		}
+		if err != nil {
+			var unavailable IssuerUnavailable
+			if errors.As(err, &unavailable) {
+				jsonResponse(w, 503, D{"error": "temporarily_unavailable"})
+			} else {
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+origin+`/.well-known/oauth-protected-resource/mcp"`)
+				jsonResponse(w, 401, D{"error": "invalid_token"})
+			}
+			return
+		}
+		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, who)))
+	}))
+	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		internal := r.URL.Path == "/internal/guest-status"
+		if internal && !strings.HasPrefix(host, "10.200.") {
+			jsonResponse(w, 403, D{"error": "forbidden"})
+			return
+		}
+		if !internal && r.Host != strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://") {
+			jsonResponse(w, 400, D{"error": "invalid_host"})
+			return
+		}
+		if v := r.Header.Get("Origin"); v != "" && v != origin {
+			jsonResponse(w, 403, D{"error": "invalid_origin"})
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/oauth/") {
+			a.mu.Lock()
+			minute := time.Now().Unix() / 60
+			if minute != a.minute {
+				a.minute = minute
+				a.requests = 0
+			}
+			a.requests++
+			limited := a.requests > 300
+			a.mu.Unlock()
+			if limited {
+				jsonResponse(w, 429, D{"error": "rate_limited"})
+				return
+			}
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 262144)
+		mux.ServeHTTP(w, r)
+	})
+	return a
+}
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
+func (a *App) Call(ctx context.Context, name string, args, who D) D {
+	schema := a.schemas[name]
+	if schema == nil {
+		return D{"ok": false, "error": D{"code": "invalid", "message": "Unknown tool or missing required field"}}
+	}
+	if err := schema.Validate(args); err != nil {
+		return D{"ok": false, "error": D{"code": "invalid", "message": "Invalid tool arguments", "details": err.Error()}}
+	}
+	return a.Platform.Execute(ctx, name, args, who)
+}
+func (p *Platform) Start() {
+	p.wg.Add(1)
+	go p.Operations.Loop()
+	p.Operations.Recover()
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		for {
+			p.writer.Lock()
+			err := attempt(func() {
+				e := p.execution(p.ctx)
+				if len(e.S.Tenants()) > 0 {
+					e.ExpireGrants()
+					e.Reconcile()
+					e.MaintainDomains()
+				}
+				e.S.PurgeOAuth()
+			})
+			p.writer.Unlock()
+			if err != nil {
+				slog.Error("reconcile_failed", "type", "maintenance")
+			}
+			if p.ctx.Err() != nil {
+				return
+			}
+			p.execution(p.ctx).RefreshStorage()
+			if !sleep(p.ctx, 300*time.Second) {
+				return
+			}
+		}
+	}()
+}
+func (p *Platform) Close() { p.cancel(); p.wg.Wait() }
+func (e *Execution) MaintainDomains() {
+	for _, t := range e.S.Tenants() {
+		n := integer(t["n"])
+		domains := filter(e.S.Objects("domains", n), func(d D) bool { return d["state"] != "deleting" })
+		certs := e.S.Objects("certificates", n)
+		if len(domains) == 0 && len(certs) == 0 {
+			continue
+		}
+		status := D{"state": "ready", "checked_at": now()}
+		err := attempt(func() {
+			for _, d := range domains {
+				active := find(e.S.Objects("operations", n), func(o D) bool { return !contains(terminal, o["state"]) && o["id"] == d["operation_id"] })
+				if (d["state"] == "queued" || d["state"] == "configuring") && active == nil && num(d["ready_at"]) <= now() {
+					e.DomainAction("domain_add", D{"machine": str(d["vmid"]), "sub": d["sub"], "target_port": d["target_port"]}, t)
+				}
+			}
+			if len(certs) > 0 || find(domains, func(d D) bool { return d["state"] == "ready" }) != nil {
+				e.DomainRecord(t, len(domains) == 0)
+			}
+			e.RenewCertificate(t)
+		})
+		if err != nil {
+			if w, ok := err.(Waiting); ok {
+				status = D{"state": "waiting", "ready_at": w.ReadyAt, "checked_at": now()}
+			} else {
+				status = D{"state": "retrying", "checked_at": now(), "error": "DNS or certificate maintenance failed"}
+			}
+		}
+		e.S.Put("domain_status", str(n), n, status)
+	}
+}

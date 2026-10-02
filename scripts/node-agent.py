@@ -24,6 +24,14 @@ NODE = socket.gethostname().split(".")[0]
 CONFIG = Path("/etc/carrel/node.json")
 
 
+def pve_read(mode):
+    # The fixed Go reader is opt-in at deployment. Never fall back after a read
+    # failure: stale or ACL-filtered inventories must not authorize allocations.
+    config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    reader = "/usr/local/lib/carrel/carrel-pve-read" if config.get("go_pve_reader") else "/usr/local/lib/carrel/pve-read.pl"
+    return json.loads(run(reader, mode))
+
+
 def guest_firewall(m, state, config):
     machine(m)
     if m.get("network_access") == "restricted" and m.get("nics"):
@@ -318,7 +326,7 @@ def reconcile(state):
     changed = []
     # One fresh observation per reconciliation, without repeated pvesh startup.
     # Mutations remain serialized by the node adapter's infrastructure lock.
-    topology = json.loads(run("/usr/local/lib/carrel/pve-read.pl", "topology"))
+    topology = pve_read("topology")
     vnets, subnets_by_vnet = topology["vnets"], topology["subnets"]
     for t in state["tenants"]:
         n, vnet = tenant_config(t)
@@ -823,7 +831,7 @@ def main():
         elif op == "inventory":
             # Guest maxdisk omits secondary disks. Count all thin volumes,
             # including templates and unused disks, for conservative admission.
-            observed = json.loads(run("/usr/local/lib/carrel/pve-read.pl", "inventory"))
+            observed = pve_read("inventory")
             volumes = observed.pop("volumes")
             pools = json.loads(run("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o", "lv_name,data_percent,metadata_percent", "pve/data"))["report"][0]["lv"]
             pool = pools[0]

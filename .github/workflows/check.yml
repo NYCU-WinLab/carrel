@@ -4,6 +4,22 @@ on:
   push:
     branches: [main, codex/carrel01-bootstrap]
 jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+      - run: test -z "$(gofmt -l cmd internal)"
+      - run: go vet ./...
+      - run: go test -race ./... -count=1
+      - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
+      - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-pve-read ./cmd/carrel-pve-read
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carrel-linux-amd64
+          path: dist/
   python:
     runs-on: ubuntu-latest
     steps:
@@ -18,4 +34,5 @@ jobs:
       - run: uv run pytest -q
         env:
           PYTHONPATH: src
+      - run: uv run ruff check scripts/configure-go-reader.py scripts/export-go-contract.py scripts/export-go-parity.py scripts/deploy-go.py
       - run: python -m compileall -q scripts

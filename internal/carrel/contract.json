@@ -1,0 +1,4595 @@
+{
+  "tools": [
+    {
+      "name": "whoami",
+      "description": "Get exact service.version, identity, default tenant, supported capabilities and every visible tenant's used/limit/remaining quota in one call. Eligible tenants register automatically. No quota_get or deployment previews needed for this overview.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "quota_get",
+      "description": "Refresh one tenant's used/limit/remaining quota; whoami already includes all visible tenants.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "catalog_get",
+      "description": "Get exact service.version, installed images, size presets, VM/CT restrictions, MiB/GiB units and supported capabilities together. No deployment preview needed to discover support.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "capacity_get",
+      "description": "Get live aggregate physical CPU/RAM/storage, admission headroom and policy. Shared capacity is separate from tenant quota; no other tenants' guest details. GPU allocation is unsupported, GPU hardware inventory unknown.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "images_list",
+      "description": "List installed stable images and support dates.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "vm",
+              "ct"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "sizes_list",
+      "description": "List machine resource presets.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_create",
+      "description": "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "kind": {
+            "enum": [
+              "vm",
+              "ct"
+            ]
+          },
+          "image": {
+            "enum": [
+              "debian-13",
+              "ubuntu-24.04"
+            ]
+          },
+          "size": {
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ]
+          },
+          "cpu": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64,
+            "description": "Virtual CPUs (vCPU)."
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 512,
+            "maximum": 131072,
+            "description": "RAM in MiB (1024 MiB = 1 GiB)."
+          },
+          "disk_gb": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 1000,
+            "description": "Virtual disk capacity in GiB."
+          },
+          "ssh_keys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 40,
+              "maxLength": 16000
+            },
+            "maxItems": 20
+          },
+          "nested_virt": {
+            "type": "boolean"
+          },
+          "network_access": {
+            "enum": [
+              "tenant",
+              "restricted"
+            ],
+            "default": "tenant",
+            "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs."
+          },
+          "swap_mb": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "description": "Swap in MiB."
+          },
+          "packages": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9+.-]{0,99}$"
+            }
+          },
+          "health_checks": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "Optional checks after cloud-init. Examples: {\"type\":\"http\",\"port\":80,\"path\":\"/\",\"status\":200}, {\"type\":\"tcp\",\"port\":5432}, {\"type\":\"service\",\"service\":\"nginx\"}. HTTP/TCP always target 127.0.0.1; specify port, not a URL. No checks means application readiness is not verified.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "enum": [
+                    "service",
+                    "http",
+                    "tcp"
+                  ]
+                },
+                "service": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,99}$"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "path": {
+                  "type": "string",
+                  "pattern": "^/[^\\r\\n]*$",
+                  "maxLength": 512
+                },
+                "status": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 599
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "const": "service"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "service"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "http",
+                          "tcp"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "runcmd": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            }
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait for verified readiness before returning, up to 55 seconds. Zero returns the durable job immediately. A timeout or disconnect does not cancel creation."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_list",
+      "description": "List this tenant's allocated machines.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_get",
+      "description": "Get a machine's specification, readiness, allowed connections, public SSH entry and current runtime power state/uptime. Use machine_metrics for detailed usage.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_retry",
+      "description": "Retry an incomplete allocation after the infrastructure fault is repaired; keeps the same VMID, address and quota reservation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_delete",
+      "description": "Delete a machine and its grants permanently; confirm must match its name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "confirm": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_power",
+      "description": "Start, stop, gracefully shut down, or reboot; persist the owner's intended onboot state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "action": {
+            "enum": [
+              "start",
+              "stop",
+              "shutdown",
+              "reboot"
+            ]
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_resize",
+      "description": "Resize CPU, RAM or disk after quota and capacity checks. CPU/RAM can shrink only while stopped; disk cannot shrink. Capacity is released only after the host confirms the change.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "cpu": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64,
+            "description": "Virtual CPUs (vCPU)."
+          },
+          "memory_mb": {
+            "type": "integer",
+            "minimum": 512,
+            "maximum": 131072,
+            "description": "RAM in MiB (1024 MiB = 1 GiB)."
+          },
+          "disk_gb": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 1000,
+            "description": "Virtual disk capacity in GiB."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_metrics",
+      "description": "Read hypervisor RRD metrics for the last hour.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "network_create",
+      "description": "Create an isolated private network. Default managed mode assigns fixed private IPs automatically using DHCP, no default gateway, MTU 1450. Use raw_l2 for Mininet or owner-managed DHCP.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "cidr": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "mode": {
+            "enum": [
+              "managed",
+              "raw_l2"
+            ]
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "network_list",
+      "description": "List private networks owned by this tenant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "network_delete",
+      "description": "Delete an empty private network; confirm its name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "network": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "confirm": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "network",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_nic_attach",
+      "description": "Attach a private NIC. Managed networks automatically configure an IP on current Carrel images; raw_l2 requires owner configuration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "network": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "network"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_nic_detach",
+      "description": "Detach a private NIC; primary net0 cannot be detached.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "nic": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "nic"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "ssh_key_add",
+      "description": "Save a public SSH key for future machines in this tenant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 16000
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "ssh_key_list",
+      "description": "List saved public SSH keys.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "ssh_key_remove",
+      "description": "Remove a saved key; existing machines are unchanged.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "port_open",
+      "description": "Publish a guest TCP/UDP port and return its public endpoint. HTTPS websites should use domain_add or deployment publications.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "proto": {
+            "enum": [
+              "tcp",
+              "udp"
+            ]
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "port",
+          "proto"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "port_list",
+      "description": "List public port grants.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "port_close",
+      "description": "Remove a public port grant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "domain_add",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "sub": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "target_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "sub",
+          "target_port"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "domain_list",
+      "description": "List your HTTPS routes and certificate queue state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "domain_remove",
+      "description": "Remove an HTTPS route; delete the owned wildcard DNS record when the final route is removed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "peer_allow",
+      "description": "Allow one port on your machine from another tenant or one of its machines. Default cross-tenant traffic is denied.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "from_tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "from_machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "port",
+          "from_tenant"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "peer_list",
+      "description": "List inbound cross-tenant permissions owned by this tenant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "peer_revoke",
+      "description": "Revoke an inbound cross-tenant permission.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "snapshot_create",
+      "description": "Create a disk snapshot. Reserves its worst-case size in the separate snapshot_gb quota, not disk_gb. Actual retained blocks are reported separately when available.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "snapshot_list",
+      "description": "List managed snapshots.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "snapshot_delete",
+      "description": "Delete a managed snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "snapshot_rollback",
+      "description": "Roll back disk contents; later changes are lost. Confirm snapshot name. Restores the previous power state and checks guest readiness. Brief downtime is expected; returns a background operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "confirm": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine",
+          "name",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "quota_request",
+      "description": "Request a new total quota limit, with a reason and optional expiry date.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "vcpu",
+              "memory_mb",
+              "disk_gb",
+              "machines",
+              "ips",
+              "public_ports",
+              "domains",
+              "networks",
+              "snapshots",
+              "snapshot_gb"
+            ]
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 2000
+          },
+          "until": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "dimension",
+          "amount",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "request_list",
+      "description": "List your quota requests and decisions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "audit_log",
+      "description": "Read your tenant's latest 100 audit entries; secrets and guest commands are redacted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "tenant_list",
+      "description": "Admin: list tenant registrations.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "node_list",
+      "description": "Admin: inspect site inventory and capacity.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "usage_report",
+      "description": "Admin: allocations and quotas for all tenants.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "reconcile_run",
+      "description": "Admin: regenerate managed network, firewall, DHCP and edge configuration from the database.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "quota_set",
+      "description": "Admin: set a tenant's total quota limit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "vcpu",
+              "memory_mb",
+              "disk_gb",
+              "machines",
+              "ips",
+              "public_ports",
+              "domains",
+              "networks",
+              "snapshots",
+              "snapshot_gb"
+            ]
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "tenant",
+          "dimension",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "tenant_suspend",
+      "description": "Admin: stop tenant machines and prevent mutations.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "tenant"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "request_list_all",
+      "description": "Admin: list all pending and completed requests.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "request_approve",
+      "description": "Admin: approve a pending quota request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "request_reject",
+      "description": "Admin: reject a pending quota request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "deployment_plan",
+      "description": "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. This is the complete preview: apply the same specification once with deployment_apply when authorized; do not repeat a dry-run or create each resource separately. Publications can reference existing machine names with no machines array.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machines": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "kind": {
+                  "enum": [
+                    "vm",
+                    "ct"
+                  ]
+                },
+                "image": {
+                  "enum": [
+                    "debian-13",
+                    "ubuntu-24.04"
+                  ]
+                },
+                "size": {
+                  "enum": [
+                    "small",
+                    "medium",
+                    "large"
+                  ]
+                },
+                "cpu": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64,
+                  "description": "Virtual CPUs (vCPU)."
+                },
+                "memory_mb": {
+                  "type": "integer",
+                  "minimum": 512,
+                  "maximum": 131072,
+                  "description": "RAM in MiB (1024 MiB = 1 GiB)."
+                },
+                "disk_gb": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 1000,
+                  "description": "Virtual disk capacity in GiB."
+                },
+                "ssh_keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 40,
+                    "maxLength": 16000
+                  },
+                  "maxItems": 20
+                },
+                "nested_virt": {
+                  "type": "boolean"
+                },
+                "network_access": {
+                  "enum": [
+                    "tenant",
+                    "restricted"
+                  ],
+                  "default": "tenant",
+                  "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs."
+                },
+                "swap_mb": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65536,
+                  "description": "Swap in MiB."
+                },
+                "packages": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9+.-]{0,99}$"
+                  }
+                },
+                "health_checks": {
+                  "type": "array",
+                  "maxItems": 20,
+                  "description": "Optional checks after cloud-init. Examples: {\"type\":\"http\",\"port\":80,\"path\":\"/\",\"status\":200}, {\"type\":\"tcp\",\"port\":5432}, {\"type\":\"service\",\"service\":\"nginx\"}. HTTP/TCP always target 127.0.0.1; specify port, not a URL. No checks means application readiness is not verified.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "service",
+                          "http",
+                          "tcp"
+                        ]
+                      },
+                      "service": {
+                        "type": "string",
+                        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,99}$"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "^/[^\\r\\n]*$",
+                        "maxLength": 512
+                      },
+                      "status": {
+                        "type": "integer",
+                        "minimum": 100,
+                        "maximum": 599
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "service"
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": [
+                            "service"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "enum": [
+                                "http",
+                                "tcp"
+                              ]
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": [
+                            "port"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "runcmd": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    }
+                  }
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "networks": {
+            "type": "array",
+            "maxItems": 99,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "cidr": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "mode": {
+                  "enum": [
+                    "managed",
+                    "raw_l2"
+                  ]
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 700,
+            "items": {
+              "type": "object",
+              "properties": {
+                "machine": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "network": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "machine",
+                "network"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "connections": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "to": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "protocol": {
+                  "enum": [
+                    "tcp",
+                    "udp"
+                  ],
+                  "default": "tcp"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "port"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "publications": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "machine": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "protocol": {
+                  "enum": [
+                    "https",
+                    "tcp",
+                    "udp"
+                  ]
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "sub": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                }
+              },
+              "required": [
+                "machine",
+                "protocol",
+                "port"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "deployment_apply",
+      "description": "Create a group of machines, connections and publications in one call when authorized. Use deployment_plan only when a preview is wanted, then apply the same specification. Reserves the entire group and waits up to 55 seconds for completion; result includes SSH and public endpoints. Only call operation_get if still pending. Default rollback removes only newly created resources; keep retains them for repair. Reuse idempotency_key after a lost response.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machines": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "kind": {
+                  "enum": [
+                    "vm",
+                    "ct"
+                  ]
+                },
+                "image": {
+                  "enum": [
+                    "debian-13",
+                    "ubuntu-24.04"
+                  ]
+                },
+                "size": {
+                  "enum": [
+                    "small",
+                    "medium",
+                    "large"
+                  ]
+                },
+                "cpu": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 64,
+                  "description": "Virtual CPUs (vCPU)."
+                },
+                "memory_mb": {
+                  "type": "integer",
+                  "minimum": 512,
+                  "maximum": 131072,
+                  "description": "RAM in MiB (1024 MiB = 1 GiB)."
+                },
+                "disk_gb": {
+                  "type": "integer",
+                  "minimum": 10,
+                  "maximum": 1000,
+                  "description": "Virtual disk capacity in GiB."
+                },
+                "ssh_keys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 40,
+                    "maxLength": 16000
+                  },
+                  "maxItems": 20
+                },
+                "nested_virt": {
+                  "type": "boolean"
+                },
+                "network_access": {
+                  "enum": [
+                    "tenant",
+                    "restricted"
+                  ],
+                  "default": "tenant",
+                  "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs."
+                },
+                "swap_mb": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 65536,
+                  "description": "Swap in MiB."
+                },
+                "packages": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9+.-]{0,99}$"
+                  }
+                },
+                "health_checks": {
+                  "type": "array",
+                  "maxItems": 20,
+                  "description": "Optional checks after cloud-init. Examples: {\"type\":\"http\",\"port\":80,\"path\":\"/\",\"status\":200}, {\"type\":\"tcp\",\"port\":5432}, {\"type\":\"service\",\"service\":\"nginx\"}. HTTP/TCP always target 127.0.0.1; specify port, not a URL. No checks means application readiness is not verified.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "service",
+                          "http",
+                          "tcp"
+                        ]
+                      },
+                      "service": {
+                        "type": "string",
+                        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,99}$"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "^/[^\\r\\n]*$",
+                        "maxLength": 512
+                      },
+                      "status": {
+                        "type": "integer",
+                        "minimum": 100,
+                        "maximum": 599
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "const": "service"
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": [
+                            "service"
+                          ]
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "type": {
+                              "enum": [
+                                "http",
+                                "tcp"
+                              ]
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": [
+                            "port"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "runcmd": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    }
+                  }
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "networks": {
+            "type": "array",
+            "maxItems": 99,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "cidr": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "mode": {
+                  "enum": [
+                    "managed",
+                    "raw_l2"
+                  ]
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 700,
+            "items": {
+              "type": "object",
+              "properties": {
+                "machine": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "network": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "machine",
+                "network"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "connections": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "to": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "protocol": {
+                  "enum": [
+                    "tcp",
+                    "udp"
+                  ],
+                  "default": "tcp"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "port"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "publications": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "properties": {
+                "machine": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                },
+                "protocol": {
+                  "enum": [
+                    "https",
+                    "tcp",
+                    "udp"
+                  ]
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "sub": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                }
+              },
+              "required": [
+                "machine",
+                "protocol",
+                "port"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "on_failure": {
+            "enum": [
+              "rollback",
+              "keep"
+            ]
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait for verified readiness before returning, up to 55 seconds. Zero returns the durable job immediately. A timeout or disconnect does not cancel creation."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "operation_get",
+      "description": "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 55 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup and follow next_action (revise_request means invalid inputs must be corrected, not retried); poll no faster than poll_after_seconds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "operation_retry",
+      "description": "Resume a failed operation using its original allocation and durable checkpoints. A rolled-back deployment gets a fresh attempt; cleanup_failed retries cleanup first. Does not repeat a succeeded operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "visible": [
+    "whoami",
+    "quota_get",
+    "catalog_get",
+    "capacity_get",
+    "machine_create",
+    "machine_list",
+    "machine_get",
+    "machine_retry",
+    "machine_delete",
+    "machine_power",
+    "machine_resize",
+    "machine_metrics",
+    "network_create",
+    "network_list",
+    "network_delete",
+    "machine_nic_attach",
+    "machine_nic_detach",
+    "ssh_key_add",
+    "ssh_key_list",
+    "ssh_key_remove",
+    "port_open",
+    "port_list",
+    "port_close",
+    "domain_add",
+    "domain_list",
+    "domain_remove",
+    "peer_allow",
+    "peer_list",
+    "peer_revoke",
+    "snapshot_create",
+    "snapshot_list",
+    "snapshot_delete",
+    "snapshot_rollback",
+    "quota_request",
+    "request_list",
+    "audit_log",
+    "tenant_list",
+    "node_list",
+    "usage_report",
+    "reconcile_run",
+    "quota_set",
+    "tenant_suspend",
+    "request_list_all",
+    "request_approve",
+    "request_reject",
+    "deployment_plan",
+    "deployment_apply",
+    "operation_get",
+    "operation_retry"
+  ],
+  "admin_tools": [
+    "node_list",
+    "quota_set",
+    "reconcile_run",
+    "request_approve",
+    "request_list_all",
+    "request_reject",
+    "tenant_list",
+    "tenant_suspend",
+    "usage_report"
+  ],
+  "mutations": [
+    "deployment_apply",
+    "domain_add",
+    "domain_remove",
+    "machine_create",
+    "machine_delete",
+    "machine_nic_attach",
+    "machine_nic_detach",
+    "machine_power",
+    "machine_resize",
+    "machine_retry",
+    "network_create",
+    "network_delete",
+    "operation_retry",
+    "peer_allow",
+    "peer_revoke",
+    "port_close",
+    "port_open",
+    "quota_request",
+    "quota_set",
+    "reconcile_run",
+    "request_approve",
+    "request_reject",
+    "snapshot_create",
+    "snapshot_delete",
+    "snapshot_rollback",
+    "ssh_key_add",
+    "ssh_key_remove",
+    "tenant_suspend"
+  ],
+  "async_tools": [
+    "deployment_apply",
+    "domain_add",
+    "domain_remove",
+    "machine_create",
+    "machine_delete",
+    "machine_nic_attach",
+    "machine_nic_detach",
+    "machine_power",
+    "machine_resize",
+    "machine_retry",
+    "network_create",
+    "network_delete",
+    "peer_allow",
+    "peer_revoke",
+    "port_close",
+    "port_open",
+    "reconcile_run",
+    "snapshot_create",
+    "snapshot_delete",
+    "snapshot_rollback",
+    "tenant_suspend"
+  ],
+  "images": [
+    {
+      "name": "debian-13",
+      "kind": "vm",
+      "default": true,
+      "support_until": "2030-06-30"
+    },
+    {
+      "name": "debian-13",
+      "kind": "ct",
+      "default": true,
+      "support_until": "2030-06-30"
+    },
+    {
+      "name": "ubuntu-24.04",
+      "kind": "vm",
+      "default": false,
+      "support_until": "2029-04-30"
+    },
+    {
+      "name": "ubuntu-24.04",
+      "kind": "ct",
+      "default": false,
+      "support_until": "2029-04-30"
+    }
+  ],
+  "sizes": {
+    "small": {
+      "cpu": 2,
+      "memory_mb": 2048,
+      "disk_gb": 20
+    },
+    "medium": {
+      "cpu": 4,
+      "memory_mb": 8192,
+      "disk_gb": 40
+    },
+    "large": {
+      "cpu": 8,
+      "memory_mb": 16384,
+      "disk_gb": 80
+    }
+  },
+  "capabilities": {
+    "deployment_planning": true,
+    "background_operations": true,
+    "deployment_apply": true,
+    "deployment_connections": true,
+    "deployment_publications": true,
+    "restricted_machine_ingress": true,
+    "managed_private_networks": true,
+    "guest_readiness": true,
+    "stopped_machine_reservations": true,
+    "separate_snapshot_quota": true,
+    "capacity_summary": true,
+    "capacity_visibility": "aggregate_only",
+    "gpu_allocation": false,
+    "gpu_hardware_inventory": "unknown",
+    "custom_image_upload": false,
+    "custom_image_import": false,
+    "mcp_resources": false
+  },
+  "instructions": "WinLab machines; tools only, no MCP resources. Use whoami when asked about identity or all visible tenants' used/limit/remaining quotas, service.version and capabilities. These are authoritative; capability questions do not need deployment previews. Use catalog_get for images/sizes, capacity_get only when asked about shared physical capacity. For a request to create one machine, call machine_create directly with a public key; defaults are Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. No discovery or preview is required. Use deployment_apply to describe machines, connections (from/to/port), and publications (machine/protocol/port/sub for HTTPS) together. Use network_access=restricted for destinations that should accept only declared service connections. The default tenant mode allows all same-tenant traffic; extra networks/NICs are advanced unfiltered L2 experiments. Creation waits up to 55 seconds for verified readiness and returns a durable operation. Inspect its state/result/error; only use operation_get if still pending. Queued jobs have not reserved capacity. Use a stable idempotency_key after a lost submission response. Waiting jobs resume automatically; follow next_action. Completion returns SSH entries and public endpoints. For a local client, merge the returned ssh_config into its SSH configuration when authorized, verify with ssh -G, then present ssh_short. Before setup, use the direct ssh command. The alias needs no DNS change and is scoped by tenant. Publication verification=routing_configured does not verify an application's external HTTP response. Follow next_action for failures: operation_retry preserves allocations; revise_request means fix invalid inputs before a new submission. Managed private networks assign IPs automatically. Machine readiness includes cloud-init completion and requested application checks; SSH alone is insufficient. Use VMs for Docker, Mininet and databases. memory_mb/swap_mb are MiB; disk_gb is GiB. Preview when the user asks to plan or compare before creating. Authorized creation can apply directly. Destructive operations still require their confirmation fields. deployment_plan is the complete preview; do not repeat it with deployment_apply(dry_run=true) or manually execute its resources one by one. Previews never reserve or write resources; audit is recorded. Trust quota_before/delta/quota_after and resource_changes=false; follow-up list/quota/key calls are unnecessary just to verify a preview. Missing SSH public keys do not block planning; they are required for actual creation and can be passed inline without saving. Previews do not test guest boot or commands. Tenant membership is verified on every request; eligible tenants register automatically after sign-in."
+}

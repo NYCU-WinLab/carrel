@@ -142,9 +142,11 @@ without setup. Verify the alias with `ssh -G` before presenting it as ready to u
 name reuse can change its port and host key; refresh its stanza and verify the new host identity.
 A bare SSH connection does not provision machines; creation remains authenticated through MCP.
 
-Read-only tools do not wait for the infrastructure writer, including during VM provisioning and
-certificate issuance. A single durable infrastructure writer currently serializes mutations to
-preserve node admission and shared network configuration; this is not multi-node scheduling.
+Read-only tools do not wait for the infrastructure writer. The Go scheduler serializes admission and
+shared network changes, then releases the writer while guests boot. Independent creations can overlap
+that wait; edits to the same machine remain ordered. This is a single-node scheduler.
+`capacity_get` coalesces concurrent reads and caches physical observations for two seconds, with an
+observation timestamp. Allocation always reads fresh capacity and includes pending reservations.
 Jobs and node-side request receipts survive service restarts. Cancellation of a client connection
 does not cancel an accepted job. Each retry remains bound to its original resource allocation.
 
@@ -197,6 +199,10 @@ creation at 34.70 seconds, with live private-network, DNS, HTTPS and cleanup che
 The [Python/Rust read-path experiment](docs/evaluations/2026-10-02-pve-language-benchmark.md)
 compares both languages with CLI and direct HTTPS access, including fresh-process and reused-client timings.
 
+The [0.6 Go acceptance](docs/evaluations/2026-10-02-go-control-plane.md) records a 29-second
+single-call Debian VM, two overlapping VM creations in 39 seconds, persisted-job recovery
+across restart, existing login continuity and live network/snapshot/backup checks.
+
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.
@@ -228,12 +234,24 @@ execution or file-reading API. Verification uses disposable guests and their own
 
 ## Development and deployment
 
+The runtime is Go (1.26 or newer; CI uses 1.27.1). Run builds and tests in a development VM:
+
 ```sh
+go test -race ./... -count=1
+go vet ./...
+CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
+CGO_ENABLED=0 go build -trimpath -o dist/carrel-pve-read ./cmd/carrel-pve-read
 uv sync --locked
 PYTHONPATH=src uv run pytest -q
 uv run ruff check src tests
 python3 -m compileall -q scripts
 ```
+
+Go owns the MCP server, OAuth, durable jobs, admission, state and backups. The existing bounded
+Python node/edge mutation adapters and guest reporter remain; certificate issuance still uses
+certbot. The Python control-plane source is retained as a behavioral reference, with 79 frozen
+cross-language parity cases. `scripts/export-go-contract.py` and `scripts/export-go-parity.py`
+regenerate those reference fixtures; they are not runtime dependencies.
 
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
@@ -254,11 +272,16 @@ owned infrastructure, install networking/templates, connect the edge, upgrade th
 then deploy and publish. For an existing deployment with SSH aliases `carrel01` and `pve`:
 
 ```sh
-python3 scripts/deploy-control.py
+python3 scripts/deploy-go.py --artifacts /path/to/sandbox-built/dist
 ```
 
-Deployment installs hashed dependencies exported from `uv.lock` and preserves existing route/NAT
-state. Secrets travel through SSH stdin and protected files. Never save a complete iptables ruleset
+The Go upgrade requires the existing site bootstrap, a configured control CT and its certbot
+virtual environment. The original `deploy-control.py` is the legacy Python bootstrap driver;
+use `deploy-go.py` for current releases. The upgrade checks idle jobs and full PVE volume visibility,
+keeps database/configuration/OAuth/certificates, and saves private service/node rollback files.
+It installs prebuilt static binaries without compiling on the workstation or hypervisor.
+Existing route/NAT state remains in place. See [PLAN 15.9](PLAN.md#159-go-control-plane-06-2026-10-02)
+for the reader credential and rollback details. Secrets travel through SSH stdin and protected files. Never save a complete iptables ruleset
 on the old host: its existing services and tailnet routes are independent of Carrel.
 
 The `carrel-backup.timer` makes a consistent SQLite backup with config, service key and certificates
