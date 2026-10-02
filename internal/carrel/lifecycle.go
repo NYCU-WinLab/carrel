@@ -164,10 +164,13 @@ func (p *Platform) notifyReport(vmid int) {
 	p.reports[vmid] = make(chan struct{})
 }
 func (e *Execution) WaitReady(original D, previousBoot string) {
-	deadline := time.Now().Add(time.Duration(intAt(e.P.Config, "guest_ready_timeout", 900)) * time.Second)
 	id := str(original["vmid"])
+	e.P.writer.Lock()
+	deadline := e.readinessDeadline(id, "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
+	e.P.writer.Unlock()
 	identity := machineIdentity(original)
-	for time.Now().Before(deadline) {
+	appDeadline := num(obj(obj(e.Op)["readiness_deadlines"])[id+":application"])
+	for now() < deadline {
 		must(e.Ctx.Err())
 		signal := e.P.reportSignal(integer(original["vmid"]))
 		m := e.S.Get("machines", id)
@@ -181,7 +184,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		}
 		ssh := probe(e.Ctx, m)
 		r := obj(e.S.Get("guest_reports", id))
-		current := num(r["reported_at"]) > now()-120 && (previousBoot == "" || str(r["boot_id"]) != previousBoot)
+		current := fresh(r["reported_at"]) && (previousBoot == "" || str(r["boot_id"]) != previousBoot)
 		if e.Op != nil && e.Op["tool"] == "machine_power" {
 			current = current && num(r["reported_at"]) >= num(obj(e.Op["power_restore"])["reported_after"])
 		}
@@ -209,13 +212,23 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 				fail("conflict", "Machine allocation changed while waiting for readiness")
 			}
 			e.RequireActive(integer(latest["tenant_n"]))
-			latest["ssh_ready"] = ssh
-			if init == "failed" || app == "failed" {
+			latest["ssh_ready"], latest["ssh_checked_at"] = ssh, now()
+			if init == "complete" && (app == "failed" || app == "pending") {
+				if appDeadline == 0 {
+					appDeadline = e.readinessDeadline(id, "application", intAt(e.P.Config, "application_ready_timeout", 120))
+				}
+			}
+			appExpired := appDeadline > 0 && now() >= appDeadline && !contains([]string{"healthy", "not_checked"}, app)
+			if init == "failed" || appExpired {
 				latest["state"] = "needs_owner_fix"
 				latest["reason"] = "Guest initialization or an application check failed"
 			} else if ssh && init == "complete" && (app == "healthy" || app == "not_checked") && network {
 				latest["state"] = "ready"
 				latest["power_state"] = "running"
+				latest["network_verification"] = "verified"
+				delete(latest, "reason")
+			} else {
+				latest["state"] = "initializing"
 				delete(latest, "reason")
 			}
 			e.Put("machines", latest["vmid"], integer(latest["tenant_n"]), latest)
@@ -249,7 +262,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		m["reason"] = "Timed out waiting for guest initialization and health checks"
 		e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	}
-	fail("guest_not_ready", "Timed out waiting for guest initialization and health checks", D{"machine": original["name"]})
+	fail("guest_not_ready", "Timed out waiting for guest initialization and health checks", D{"machine": original["name"], "checks": obj(e.S.Get("guest_reports", id))["checks"], "failed_step": obj(e.S.Get("guest_reports", id))["failed_step"]})
 }
 
 func probeSSH(ctx context.Context, m D) bool {

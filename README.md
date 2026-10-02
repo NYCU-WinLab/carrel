@@ -106,7 +106,11 @@ delta. Use `detail="full"` for complete accounting and internal identifiers; dur
 retain those details. Successful deployment summaries omit internal allocation bindings and cleanup
 receipts; machine access, declared connections and public endpoints remain. Previews, errors, partial
 cleanup and recovery instructions are preserved.
-`machine_list` reports recorded state; `machine_get` observes live power state.
+`machine_list` reports recorded state without probing every guest. `machine_get` observes power
+and SSH now. Guest reports expire after 120 seconds; stale or previous-boot reports become unknown.
+Live power or an SSH banner alone cannot imply healthy applications. Bootstrap failures remain
+immediate; application checks get a 120-second warm-up window after initialization completes.
+The deadline persists across control restarts. An explicit retry starts a new verification window.
 
 Start also resumes a paused VM. Start, resume and reboot wait for SSH and initialization readiness;
 reboot and a stopped-to-running transition require a fresh boot report. Repeating start, shutdown,
@@ -122,7 +126,9 @@ intent. Its `confirm` field records that authorization; it does not require a re
 
 Only send the resource fields requested when resizing. CPU/RAM reductions require a stopped guest;
 do not stop running work without authorization. Running guests may require a restart for configured
-CPU/RAM changes. Disk shrinking is unsupported. Snapshot rollback restores disk contents, not a
+CPU/RAM changes. Disk shrinking is unsupported. `machine.resize` separates confirmed allocation
+from unverified guest capacity and supplies owner SSH inspection/growth steps. VM disk growth does
+not prove that the partition and filesystem grew; verify them before reporting usable space. Snapshot rollback restores disk contents, not a
 paused process or RAM; resume or shut down a paused VM before disk rollback. Publishing configures routing; verify the actual application separately.
 
 Save the client's chosen public key once with `ssh_key_add` to omit `ssh_keys` on future creations.
@@ -171,6 +177,36 @@ the agent must still test the actual application from its intended client.
 access. Internet egress remains available. It does not allow extra experiment NICs, which would
 bypass ingress filtering. The compatible default, `tenant`, allows traffic within the tenant.
 Choose `restricted` explicitly when only designated callers should reach a service.
+
+For an existing database, submit the authorized ingress change together with its allowed caller:
+
+```json
+{
+  "access": [{"machine": "db", "network_access": "restricted", "confirm": "db"}],
+  "connections": [{"from": "app", "to": "db", "port": 5432, "protocol": "tcp"}]
+}
+```
+
+Use `deployment_plan` for a requested preview, or `deployment_apply` for an authorized change.
+The preview explains lost or added same-tenant connectivity. Machine identity and disks remain;
+SSH routes, publications and existing explicit peer grants are preserved and visible in the result.
+Remove unwanted old grants explicitly. Detach experiment NICs before restricting ingress.
+Changing back to `tenant` grants same-tenant ingress again. Rollback restores only a policy still
+owned by that operation, never a newer edit or a replacement machine.
+
+Managed NICs attached to stopped/paused VMs return `pending_guest_start` or `pending_guest_resume`
+without starting them. The next authorized start/resume verifies the interface. Running guests
+require the reported address and MTU. Summaries retain private IPs, named NICs and ingress rules.
+Route lists resolve machine names and endpoints; confirmed removals return `state=deleted`.
+
+Follow typed recovery guidance before retrying: revise input, resolve capacity or prerequisites,
+repair the retained guest, finish cleanup, or retry infrastructure. Deterministic input conflicts
+are not requeued unchanged. Quota requests specify total limits, enforce fixed address ceilings,
+and deduplicate tenant-scoped idempotency keys. Approval rechecks expiry and current limits.
+
+HTTPS certificate preparation uses a durable stage outside the infrastructure writer, allowing
+unrelated work during DNS propagation. Changes to the same machine remain ordered.
+
 
 For creation, pass your **public** key inline or save it with `ssh_key_add`. Only actual creation
 returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
@@ -268,9 +304,9 @@ The [0.7 common actions acceptance](docs/evaluations/2026-10-02-common-actions.m
 single-call power operations, VM memory pause/resume, concise results, direct publication endpoints
 and live lifecycle/snapshot/publication checks with cleanup.
 
-The [v0.7.2 scope audit](docs/evaluations/2026-10-02-scope-audit.md) records open gaps in readiness,
+The [v0.7.2 scope audit](docs/evaluations/2026-10-02-scope-audit.md) records baseline gaps in readiness,
 offline NIC configuration, recovery, result presentation and quota requests, with isolated
-reproductions and a proposed implementation order. It is an audit, not a completed fix release.
+reproductions and a proposed implementation order. Version 0.8 addresses A1 through A8; see the [scope fix acceptance](docs/evaluations/2026-10-02-scope-fixes.md).
 
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
@@ -406,3 +442,8 @@ post-reboot verification; do not use it on an active cluster.
 ## License
 
 Private to NYCU WinLab.
+
+Saved SSH keys apply to future creations; removing one does not rotate existing guest keys.
+Lost-key console recovery remains unavailable. Control backups include SQLite, configuration and
+certificates, not tenant disks. Full tenant disaster restoration and install-from-scratch acceptance
+remain separate release gates.

@@ -9,16 +9,16 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 	case "network_list":
 		return D{"networks": e.S.Objects("networks", n)}
 	case "port_list":
-		return D{"ports": e.S.Objects("ports", n)}
+		return D{"ports": e.PublicGrants("ports", n)}
 	case "peer_list":
-		return D{"peers": e.S.Objects("peers", n)}
+		return D{"peers": e.PublicGrants("peers", n)}
 	case "network_create", "network_delete":
 		nets := e.S.Objects("networks", n)
 		var network, delta D
 		if tool == "network_create" {
 			old := find(nets, func(v D) bool { return v["name"] == a["name"] })
 			if old != nil && !e.sameOperation(old) {
-				fail("conflict", "Network name already exists")
+				fail("conflict", "Network name already exists", D{"recovery": "revise_request"})
 			}
 			delta = D{}
 			if old == nil {
@@ -48,7 +48,7 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			for _, m := range e.S.Objects("machines", n) {
 				for _, nic := range dicts(m["nics"]) {
 					if nic["network"] == network["id"] {
-						fail("conflict", "Network still has attached NICs")
+						fail("conflict", "Network still has attached NICs", D{"recovery": "resolve_prerequisite"})
 					}
 				}
 			}
@@ -57,6 +57,7 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 				e.Put("networks", network["id"], n, network)
 				e.Reconcile()
 				e.S.Remove("networks", network["id"])
+				network["state"] = "deleted"
 			}
 		}
 		q := e.Quota(t)
@@ -75,7 +76,7 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			}
 			existing := find(nics, func(v D) bool { return v["network"] == network["id"] })
 			if existing != nil && !e.sameOperation(existing) {
-				fail("conflict", "Machine already attached to this network")
+				fail("conflict", "Machine already attached to this network", D{"recovery": "revise_request"})
 			}
 			i := 0
 			if existing != nil {
@@ -112,8 +113,11 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			}
 			e.Call(merge(D{"op": "action", "machine": m}, request))
 			m["nics"] = nics
-			if tool == "machine_nic_attach" && nic["ip"] != nil && m["kind"] == "vm" {
-				m["state"] = "initializing"
+			if tool == "machine_nic_detach" && len(nics) == 0 {
+				delete(m, "network_verification")
+			}
+			if tool == "machine_nic_attach" {
+				e.NICReadiness(m, nic)
 			}
 			e.Put("machines", m["vmid"], n, m)
 			if tool == "machine_nic_detach" {
@@ -134,10 +138,13 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 				return integer(p["vmid"]) == integer(m["vmid"]) && num(p["port"]) == num(a["port"]) && p["proto"] == a["proto"]
 			})
 			if existing != nil {
+				if existing["state"] == "deleting" {
+					fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
+				}
 				if !dry {
 					e.Reconcile()
 				}
-				return D{"port": existing, "quota_after": e.Quota(t)}
+				return D{"port": e.PublicGrant("ports", existing, n), "quota_after": e.Quota(t)}
 			}
 			delta = D{"public_ports": 1}
 			e.Quota(t, delta)
@@ -160,13 +167,14 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 				e.Put("ports", grant["id"], n, grant)
 				e.Reconcile()
 				e.S.Remove("ports", grant["id"])
+				grant["state"] = "deleted"
 			}
 		}
 		q := e.Quota(t)
 		if dry {
 			q = e.Quota(t, delta)
 		}
-		return D{"port": grant, "dry_run": dry, "quota_after": q}
+		return D{"port": e.PublicGrant("ports", grant, n), "dry_run": dry, "quota_after": q}
 	case "peer_allow", "peer_revoke":
 		var grant D
 		if tool == "peer_allow" {
@@ -185,6 +193,9 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			if grant == nil {
 				grant = D{"id": randomID()[:16], "tenant_n": n, "source": src, "target": m["ip"], "port": a["port"], "proto": "tcp"}
 			}
+			if grant["state"] == "deleting" {
+				fail("conflict", "Finish removing this peer grant before reusing it", D{"recovery": "finish_cleanup"})
+			}
 			if !dry {
 				e.Put("peers", grant["id"], n, grant)
 				e.Reconcile()
@@ -201,9 +212,10 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 				e.Put("peers", grant["id"], n, grant)
 				e.Reconcile()
 				e.S.Remove("peers", grant["id"])
+				grant["state"] = "deleted"
 			}
 		}
-		return D{"peer": grant, "dry_run": dry, "quota_after": e.Quota(t)}
+		return D{"peer": e.PublicGrant("peers", grant, n), "dry_run": dry, "quota_after": e.Quota(t)}
 	}
 	fail("invalid", "Unknown network tool")
 	return nil

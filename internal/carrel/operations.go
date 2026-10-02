@@ -21,11 +21,11 @@ func publicOperation(o D) D {
 	r["next_action"] = "operation_get"
 	if o["state"] == "succeeded" {
 		r["next_action"] = "use_result"
-	} else if (o["state"] == "failed" || o["state"] == "rolled_back") && !boolean(o["reserved"]) && obj(o["error"])["code"] == "invalid" {
-		r["next_action"] = "revise_request"
-		r["next_action_detail"] = "No resources remain reserved. Correct the request and submit with a new idempotency_key; retrying this operation reuses the invalid arguments."
 	} else if contains(terminal, o["state"]) {
-		r["next_action"] = "operation_retry"
+		r["next_action"], r["next_action_detail"] = recoveryAction(o)
+		if len(arr(o["recovery_machines"])) > 0 {
+			r["machines"] = o["recovery_machines"]
+		}
 	}
 	return r
 }
@@ -160,6 +160,9 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	defer o.p.writer.Unlock()
 	op := o.Find(t, id)
 	if contains(terminal, op["state"]) && op["state"] != "succeeded" {
+		if next, _ := recoveryAction(op); next == "revise_request" {
+			return D{"operation": publicOperation(op)}
+		}
 		o.CheckQueue(t, str(op["tool"]))
 		if op["state"] == "cleanup_failed" {
 			op["resume_cleanup"] = true
@@ -170,7 +173,7 @@ func (o *Operations) Retry(t D, id string, w D) D {
 		}
 		delete(op, "prepared_result")
 		op = merge(op, D{"state": "queued", "phase": "retry_queued", "who": w, "queued_at": now()})
-		for _, k := range []string{"error", "result", "ready_at"} {
+		for _, k := range []string{"error", "result", "ready_at", "readiness_deadlines", "recovery_machines"} {
 			delete(op, k)
 		}
 		o.Save(op)
@@ -285,6 +288,7 @@ func (o *Operations) apply(id string) {
 					e.WaitReady(m, previous)
 				}
 			}
+			e.PreparePublication()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
@@ -294,6 +298,9 @@ func (o *Operations) apply(id string) {
 		if problem == nil {
 			problem = attempt(func() {
 				t := e.S.TenantN(integer(op["tenant_n"]))
+				if op["tool"] == "domain_add" {
+					result = merge(result, e.DomainAction("domain_add", obj(op["args"]), t))
+				}
 				if op["tool"] == "deployment_apply" {
 					e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))
 					result = merge(result, e.AccessResult(t, obj(op["args"])))
@@ -302,6 +309,13 @@ func (o *Operations) apply(id string) {
 						machines = append(machines, e.PublicMachine(e.Machine(t, vmid), e.S.Objects("ports", integer(t["n"]))))
 					}
 					result["machines"] = machines
+					updated := []D{}
+					for id := range obj(obj(op["deployment"])["bindings"]) {
+						if find(machines, func(m D) bool { return integer(m["vmid"]) == integer(id) }) == nil {
+							updated = append(updated, e.PublicMachine(e.Machine(t, id), e.S.Objects("ports", integer(t["n"]))))
+						}
+					}
+					result["updated_machines"] = updated
 				}
 				if pub := obj(result["machine"]); pub["name"] != nil {
 					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.S.Objects("ports", integer(t["n"])))
@@ -359,6 +373,16 @@ func (o *Operations) saveOutcome(e *Execution) {
 		}
 	}
 	op["reserved"] = reserved
+	if contains(terminal, op["state"]) && op["state"] != "succeeded" {
+		machines := []D{}
+		for _, m := range e.S.Objects("machines", integer(op["tenant_n"])) {
+			bound := obj(op["machine_target"])
+			if m["operation_id"] == op["id"] || equal(machineIdentity(m), obj(obj(op["deployment"])["bindings"])[str(m["vmid"])]) || (integer(m["vmid"]) == integer(bound["vmid"]) && equal(machineIdentity(m), bound["identity"])) {
+				machines = append(machines, machineSummary(e.PublicMachine(m, e.S.Objects("ports", integer(op["tenant_n"])))))
+			}
+		}
+		op["recovery_machines"] = machines
+	}
 	o.Save(op)
 	event := "operation_waiting"
 	if contains(terminal, op["state"]) {
@@ -382,7 +406,7 @@ func (e *Execution) BindMachine(t D) bool {
 			fail("not_found", "The operation's original machine no longer exists")
 		}
 		if !equal(machineIdentity(m), bound["identity"]) {
-			fail("conflict", "VMID now belongs to a different allocation; retry refused")
+			fail("conflict", "VMID now belongs to a different allocation; retry refused", D{"recovery": "revise_request"})
 		}
 		a["machine"] = str(bound["vmid"])
 	} else {
@@ -401,7 +425,7 @@ func (e *Execution) BindMachine(t D) bool {
 				return true
 			}
 			if !equal(identity, target) {
-				fail("conflict", "NIC index belongs to a different attachment; retry refused")
+				fail("conflict", "NIC index belongs to a different attachment; retry refused", D{"recovery": "revise_request"})
 			}
 		} else if nic != nil {
 			op["nic_target"] = identity
@@ -429,7 +453,7 @@ func (e *Execution) BindObject(t D) bool {
 			fail("not_found", "The operation's original resource no longer exists")
 		}
 		if !equal(o["operation_id"], bound["operation_id"]) {
-			fail("conflict", "Resource identifier belongs to a different allocation; retry refused")
+			fail("conflict", "Resource identifier belongs to a different allocation; retry refused", D{"recovery": "revise_request"})
 		}
 	} else {
 		o := find(objects, func(o D) bool {
@@ -449,13 +473,18 @@ func (e *Execution) CheckBusy(t D) {
 		return
 	}
 	targets := map[int]bool{}
+	if e.Op["tool"] == "domain_remove" {
+		if d := e.S.Get("domains", str(obj(e.Op["object_target"])["id"])); d != nil {
+			targets[integer(d["vmid"])] = true
+		}
+	}
 	if id := obj(e.Op["machine_target"])["vmid"]; id != nil {
 		targets[integer(id)] = true
 	}
 	if e.Op["tool"] == "deployment_apply" {
 		args := obj(e.Op["args"])
 		refs := []any{}
-		for _, a := range dicts(args["attachments"]) {
+		for _, a := range append(dicts(args["attachments"]), dicts(args["access"])...) {
 			refs = append(refs, a["machine"])
 		}
 		for _, p := range dicts(args["publications"]) {
@@ -473,7 +502,7 @@ func (e *Execution) CheckBusy(t D) {
 		}
 	}
 	for _, other := range e.S.Objects("operations") {
-		if other["id"] == e.Op["id"] || contains(terminal, other["state"]) || other["phase"] != "waiting_for_guest" {
+		if other["id"] == e.Op["id"] || contains(terminal, other["state"]) || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing"}, other["phase"]) {
 			continue
 		}
 		ids := arr(obj(other["deployment"])["machines"])

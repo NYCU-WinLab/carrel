@@ -1333,8 +1333,40 @@ instructions across a dump of every tool. Local SSH alias setup remains the defa
 
 The [scope audit](docs/evaluations/2026-10-02-scope-audit.md) maps all 40 member tools to user
 outcomes and records seven reproduced behavior problems plus an existing-machine isolation gap.
-These findings are open, not implemented changes. First address stale readiness, offline NIC
+These findings describe the v0.7.2 baseline; section 15.13 records their implementation. First address stale readiness, offline NIC
 configuration and premature application-health rollback. Then make summaries, deletion receipts
 and recovery guidance usable without extra discovery; align quota request validation and
 idempotency with approval. Existing-machine isolation changes and guest-visible resize completion
 need explicit acceptance cases. The audit adds no runtime feature or deployment requirement.
+
+
+### 15.13 Consistent outcomes across scopes (0.8, 2026-10-02)
+
+A1 through A8 are addressed by the existing tools. Summaries preserve private IPs, named NICs and
+ingress grants; port/domain/peer lists resolve user-facing identities. Removal receipts say deleted
+only after cleanup. Live power/SSH and report freshness are separate signals. Offline managed NIC
+configuration preserves power state and verifies interfaces on the next authorized start/resume.
+
+Application checks get `application_ready_timeout` (default 120 seconds) after cloud-init completion,
+bounded by `guest_ready_timeout`. Deadlines survive restarts; explicit retries start a new window.
+Bootstrap failures remain immediate. Typed recovery covers input conflicts, capacity, prerequisites,
+guest repair and cleanup. Backend failures include bounded component/error codes and operation/request
+correlation, never arbitrary adapter output. Quota requests share approval validation and deduplicate
+keys after approval/expiry. Approval and expiry save quota and decision in one transaction.
+
+`deployment_plan` and `deployment_apply` accept `access` entries for existing machines, with machine,
+network_access and confirm (the machine name for a mode change). Previews explain connectivity lost
+or enabled. The operation reserves policy changes and connections atomically, binds allocations and
+reconciles. Experiment NICs, including attachments in the same plan, prevent restricted ingress.
+SSH, publications and old peer grants remain. Rollback restores a prior policy only if the operation
+still owns it on the same allocation. Results include affected existing machines.
+
+Resize separates allocated block capacity from unverified guest filesystem growth, with owner SSH
+follow-up and no implicit reboot or guest execution API. HTTPS preparation persists reserved domains
+before DNS/ACME work outside the writer; issuers serialize separately for certbot's shared directories.
+Finalization checks allocation/domain identities and tenant status again. Renewal also runs outside
+the writer. Same-machine mutations stay ordered, unrelated jobs proceed during propagation.
+
+See [scope fixes](docs/evaluations/2026-10-02-scope-fixes.md) for acceptance. Saved-key changes still
+only affect future guests; control backups exclude tenant disks. Full disaster recovery, custom images,
+multi-node scheduling and console/key recovery remain deferred. Member tool count remains 40.

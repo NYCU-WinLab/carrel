@@ -193,7 +193,6 @@ func (p *Platform) Start() {
 				if len(e.S.Tenants()) > 0 {
 					e.ExpireGrants()
 					e.Reconcile()
-					e.MaintainDomains()
 				}
 				e.S.PurgeOAuth()
 			})
@@ -204,6 +203,7 @@ func (p *Platform) Start() {
 			if p.ctx.Err() != nil {
 				return
 			}
+			p.execution(p.ctx).MaintainDomains()
 			p.execution(p.ctx).RefreshStorage()
 			if !sleep(p.ctx, 300*time.Second) {
 				return
@@ -212,26 +212,51 @@ func (p *Platform) Start() {
 	}()
 }
 func (p *Platform) Close() { p.cancel(); p.wg.Wait() }
+
+// Slow certificate renewal runs without the infrastructure writer. Revalidate
+// each domain under the writer before routing an orphaned publication.
 func (e *Execution) MaintainDomains() {
 	for _, t := range e.S.Tenants() {
 		n := integer(t["n"])
-		domains := filter(e.S.Objects("domains", n), func(d D) bool { return d["state"] != "deleting" })
-		certs := e.S.Objects("certificates", n)
-		if len(domains) == 0 && len(certs) == 0 {
-			continue
-		}
 		status := D{"state": "ready", "checked_at": now()}
 		err := attempt(func() {
-			for _, d := range domains {
-				active := find(e.S.Objects("operations", n), func(o D) bool { return !contains(terminal, o["state"]) && o["id"] == d["operation_id"] })
-				if (d["state"] == "queued" || d["state"] == "configuring") && active == nil && num(d["ready_at"]) <= now() {
-					e.DomainAction("domain_add", D{"machine": str(d["vmid"]), "sub": d["sub"], "target_port": d["target_port"]}, t)
+			for _, original := range e.S.Objects("domains", n) {
+				if !contains([]string{"queued", "configuring"}, original["state"]) || num(original["ready_at"]) > now() {
+					continue
 				}
-			}
-			if len(certs) > 0 || find(domains, func(d D) bool { return d["state"] == "ready" }) != nil {
-				e.DomainRecord(t, len(domains) == 0)
+				active := func() bool {
+					return find(e.S.Objects("operations", n), func(o D) bool {
+						return !contains(terminal, o["state"]) && (o["id"] == original["operation_id"] || (o["tool"] == "domain_add" && len(arr(o["domain_target"])) > 0 && arr(o["domain_target"])[0] == original["id"]))
+					}) != nil
+				}
+				if active() || t["status"] != "active" {
+					continue
+				}
+				cert := e.EnsureCertificate(t)
+				if cert["state"] != "ready" {
+					panic(Waiting{"waiting_for_certificate", num(cert["ready_at"])})
+				}
+				func() {
+					e.P.writer.Lock()
+					defer e.P.writer.Unlock()
+					d := e.S.Get("domains", str(original["id"]))
+					if d == nil || !equal(d["operation_id"], original["operation_id"]) || d["state"] == "deleting" || active() || e.S.TenantN(n)["status"] != "active" {
+						return
+					}
+					d["state"] = "configuring"
+					e.Put("domains", d["id"], n, d)
+					e.DomainAction("domain_add", D{"machine": str(d["vmid"]), "sub": d["sub"], "target_port": d["target_port"]}, t)
+				}()
 			}
 			e.RenewCertificate(t)
+			func() {
+				e.P.writer.Lock()
+				defer e.P.writer.Unlock()
+				domains := filter(e.S.Objects("domains", n), func(d D) bool { return d["state"] != "deleting" })
+				if len(e.S.Objects("certificates", n)) > 0 || find(domains, func(d D) bool { return d["state"] == "ready" }) != nil {
+					e.DomainRecord(t, len(domains) == 0)
+				}
+			}()
 		})
 		if err != nil {
 			if w, ok := err.(Waiting); ok {
