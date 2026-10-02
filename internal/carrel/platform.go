@@ -257,6 +257,7 @@ func (e *Execution) SnapshotUsage(t D) D {
 	}
 	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample; snapshot_gb reserves worst-case size"}
 }
+
 const maxBootstrapArgumentBytes = 64 * 1024
 
 func validateBootstrapArguments(tool string, args D) {
