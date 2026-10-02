@@ -1368,5 +1368,7 @@ Finalization checks allocation/domain identities and tenant status again. Renewa
 the writer. Same-machine mutations stay ordered, unrelated jobs proceed during propagation.
 
 See [scope fixes](docs/evaluations/2026-10-02-scope-fixes.md) for acceptance. Saved-key changes still
-only affect future guests; control backups exclude tenant disks. Full disaster recovery, custom images,
+only affect future guests; control backups exclude tenant disks. Live acceptance passed on three
+disposable guests with all temporary resources removed. Paused NIC removal now rejects before
+PVE can write a pending unplug; resume or shutdown is an explicit prerequisite. Full disaster recovery, custom images,
 multi-node scheduling and console/key recovery remain deferred. Member tool count remains 40.

@@ -28,7 +28,8 @@ func TestCurrentObservationDoesNotReusePriorBootOrProbeLists(t *testing.T) {
 }
 
 func TestLivePowerObservationPreservesApplicationWarmup(t *testing.T) {
-	p, _ := fixture(t)
+	p, b := fixture(t)
+	b.call = func(D, string) (any, error) { return D{"status": "running", "uptime": 5}, nil }
 	m := seedMachine(p, "warming", 10100)
 	m["state"] = "initializing"
 	p.Store.Put("machines", 10100, 1, m)
@@ -39,6 +40,11 @@ func TestLivePowerObservationPreservesApplicationWarmup(t *testing.T) {
 	got := dicts(r["machines"])[0]
 	if got["state"] != "initializing" || got["power_state"] != "running" || got["ssh_ready"] != true {
 		t.Fatalf("status ended the operation's warm-up window: %s", encoded(r))
+	}
+	p.Store.Remove("guest_reports", 10100)
+	r = NewApp(p, nil).Call(context.Background(), "machine_get", D{"machine": "warming"}, person("alice", false))
+	if obj(dicts(r["machines"])[0]["readiness"])["freshness"] != "unknown" {
+		t.Fatal("missing report misclassified as a previous boot")
 	}
 }
 

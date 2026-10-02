@@ -15,7 +15,7 @@ func observePower(machine, status D) {
 	machine["power_state"] = state
 	machine["runtime"] = D{"power_state": state, "uptime_seconds": status["uptime"], "observed_at": stamp()}
 	r := obj(machine["readiness"])
-	if machine["kind"] == "vm" && state == "running" && status["uptime"] != nil && num(r["reported_at"]) < now()-num(status["uptime"])-5 {
+	if machine["kind"] == "vm" && state == "running" && r["reported_at"] != nil && status["uptime"] != nil && num(r["reported_at"]) < now()-num(status["uptime"])-5 {
 		r["freshness"] = "previous_boot"
 		unknownReport(r)
 	}
