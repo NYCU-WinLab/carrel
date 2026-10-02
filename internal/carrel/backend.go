@@ -35,7 +35,18 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	err := cmd.Run()
 	var result D
 	if json.Unmarshal(out.Bytes(), &result) != nil || err != nil || !boolean(result["ok"]) {
-		return nil, fmt.Errorf("node operation failed; allocation retained for repair")
+		code := "adapter_rejected"
+		if ctx.Err() != nil {
+			code = "adapter_timeout"
+		} else if err != nil {
+			code = "adapter_process_failed"
+		}
+		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal"}, result["error_code"]) {
+			code = str(result["error_code"])
+		}
+		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": target, "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
+		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
+		return nil, Failure{D{"ok": false, "error": details}}
 	}
 	slog.Info("adapter_completed", "event", "adapter_completed", "op", request["op"], "target", target,
 		"operation", ctx.Value(operationLogKey{}), "seconds", time.Since(started).Seconds())

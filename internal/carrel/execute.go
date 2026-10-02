@@ -188,6 +188,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			if tool == "machine_get" {
 				status := obj(e.Call(D{"op": "status", "machine": m}))
 				observePower(pub, status)
+				e.ObserveSSH(pub)
 			}
 			out = append(out, pub)
 		}
@@ -200,7 +201,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 				m = e.Machine(t, a["machine"])
 			}
 			if !contains([]string{"error", "needs_owner_fix", "provisioning", "initializing"}, m["state"]) && existing == nil {
-				fail("conflict", "Only an incomplete allocation can be retried")
+				fail("conflict", "Only an incomplete allocation can be retried", D{"recovery": "revise_request"})
 			}
 			if !dry {
 				e.Provision(m, false)
@@ -236,25 +237,9 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "snapshot_create", "snapshot_list", "snapshot_delete", "snapshot_rollback":
 		return e.SnapshotAction(tool, a, t)
 	case "request_list":
-		return D{"requests": e.S.Objects("requests", n)}
+		return D{"requests": publicRequests(e.S.Objects("requests", n))}
 	case "quota_request":
-		dim := str(a["dimension"])
-		if _, ok := DefaultQuota[dim]; !ok || dim == "images_gb" {
-			fail("invalid", "Quota dimension is not available")
-		}
-		if a["until"] != nil {
-			if !parseExpiry(str(a["until"])).After(time.Now()) {
-				fail("invalid", "Expiry must be in the future")
-			}
-		}
-		r := D{"id": randomID()[:16], "tenant_n": n, "kind": "quota", "status": "pending", "dimension": dim, "amount": a["amount"], "reason": a["reason"], "until": a["until"], "actor": w["sub"], "created_at": time.Now().Unix()}
-		if !dry {
-			e.Put("requests", r["id"], n, r)
-		} else {
-			r = without(r, "id", "tenant_n", "actor", "created_at")
-			r["status"] = "planned"
-		}
-		return D{"request": r, "dry_run": dry, "quota_after": e.Quota(t)}
+		return e.QuotaRequest(a, w, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil
@@ -302,7 +287,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		if shrinking && !dry {
 			status := obj(e.Call(D{"op": "status", "machine": m}))
 			if fallback(status, "status", status["state"]) != "stopped" {
-				fail("conflict", "Stop the machine before reducing CPU or RAM")
+				fail("conflict", "Stop the machine before reducing CPU or RAM", D{"recovery": "resolve_prerequisite"})
 			}
 		}
 		delta = D{"vcpu": num(spec["cpu"]) - num(m["cpu"]), "memory_mb": num(spec["memory_mb"]) - num(m["memory_mb"]), "disk_gb": num(spec["disk_gb"]) - num(m["disk_gb"])}
@@ -346,6 +331,8 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 				tx.S.Remove("machines", m["vmid"])
 			})
 		case "machine_resize":
+			previous := obj(m["resize_from"])
+			m["resize"] = resizeCompletion(m, previous, spec)
 			m = merge(m, spec)
 			delete(m, "resize_from")
 			e.Put("machines", m["vmid"], n, m)
@@ -361,7 +348,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			r["deleted"] = D{"name": m["name"], "state": "deleted"}
 		} else if tool == "machine_resize" {
 			r["machine"] = e.PublicMachine(m, e.S.Objects("ports", n))
-			r["configuration"] = "allocated; running guests may need a restart for CPU/RAM changes"
+			r["configuration"] = "allocated; see machine.resize for guest verification and required owner actions"
 		}
 	}
 	if dry && shrinking {

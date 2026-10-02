@@ -43,6 +43,15 @@ func memberResponse(tool string, args, result D) D {
 	if tool == "ssh_key_add" || tool == "ssh_key_remove" {
 		return without(r, "quota_before", "quota_after", "delta", "dry_run")
 	}
+	for _, kind := range []string{"ports", "domains", "peers", "networks"} {
+		if values, exists := r[kind]; exists {
+			out := []D{}
+			for _, g := range dicts(values) {
+				out = append(out, grantSummary(kind, g))
+			}
+			r[kind] = out
+		}
+	}
 	return r
 }
 
@@ -62,19 +71,21 @@ func operationSummary(op D) D {
 	if m, ok := result["machine"]; ok {
 		result["machine"] = machineSummary(obj(m))
 	}
-	if ms, ok := result["machines"]; ok {
-		out := []D{}
-		for _, m := range dicts(ms) {
-			out = append(out, machineSummary(m))
+	for _, key := range []string{"machines", "updated_machines"} {
+		if ms, ok := result[key]; ok {
+			out := []D{}
+			for _, m := range dicts(ms) {
+				out = append(out, machineSummary(m))
+			}
+			result[key] = out
 		}
-		result["machines"] = out
 	}
 	if snapshot, ok := result["snapshot"]; ok {
 		result["snapshot"] = pick(obj(snapshot), "name", "state", "disk_gb")
 		delete(result, "snapshot_storage")
 	}
 	if port, ok := result["port"]; ok {
-		pub := pick(obj(port), "id", "public_port", "port", "proto", "state")
+		pub := grantSummary("ports", obj(port))
 		if op["tool"] == "port_open" {
 			pub["endpoint"] = fmt.Sprintf("carrel.winlab.tw:%d", integer(pub["public_port"]))
 			pub["verification"] = "routing_configured"
@@ -82,21 +93,33 @@ func operationSummary(op D) D {
 		result["port"] = pub
 	}
 	if domain, ok := result["domain"]; ok {
-		pub := pick(obj(domain), "name", "state", "sub", "target_port")
+		pub := grantSummary("domains", obj(domain))
 		if op["tool"] == "domain_add" {
 			pub["url"] = "https://" + str(pub["name"])
 			pub["verification"] = "routing_configured"
 		}
 		result["domain"] = pub
 	}
+	for singular, plural := range map[string]string{"peer": "peers", "network": "networks"} {
+		if value, ok := result[singular]; ok {
+			result[singular] = grantSummary(plural, obj(value))
+		}
+	}
 	r["result"] = result
 	return r
 }
 
 func machineSummary(m D) D {
-	r := pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "state", "power_state", "ssh_ready", "runtime", "reason", "ssh", "ssh_short", "ssh_config", "ssh_short_requires")
+	r := pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "state", "power_state", "ssh_ready", "runtime", "reason", "ssh", "ssh_short", "ssh_config", "ssh_short_requires", "ip", "access", "network_verification", "resize")
+	if len(arr(m["nics"])) > 0 {
+		out := []D{}
+		for _, nic := range dicts(m["nics"]) {
+			out = append(out, pick(nic, "index", "network_name", "mode", "ip", "prefix", "mtu"))
+		}
+		r["nics"] = out
+	}
 	if readiness, ok := m["readiness"]; ok {
-		r["readiness"] = pick(obj(readiness), "ssh_ready", "initialization_status", "application_status", "reported_at", "failed_step")
+		r["readiness"] = pick(obj(readiness), "ssh_ready", "initialization_status", "application_status", "reported_at", "failed_step", "freshness", "ssh_status", "ssh_checked_at")
 		if len(arr(obj(readiness)["checks"])) > 0 {
 			obj(r["readiness"])["checks"] = obj(readiness)["checks"]
 		}

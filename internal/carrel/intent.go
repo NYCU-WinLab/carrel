@@ -27,7 +27,7 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 		proto := textAt(r, "protocol", "tcp")
 		key := string(encoded([]any{source["name"], target["name"], r["port"], proto}))
 		if seen[key] {
-			fail("conflict", "Duplicate connection")
+			fail("conflict", "Duplicate connection", D{"recovery": "revise_request"})
 		}
 		seen[key] = true
 		connections = append(connections, D{"from": source["name"], "to": target["name"], "port": r["port"], "protocol": proto})
@@ -60,6 +60,9 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			old := find(e.S.Objects("ports", integer(t["n"])), func(p D) bool {
 				return integer(p["vmid"]) == integer(m["vmid"]) && integer(p["port"]) == port && p["proto"] == proto
 			})
+			if old != nil && old["state"] == "deleting" {
+				fail("conflict", "Finish removing this port before reusing it", D{"recovery": "finish_cleanup"})
+			}
 			reused := old != nil || (m["vmid"] == nil && proto == "tcp" && port == 22)
 			pub["reused"] = reused
 			if !reused {
@@ -67,7 +70,7 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			}
 		}
 		if seen[key] {
-			fail("conflict", "Duplicate publication")
+			fail("conflict", "Duplicate publication", D{"recovery": "revise_request"})
 		}
 		seen[key] = true
 		publications = append(publications, pub)
@@ -95,7 +98,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	delta := D{}
 	for _, r := range dicts(a["machines"]) {
 		if byMachine[str(r["name"])] != nil {
-			fail("conflict", "Duplicate or existing machine name", D{"name": r["name"]})
+			fail("conflict", "Duplicate or existing machine name", D{"name": r["name"], "recovery": "revise_request"})
 		}
 		m := e.MachineSpec(t, r, true)
 		machines = append(machines, m)
@@ -106,7 +109,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	}
 	for _, r := range dicts(a["networks"]) {
 		if byNetwork[str(r["name"])] != nil {
-			fail("conflict", "Duplicate or existing network name", D{"name": r["name"]})
+			fail("conflict", "Duplicate or existing network name", D{"name": r["name"], "recovery": "revise_request"})
 		}
 		n := e.NetworkSpec(t, r, simN)
 		simN = append(simN, n)
@@ -116,8 +119,9 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	if len(networks) > 0 {
 		delta["networks"] = len(networks)
 	}
+	access, accessRequirements := e.PlanPolicy(a, byMachine)
 	nonempty := false
-	for _, k := range []string{"machines", "networks", "attachments", "connections", "publications"} {
+	for _, k := range []string{"machines", "networks", "attachments", "connections", "publications", "access"} {
 		nonempty = nonempty || len(arr(a[k])) > 0
 	}
 	if !nonempty {
@@ -140,7 +144,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 		ref := fallback(network, "id", network["name"])
 		nics := dicts(m["nics"])
 		if find(nics, func(n D) bool { return n["network"] == ref }) != nil {
-			fail("conflict", "Machine already attached to this network")
+			fail("conflict", "Machine already attached to this network", D{"recovery": "revise_request"})
 		}
 		index := nextNIC(nics)
 		if index == 0 {
@@ -161,7 +165,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	if len(machines) > 0 {
 		admission = e.Admission(num(delta["vcpu"]), num(delta["memory_mb"]), num(delta["disk_gb"]), nil, false)
 	}
-	planned, requirements := []D{}, []D{}
+	planned, requirements := []D{}, accessRequirements
 	for _, m := range machines {
 		pm := plannedMachine(m)
 		planned = append(planned, pm)
@@ -174,7 +178,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 		next = "provide_requirements"
 		detail = "Supply the listed requirements, then preview the updated specification."
 	}
-	return mutationResult(before, D{"machines": planned, "networks": networks, "attachments": attachments, "connections": connections, "publications": publications, "quota_after": after, "admission": admission, "requirements": requirements, "units": Units, "apply_tool": "deployment_apply", "next_action": next, "next_action_detail": detail, "limitations": []string{"No IDs, addresses or ports are reserved; apply rechecks capacity and quota.", "Guest boot, package commands and SSH connectivity are checked only after creation.", "Managed networks configure private IPs automatically; raw_l2 requires owner configuration.", "network_access=tenant allows all same-tenant primary traffic. Use restricted and connections for service isolation.", "Publication success confirms routing and TLS configuration; end-to-end application responses require an external check."}}, true)
+	return mutationResult(before, D{"machines": planned, "access": access, "networks": networks, "attachments": attachments, "connections": connections, "publications": publications, "quota_after": after, "admission": admission, "requirements": requirements, "units": Units, "apply_tool": "deployment_apply", "next_action": next, "next_action_detail": detail, "limitations": []string{"No IDs, addresses or ports are reserved; apply rechecks capacity and quota.", "Guest boot, package commands and SSH connectivity are checked only after creation.", "Managed networks configure private IPs automatically; raw_l2 requires owner configuration.", "network_access=tenant allows all same-tenant primary traffic. Use restricted and connections for service isolation.", "Publication success confirms routing and TLS configuration; end-to-end application responses require an external check."}}, true)
 }
 func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 	created := D{"ports": []any{}, "domains": []any{}, "peers": []any{}}
@@ -192,6 +196,9 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			return p["source"] == str(source["ip"])+"/32" && p["target"] == target["ip"] && num(p["port"]) == num(c["port"]) && textAt(p, "proto", "tcp") == str(c["protocol"])
 		})
 		if old != nil {
+			if old["state"] == "deleting" {
+				fail("conflict", "Finish removing this connection before reusing it", D{"recovery": "finish_cleanup"})
+			}
 			references = append(references, []any{"peers", old["id"], old["operation_id"]})
 			continue
 		}
@@ -229,22 +236,23 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 	return created, bindings, references
 }
 func (e *Execution) CheckBindings(t, deployment D) {
+	e.CheckPolicy(deployment)
 	for vmid, identity := range obj(deployment["bindings"]) {
 		if !equal(machineIdentity(e.Machine(t, vmid)), identity) {
-			fail("conflict", "A referenced machine was replaced; retry refused")
+			fail("conflict", "A referenced machine was replaced; retry refused", D{"recovery": "revise_request"})
 		}
 	}
 	for id, owner := range obj(deployment["network_bindings"]) {
 		network := e.S.Get("networks", id)
 		if network == nil || integer(network["tenant_n"]) != integer(t["n"]) || !equal(network["operation_id"], owner) {
-			fail("conflict", "A referenced network was removed or replaced; retry refused")
+			fail("conflict", "A referenced network was removed or replaced; retry refused", D{"recovery": "revise_request"})
 		}
 	}
 	for kind, ids := range obj(deployment["grants"]) {
 		for _, id := range arr(ids) {
 			o := e.S.Get(kind, str(id))
 			if o == nil || !e.sameOperation(o) {
-				fail("conflict", "A deployment grant was removed or replaced; retry refused")
+				fail("conflict", "A deployment grant was removed or replaced; retry refused", D{"recovery": "revise_request"})
 			}
 		}
 	}
@@ -255,7 +263,7 @@ func (e *Execution) CheckBindings(t, deployment D) {
 		}
 		o := e.S.Get(str(ref[0]), str(ref[1]))
 		if o == nil || !equal(o["operation_id"], ref[2]) {
-			fail("conflict", "A reused permission or publication was removed or replaced; retry refused")
+			fail("conflict", "A reused permission or publication was removed or replaced; retry refused", D{"recovery": "revise_request"})
 		}
 	}
 }
@@ -268,7 +276,7 @@ func (e *Execution) DeploymentApply(t, a, w D) D {
 	if op["deployment"] == nil {
 		plan := e.DeploymentPlan(t, a)
 		if !boolean(plan["ready_to_apply"]) {
-			fail("invalid", "Deployment requires SSH public keys", D{"requirements": plan["requirements"]})
+			fail("invalid", "Deployment requires the listed keys or ingress-change confirmation", D{"requirements": plan["requirements"]})
 		}
 		e.Transaction(func(tx *Execution) {
 			ms, ns, nics := []any{}, []any{}, []D{}
@@ -290,6 +298,7 @@ func (e *Execution) DeploymentApply(t, a, w D) D {
 				nics = append(nics, D{"vmid": m["vmid"], "index": nic["index"], "network": network["id"]})
 			}
 			grants, bindings, refs := tx.ReserveAccess(t, plan)
+			access := tx.ReservePolicy(t, plan, bindings)
 			networkIDs := append([]any{}, ns...)
 			for _, vmid := range ms {
 				m := tx.Machine(t, vmid)
@@ -306,7 +315,7 @@ func (e *Execution) DeploymentApply(t, a, w D) D {
 					nb[str(network["id"])] = network["operation_id"]
 				}
 			}
-			op["deployment"] = D{"machines": ms, "networks": ns, "nics": nics, "grants": grants, "bindings": bindings, "references": refs, "network_bindings": nb}
+			op["deployment"] = D{"machines": ms, "networks": ns, "nics": nics, "access": access, "grants": grants, "bindings": bindings, "references": refs, "network_bindings": nb}
 			op["reserved"] = true
 			op["resource_changes"] = true
 			op["phase"] = "resources_reserved"
@@ -331,10 +340,7 @@ func (e *Execution) DeploymentApply(t, a, w D) D {
 		nic := find(dicts(m["nics"]), func(n D) bool { return integer(n["index"]) == integer(attachment["index"]) })
 		network := e.S.Get("networks", str(nic["network"]))
 		e.Call(D{"op": "action", "action": "nic_attach", "machine": m, "index": nic["index"], "serial": network["serial"], "nic": nic})
-		if nic["ip"] != nil && m["kind"] == "vm" {
-			m["state"] = "initializing"
-			e.Put("machines", m["vmid"], n, m)
-		}
+		e.NICReadiness(m, nic)
 	}
 	return D{"deployment": deployment, "quota_after": e.Quota(t)}
 }
@@ -345,7 +351,7 @@ func (e *Execution) PublishDeployment(t, a, w D) {
 		e.RequireActive(integer(t["n"]))
 		d := e.S.Get("domains", str(id))
 		if d == nil || !e.sameOperation(d) {
-			fail("conflict", "Deployment publication was removed or replaced; retry refused")
+			fail("conflict", "Deployment publication was removed or replaced; retry refused", D{"recovery": "revise_request"})
 		}
 		e.Op["phase"] = "publishing"
 		e.Op["current_resource"] = d["name"]
@@ -414,5 +420,6 @@ func (e *Execution) CleanupDeployment() []D {
 			run("network_delete", D{"network": network["id"], "confirm": network["name"]}, D{"kind": "network", "name": network["name"]})
 		}
 	}
+	failures = append(failures, e.RestorePolicy()...)
 	return filter(failures, func(f D) bool { return f["id"] == nil || e.S.Get(str(f["kind"]), str(f["id"])) != nil })
 }

@@ -41,26 +41,29 @@ func validateKeys(keys any) {
 }
 
 type Platform struct {
-	Store        *Store
-	Backend      Backend
-	Config       D
-	HTTP         *http.Client
-	writer       sync.Mutex
-	registration sync.Mutex
-	inventory    ObservationCache
-	Operations   *Operations
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	reportMu     sync.Mutex
-	reports      map[int]chan struct{}
-	sshProbe     func(context.Context, D) bool
+	Store              *Store
+	Backend            Backend
+	Config             D
+	HTTP               *http.Client
+	writer             sync.Mutex
+	certificates       sync.Mutex
+	registration       sync.Mutex
+	inventory          ObservationCache
+	Operations         *Operations
+	ctx                context.Context
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	reportMu           sync.Mutex
+	reports            map[int]chan struct{}
+	sshProbe           func(context.Context, D) bool
+	certificatePrepare func(D) D
 }
 type Execution struct {
-	P   *Platform
-	S   *Store
-	Ctx context.Context
-	Op  D
+	P                   *Platform
+	S                   *Store
+	Ctx                 context.Context
+	Op                  D
+	publicationPrepared bool
 }
 
 func NewPlatform(s *Store, b Backend, c D) *Platform {
@@ -283,7 +286,7 @@ func validateBootstrapArguments(tool string, args D) {
 
 func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["name"] == a["name"] }) != nil {
-		fail("conflict", "Machine name is already allocated")
+		fail("conflict", "Machine name is already allocated", D{"recovery": "revise_request", "machine": a["name"]})
 	}
 	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", "small")]), pick(a, "cpu", "memory_mb", "disk_gb"))
 	kind, image := textAt(a, "kind", "vm"), textAt(a, "image", "debian-13")
@@ -361,16 +364,18 @@ func (e *Execution) AllocatePort(t D) int {
 	return 0
 }
 func (e *Execution) PublicMachine(m D, ports []D) D {
-	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token")
+	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at")
 	report := obj(e.S.Get("guest_reports", str(m["vmid"])))
 	if m["kind"] == "ct" && m["state"] == "ready" {
 		report = merge(report, D{"initialization_status": "complete", "application_status": "not_checked"})
 	}
 	safe["readiness"] = D{"ssh_ready": boolean(m["ssh_ready"]), "initialization_status": textAt(report, "initialization_status", "unknown"), "application_status": textAt(report, "application_status", "not_checked"), "checks": arr(report["checks"]), "reported_at": report["reported_at"], "private_interfaces": arr(report["interfaces"]), "failed_step": report["failed_step"]}
+	presentReadiness(safe, report)
 	allowed := []D{}
 	for _, p := range e.S.Objects("peers", integer(m["tenant_n"])) {
-		if p["target"] == m["ip"] {
-			allowed = append(allowed, D{"from": fallback(p, "from_machine", p["source"]), "port": p["port"], "protocol": textAt(p, "proto", "tcp")})
+		if p["target"] == m["ip"] && p["state"] != "deleting" {
+			g := e.PublicGrant("peers", p, integer(m["tenant_n"]))
+			allowed = append(allowed, D{"id": p["id"], "from": fallback(g, "from_machine", p["source"]), "from_tenant": g["from_tenant"], "port": p["port"], "protocol": textAt(p, "proto", "tcp")})
 		}
 	}
 	private := "unfiltered_experiment_networks"
@@ -378,6 +383,15 @@ func (e *Execution) PublicMachine(m D, ports []D) D {
 		private = "not_allowed"
 	}
 	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": private, "allowed_connections": allowed}
+	nics := []D{}
+	for _, nic := range dicts(m["nics"]) {
+		entry := clone(nic)
+		if network := e.S.Get("networks", str(nic["network"])); network != nil {
+			entry["network_name"] = network["name"]
+		}
+		nics = append(nics, entry)
+	}
+	safe["nics"] = nics
 	ssh := find(ports, func(p D) bool {
 		return integer(p["vmid"]) == integer(m["vmid"]) && integer(p["port"]) == 22 && p["proto"] == "tcp"
 	})

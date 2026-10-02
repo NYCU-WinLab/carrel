@@ -922,5 +922,12 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(json.dumps({"ok": False, "error": str(e)}))
+        code = "adapter_internal"
+        if isinstance(e, ValueError):
+            code = "invalid_request"
+        elif isinstance(e, subprocess.TimeoutExpired):
+            code = "command_timeout"
+        elif isinstance(e, subprocess.CalledProcessError):
+            code = "command_failed"
+        print(json.dumps({"ok": False, "error_code": code, "error": "Node action failed"}))
         sys.exit(1)

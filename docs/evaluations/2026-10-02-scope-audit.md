@@ -6,7 +6,8 @@ networking limitation. The largest gaps are readiness, offline configuration and
 guidance. They do not require another language rewrite or a new orchestration service.
 
 Reviewed runtime: **v0.7.2**, commit `7d979ec6f14272343c8170cef9e4af6493047491`.
-This is an audit, not a runtime release. The findings below remain open.
+This document preserves the v0.7.2 baseline. The subsequent [0.8 corrections](2026-10-02-scope-fixes.md)
+address A1 through A8 and record their acceptance separately.
 
 ## Method and coverage
 

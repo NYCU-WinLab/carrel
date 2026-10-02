@@ -70,10 +70,57 @@ func TestPythonBehaviorParity(t *testing.T) {
 			// Validate those additions in actions_test.go; compare the rest unchanged.
 			if tc["tool"] == "whoami" || tc["tool"] == "catalog_get" {
 				delete(obj(obj(a)["capabilities"]), "machine_pause")
+				delete(obj(obj(a)["capabilities"]), "existing_machine_access")
 			}
-			if tc["tool"] == "machine_get" && boolean(obj(a)["ok"]) {
+			// Scope regressions cover the intentionally changed observation and
+			// presentation fields. Compare the remaining legacy allocation contract.
+			if (tc["tool"] == "machine_get" || tc["tool"] == "machine_list") && boolean(obj(a)["ok"]) {
 				for _, m := range dicts(obj(b)["machines"]) {
-					m["power_state"], m["ssh_ready"], m["state"] = "running", false, "running"
+					if tc["tool"] == "machine_get" {
+						m["power_state"] = "running"
+					}
+					m["ssh_ready"], m["state"] = false, "readiness_unknown"
+					r := obj(m["readiness"])
+					r["application_status"] = "unknown"
+					r["freshness"], r["ssh_status"], r["ssh_checked_at"] = "unknown", "unknown", nil
+					if tc["tool"] == "machine_get" {
+						r["ssh_status"] = "unavailable"
+					}
+					for _, k := range []string{"checks", "failed_step", "private_interfaces"} {
+						delete(r, k)
+					}
+				}
+				for _, m := range dicts(obj(a)["machines"]) {
+					obj(m["readiness"])["ssh_checked_at"] = nil
+				}
+			}
+			if tc["tool"] == "port_list" {
+				for _, port := range dicts(obj(a)["ports"]) {
+					for _, k := range []string{"machine", "endpoint", "verification"} {
+						delete(port, k)
+					}
+				}
+			}
+			if tc["tool"] == "deployment_plan" || tc["tool"] == "deployment_apply" {
+				if len(arr(obj(a)["access"])) == 0 {
+					delete(obj(a), "access")
+				}
+			}
+			delete(obj(obj(a)["error"]), "recovery")
+			switch tc["tool"] {
+			case "machine_create":
+				delete(obj(obj(a)["error"]), "machine")
+			case "port_open", "port_close":
+				for _, k := range []string{"machine", "endpoint", "verification"} {
+					if obj(obj(b)["port"])[k] == nil {
+						delete(obj(obj(a)["port"]), k)
+					}
+				}
+			case "domain_add":
+				delete(obj(obj(a)["domain"]), "url")
+			case "peer_allow":
+				for _, k := range []string{"machine", "from_tenant", "from_machine"} {
+					delete(obj(obj(a)["peer"]), k)
 				}
 			}
 			if !equal(a, b) {

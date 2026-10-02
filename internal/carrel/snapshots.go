@@ -6,7 +6,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	m := e.Machine(t, a["machine"])
 	if m["resize_from"] != nil && (tool == "snapshot_create" || tool == "snapshot_rollback") {
-		fail("conflict", "Finish the pending machine_resize before snapshot operations")
+		fail("conflict", "Finish the pending machine_resize before snapshot operations", D{"recovery": "resolve_prerequisite"})
 	}
 	snaps := filter(e.S.Objects("snapshots", n), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) })
 	if tool == "snapshot_list" {
@@ -18,7 +18,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 	configuration := pick(m, "cpu", "memory_mb", "disk_gb", "nics")
 	if tool == "snapshot_create" {
 		if snap != nil && !e.sameOperation(snap) {
-			fail("conflict", "Snapshot exists")
+			fail("conflict", "Snapshot exists", D{"recovery": "revise_request"})
 		}
 		delta = D{}
 		if snap == nil {
@@ -51,7 +51,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			if len(restore) == 0 {
 				status := obj(e.Call(D{"op": "status", "machine": m}))
 				if powerState(status) == "paused" {
-					fail("conflict", "Resume or shut down the VM before disk rollback; rollback cannot preserve paused memory")
+					fail("conflict", "Resume or shut down the VM before disk rollback; rollback cannot preserve paused memory", D{"recovery": "resolve_prerequisite"})
 				}
 				report := obj(e.S.Get("guest_reports", str(m["vmid"])))
 				restore = D{"running": powerState(status) == "running", "boot_id": report["boot_id"]}
@@ -70,6 +70,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			e.Put("snapshots", id, n, snap)
 		} else if tool == "snapshot_delete" {
 			e.S.Remove("snapshots", id)
+			snap["state"] = "deleted"
 		} else {
 			state := "stopped"
 			m["ssh_ready"] = false
