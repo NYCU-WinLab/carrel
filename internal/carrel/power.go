@@ -55,8 +55,16 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	if state != want {
 		fail("conflict", "Power transition was not confirmed", D{"expected": want, "observed": state})
 	}
-	if e.Op != nil && !boolean(result["boot_changed"]) {
-		obj(e.Op["power_restore"])["boot_id"] = ""
+	if e.Op != nil {
+		restore := obj(e.Op["power_restore"])
+		restore["reported_after"] = 0
+		if boolean(result["boot_changed"]) {
+			// A retry can follow a partially successful earlier reboot. Require a
+			// report after this confirmed transition, not that intermediate boot.
+			restore["reported_after"] = now()
+		} else {
+			restore["boot_id"] = ""
+		}
 		e.P.Operations.Save(e.Op)
 	}
 	m["state"], m["power_state"], m["ssh_ready"] = state, state, false

@@ -81,6 +81,14 @@ func operationSummary(op D) D {
 		}
 		result["port"] = pub
 	}
+	if domain, ok := result["domain"]; ok {
+		pub := pick(obj(domain), "name", "state", "sub", "target_port")
+		if op["tool"] == "domain_add" {
+			pub["url"] = "https://" + str(pub["name"])
+			pub["verification"] = "routing_configured"
+		}
+		result["domain"] = pub
+	}
 	r["result"] = result
 	return r
 }

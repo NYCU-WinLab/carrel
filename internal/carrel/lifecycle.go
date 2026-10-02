@@ -182,6 +182,9 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		ssh := probe(e.Ctx, m)
 		r := obj(e.S.Get("guest_reports", id))
 		current := num(r["reported_at"]) > now()-120 && (previousBoot == "" || str(r["boot_id"]) != previousBoot)
+		if e.Op != nil && e.Op["tool"] == "machine_power" {
+			current = current && num(r["reported_at"]) >= num(obj(e.Op["power_restore"])["reported_after"])
+		}
 		init, app := "", ""
 		if current {
 			init, app = str(r["initialization_status"]), str(r["application_status"])
