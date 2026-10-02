@@ -1,0 +1,933 @@
+{
+  "version": "0.6.0",
+  "date": "2026-10-02",
+  "validation": {
+    "python_tests": 158,
+    "python_parity_cases": 79,
+    "go_race": true,
+    "go_vet": true,
+    "ruff": true
+  },
+  "deployed": {
+    "version": "0.6.0",
+    "revision": "b4bbf43f73d1d403699c7a6e7f157723325ebec9",
+    "stamp": "20261002-034832",
+    "sha256": {
+      "carrel": "2b4f7dde48596cffecb816850b9bf04158b1f0f879303f201bb8af52d8c91362",
+      "carrel-pve-read": "7a5bbe9f5ea68d1bb3eee9779b31937b01175c453c05f0cda7a14917ccda82da",
+      "node-agent.py": "ce3558225e4007c4582ae3b2de0efa2a6c30c6fb03faf979d57917817d478b24",
+      "configure-go-reader.py": "41bc4c8e84ba62e25df7994bc78da7d3490f1771418dcbab4ebc7862367ca427"
+    },
+    "node_backup": "/var/lib/carrel/go-upgrade-20261002-034832",
+    "control_backup": "/opt/carrel/rollback/go-20261002-034832.tar.gz"
+  },
+  "operations": [
+    {
+      "case": "single_default_vm",
+      "id": "eddf1bb35294c6a2fd6200f9e85aff67",
+      "tool": "machine_create",
+      "state": "succeeded",
+      "attempts": 1,
+      "created_at": 1790912944.0537136,
+      "updated_at": 1790912973.0350907,
+      "server_seconds": 28.981377124786377,
+      "machine": {
+        "name": "go-one",
+        "vmid": 10301,
+        "kind": "vm",
+        "image": "debian-13",
+        "cpu": 2,
+        "memory_mb": 2048,
+        "disk_gb": 20,
+        "state": "ready",
+        "ssh_ready": true
+      },
+      "mcp_seconds": 29.008
+    },
+    {
+      "case": "ct",
+      "id": "c9ea3f00abc805839925ac4b95deae5e",
+      "tool": "machine_create",
+      "state": "succeeded",
+      "attempts": 1,
+      "created_at": 1790913121.5363266,
+      "updated_at": 1790913135.9329488,
+      "server_seconds": 14.39662218093872,
+      "machine": {
+        "name": "go-ct",
+        "vmid": 10303,
+        "kind": "ct",
+        "image": "debian-13",
+        "cpu": 1,
+        "memory_mb": 512,
+        "disk_gb": 10,
+        "state": "ready",
+        "ssh_ready": true
+      }
+    },
+    {
+      "case": "network_publication",
+      "id": "86ba3721db7c2cde4f79c20b55b17866",
+      "tool": "deployment_apply",
+      "state": "succeeded",
+      "attempts": 1,
+      "created_at": 1790913152.5807757,
+      "updated_at": 1790913209.6680973,
+      "server_seconds": 57.087321519851685
+    },
+    {
+      "case": "snapshot_rollback",
+      "id": "ba69887dcfb265af367963d5b59542f5",
+      "tool": "snapshot_rollback",
+      "state": "succeeded",
+      "attempts": 1,
+      "created_at": 1790913282.233492,
+      "updated_at": 1790913309.5458941,
+      "server_seconds": 27.31240224838257
+    },
+    {
+      "case": "restart_during_readiness",
+      "id": "0277eb124a35ecf9407c35b6e7e4d5f9",
+      "tool": "machine_create",
+      "state": "succeeded",
+      "attempts": 2,
+      "created_at": 1790913452.3612797,
+      "updated_at": 1790913501.68697,
+      "server_seconds": 49.325690269470215,
+      "machine": {
+        "name": "go-recover",
+        "vmid": 10303,
+        "kind": "vm",
+        "image": "debian-13",
+        "cpu": 2,
+        "memory_mb": 2048,
+        "disk_gb": 20,
+        "state": "ready",
+        "ssh_ready": true
+      }
+    }
+  ],
+  "checks": {
+    "capacity_cache": [
+      {
+        "seconds": 0.359,
+        "ok": true,
+        "checked_at": "2026-10-02T03:52:46.781307569Z"
+      },
+      {
+        "seconds": 0.014,
+        "ok": true,
+        "checked_at": "2026-10-02T03:52:46.781307569Z"
+      }
+    ],
+    "oauth_survived_python_to_go": true,
+    "vm_environment": true,
+    "owner_ssh_vm_and_ct": true,
+    "https_verified_body": "carrel-go-live-acceptance",
+    "restricted_allow": "go-two to go-three TCP8766",
+    "restricted_deny": "go-ct to go-three TCP8766",
+    "private_network_both_directions": true,
+    "private_vm_ip": "10.77.6.12",
+    "private_ct_ip": "10.77.6.13",
+    "primary_route_unchanged": true,
+    "internal_dns": true,
+    "snapshot_restored_file": "before",
+    "backup_restore_integrity": "ok",
+    "backup_oauth_clients": 7,
+    "ssh_alias": true,
+    "restart_during_checkpoint": true,
+    "restart_create_action_count": 1,
+    "oauth_survived_go_restart": true
+  },
+  "cleanup": {
+    "version": {
+      "name": "carrel",
+      "version": "0.6.0"
+    },
+    "quota": {
+      "disk_gb": 20,
+      "domains": 0,
+      "ips": 1,
+      "machines": 1,
+      "memory_mb": 2048,
+      "networks": 0,
+      "public_ports": 1,
+      "snapshot_gb": 0,
+      "snapshots": 0,
+      "vcpu": 2
+    },
+    "no_test_guests": true,
+    "no_test_volumes": true,
+    "total_volumes": 15,
+    "private_vnet_removed": true,
+    "gateway_test_entries_removed": true,
+    "edge_publication_removed": true,
+    "task_private_key_removed": true,
+    "dev01_owner_ssh": true,
+    "temporary_tenant_wildcard_removed": true
+  },
+  "client_serialized_creates": {
+    "note": "The MCP connector serialized same-tool calls before submission. This is not a server concurrency test.",
+    "wall_seconds": 57.608,
+    "operations": [
+      {
+        "id": "41bfc66c762126b492b62695517e6d4d",
+        "tool": "machine_create",
+        "state": "succeeded",
+        "attempts": 1,
+        "created_at": 1790913044.7956076,
+        "updated_at": 1790913073.0604727,
+        "server_seconds": 28.264865159988403,
+        "machine": {
+          "name": "go-two",
+          "vmid": 10302,
+          "kind": "vm",
+          "image": "debian-13",
+          "cpu": 2,
+          "memory_mb": 2048,
+          "disk_gb": 20,
+          "state": "ready",
+          "ssh_ready": true
+        }
+      },
+      {
+        "id": "6e4b636408f743357a580a12b1366e72",
+        "tool": "machine_create",
+        "state": "succeeded",
+        "attempts": 1,
+        "created_at": 1790913015.4790223,
+        "updated_at": 1790913044.7669384,
+        "server_seconds": 29.28791618347168,
+        "machine": {
+          "name": "go-three",
+          "vmid": 10301,
+          "kind": "vm",
+          "image": "debian-13",
+          "cpu": 2,
+          "memory_mb": 2048,
+          "disk_gb": 20,
+          "state": "ready",
+          "ssh_ready": true
+        }
+      }
+    ]
+  },
+  "concurrent_pair": {
+    "server_wall_seconds": 38.91677784919739,
+    "observed_overlap": "go-pair-a waiting_for_guest while go-pair-b applying",
+    "operations": [
+      {
+        "id": "f32c17cd3f89ea804106678c174e4193",
+        "tool": "machine_create",
+        "state": "succeeded",
+        "attempts": 1,
+        "created_at": 1790913392.9613063,
+        "updated_at": 1790913421.2881222,
+        "server_seconds": 28.326815843582153,
+        "machine": {
+          "name": "go-pair-a",
+          "vmid": 10301,
+          "kind": "vm",
+          "image": "debian-13",
+          "cpu": 2,
+          "memory_mb": 2048,
+          "disk_gb": 20,
+          "state": "ready",
+          "ssh_ready": true
+        }
+      },
+      {
+        "id": "5f441d4474dee6e61d5a31134ce670f0",
+        "tool": "machine_create",
+        "state": "succeeded",
+        "attempts": 1,
+        "created_at": 1790913403.0294888,
+        "updated_at": 1790913431.8780842,
+        "server_seconds": 28.84859538078308,
+        "machine": {
+          "name": "go-pair-b",
+          "vmid": 10302,
+          "kind": "vm",
+          "image": "debian-13",
+          "cpu": 2,
+          "memory_mb": 2048,
+          "disk_gb": 20,
+          "state": "ready",
+          "ssh_ready": true
+        }
+      }
+    ]
+  },
+  "adapter_timings": [
+    {
+      "time": "2026-10-02T03:48:45.50846044Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 1.25752828
+    },
+    {
+      "time": "2026-10-02T03:48:46.41342784Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": null,
+      "seconds": 0.904926769
+    },
+    {
+      "time": "2026-10-02T03:48:51.474424945Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 0.598351582
+    },
+    {
+      "time": "2026-10-02T03:49:04.39178816Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "eddf1bb35294c6a2fd6200f9e85aff67",
+      "seconds": 0.321336009
+    },
+    {
+      "time": "2026-10-02T03:49:05.504312671Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "eddf1bb35294c6a2fd6200f9e85aff67",
+      "seconds": 1.110768703
+    },
+    {
+      "time": "2026-10-02T03:49:06.130460178Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "eddf1bb35294c6a2fd6200f9e85aff67",
+      "seconds": 0.62611129
+    },
+    {
+      "time": "2026-10-02T03:49:14.006190904Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "eddf1bb35294c6a2fd6200f9e85aff67",
+      "seconds": 7.8756779980000005
+    },
+    {
+      "time": "2026-10-02T03:49:50.809195676Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "5501516ed53533f071c9a6dd09b01b01",
+      "seconds": 4.371190004
+    },
+    {
+      "time": "2026-10-02T03:49:51.940398277Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "5501516ed53533f071c9a6dd09b01b01",
+      "seconds": 1.129916052
+    },
+    {
+      "time": "2026-10-02T03:49:52.580096241Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "5501516ed53533f071c9a6dd09b01b01",
+      "seconds": 0.639659192
+    },
+    {
+      "time": "2026-10-02T03:50:15.8516716Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "6e4b636408f743357a580a12b1366e72",
+      "seconds": 0.356358738
+    },
+    {
+      "time": "2026-10-02T03:50:16.985225549Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "6e4b636408f743357a580a12b1366e72",
+      "seconds": 1.131788969
+    },
+    {
+      "time": "2026-10-02T03:50:17.629707378Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "6e4b636408f743357a580a12b1366e72",
+      "seconds": 0.644444561
+    },
+    {
+      "time": "2026-10-02T03:50:25.475697781Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "6e4b636408f743357a580a12b1366e72",
+      "seconds": 7.8459338370000005
+    },
+    {
+      "time": "2026-10-02T03:50:45.167766525Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "41bfc66c762126b492b62695517e6d4d",
+      "seconds": 0.355146138
+    },
+    {
+      "time": "2026-10-02T03:50:46.298419713Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "41bfc66c762126b492b62695517e6d4d",
+      "seconds": 1.128802708
+    },
+    {
+      "time": "2026-10-02T03:50:46.954272442Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "41bfc66c762126b492b62695517e6d4d",
+      "seconds": 0.655815785
+    },
+    {
+      "time": "2026-10-02T03:50:54.807960152Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "41bfc66c762126b492b62695517e6d4d",
+      "seconds": 7.85364501
+    },
+    {
+      "time": "2026-10-02T03:52:01.919716264Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "c9ea3f00abc805839925ac4b95deae5e",
+      "seconds": 0.365938767
+    },
+    {
+      "time": "2026-10-02T03:52:03.041275865Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "c9ea3f00abc805839925ac4b95deae5e",
+      "seconds": 1.119611655
+    },
+    {
+      "time": "2026-10-02T03:52:03.683392243Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "c9ea3f00abc805839925ac4b95deae5e",
+      "seconds": 0.642079688
+    },
+    {
+      "time": "2026-10-02T03:52:15.919327462Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "c9ea3f00abc805839925ac4b95deae5e",
+      "seconds": 12.235881709
+    },
+    {
+      "time": "2026-10-02T03:52:39.300422132Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "86ba3721db7c2cde4f79c20b55b17866",
+      "seconds": 6.69853999
+    },
+    {
+      "time": "2026-10-02T03:52:39.948339529Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "86ba3721db7c2cde4f79c20b55b17866",
+      "seconds": 0.647874921
+    },
+    {
+      "time": "2026-10-02T03:52:42.801115165Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "86ba3721db7c2cde4f79c20b55b17866",
+      "seconds": 2.852419878
+    },
+    {
+      "time": "2026-10-02T03:52:44.931576095Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "86ba3721db7c2cde4f79c20b55b17866",
+      "seconds": 2.129513007
+    },
+    {
+      "time": "2026-10-02T03:52:46.781274209Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 0.339032073
+    },
+    {
+      "time": "2026-10-02T03:53:26.566663115Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "86ba3721db7c2cde4f79c20b55b17866",
+      "seconds": 1.24823685
+    },
+    {
+      "time": "2026-10-02T03:53:29.666631337Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "86ba3721db7c2cde4f79c20b55b17866",
+      "seconds": 3.099926031
+    },
+    {
+      "time": "2026-10-02T03:53:49.173403428Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "status",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 2.082914818
+    },
+    {
+      "time": "2026-10-02T03:53:49.220767365Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "status",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 2.08454789
+    },
+    {
+      "time": "2026-10-02T03:53:52.586415711Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 1.110385793
+    },
+    {
+      "time": "2026-10-02T03:53:53.830118057Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": null,
+      "seconds": 1.243661624
+    },
+    {
+      "time": "2026-10-02T03:53:55.430207883Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 0.841023154
+    },
+    {
+      "time": "2026-10-02T03:54:12.497094351Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "e70e165741811062e3a077bfe5e1dd67",
+      "seconds": 0.347400748
+    },
+    {
+      "time": "2026-10-02T03:54:15.834586671Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "e70e165741811062e3a077bfe5e1dd67",
+      "seconds": 3.3366272439999998
+    },
+    {
+      "time": "2026-10-02T03:54:16.441200347Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "e70e165741811062e3a077bfe5e1dd67",
+      "seconds": 0.605829426
+    },
+    {
+      "time": "2026-10-02T03:54:44.326246159Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "status",
+      "target": "carrel-node",
+      "operation": "ba69887dcfb265af367963d5b59542f5",
+      "seconds": 2.074074393
+    },
+    {
+      "time": "2026-10-02T03:54:49.308460686Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "ba69887dcfb265af367963d5b59542f5",
+      "seconds": 4.981546338
+    },
+    {
+      "time": "2026-10-02T03:54:54.134467683Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "ba69887dcfb265af367963d5b59542f5",
+      "seconds": 4.825945608
+    },
+    {
+      "time": "2026-10-02T03:54:54.857329583Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "ba69887dcfb265af367963d5b59542f5",
+      "seconds": 0.722054109
+    },
+    {
+      "time": "2026-10-02T03:55:57.596771913Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "f1ee6acec7a34ee983c90d190930a2dc",
+      "seconds": 4.610961283
+    },
+    {
+      "time": "2026-10-02T03:55:58.857193578Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "f1ee6acec7a34ee983c90d190930a2dc",
+      "seconds": 1.258983607
+    },
+    {
+      "time": "2026-10-02T03:56:01.378174582Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "f1ee6acec7a34ee983c90d190930a2dc",
+      "seconds": 2.520939625
+    },
+    {
+      "time": "2026-10-02T03:56:05.800982557Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "e294bf6a05ad61e5b02f492de8cd78b3",
+      "seconds": 4.388889483
+    },
+    {
+      "time": "2026-10-02T03:56:06.93943037Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "e294bf6a05ad61e5b02f492de8cd78b3",
+      "seconds": 1.137178973
+    },
+    {
+      "time": "2026-10-02T03:56:07.588270995Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "e294bf6a05ad61e5b02f492de8cd78b3",
+      "seconds": 0.648805473
+    },
+    {
+      "time": "2026-10-02T03:56:12.754366899Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "375dc3c986f43e8000714993bed5fe83",
+      "seconds": 5.132212014
+    },
+    {
+      "time": "2026-10-02T03:56:13.899185741Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "375dc3c986f43e8000714993bed5fe83",
+      "seconds": 1.143570275
+    },
+    {
+      "time": "2026-10-02T03:56:14.538979421Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "375dc3c986f43e8000714993bed5fe83",
+      "seconds": 0.639759805
+    },
+    {
+      "time": "2026-10-02T03:56:27.042015271Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "ea9ebe90a6146a2af0fc5af7dc0a61e2",
+      "seconds": 6.724004172
+    },
+    {
+      "time": "2026-10-02T03:56:27.674169806Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "ea9ebe90a6146a2af0fc5af7dc0a61e2",
+      "seconds": 0.632110967
+    },
+    {
+      "time": "2026-10-02T03:56:33.343800302Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "f32c17cd3f89ea804106678c174e4193",
+      "seconds": 0.363948636
+    },
+    {
+      "time": "2026-10-02T03:56:34.466493245Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "f32c17cd3f89ea804106678c174e4193",
+      "seconds": 1.120916315
+    },
+    {
+      "time": "2026-10-02T03:56:35.15321629Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "f32c17cd3f89ea804106678c174e4193",
+      "seconds": 0.686686591
+    },
+    {
+      "time": "2026-10-02T03:56:43.012455801Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "f32c17cd3f89ea804106678c174e4193",
+      "seconds": 7.85919719
+    },
+    {
+      "time": "2026-10-02T03:56:43.389008494Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "5f441d4474dee6e61d5a31134ce670f0",
+      "seconds": 0.338146716
+    },
+    {
+      "time": "2026-10-02T03:56:44.510562698Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "5f441d4474dee6e61d5a31134ce670f0",
+      "seconds": 1.119756229
+    },
+    {
+      "time": "2026-10-02T03:56:45.183599737Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "5f441d4474dee6e61d5a31134ce670f0",
+      "seconds": 0.673000979
+    },
+    {
+      "time": "2026-10-02T03:56:53.085416531Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "5f441d4474dee6e61d5a31134ce670f0",
+      "seconds": 7.901772325
+    },
+    {
+      "time": "2026-10-02T03:57:32.743797294Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "0277eb124a35ecf9407c35b6e7e4d5f9",
+      "seconds": 0.363381873
+    },
+    {
+      "time": "2026-10-02T03:57:33.879687765Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "0277eb124a35ecf9407c35b6e7e4d5f9",
+      "seconds": 1.133931169
+    },
+    {
+      "time": "2026-10-02T03:57:34.528128703Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "0277eb124a35ecf9407c35b6e7e4d5f9",
+      "seconds": 0.648406669
+    },
+    {
+      "time": "2026-10-02T03:57:42.46782975Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "0277eb124a35ecf9407c35b6e7e4d5f9",
+      "seconds": 7.939644993
+    },
+    {
+      "time": "2026-10-02T03:57:44.938839963Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 1.240161805
+    },
+    {
+      "time": "2026-10-02T03:57:45.707564031Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": null,
+      "seconds": 0.768667219
+    },
+    {
+      "time": "2026-10-02T03:57:52.227429477Z",
+      "level": "INFO",
+      "msg": "adapter_completed",
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": null,
+      "seconds": 1.991136584
+    }
+  ]
+}

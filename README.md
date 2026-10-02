@@ -199,6 +199,10 @@ creation at 34.70 seconds, with live private-network, DNS, HTTPS and cleanup che
 The [Python/Rust read-path experiment](docs/evaluations/2026-10-02-pve-language-benchmark.md)
 compares both languages with CLI and direct HTTPS access, including fresh-process and reused-client timings.
 
+The [0.6 Go acceptance](docs/evaluations/2026-10-02-go-control-plane.md) records a 29-second
+single-call Debian VM, two overlapping VM creations in 39 seconds, persisted-job recovery
+across restart, existing login continuity and live network/snapshot/backup checks.
+
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.

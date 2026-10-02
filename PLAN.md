@@ -1266,3 +1266,12 @@ disable its flag before removing its owned token/ACL/role with `configure-go-rea
 Go race tests, 79 Python behavior fixtures and the existing Python reference tests validate the rewrite.
 The [Go evaluation](docs/evaluations/2026-10-02-go-control-plane.md) records live read-path measurements
 and rollout acceptance. This release adds no warm pool or SSH provisioning gateway.
+
+Live 0.6 acceptance: the public service reports 0.6.0, installed hashes match and existing
+MCP authentication survives both migration and restart. One default VM takes 29.008 seconds
+(previous 0.5.1 sample 34.696); two immediate submissions finish in 38.917 seconds together.
+Private VM/CT networking, restricted ingress, external HTTPS, snapshot file restoration,
+checkpoint restart without duplicate creation and real backup integrity all pass. All seven
+disposable guests are removed, original volumes/quotas restored and `ssh dev01` remains valid.
+These small samples do not establish an SLA. See the evaluation for client serialization,
+resource sizes, operation IDs, precise timings and retained Python helpers.
