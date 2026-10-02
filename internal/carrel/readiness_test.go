@@ -27,6 +27,21 @@ func TestCurrentObservationDoesNotReusePriorBootOrProbeLists(t *testing.T) {
 	}
 }
 
+func TestLivePowerObservationPreservesApplicationWarmup(t *testing.T) {
+	p, _ := fixture(t)
+	m := seedMachine(p, "warming", 10100)
+	m["state"] = "initializing"
+	p.Store.Put("machines", 10100, 1, m)
+	p.Store.Put("guest_reports", 10100, 1, D{"reported_at": now(), "initialization_status": "complete", "application_status": "failed"})
+	p.sshProbe = func(context.Context, D) bool { return true }
+	r := NewApp(p, nil).Call(context.Background(), "machine_get", D{"machine": "warming"}, person("alice", false))
+	assertOK(t, r)
+	got := dicts(r["machines"])[0]
+	if got["state"] != "initializing" || got["power_state"] != "running" || got["ssh_ready"] != true {
+		t.Fatalf("status ended the operation's warm-up window: %s", encoded(r))
+	}
+}
+
 func TestRunningNICRequiresReportedInterface(t *testing.T) {
 	p, b := fixture(t)
 	seedMachine(p, "db", 10100)
