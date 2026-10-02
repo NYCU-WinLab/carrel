@@ -64,6 +64,10 @@ running PVE HTTP API could avoid that startup in either language, but authentica
 direct HTTP access was neither implemented nor benchmarked in this release.
 Python CPU work has not been comprehensively profiled.
 
+A subsequent [Python/Rust experiment](2026-10-02-pve-language-benchmark.md) measures
+both direct HTTPS implementations and CLI controls. Its results refine this startup
+discussion; it does not replace the deployed 0.5.1 transport or its acceptance results.
+
 ## Acceptance and cleanup
 
 All dependency installation, lint, tests and builds ran on sandbox VM 104:

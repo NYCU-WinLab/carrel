@@ -1209,3 +1209,11 @@ one MCP call. Sample counts, remaining limitations and deployed hashes are in th
 Startup probes measure Python at about 14 ms and the PVE module/environment at about one second.
 Direct HTTP API access may remove the remaining module startup regardless of language, but no
 Rust/HTTP comparison was run. Warm pools and a language rewrite are not part of this release.
+
+A subsequent [read-path experiment](docs/evaluations/2026-10-02-pve-language-benchmark.md)
+compares Python and Rust across 12 interleaved fresh-process trials and five reused-client blocks.
+Direct HTTPS inventory/topology medians are 409/80 ms in Python and 347/16.4 ms in Rust. Reusing
+the client yields 335/11.22 ms and 338/10.98 ms. Rust saves about 63 ms in the per-request process
+design; direct API access provides most of the improvement over either language spawning `pvesh`.
+The experiment also catches PVE API volume filtering under audit-only credentials. Any production
+HTTP reader must preserve all-volume visibility. No production transport change is part of this experiment.
