@@ -1287,7 +1287,7 @@ in section 4.5 remains planned. The 40-tool member discovery surface is unchange
 - Extend the existing `machine_power` with VM `pause`/`resume`, using in-memory QEMU suspension.
   CT suspension is deliberately unsupported because PVE implements it as experimental disk
   checkpointing. Pause retains allocations, disables automatic boot, and does not survive host
-  power loss. Start resumes a paused VM; graceful shutdown/reboot require resuming it first.
+  power loss. Start resumes a paused VM; graceful shutdown/reboot perform any needed resume internally.
 - Verify power transitions at the node, including QMP paused state. Repeated target-state requests
   are no-ops. Graceful shutdown explicitly disables forced-stop fallback. CPU/RAM reservations
   remain allocated when stopped or paused. Normal start/resume is allowed with existing
@@ -1305,6 +1305,6 @@ in section 4.5 remains planned. The 40-tool member discovery surface is unchange
   contract, preserving the frozen Python behavior baseline. No new scheduler, cache or warm pool
   is introduced by this release.
 
-Validation: Go race tests/vet and static builds, 176 Python tests, Ruff and script compilation run
+Validation: Go race tests/vet and static builds, 177 Python tests, Ruff and script compilation run
 on sandbox VM104. Live acceptance and release evidence are recorded in
 `docs/evaluations/2026-10-02-common-actions.md` after deployment.

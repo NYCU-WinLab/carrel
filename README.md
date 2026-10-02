@@ -106,8 +106,7 @@ idempotency key identifies a lost submission.
 
 Pause freezes VM execution in RAM. It retains memory allocation, disks and quota, and cannot
 survive host power loss. It sets automatic boot off until resume/start. CT pause/resume is
-unsupported because PVE's CT suspension is experimental disk checkpointing. Resume a paused VM
-before graceful shutdown/reboot. `stop` force-powers off and is only for explicit force-stop
+unsupported because PVE's CT suspension is experimental disk checkpointing. Graceful shutdown/reboot resume a paused VM as needed within the same operation. `stop` force-powers off and is only for explicit force-stop
 requests; graceful shutdown never falls back to it. Shutdown preserves disks and reservations.
 Deletion permanently removes disks, snapshots and grants, and must represent explicit deletion
 intent. Its `confirm` field records that authorization; it does not require a redundant preview.

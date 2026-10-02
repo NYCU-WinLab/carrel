@@ -23,7 +23,7 @@ func publicOperation(o D) D {
 		r["next_action"] = "use_result"
 	} else if (o["state"] == "failed" || o["state"] == "rolled_back") && !boolean(o["reserved"]) && obj(o["error"])["code"] == "invalid" {
 		r["next_action"] = "revise_request"
-		r["next_action_detail"] = "No resources remain reserved. Correct the request, preview it and submit with a new idempotency_key; retrying this operation reuses the invalid arguments."
+		r["next_action_detail"] = "No resources remain reserved. Correct the request and submit with a new idempotency_key; retrying this operation reuses the invalid arguments."
 	} else if contains(terminal, o["state"]) {
 		r["next_action"] = "operation_retry"
 	}

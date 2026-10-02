@@ -754,13 +754,15 @@ def power_action(m, cfg, op):
     before = power_status(m)
     if before not in ("running", "stopped", "paused"):
         raise ValueError("cannot confirm current power state")
-    if op in ("shutdown", "reboot") and before == "paused":
-        raise ValueError("resume the paused VM before graceful shutdown or reboot")
     if op in ("pause", "resume", "reboot") and before == "stopped":
         raise ValueError("start the stopped machine first")
     desired = "stopped" if op in ("stop", "shutdown") else "paused" if op == "pause" else "running"
     transition = before != desired or op == "reboot"
     if transition:
+        if op in ("shutdown", "reboot") and before == "paused":
+            # Graceful guest actions need its CPUs running. This intermediate
+            # resume is part of the requested shutdown/reboot, not a new intent.
+            run(cmd, "resume", vmid, timeout=180)
         actual = "resume" if op == "start" and before == "paused" else "suspend" if op == "pause" else op
         args = [cmd, actual, vmid]
         if op == "pause":
@@ -770,6 +772,12 @@ def power_action(m, cfg, op):
             args += ["--timeout", "150", "--forceStop", "0"]
         run(*args, timeout=180)
     after = power_status(m) if transition else before
+    # qm reboot finishes before its separate qmstart worker has completed.
+    # Observe the bounded transition instead of treating that stopped gap as failure.
+    deadline = time.monotonic() + 30
+    while transition and after != desired and time.monotonic() < deadline:
+        time.sleep(0.5)
+        after = power_status(m)
     if after != desired:
         raise ValueError(f"power transition not confirmed: expected {desired}, observed {after}")
     onboot = 1 if desired == "running" else 0

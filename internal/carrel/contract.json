@@ -921,7 +921,7 @@
     },
     {
       "name": "machine_power",
-      "description": "Control an existing machine by name in one call; no preliminary lookup or preview is required. start starts or resumes; shutdown gracefully turns off; stop force-powers off only when explicitly requested; reboot restarts. VM-only pause freezes execution in RAM, resume continues it; neither releases quota nor survives host power loss. No CT hibernation. Waits up to 55 seconds, verifies the power transition and SSH/initialization for start/reboot/resume. Already started/stopped/paused requests are safe no-ops. Returns the machine and access details; poll only if pending.",
+      "description": "Control an existing machine by name in one call; no preliminary lookup or preview is required. start starts or resumes; shutdown gracefully turns off; stop force-powers off only when explicitly requested; reboot restarts. VM-only pause freezes execution in RAM, resume continues it; neither releases quota nor survives host power loss. No CT hibernation. Waits up to 55 seconds, verifies the power transition and SSH/initialization for start/reboot/resume. Already started/stopped/paused requests are safe no-ops. Returns the machine and access details; poll only if pending. Graceful shutdown/reboot resume a paused VM internally, with no separate client call.",
       "inputSchema": {
         "type": "object",
         "properties": {

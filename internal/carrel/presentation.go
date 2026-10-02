@@ -14,6 +14,12 @@ func memberResponse(tool string, args, result D) D {
 	r := clone(result)
 	if op, ok := r["operation"]; ok {
 		r["operation"] = operationSummary(obj(op))
+		if obj(op)["state"] == "succeeded" {
+			r = without(r, "quota_before", "quota_after", "dry_run")
+			if len(obj(r["delta"])) == 0 {
+				delete(r, "delta")
+			}
+		}
 	}
 	if ops, ok := r["operations"]; ok {
 		out := []D{}
@@ -74,6 +80,14 @@ func operationSummary(op D) D {
 			pub["verification"] = "routing_configured"
 		}
 		result["port"] = pub
+	}
+	if domain, ok := result["domain"]; ok {
+		pub := pick(obj(domain), "name", "state", "sub", "target_port")
+		if op["tool"] == "domain_add" {
+			pub["url"] = "https://" + str(pub["name"])
+			pub["verification"] = "routing_configured"
+		}
+		result["domain"] = pub
 	}
 	r["result"] = result
 	return r

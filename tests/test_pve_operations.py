@@ -219,6 +219,8 @@ sub encode_json { JSON::PP::encode_json($_[0]) }
         ("start", "paused", "running", "resume", 1),
         ("start", "stopped", "running", "start", 1),
         ("shutdown", "running", "stopped", "shutdown", 0),
+        ("shutdown", "paused", "stopped", "shutdown", 0),
+        ("reboot", "paused", "running", "reboot", 1),
         ("stop", "paused", "stopped", "stop", 0),
         ("reboot", "running", "running", "reboot", 1),
     ],
@@ -235,12 +237,16 @@ def test_power_verifies_transitions_and_never_implicitly_forces_shutdown(
     assert result["power_state"] == after
     assert result["changed"]
     assert result["boot_changed"] == (action == "reboot" or before == "stopped")
-    assert calls[0][0][:3] == ("qm", command, 10100)
+    command_index = 0
+    if before == "paused" and action in ("shutdown", "reboot"):
+        assert calls[0][0] == ("qm", "resume", 10100)
+        command_index = 1
+    assert calls[command_index][0][:3] == ("qm", command, 10100)
     assert calls[-1][0] == ("qm", "set", 10100, "--onboot", onboot)
     if action == "pause":
         assert calls[0][0][-2:] == ("--todisk", "0")
     if action == "shutdown":
-        assert calls[0][0][-2:] == ("--forceStop", "0")
+        assert calls[command_index][0][-2:] == ("--forceStop", "0")
         assert not any(a[1] == "stop" for a, _ in calls)
 
 
@@ -264,8 +270,6 @@ def test_repeated_power_requests_are_noops(monkeypatch, action, state, onboot):
         ("pause", "stopped"),
         ("resume", "stopped"),
         ("reboot", "stopped"),
-        ("shutdown", "paused"),
-        ("reboot", "paused"),
     ],
 )
 def test_invalid_power_transition_makes_no_changes(monkeypatch, action, state):
@@ -292,6 +296,8 @@ def test_power_timeout_does_not_turn_into_force_stop_or_success(monkeypatch):
         module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, "shutdown")
     assert len(calls) == 1 and calls[0][1] == "shutdown"
     monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a))
+    ticks = iter([0, 31])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
     with pytest.raises(ValueError, match="not confirmed"):
         module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, "pause")
     assert not any(a[1] == "set" for a in calls)
@@ -304,3 +310,15 @@ def test_qemu_paused_status_is_not_running(monkeypatch):
     module = script("node-agent.py")
     monkeypatch.setattr(module, "api", lambda *a, **kw: {"status": "running", "qmpstatus": "paused"})
     assert module.power_status({"kind": "vm", "vmid": 10100}) == "paused"
+
+
+def test_reboot_waits_for_separate_pve_start_worker(monkeypatch):
+    module = script("node-agent.py")
+    states = iter(["running", "stopped", "running"])
+    calls = []
+    monkeypatch.setattr(module, "power_status", lambda m: next(states))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a))
+    result = module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, "reboot")
+    assert result == {"power_state": "running", "changed": True, "boot_changed": True}
+    assert calls == [("qm", "reboot", 10100)]

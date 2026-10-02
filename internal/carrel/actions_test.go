@@ -91,6 +91,28 @@ func TestNoopStartStillChecksReadinessWithoutRequiringNewBoot(t *testing.T) {
 	}
 }
 
+func TestRebootRetryRejectsIntermediateBootReport(t *testing.T) {
+	p, b := fixture(t)
+	seedMachine(p, "dev", 10100)
+	p.Store.Put("guest_reports", 10100, 1, D{"boot_id": "intermediate", "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked"})
+	p.sshProbe = func(context.Context, D) bool { return true }
+	b.call = func(D, string) (any, error) {
+		return D{"power_state": "running", "changed": true, "boot_changed": true}, nil
+	}
+	op := D{"id": "reboot-retry", "tenant_n": 1, "tool": "machine_power", "args": D{"machine": "dev", "action": "reboot"}, "who": person("alice", false), "state": "failed", "power_restore": D{"boot_id": "original"}}
+	p.Operations.Save(op)
+	runQueue(p)
+	r := p.Execute(context.Background(), "operation_retry", D{"id": "reboot-retry", "wait_seconds": 0}, person("alice", false))
+	assertOK(t, r)
+	awaitState(t, p, "reboot-retry", "waiting_for_guest")
+	if p.Store.Get("machines", "10100")["state"] == "ready" {
+		t.Fatal("intermediate boot report satisfied another reboot")
+	}
+	p.Store.Put("guest_reports", 10100, 1, D{"boot_id": "final", "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked"})
+	p.notifyReport(10100)
+	awaitState(t, p, "reboot-retry", "succeeded")
+}
+
 func TestPowerFailureAndUnsupportedCTDoNotClaimSuccess(t *testing.T) {
 	for _, kind := range []string{"vm", "ct"} {
 		p, b := fixture(t)
@@ -150,6 +172,10 @@ func TestSummaryPreservesFullDurableResultAndIdempotency(t *testing.T) {
 	args := D{"id": "done"}
 	summary := app.Call(context.Background(), "operation_get", args, person("alice", false))
 	full := app.Call(context.Background(), "operation_get", merge(args, D{"detail": "full"}), person("alice", false))
+	retried := app.Call(context.Background(), "operation_retry", args, person("alice", false))
+	if retried["quota_before"] != nil || retried["quota_after"] != nil || retried["dry_run"] != nil || obj(retried["operation"])["state"] != "succeeded" {
+		t.Fatal("successful retry leaked outer accounting into summary")
+	}
 	small := dicts(summary["operations"])[0]
 	if num(small["duration_seconds"]) != 28.286 || obj(small["result"])["quota_after"] != nil || obj(dicts(full["operations"])[0]["result"])["quota_after"] == nil {
 		t.Fatalf("summary damaged full result: %s", encoded(summary))
