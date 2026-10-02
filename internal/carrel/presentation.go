@@ -14,6 +14,12 @@ func memberResponse(tool string, args, result D) D {
 	r := clone(result)
 	if op, ok := r["operation"]; ok {
 		r["operation"] = operationSummary(obj(op))
+		if obj(op)["state"] == "succeeded" {
+			r = without(r, "quota_before", "quota_after", "dry_run")
+			if len(obj(r["delta"])) == 0 {
+				delete(r, "delta")
+			}
+		}
 	}
 	if ops, ok := r["operations"]; ok {
 		out := []D{}

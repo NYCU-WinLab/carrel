@@ -150,6 +150,10 @@ func TestSummaryPreservesFullDurableResultAndIdempotency(t *testing.T) {
 	args := D{"id": "done"}
 	summary := app.Call(context.Background(), "operation_get", args, person("alice", false))
 	full := app.Call(context.Background(), "operation_get", merge(args, D{"detail": "full"}), person("alice", false))
+	retried := app.Call(context.Background(), "operation_retry", args, person("alice", false))
+	if retried["quota_before"] != nil || retried["quota_after"] != nil || retried["dry_run"] != nil || obj(retried["operation"])["state"] != "succeeded" {
+		t.Fatal("successful retry leaked outer accounting into summary")
+	}
 	small := dicts(summary["operations"])[0]
 	if num(small["duration_seconds"]) != 28.286 || obj(small["result"])["quota_after"] != nil || obj(dicts(full["operations"])[0]["result"])["quota_after"] == nil {
 		t.Fatalf("summary damaged full result: %s", encoded(summary))
