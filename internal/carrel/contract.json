@@ -1562,7 +1562,7 @@
     },
     {
       "name": "machine_nic_detach",
-      "description": "Detach a private NIC; primary net0 cannot be detached.",
+      "description": "Detach a private NIC; primary net0 cannot be detached. A paused VM cannot acknowledge hot unplug; resume or shut it down with authorization before detaching. The request fails before changing PVE configuration.",
       "inputSchema": {
         "type": "object",
         "properties": {

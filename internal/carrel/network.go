@@ -95,6 +95,9 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			request = D{"action": "nic_attach", "index": i, "serial": network["serial"], "nic": nic}
 		} else {
 			i := integer(a["nic"])
+			if !dry && m["kind"] == "vm" && powerState(obj(e.Call(D{"op": "status", "machine": m}))) == "paused" {
+				fail("conflict", "Resume or shut down the VM before detaching a NIC; a paused guest cannot acknowledge hot unplug", D{"recovery": "resolve_prerequisite"})
+			}
 			if i == 0 || find(nics, func(n D) bool { return integer(n["index"]) == i }) == nil {
 				if e.Op != nil && i != 0 {
 					e.Reconcile()

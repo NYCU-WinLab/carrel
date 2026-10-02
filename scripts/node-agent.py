@@ -106,10 +106,14 @@ def guest_firewall(m, state, config):
     return "\n".join(rules) + "\n"
 
 
+class CommandFailure(RuntimeError):
+    pass
+
+
 def run(*args, timeout=180, input=None):
     p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout, input=input)
     if p.returncode:
-        raise RuntimeError(f"{args[0]} {args[1]} failed: {p.stderr[-1200:]}")
+        raise CommandFailure(f"{args[0]} {args[1]} failed: {p.stderr[-1200:]}")
     return p.stdout.strip()
 
 
@@ -843,6 +847,8 @@ def action(req):
     elif op in ["nic_attach", "nic_detach"]:
         index = integer(req["index"], 1, 7)
         if op == "nic_detach":
+            if cmd == "qm" and power_status(m) == "paused":
+                raise ValueError("resume or shut down before NIC hot unplug")
             if f"net{index}" in cfg:
                 run(cmd, "set", vmid, "--delete", f"net{index}")
         else:
@@ -927,7 +933,7 @@ if __name__ == "__main__":
             code = "invalid_request"
         elif isinstance(e, subprocess.TimeoutExpired):
             code = "command_timeout"
-        elif isinstance(e, subprocess.CalledProcessError):
+        elif isinstance(e, (subprocess.CalledProcessError, CommandFailure)):
             code = "command_failed"
         print(json.dumps({"ok": False, "error_code": code, "error": "Node action failed"}))
         sys.exit(1)

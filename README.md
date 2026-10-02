@@ -195,7 +195,9 @@ Changing back to `tenant` grants same-tenant ingress again. Rollback restores on
 owned by that operation, never a newer edit or a replacement machine.
 
 Managed NICs attached to stopped/paused VMs return `pending_guest_start` or `pending_guest_resume`
-without starting them. The next authorized start/resume verifies the interface. Running guests
+without starting them. The next authorized start/resume verifies a new interface report.
+NIC removal from a paused VM requires an authorized resume or shutdown first, because the guest
+cannot acknowledge hot unplug while paused. The request fails before changing its configuration. Running guests
 require the reported address and MTU. Summaries retain private IPs, named NICs and ingress rules.
 Route lists resolve machine names and endpoints; confirmed removals return `state=deleted`.
 

@@ -42,6 +42,21 @@ func TestLivePowerObservationPreservesApplicationWarmup(t *testing.T) {
 	}
 }
 
+func TestPausedNICDetachRejectsBeforePVECanWritePendingRemoval(t *testing.T) {
+	p, b := fixture(t)
+	m := seedMachine(p, "paused", 10100)
+	m["state"], m["power_state"] = "paused", "paused"
+	m["nics"] = []D{{"index": 1, "network": "p00101", "mac": "02:cb:01:00:01:01"}}
+	p.Store.Put("machines", 10100, 1, m)
+	b.call = func(D, string) (any, error) { return D{"status": "running", "qmpstatus": "paused"}, nil }
+	runQueue(p)
+	r := p.Execute(context.Background(), "machine_nic_detach", D{"machine": "paused", "nic": 1}, person("alice", false))
+	op := obj(r["operation"])
+	if op["state"] != "failed" || op["next_action"] != "resolve_prerequisite" || b.count("action") != 0 || !equal(m, p.Store.Get("machines", "10100")) {
+		t.Fatalf("paused unplug partially mutated guest: %s", encoded(r))
+	}
+}
+
 func TestRunningNICRequiresReportedInterface(t *testing.T) {
 	p, b := fixture(t)
 	seedMachine(p, "db", 10100)

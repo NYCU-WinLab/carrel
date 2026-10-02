@@ -39,7 +39,7 @@ All development validation runs on sandbox VM104. The local Mac only edits and u
   protection of newer policy owners/replacement allocations.
 - Blocked certificate preparation with an unrelated power job completing while the target-machine
   job remains ordered. This is a deterministic scheduling test, not a production ACME latency SLA.
-- Go vet, static Linux builds, 177 Python reference tests, deployment lint and script compilation.
+- Go vet, static Linux builds, 178 Python reference tests, deployment lint and script compilation.
 
 ## Live acceptance
 
@@ -56,3 +56,7 @@ removed explicitly if the user's isolation intent excludes them.
 Saved-key edits affect future guests. Console/lost-key recovery is deferred. Control backups
 exclude tenant disks; full tenant disaster recovery and clean installation acceptance remain
 separate gates. Custom images and multi-node scheduling remain outside this release.
+
+Live follow-up found that paused NIC hot-unplug writes pending PVE configuration before failing.
+The final adapter/control path rejects that case before mutation with a resume/shutdown prerequisite.
+Prepared Debian uses /dev/sda3 in this run; resize guidance now uses the observed partition number.
