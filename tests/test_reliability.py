@@ -60,7 +60,9 @@ async def test_queries_and_queue_submission_do_not_wait_for_create(platform):
         return await original(req)
 
     platform.backend.call = blocked
-    result = await platform.execute("machine_create", {"name": "slow", "ssh_keys": [KEY]}, person())
+    result = await platform.execute(
+        "machine_create", {"name": "slow", "ssh_keys": [KEY], "wait_seconds": 0}, person()
+    )
     assert result["operation"]["state"] == "queued" and not result["operation"]["reserved"]
     await asyncio.wait_for(entered.wait(), 1)
     for tool in ("whoami", "quota_get", "capacity_get"):
@@ -207,7 +209,9 @@ async def test_service_restart_reuses_original_allocation(platform):
         return await original(req)
 
     platform.backend.call = interrupted
-    result = await platform.execute("machine_create", {"name": "restart", "ssh_keys": [KEY]}, person())
+    result = await platform.execute(
+        "machine_create", {"name": "restart", "ssh_keys": [KEY], "wait_seconds": 0}, person()
+    )
     await entered.wait()
     allocation = platform.store.objects("machines", 1)[0]["allocation_id"]
     await platform.operations.close()
@@ -527,3 +531,170 @@ def test_partial_clone_cleanup_requires_matching_allocation_marker(monkeypatch, 
             module.owned(machine, allow_provisioning=True)
     else:
         assert module.owned(machine, allow_provisioning=True) == config
+
+
+async def test_create_returns_ready_result_without_polling(platform):
+    result = await platform.execute("machine_create", {"name": "direct", "ssh_keys": [KEY]}, person())
+    op = result["operation"]
+    assert op["state"] == "succeeded"
+    assert op["result"]["machine"]["state"] == "ready"
+    assert op["result"]["machine"]["ssh_short"] == "ssh direct.alice"
+    platform.wait_ready.assert_awaited_once()
+
+
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_creation_wait_keeps_worker_alive_and_deduplicates(platform, disconnect):
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = platform.wait_ready
+
+    async def blocked(machine, previous_boot=None):
+        entered.set()
+        await release.wait()
+        await original(machine, previous_boot)
+
+    platform.wait_ready = blocked
+    args = {"name": "waiting", "ssh_keys": [KEY], "idempotency_key": "waiting-1234"}
+    request = asyncio.create_task(platform.execute("machine_create", args, person()))
+    await asyncio.wait_for(entered.wait(), 1)
+    assert (await asyncio.wait_for(platform.execute("whoami", {}, person("bob")), 0.2))["ok"]
+    if disconnect:
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    op = platform.store.objects("operations", 1)[0]
+    assert not platform.operations.tasks[op["id"]].done()
+    # A bounded timeout returns current state, without cancelling the worker.
+    bounded = await platform.operations.wait(platform.store.tenant("user:alice"), op["id"], 0.01)
+    assert bounded["state"] == "running"
+    duplicate = await platform.execute("machine_create", {**args, "wait_seconds": 0}, person())
+    assert duplicate["operation"]["id"] == op["id"]
+    assert len(platform.store.objects("machines", 1)) == 1
+    release.set()
+    await finish(platform, duplicate)
+    if not disconnect:
+        assert (await request)["operation"]["state"] == "succeeded"
+    again = await platform.execute("machine_create", {**args, "wait_seconds": 1}, person())
+    assert again["operation"]["state"] == "succeeded"
+    assert again["operation"]["id"] == op["id"]
+
+
+async def test_short_ssh_aliases_are_scoped_by_tenant(platform, tmp_path):
+    import subprocess
+
+    for user in ("alice", "bob"):
+        result = await platform.execute("machine_create", {"name": "dev", "ssh_keys": [KEY]}, person(user))
+        machine = result["operation"]["result"]["machine"]
+        path = tmp_path / user
+        path.write_text(machine["ssh_config"])
+        for alias in (f"dev.{user}", f"dev.{user}.winlab.tw"):
+            parsed = await asyncio.to_thread(
+                subprocess.check_output, ["ssh", "-F", str(path), "-G", alias], text=True
+            )
+            assert "hostname carrel.winlab.tw\n" in parsed
+            assert "user user\n" in parsed
+            assert f"port {machine['ssh'].split()[2]}\n" in parsed
+        assert machine["ssh_short"] == f"ssh dev.{user}"
+
+
+@pytest.mark.parametrize("prepared,packages", [(False, []), (True, []), (True, ["nginx"])])
+def test_template_preparation_preserves_requested_package_install(monkeypatch, prepared, packages):
+    spec = importlib.util.spec_from_file_location(
+        "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    files = {}
+    monkeypatch.setattr(module, "write", lambda path, data, mode: files.update({path: data}))
+    module.cloud_init(
+        {
+            "name": "fresh",
+            "vmid": 10100,
+            "tenant_n": 1,
+            "mac": "02:ca:01:00:00:01",
+            "ip": "10.200.1.10",
+            "ssh_keys": [KEY],
+            "packages": packages,
+        },
+        prepared=prepared,
+    )
+    data = json.loads(files["/var/lib/vz/snippets/carrel-10100-user.json"].split("\n", 1)[1])
+    assert data["package_update"] is (bool(packages) or not prepared)
+    assert (
+        data.get("packages", [])
+        == ([] if prepared else ["qemu-guest-agent", "unattended-upgrades"]) + packages
+    )
+    assert ("packages" in data) is (bool(packages) or not prepared)
+    assert "guest-exec" in data["write_files"][0]["content"]
+    assert data["swap"]["size"] == "4096M"
+    assert data["users"][0].get("groups", []) == (["docker"] if prepared else [])
+
+
+async def test_group_creation_waits_and_preview_remains_read_only(platform):
+    preview = await platform.execute("machine_create", {"name": "preview", "dry_run": True}, person())
+    assert preview["ok"] and not platform.store.objects("operations", 1)
+    result = await platform.execute("deployment_apply", deployment(), person())
+    assert result["operation"]["state"] == "succeeded"
+    assert [m["name"] for m in result["operation"]["result"]["machines"]] == ["first", "second"]
+
+
+def test_wait_is_request_policy_not_nested_machine_spec():
+    from carrel.tools import BY_NAME
+
+    for name in ("machine_create", "deployment_apply", "operation_get"):
+        wait = BY_NAME[name].inputSchema["properties"]["wait_seconds"]
+        assert wait["default"] == wait["maximum"] == 55
+    assert (
+        "wait_seconds"
+        not in BY_NAME["deployment_plan"].inputSchema["properties"]["machines"]["items"]["properties"]
+    )
+
+
+@pytest.mark.parametrize("immutable", [True, False])
+async def test_linked_clone_requires_immutable_thin_template(platform, monkeypatch, tmp_path, immutable):
+    from carrel.operations import current_operation
+
+    # Obtain a real validated allocation; replace only the privileged node boundary.
+    await platform.execute("machine_create", {"name": "linked", "ssh_keys": [KEY]}, person())
+    machine = platform.store.objects("machines", 1)[0]
+    spec = importlib.util.spec_from_file_location(
+        "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
+    monkeypatch.setattr(
+        module, "api", lambda *args: {"template": int(immutable), "scsi0": "local-lvm:base-9010-disk-0"}
+    )
+    monkeypatch.setattr(
+        module, "cloud_init", lambda m, **kwargs: "prepared-snippet" if kwargs["prepared"] else "legacy"
+    )
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "stopped")
+    assert current_operation.get() is None
+    if immutable:
+        assert module.create(machine)["state"] == "running"
+        clone = next(c for c in calls if c[:2] == ("qm", "clone"))
+        assert clone[2] == 9010 and clone[clone.index("--full") + 1] == "0"
+        manifest = json.loads((tmp_path / f"create-{machine['vmid']}.json").read_text())
+        assert manifest["template"] == {"vmid": 9010, "prepared": True}
+    else:
+        with pytest.raises(ValueError, match="immutable"):
+            module.create(machine)
+        assert not calls
+
+
+def test_topology_snapshot_tracks_new_vnets_without_duplicate_creates(monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    monkeypatch.setattr(module, "api", lambda *args, **kwargs: calls.append((args, kwargs)))
+    existing = [{"vnet": "t001", "zone": "tenants"}]
+    assert not module.ensure("/cluster/sdn/vnets", "vnet", "t001", existing=existing, zone="tenants")
+    assert module.ensure("/cluster/sdn/vnets", "vnet", "t002", existing=existing, zone="tenants")
+    assert not module.ensure("/cluster/sdn/vnets", "vnet", "t002", existing=existing, zone="tenants")
+    assert len(calls) == 1 and calls[0][0][0] == "create"
+    assert existing[-1] == {"vnet": "t002", "zone": "tenants"}

@@ -68,6 +68,14 @@ def tool(name, description, properties=None, required=(), account=False):
             "default": False,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes.",
         }
+    if name in {"machine_create", "deployment_apply"}:
+        props["wait_seconds"] = {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait for verified readiness before returning, up to 55 seconds. Zero returns the durable job immediately. A timeout or disconnect does not cancel creation.",
+        }
     from mcp.types import ToolAnnotations
 
     return Tool(
@@ -117,7 +125,7 @@ TOOLS = [
     tool("sizes_list", "List machine resource presets.", account=True),
     tool(
         "machine_create",
-        "Create one VM/CT; apply returns a queued operation. Use operation_get until complete; SSH alone does not imply guest/application readiness. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt; configure them over SSH. Dry-run first: checks quota/capacity even without SSH keys, returning requirements instead. Valid public keys are mandatory for apply, can be passed inline and need not be saved. For multiple resources and NICs use deployment_plan then deployment_apply.",
+        "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications.",
         {
             "name": LABEL,
             "kind": {"enum": ["vm", "ct"]},
@@ -330,7 +338,7 @@ TOOLS = [t for t in TOOLS if t.name not in {"images_list", "sizes_list"}]
 _machine = {
     k: v
     for k, v in BY_NAME["machine_create"].inputSchema["properties"].items()
-    if k not in ("tenant", "dry_run", "idempotency_key")
+    if k not in ("tenant", "dry_run", "idempotency_key", "wait_seconds")
 }
 _network = {"name": LABEL, "cidr": TEXT, "mode": {"enum": ["managed", "raw_l2"]}}
 
@@ -377,7 +385,7 @@ BY_NAME[plan.name] = plan
 
 apply = tool(
     "deployment_apply",
-    "Apply the same deployment_plan specification, including connections and publications. Reserves the entire group, returns one durable operation, then SSH entries and public endpoints on completion. Default rollback removes only newly created resources; keep retains them for repair. Poll operation_get; waiting dependencies resume automatically. Reuse idempotency_key after a lost response.",
+    "Create a group of machines, connections and publications in one call when authorized. Use deployment_plan only when a preview is wanted, then apply the same specification. Reserves the entire group and waits up to 55 seconds for completion; result includes SSH and public endpoints. Only call operation_get if still pending. Default rollback removes only newly created resources; keep retains them for repair. Reuse idempotency_key after a lost response.",
     {
         **{k: v for k, v in plan.inputSchema["properties"].items() if k != "tenant"},
         "on_failure": {"enum": ["rollback", "keep"]},
@@ -385,8 +393,8 @@ apply = tool(
 )
 get = tool(
     "operation_get",
-    "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 20 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup and follow next_action (revise_request means invalid inputs must be corrected, not retried); poll no faster than poll_after_seconds.",
-    {"id": TEXT, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 30, "default": 20}},
+    "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 55 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup and follow next_action (revise_request means invalid inputs must be corrected, not retried); poll no faster than poll_after_seconds.",
+    {"id": TEXT, "wait_seconds": {"type": "integer", "minimum": 0, "maximum": 55, "default": 55}},
 )
 retry = tool(
     "operation_retry",

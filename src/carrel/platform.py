@@ -505,8 +505,15 @@ class Platform(Lifecycle, Intent):
         if ssh:
             user = "user" if m["kind"] == "vm" else "root"
             safe["ssh"] = f"ssh -p {ssh['public_port']} {user}@carrel.winlab.tw"
+            tenant = next(t for t in self.store.tenants() if t["n"] == m["tenant_n"])
+            alias = f"{m['name']}.{tenant['slug']}"
+            safe["ssh_short"] = f"ssh {alias}"
             safe["ssh_config"] = (
-                f"Host {m['name']}-carrel\n  HostName carrel.winlab.tw\n  User {user}\n  Port {ssh['public_port']}\n"
+                f"Host {alias} {alias}.winlab.tw\n  HostName carrel.winlab.tw\n"
+                f"  User {user}\n  Port {ssh['public_port']}\n"
+            )
+            safe["ssh_short_requires"] = (
+                "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
             )
         return safe
 
@@ -533,6 +540,10 @@ class Platform(Lifecycle, Intent):
                         "UPDATE tenants SET status='suspending' WHERE n=? AND status='active'", (t["n"],)
                     )
                 self.store.log(who["sub"], t["n"], tool, args, "queued")
+                if tool in {"machine_create", "deployment_apply"}:
+                    result["operation"] = await self.operations.wait(
+                        t, result["operation"]["id"], args.get("wait_seconds", 55)
+                    )
                 return {"ok": True, **result}
         except Failure as e:
             return e.result
@@ -561,6 +572,7 @@ class Platform(Lifecycle, Intent):
             return {
                 "service": {"name": "carrel", "version": __version__},
                 "images": IMAGES,
+                "vm_environment": self.config.get("vm_environment", {}),
                 "sizes": SIZES,
                 "units": UNITS,
                 "capabilities": CAPABILITIES,
@@ -625,10 +637,7 @@ class Platform(Lifecycle, Intent):
         dry, n = a.get("dry_run", False), t["n"]
         if tool == "operation_get":
             if a.get("id"):
-                self.operations.find(t, a["id"])
-                task = self.operations.tasks.get(a["id"])
-                if task and a.get("wait_seconds", 20):
-                    await asyncio.wait({task}, timeout=a.get("wait_seconds", 20))
+                await self.operations.wait(t, a["id"], a.get("wait_seconds", 55))
             ops = (
                 [self.operations.find(t, a["id"])]
                 if a.get("id")
