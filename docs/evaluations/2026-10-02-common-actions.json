@@ -1,0 +1,467 @@
+{
+  "version": "0.7.0",
+  "implementation_revision": "4f922c6e51f9026d5e21348ad0b996445fcbe774",
+  "response_size_comparison": {
+    "full_bytes": 2680,
+    "summary_bytes": 939
+  },
+  "operations": [
+    {
+      "tool": "machine_create",
+      "kind": "vm",
+      "elapsed_seconds": 29.025,
+      "operation_duration_seconds": 28.972,
+      "operation_id": "595c1f7f737b7051f87aca637ec1f489",
+      "state": "succeeded",
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919254.7983794,
+        "ssh_ready": true
+      }
+    },
+    {
+      "tool": "snapshot_create",
+      "elapsed_seconds": 4.488,
+      "operation_duration_seconds": 4.395,
+      "operation_id": "c30c8e5ef7cf1da9269895bfd8e5e55e",
+      "state": "succeeded"
+    },
+    {
+      "tool": "machine_power",
+      "action": "pause",
+      "kind": "vm",
+      "elapsed_seconds": 4.85,
+      "operation_duration_seconds": 4.817,
+      "operation_id": "4411ca086d0bbd7a66ad5b3af53c1cc9",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "paused",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919273.934885,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "machine_get",
+      "kind": "vm",
+      "state": "paused",
+      "power_state": "paused",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919273.934885,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "snapshot_rollback",
+      "operation_id": "04c3da08235a8f94a5d3ed19cf5533c2",
+      "state": "failed",
+      "error": {
+        "code": "conflict",
+        "message": "Resume or shut down the VM before disk rollback; rollback cannot preserve paused memory"
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "resume",
+      "kind": "vm",
+      "elapsed_seconds": 4.916,
+      "operation_duration_seconds": 4.824,
+      "operation_id": "e398759d11c51dabbbeed239ab963220",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919273.934885,
+        "ssh_ready": true
+      }
+    },
+    {
+      "tool": "operation_retry",
+      "kind": "vm",
+      "for": "snapshot_rollback",
+      "elapsed_seconds": 25.873,
+      "operation_duration_seconds": 46.052,
+      "operation_id": "04c3da08235a8f94a5d3ed19cf5533c2",
+      "state": "succeeded",
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919349.5404913,
+        "ssh_ready": true
+      }
+    },
+    {
+      "tool": "port_open",
+      "elapsed_seconds": 2.036,
+      "operation_duration_seconds": 1.894,
+      "operation_id": "94e7e0c59ebf94967841e299530054e2",
+      "state": "succeeded"
+    },
+    {
+      "tool": "machine_power",
+      "action": "shutdown",
+      "kind": "vm",
+      "elapsed_seconds": 7.777,
+      "operation_duration_seconds": 7.667,
+      "operation_id": "3d1bf5ae6e1c6a193de3cea398a6e439",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "stopped",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919374.4892776,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "shutdown",
+      "kind": "vm",
+      "elapsed_seconds": 2.145,
+      "operation_duration_seconds": 2.086,
+      "operation_id": "35c89d7e4d160e06b628d2d3d724f68b",
+      "state": "succeeded",
+      "changed": false,
+      "power_state": "stopped",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919374.4892776,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "machine_resize",
+      "kind": "vm",
+      "elapsed_seconds": 4.923,
+      "operation_duration_seconds": 4.792,
+      "operation_id": "2e0ac582374f2e48c50938e993db71c2",
+      "state": "succeeded",
+      "power_state": "stopped",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919374.4892776,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "start",
+      "kind": "vm",
+      "elapsed_seconds": 19.973,
+      "operation_duration_seconds": 19.9,
+      "operation_id": "4280ecb5786fe67af60672fc55070c36",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919422.2701395,
+        "ssh_ready": true
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "reboot",
+      "elapsed_seconds": 6.43,
+      "operation_id": "340c28e4198046a8391fad6a924ebc69",
+      "state": "failed",
+      "error": {
+        "code": "conflict",
+        "message": "Operation failed; allocation retained for repair"
+      }
+    },
+    {
+      "tool": "machine_create",
+      "kind": "ct",
+      "elapsed_seconds": 20.611,
+      "operation_duration_seconds": 14.808,
+      "operation_id": "62c263a4e61ea94137732c3167f8210a",
+      "state": "succeeded",
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": null,
+        "ssh_ready": true
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "pause",
+      "kind": "ct",
+      "elapsed_seconds": 0.076,
+      "operation_id": "2a82c8e792245727f4ab85ea15595d00",
+      "state": "failed",
+      "error": {
+        "code": "invalid",
+        "message": "Pause and resume require a VM. CT checkpoint/hibernation is unsupported; shutdown is a different operation that loses running processes."
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "shutdown",
+      "kind": "ct",
+      "elapsed_seconds": 6.494,
+      "operation_duration_seconds": 6.463,
+      "operation_id": "fb6bd807d6f245fd86ca4a3dddf83d64",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "stopped",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "unknown",
+        "reported_at": null,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "machine_power",
+      "action": "start",
+      "kind": "ct",
+      "elapsed_seconds": 6.742,
+      "operation_duration_seconds": 6.645,
+      "operation_id": "c217130d43f8276d3f84d3a620ad224c",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": null,
+        "ssh_ready": true
+      }
+    },
+    {
+      "tool": "domain_add",
+      "elapsed_seconds": 14.841,
+      "operation_duration_seconds": 14.734,
+      "operation_id": "e83e1ba66e8b7f36f95ac73d74e3ed7a",
+      "state": "succeeded"
+    },
+    {
+      "tool": "operation_retry",
+      "kind": "vm",
+      "for": "reboot",
+      "elapsed_seconds": 22.426,
+      "operation_duration_seconds": 545.357,
+      "operation_id": "340c28e4198046a8391fad6a924ebc69",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919987.8278391,
+        "ssh_ready": true
+      },
+      "revision": "4f922c6"
+    },
+    {
+      "tool": "machine_power",
+      "action": "pause",
+      "kind": "vm",
+      "elapsed_seconds": 4.998,
+      "operation_duration_seconds": 4.87,
+      "operation_id": "bcef0f1e13b4ee9d03de9967cd6ac74f",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "paused",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790919987.8278391,
+        "ssh_ready": false
+      },
+      "revision": "4f922c6",
+      "from_paused": false
+    },
+    {
+      "tool": "machine_power",
+      "action": "reboot",
+      "kind": "vm",
+      "elapsed_seconds": 23.921,
+      "operation_duration_seconds": 23.885,
+      "operation_id": "fadc2fdf28b3db76c4fa61879697185b",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "running",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790920038.34483,
+        "ssh_ready": true
+      },
+      "revision": "4f922c6",
+      "from_paused": true
+    },
+    {
+      "tool": "machine_power",
+      "action": "pause",
+      "kind": "vm",
+      "elapsed_seconds": 4.876,
+      "operation_duration_seconds": 4.843,
+      "operation_id": "2ce63cbf668a690655700dd7729a5b7e",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "paused",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790920038.34483,
+        "ssh_ready": false
+      },
+      "revision": "4f922c6",
+      "from_paused": false
+    },
+    {
+      "tool": "machine_power",
+      "action": "shutdown",
+      "kind": "vm",
+      "elapsed_seconds": 8.58,
+      "operation_duration_seconds": 8.455,
+      "operation_id": "c6ddd5b575faa540802e99a870b3cafb",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "stopped",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "complete",
+        "reported_at": 1790920038.34483,
+        "ssh_ready": false
+      },
+      "revision": "4f922c6",
+      "from_paused": true
+    },
+    {
+      "tool": "machine_power",
+      "action": "stop",
+      "kind": "ct",
+      "elapsed_seconds": 6.23,
+      "operation_duration_seconds": 6.155,
+      "operation_id": "0353a46cfe912438471b51d12c37f61b",
+      "state": "succeeded",
+      "changed": true,
+      "power_state": "stopped",
+      "readiness": {
+        "application_status": "not_checked",
+        "failed_step": null,
+        "initialization_status": "unknown",
+        "reported_at": null,
+        "ssh_ready": false
+      }
+    },
+    {
+      "tool": "machine_delete",
+      "elapsed_seconds": 5.834,
+      "operation_duration_seconds": 5.612,
+      "operation_id": "648a00b2654c9c3db9b330480097ef91",
+      "state": "succeeded"
+    },
+    {
+      "tool": "machine_delete",
+      "elapsed_seconds": 7.037,
+      "operation_duration_seconds": 7,
+      "operation_id": "4cfa0db6ddd946fb8c10d83859204739",
+      "state": "succeeded"
+    }
+  ],
+  "verified": {
+    "saved_default_key_creation": true,
+    "owner_ssh_vm_ct": true,
+    "same_boot_and_original_process_after_pause_resume": true,
+    "snapshot_marker_restored": "before",
+    "external_tcp_and_https_exact_body": "before\n",
+    "reboot_final_owner_probe": "7bbaa5d6-eaf8-4c1a-8463-36784c6871bc\nstatus: done\nbefore",
+    "original_allocation_unchanged": true,
+    "original_owner_ssh_hostname": "sandbox"
+  },
+  "cleanup": {
+    "machines": [
+      {
+        "name": "sandbox",
+        "vmid": 10300,
+        "allocation_id": "2d6a0f537e167d74bddd1e3064126c82",
+        "state": "ready"
+      }
+    ],
+    "quota": {
+      "disk_gb": 20,
+      "domains": 0,
+      "ips": 1,
+      "machines": 1,
+      "memory_mb": 2048,
+      "networks": 0,
+      "public_ports": 1,
+      "snapshot_gb": 0,
+      "snapshots": 0,
+      "vcpu": 2
+    },
+    "domains": [],
+    "ports": [
+      {
+        "id": "3-20030-tcp",
+        "port": 22,
+        "public_port": 20030
+      }
+    ],
+    "pve_volumes": 15,
+    "test_volumes": []
+  },
+  "final_domain_response": {
+    "ok": true,
+    "operations": [
+      {
+        "duration_seconds": 14.734,
+        "id": "e83e1ba66e8b7f36f95ac73d74e3ed7a",
+        "next_action": "use_result",
+        "resource_changes": true,
+        "result": {
+          "delta": {
+            "domains": 1
+          },
+          "domain": {
+            "name": "actionsv07.zyx1121.winlab.tw",
+            "state": "ready",
+            "sub": "actionsv07",
+            "target_port": 8080,
+            "url": "https://actionsv07.zyx1121.winlab.tw",
+            "verification": "routing_configured"
+          },
+          "ok": true
+        },
+        "state": "succeeded",
+        "tool": "domain_add"
+      }
+    ]
+  }
+}
