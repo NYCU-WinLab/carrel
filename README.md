@@ -194,6 +194,8 @@ and 46-second Ubuntu creation, prepared development environments and linked-clon
 The [0.5.1 PVE operations acceptance](docs/evaluations/2026-10-02-pve-operations.md) records fresh
 inventory at 1.44 seconds, unchanged node network reconciliation at 2.02 seconds and one Debian
 creation at 34.70 seconds, with live private-network, DNS, HTTPS and cleanup checks.
+The [Python/Rust read-path experiment](docs/evaluations/2026-10-02-pve-language-benchmark.md)
+compares both languages with CLI and direct HTTPS access, including fresh-process and reused-client timings.
 
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.

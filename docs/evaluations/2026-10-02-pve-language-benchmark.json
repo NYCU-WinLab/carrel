@@ -1,0 +1,2836 @@
+{
+  "seed": 20261002,
+  "python": "3.13.5 (main, Jun 25 2025, 18:55:22) [GCC 14.2.0]",
+  "kernel": "6.17.2-1-pve",
+  "pve": "pve-manager/9.1.1/42db4a6cf33dac83 (running kernel: 6.17.2-1-pve)",
+  "validation": {
+    "inventory": {
+      "all_five_methods_match": true,
+      "fingerprint": "30d5837ecb2eb9dc98a24cc7470f58da746f9db042015903b1ef3b2c698e5141"
+    },
+    "topology": {
+      "all_five_methods_match": true,
+      "fingerprint": "af9af69dd36716a02cccf68557e9980b72cc3af5d8c856b3c82016d70a4dc9a5"
+    }
+  },
+  "summary_seconds": {
+    "new_process": {
+      "inventory": {
+        "python-pvesh": {
+          "n": 12,
+          "median": 4.359087269986048,
+          "min": 4.306418776017381,
+          "max": 4.435954344022321,
+          "q1": 4.329487308757962,
+          "q3": 4.379817638749955
+        },
+        "rust-pvesh": {
+          "n": 12,
+          "median": 4.295034862981993,
+          "min": 4.263359301985474,
+          "max": 4.338834155001678,
+          "q1": 4.279603893497551,
+          "q3": 4.319523518999631
+        },
+        "python-batch": {
+          "n": 12,
+          "median": 1.3486546319909394,
+          "min": 1.2967562009871472,
+          "max": 1.391045591008151,
+          "q1": 1.3304332530096872,
+          "q3": 1.3772938774854993
+        },
+        "python-http": {
+          "n": 12,
+          "median": 0.4091473169828532,
+          "min": 0.38588576699839905,
+          "max": 0.4539240429876372,
+          "q1": 0.40352331850590417,
+          "q3": 0.42084993050957564
+        },
+        "rust-http": {
+          "n": 12,
+          "median": 0.3465970809920691,
+          "min": 0.3156457570148632,
+          "max": 0.3698276749928482,
+          "q1": 0.33138126300036674,
+          "q3": 0.36428696374059655
+        }
+      },
+      "topology": {
+        "python-pvesh": {
+          "n": 12,
+          "median": 3.0689927259809338,
+          "min": 3.0612315189791843,
+          "max": 3.0780409589933697,
+          "q1": 3.06524549099413,
+          "q3": 3.0745228350060643
+        },
+        "rust-pvesh": {
+          "n": 12,
+          "median": 3.0304883329954464,
+          "min": 3.023416145995725,
+          "max": 3.0389259019866586,
+          "q1": 3.026675654487917,
+          "q3": 3.0331827710106154
+        },
+        "python-batch": {
+          "n": 12,
+          "median": 1.029332713005715,
+          "min": 1.0219636469846591,
+          "max": 1.0353429890237749,
+          "q1": 1.0263585252469056,
+          "q3": 1.0305781457427656
+        },
+        "python-http": {
+          "n": 12,
+          "median": 0.07999053297680803,
+          "min": 0.07821942798909731,
+          "max": 0.09180762199684978,
+          "q1": 0.07959479023702443,
+          "q3": 0.08023750024585752
+        },
+        "rust-http": {
+          "n": 12,
+          "median": 0.016440959501778707,
+          "min": 0.01566854098928161,
+          "max": 0.018278358998941258,
+          "q1": 0.015886134482570924,
+          "q3": 0.016690731754351873
+        }
+      }
+    },
+    "reused_client": {
+      "inventory": {
+        "python-http": {
+          "n": 50,
+          "median": 0.33497336150321644,
+          "min": 0.25449185399338603,
+          "max": 0.37966387800406665,
+          "q1": 0.32243778325937456,
+          "q3": 0.3449175242421916
+        },
+        "rust-http": {
+          "n": 50,
+          "median": 0.337868073,
+          "min": 0.267739767,
+          "max": 0.395890852,
+          "q1": 0.3318183425,
+          "q3": 0.35894014525
+        }
+      },
+      "topology": {
+        "python-http": {
+          "n": 50,
+          "median": 0.011220031999982893,
+          "min": 0.011130183993373066,
+          "max": 0.011342081998009235,
+          "q1": 0.011192875012056902,
+          "q3": 0.011243085747992154
+        },
+        "rust-http": {
+          "n": 50,
+          "median": 0.010980348000000001,
+          "min": 0.010803755,
+          "max": 0.011125473,
+          "q1": 0.0109422715,
+          "q3": 0.0110163195
+        }
+      }
+    }
+  },
+  "records": [
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0264642009860836,
+      "query_seconds": 3.025738986
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.274110325000947,
+      "query_seconds": 4.273189418
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.35226710798451677,
+      "query_seconds": 0.350624999
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.325178335013334,
+      "query_seconds": 4.285276126989629
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.079804034990957,
+      "query_seconds": 0.017033465002896264
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0219636469846591,
+      "query_seconds": 0.9825789049791638
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.38588576699839905,
+      "query_seconds": 0.3220782869902905
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0654988260066602,
+      "query_seconds": 3.026060434000101
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.01683683699229732,
+      "query_seconds": 0.015530251
+    },
+    {
+      "phase": "new_process",
+      "trial": 0,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3890571740048472,
+      "query_seconds": 1.3488756990118418
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.40727775197592564,
+      "query_seconds": 0.34313730100984685
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.307367657020222,
+      "query_seconds": 4.306450601
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.320625379012199,
+      "query_seconds": 4.280347156978678
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3547767720010597,
+      "query_seconds": 1.3145931860199198
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.027310014993418,
+      "query_seconds": 3.0265284120000002
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.016379612003220245,
+      "query_seconds": 0.015080558
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.08007526700384915,
+      "query_seconds": 0.01670928398380056
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0293418370129075,
+      "query_seconds": 0.9899653280153871
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.31715863797580823,
+      "query_seconds": 0.315628783
+    },
+    {
+      "phase": "new_process",
+      "trial": 1,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0612315189791843,
+      "query_seconds": 3.021350677998271
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.2788640829967335,
+      "query_seconds": 4.277917371
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3266556200105697,
+      "query_seconds": 1.2870690139825456
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.016347331984434277,
+      "query_seconds": 0.015074013
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.065161045989953,
+      "query_seconds": 3.0256096919765696
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0263262309890706,
+      "query_seconds": 0.9862979720055591
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.306418776017381,
+      "query_seconds": 4.266683091991581
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.09180762199684978,
+      "query_seconds": 0.02826867700787261
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0331494830024894,
+      "query_seconds": 3.03240047
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.3698276749928482,
+      "query_seconds": 0.368207496
+    },
+    {
+      "phase": "new_process",
+      "trial": 2,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.423150381015148,
+      "query_seconds": 0.35845447701285593
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.35227445501368493,
+      "query_seconds": 0.350779615
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.4041483070177492,
+      "query_seconds": 0.3405650109925773
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.07821942798909731,
+      "query_seconds": 0.016825956001412123
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.01566854098928161,
+      "query_seconds": 0.014492904
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0306588459934574,
+      "query_seconds": 3.029942306
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0339620120066684,
+      "query_seconds": 0.9939054200076498
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.366887113981647,
+      "query_seconds": 4.326474105997477
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0700832639995497,
+      "query_seconds": 3.0301079929922707
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3417661520070396,
+      "query_seconds": 1.3014646750234533
+    },
+    {
+      "phase": "new_process",
+      "trial": 3,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.333339514007093,
+      "query_seconds": 4.332358124
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.366894693986978,
+      "query_seconds": 4.326426312007243
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0286151510081254,
+      "query_seconds": 0.9885229929932393
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3446857899834868,
+      "query_seconds": 1.3050705030036625
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.01636677500209771,
+      "query_seconds": 0.015052958
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.288138912990689,
+      "query_seconds": 4.287213437
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.08004496697685681,
+      "query_seconds": 0.017118796007707715
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.41252110700588673,
+      "query_seconds": 0.34906753100221977
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.062706779979635,
+      "query_seconds": 3.0227647540159523
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.336086630995851,
+      "query_seconds": 0.334582453
+    },
+    {
+      "phase": "new_process",
+      "trial": 4,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.033193867013324,
+      "query_seconds": 3.03247607
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.36461282399250194,
+      "query_seconds": 0.36300711
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.4539240429876372,
+      "query_seconds": 0.39061095600482076
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.08005569799570367,
+      "query_seconds": 0.016916208987822756
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.397747490002075,
+      "query_seconds": 4.357878765993519
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.288033046002965,
+      "query_seconds": 4.287052225
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0780409589933697,
+      "query_seconds": 3.038011627999367
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0304022250056732,
+      "query_seconds": 0.9902261469978839
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.016720231011277065,
+      "query_seconds": 0.015332244
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.352623473998392,
+      "query_seconds": 1.3130520000122488
+    },
+    {
+      "phase": "new_process",
+      "trial": 5,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0245937119761948,
+      "query_seconds": 3.023795057
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0332147860026453,
+      "query_seconds": 3.032440765
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.36330938298488036,
+      "query_seconds": 0.361848143
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.015732401981949806,
+      "query_seconds": 0.014539019
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.4037346580007579,
+      "query_seconds": 0.3400999230216257
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.263359301985474,
+      "query_seconds": 4.262135872
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.2989265560172498,
+      "query_seconds": 1.258459453994874
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.07975698600057513,
+      "query_seconds": 0.017173060012282804
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.342414229991846,
+      "query_seconds": 4.303094372997293
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0719033070199657,
+      "query_seconds": 3.031809317995794
+    },
+    {
+      "phase": "new_process",
+      "trial": 6,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0264554080204107,
+      "query_seconds": 0.9864536010136362
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0292453079891857,
+      "query_seconds": 3.028079663
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.067647859978024,
+      "query_seconds": 3.025869955017697
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0261937690083869,
+      "query_seconds": 0.9866136319760699
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.3346725690062158,
+      "query_seconds": 0.332896604
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.2967562009871472,
+      "query_seconds": 1.25634131100378
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.308704724011477,
+      "query_seconds": 4.307750696
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.353750310983742,
+      "query_seconds": 4.31324837799184
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.4110168819897808,
+      "query_seconds": 0.34686538099776953
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.08029157799319364,
+      "query_seconds": 0.01710009400267154
+    },
+    {
+      "phase": "new_process",
+      "trial": 7,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.015730621002148837,
+      "query_seconds": 0.014550053
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.323129783995682,
+      "query_seconds": 4.322249139
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.0803480229806155,
+      "query_seconds": 0.0173870759899728
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.3650677279802039,
+      "query_seconds": 0.363642843
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.435954344022321,
+      "query_seconds": 4.3959587500139605
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.016602233983576298,
+      "query_seconds": 0.015307955
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.41394857899285853,
+      "query_seconds": 0.35024066499317996
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0753960110014305,
+      "query_seconds": 3.0353383159963414
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3677827659994364,
+      "query_seconds": 1.328043354995316
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0293235889985226,
+      "query_seconds": 0.9886511620134115
+    },
+    {
+      "phase": "new_process",
+      "trial": 8,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0389259019866586,
+      "query_seconds": 3.038111804
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.42710462998365983,
+      "query_seconds": 0.36250289899180643
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.07993609897675924,
+      "query_seconds": 0.017406653001671657
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0317345520015806,
+      "query_seconds": 3.030993361
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.01650230700033717,
+      "query_seconds": 0.015225779
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0302738969912753,
+      "query_seconds": 0.9903971549938433
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.3156457570148632,
+      "query_seconds": 0.314137935
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.06991933498648,
+      "query_seconds": 3.030065918021137
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.344151792989578,
+      "query_seconds": 4.303954197996063
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.391045591008151,
+      "query_seconds": 1.350921606994234
+    },
+    {
+      "phase": "new_process",
+      "trial": 9,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.338834155001678,
+      "query_seconds": 4.3378723
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.33028416099841706,
+      "query_seconds": 0.328831537
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0680661169753876,
+      "query_seconds": 3.0280782409827225
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.023416145995725,
+      "query_seconds": 3.022633391
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3804642479808535,
+      "query_seconds": 1.3407579839986283
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.364424228988355,
+      "query_seconds": 4.32427887400263
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.38628575002076104,
+      "query_seconds": 0.3219910119951237
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.01650888001313433,
+      "query_seconds": 0.015299486
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.030636785988463,
+      "query_seconds": 0.9905525209906045
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.301930812973296,
+      "query_seconds": 4.300947184
+    },
+    {
+      "phase": "new_process",
+      "trial": 10,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.07954072498250753,
+      "query_seconds": 0.017309566988842562
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.07908579200739041,
+      "query_seconds": 0.016904187999898568
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "inventory",
+      "method": "python-batch",
+      "seconds": 1.3445536679937504,
+      "query_seconds": 1.3048598630120978
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "topology",
+      "method": "python-batch",
+      "seconds": 1.0353429890237749,
+      "query_seconds": 0.9960104820202105
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "topology",
+      "method": "python-pvesh",
+      "seconds": 3.0770525819971226,
+      "query_seconds": 3.037313840002753
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.018278358998941258,
+      "query_seconds": 0.017004339
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "inventory",
+      "method": "rust-pvesh",
+      "seconds": 4.281823325000005,
+      "query_seconds": 4.280888266
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.4034528720076196,
+      "query_seconds": 0.339374161005253
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "topology",
+      "method": "rust-pvesh",
+      "seconds": 3.0303178199974354,
+      "query_seconds": 3.02957318
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "inventory",
+      "method": "python-pvesh",
+      "seconds": 4.384125287004281,
+      "query_seconds": 4.344162550987676
+    },
+    {
+      "phase": "new_process",
+      "trial": 11,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.3409270539996214,
+      "query_seconds": 0.33933581
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.25449185399338603
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.2954371139931027
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3020919430127833
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.33049618601216935
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.33338778899633326
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.32236702198861167
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3245606549899094
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3428423329896759
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3343552200240083
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3462635359901469
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010967276
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010978593
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010931047
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011015835
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010962036
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010995402
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010978502
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010966445
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011026211
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011004975
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.377503923
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.347081445
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.376068676
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.366706029
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.359684179
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.36127816
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.337748094
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.363165883
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.339234203
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.343871012
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011342081998009235
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011264678003499284
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011258048005402088
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011245881003560498
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011231401993427426
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011230007978156209
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.01122557997587137
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.01123153799562715
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011289607995422557
+    },
+    {
+      "phase": "reused_client",
+      "trial": 0,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011239799991017208
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.34355108300223947
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3229072690010071
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.34083574399119243
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.32903397298650816
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.34019749402068555
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3168416949920356
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3267882860091049
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.329065725003602
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3322805110074114
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.32078238599933684
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.327823884
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.326000464
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.334792146
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.326099782
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.335553931
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.35219722
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.367796128
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.395890852
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.368887357
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.340077524
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011289671005215496
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011192992009455338
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011201540008187294
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011194121005246416
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011173826991580427
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011338608019286767
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011224040994420648
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011159765999764204
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011160346010001376
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.01118483001482673
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010882817
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010879148
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010803755
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010847378
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010850681
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010894766
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010872945
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010852034
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.0108339
+    },
+    {
+      "phase": "reused_client",
+      "trial": 1,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010850792
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3660946060263086
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3443623339990154
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3224538190115709
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.30044481399818324
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.2774302850011736
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.2763459599809721
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.2723747850104701
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.33509703300660476
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.33717514501768164
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.30290533299557865
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.326007063
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.267739767
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.331499843
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.328334242
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.358692134
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.33348011
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.332709445
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.345547978
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.319588647
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.332155267
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011236458987696096
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011174776998814195
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011161052010720596
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011169644974870607
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011151800979860127
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011192524019861594
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011198681982932612
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011157517990795895
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011130183993373066
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011150894017191604
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010989247
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011095383
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010970922
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011125473
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.01103472
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011056685
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011033893
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011004152
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011080936
+    },
+    {
+      "phase": "reused_client",
+      "trial": 2,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011012647
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.336945641
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.365135062
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.372989394
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.344145375
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.315371901
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.34082843
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.337713188
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.364194268
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.309450003
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.333583619
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3399929210136179
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3406877370143775
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3307196279929485
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.32238967600278556
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3525260610040277
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3348496899998281
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3449990679800976
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3501011340122204
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.344292380992556
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3681901639793068
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011311579990433529
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011241578991757706
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.01127774000633508
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011236758989980444
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011222541012102738
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011255990015342832
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011217522987863049
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.01124215399613604
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011210688011487946
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011223289999179542
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011006941
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010997037
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010928312
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011000289
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010987988
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010995285
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010958376
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010952498
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010967241
+    },
+    {
+      "phase": "reused_client",
+      "trial": 3,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011014614
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.33291887800442055
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.34904699501930736
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.34627106800326146
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.34389628598000854
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.35701928901835345
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.36022556497482583
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3448903429962229
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.37966387800406665
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.37604061601450667
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "python-http",
+      "seconds": 0.3381641300220508
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011017773
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011018491
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010964389
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010982103
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010962409
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011026518
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010946013
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011022657
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.011048595
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "rust-http",
+      "seconds": 0.010965185
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 0,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011316244985209778
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 1,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011238164006499574
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 2,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011206502007553354
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 3,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011195436003617942
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 4,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011204182985238731
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 5,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011204636975890025
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 6,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011197347979759797
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 7,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011280172009719536
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 8,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.01119566400302574
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 9,
+      "workload": "topology",
+      "method": "python-http",
+      "seconds": 0.011215023987460881
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 0,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.344393025
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 1,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.353436547
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 2,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.335798485
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 3,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.31670786
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 4,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.333375833
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 5,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.334625186
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 6,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.33020386
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 7,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.337988052
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 8,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.331924509
+    },
+    {
+      "phase": "reused_client",
+      "trial": 4,
+      "iteration": 9,
+      "workload": "inventory",
+      "method": "rust-http",
+      "seconds": 0.348223378
+    }
+  ],
+  "date": "2026-10-02",
+  "base_commit": "3a729ef085b99dae8b7d4c78a569f6894ad237a0",
+  "build": {
+    "location": "sandbox VM 104",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "target": "x86_64-unknown-linux-musl",
+    "profile": "release",
+    "reqwest": "0.12.28",
+    "rustls": "0.23.45",
+    "serde_json": "1.0.151",
+    "cargo_clippy": true,
+    "cargo_fmt": true,
+    "python_ruff": true,
+    "python_compile": true
+  },
+  "scope": {
+    "endpoint": "https://127.0.0.1:8006",
+    "inventory_gets_per_observation": 4,
+    "topology_gets_per_observation": 9,
+    "volume_count_verified": 15,
+    "lvs_and_admission_policy_included": false,
+    "mutations_and_guest_boot_included": false,
+    "outer_ssh_transport_included": false,
+    "python_http_tcp_connection_reuse_verified": true,
+    "production_transport_changed": false
+  },
+  "comparisons": [
+    {
+      "phase": "new_process",
+      "workload": "inventory",
+      "paired_blocks": 12,
+      "python_minus_rust_seconds": [
+        0.03361865901388228,
+        0.0901191140001174,
+        0.053322706022299826,
+        0.05187385200406425,
+        0.07643447601003572,
+        0.08931121899513528,
+        0.04042527501587756,
+        0.07634431298356503,
+        0.0488808510126546,
+        0.11145887296879664,
+        0.05600158902234398,
+        0.06252581800799817
+      ],
+      "median_difference_seconds": 0.05926370351517107,
+      "bootstrap_95_interval_seconds": [
+        0.050377351508359425,
+        0.0828728475025855
+      ]
+    },
+    {
+      "phase": "new_process",
+      "workload": "topology",
+      "paired_blocks": 12,
+      "python_minus_rust_seconds": [
+        0.06296719799865969,
+        0.0636956550006289,
+        0.0754602900124155,
+        0.0625508869998157,
+        0.0636781919747591,
+        0.0633354669844266,
+        0.06402458401862532,
+        0.0645609569910448,
+        0.0637457889970392,
+        0.06343379197642207,
+        0.0630318449693732,
+        0.06080743300844915
+      ],
+      "median_difference_seconds": 0.06355599197559059,
+      "bootstrap_95_interval_seconds": [
+        0.06299952148401644,
+        0.06388518650783226
+      ]
+    },
+    {
+      "phase": "reused_client",
+      "workload": "inventory",
+      "paired_blocks": 5,
+      "python_minus_rust_seconds": [
+        -0.03295274899896061,
+        -0.008765878504944924,
+        -0.01914797899642523,
+        0.0032192500034667337,
+        0.012447196011284412
+      ],
+      "median_difference_seconds": -0.008765878504944924,
+      "bootstrap_95_interval_seconds": [
+        -0.03295274899896061,
+        0.012447196011284412
+      ]
+    },
+    {
+      "phase": "reused_client",
+      "workload": "topology",
+      "paired_blocks": 5,
+      "python_minus_rust_seconds": [
+        0.00026429299728885323,
+        0.0003421435073508762,
+        0.00013104199279560108,
+        0.0002475324908690745,
+        0.00020563149172168893
+      ],
+      "median_difference_seconds": 0.0002475324908690745,
+      "bootstrap_95_interval_seconds": [
+        0.00013104199279560108,
+        0.0003421435073508762
+      ]
+    }
+  ],
+  "cleanup_and_environment": {
+    "token_revoked": true,
+    "revoked_token_http_status": 401,
+    "temporary_acls_removed": true,
+    "temporary_role_removed": true,
+    "credential_file_removed": true,
+    "python_openssl": "OpenSSL 3.5.4 30 Sep 2025",
+    "cpu_model": "Intel(R) Xeon(R) Gold 5218 CPU @ 2.30GHz",
+    "executed_sha256": {
+      "client.py": "c9c6678bb76892d80230ae98cac4ec7565af8d8adeff70789b4e59a565ee3a38",
+      "run.py": "272f3c89b63c1b9c1eb726e08cdb6afd02a5c866f616c3809465e0c85b202750",
+      "carrel-pve-read-benchmark": "f804ff16cce8640e3469318e743cd746262c52a38c92f9e2b0b44a711933baf9"
+    },
+    "production_reader_sha256": "e3d9e72e9e3295d3fb2df0d3c23b8cea9095dfd4c4d92c4c71a51c84662d2c82"
+  },
+  "source_sha256": {
+    "experiments/pve-read-benchmark/run.py": "272f3c89b63c1b9c1eb726e08cdb6afd02a5c866f616c3809465e0c85b202750",
+    "experiments/pve-read-benchmark/client.py": "c9c6678bb76892d80230ae98cac4ec7565af8d8adeff70789b4e59a565ee3a38",
+    "experiments/pve-read-benchmark/analyze.py": "10f6e8b5fccfeef4f8fe886a359a1ba36c719619465ef7a8578c40d036d74ccc",
+    "experiments/pve-read-benchmark/src/main.rs": "6b6aa409cbabc250034f04c9c3be2b78d6e801a83f7ea2d049b9d0d87e012b44",
+    "experiments/pve-read-benchmark/Cargo.lock": "18d785cd20ffea30f4420df4f60fe2f546eb7b0adf7ee42bc9e2b522f080e29a"
+  }
+}
