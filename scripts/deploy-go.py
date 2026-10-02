@@ -10,7 +10,7 @@ import argparse
 import hashlib
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +29,7 @@ def main():
     for name in names:
         if not (artifacts / name).is_file():
             raise SystemExit("Missing sandbox-built binary: " + name)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")  # noqa: UP017 (macOS Python 3.9)
     stage = "/var/lib/carrel/go-upgrade-" + stamp
     run(["ssh", "carrel01", "install -d -m 700 " + stage])
     sources = [
