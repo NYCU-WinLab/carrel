@@ -55,7 +55,7 @@ func operationSummary(op D) D {
 	if op["created_at"] != nil && op["updated_at"] != nil {
 		r["duration_seconds"] = math.Round((num(op["updated_at"])-num(op["created_at"]))*1000) / 1000
 	}
-	result := without(obj(op["result"]), "quota_before", "quota_after", "dry_run")
+	result := without(obj(op["result"]), "quota_before", "quota_after", "dry_run", "deployment")
 	if len(obj(result["delta"])) == 0 {
 		delete(result, "delta")
 	}

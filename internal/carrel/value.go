@@ -16,7 +16,7 @@ import (
 	"unicode/utf16"
 )
 
-const Version = "0.7.1"
+const Version = "0.7.2"
 
 type D = map[string]any
 

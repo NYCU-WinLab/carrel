@@ -1313,3 +1313,18 @@ Validation: Go race tests/vet and static builds, 177 Python tests, Ruff and scri
 on sandbox VM104. Live acceptance passed on disposable VM/CT guests, including paused restart/shutdown,
 owner SSH, snapshot rollback, external HTTPS/TCP and complete cleanup. See
 `docs/evaluations/2026-10-02-common-actions.md` and its JSON evidence.
+
+### 15.11 Bootstrap and discovery follow-up (0.7.2, 2026-10-02)
+
+A native CLI system-information web demo hit the old 4,096-character command argument limit with
+a 13,297-character bootstrap script, then succeeded after splitting the source across arguments.
+VM command arguments now allow up to 64 KiB of UTF-8 data each, checked before queueing or admission
+for individual creation, deployment previews and deployment application. The existing 256 KiB HTTP
+request ceiling stays in place. Larger projects should transfer files over SSH after creation.
+This extends the existing bootstrap mechanism without adding an upload API or another tool.
+
+Successful deployment summaries omit the internal allocation/cleanup receipt while retaining
+machine access, declared connections and published endpoints. Full results, durable records and
+pending/error recovery data retain the receipt. Discovery guidance directs feature questions to
+`catalog_get` and asks clients to inspect only relevant tool definitions, avoiding repeated server
+instructions across a dump of every tool. Local SSH alias setup remains the default completion step.

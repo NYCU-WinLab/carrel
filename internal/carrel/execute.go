@@ -16,6 +16,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 			_ = attempt(func() { e.S.Log(str(w["sub"]), nil, tool, a, str(obj(result["error"])["code"])) })
 		}
 	}()
+	validateBootstrapArguments(tool, a)
 	if named("async_tools", tool) && !boolean(a["dry_run"]) {
 		var t D
 		if named("admin_tools", tool) {

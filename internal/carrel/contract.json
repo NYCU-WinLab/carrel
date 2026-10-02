@@ -115,7 +115,7 @@
     },
     {
       "name": "catalog_get",
-      "description": "Get exact service.version, installed images, size presets, VM/CT restrictions, MiB/GiB units and supported capabilities together. No deployment preview needed to discover support.",
+      "description": "Use this for questions about Carrel features, images or the development environment. Get exact service.version, installed images, size presets, VM/CT restrictions, MiB/GiB units and supported capabilities together. No deployment preview needed to discover support.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -499,9 +499,10 @@
               "maxItems": 100,
               "items": {
                 "type": "string",
-                "maxLength": 4096
+                "maxLength": 65536
               }
-            }
+            },
+            "description": "VM bootstrap commands as argument arrays. Each argument is limited to 65536 UTF-8 bytes; the complete MCP HTTP request is limited to 256 KiB. Use scp/rsync over SSH after creation for larger project files."
           },
           "tenant": {
             "type": "string",
@@ -4014,9 +4015,10 @@
                     "maxItems": 100,
                     "items": {
                       "type": "string",
-                      "maxLength": 4096
+                      "maxLength": 65536
                     }
-                  }
+                  },
+                  "description": "VM bootstrap commands as argument arrays. Each argument is limited to 65536 UTF-8 bytes; the complete MCP HTTP request is limited to 256 KiB. Use scp/rsync over SSH after creation for larger project files."
                 }
               },
               "required": [
@@ -4372,9 +4374,10 @@
                     "maxItems": 100,
                     "items": {
                       "type": "string",
-                      "maxLength": 4096
+                      "maxLength": 65536
                     }
-                  }
+                  },
+                  "description": "VM bootstrap commands as argument arrays. Each argument is limited to 65536 UTF-8 bytes; the complete MCP HTTP request is limited to 256 KiB. Use scp/rsync over SSH after creation for larger project files."
                 }
               },
               "required": [
@@ -4953,5 +4956,5 @@
       "survives_host_restart": false
     }
   },
-  "instructions": "WinLab machines through MCP. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk, prepared development tools. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota/SSH check just to prove completion. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power is live. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources."
+  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk, prepared development tools. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota/SSH check just to prove completion. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power is live. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources."
 }
