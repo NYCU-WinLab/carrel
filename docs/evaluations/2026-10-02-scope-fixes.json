@@ -545,7 +545,7 @@
     {
       "case": "allowed_source",
       "chunk_id": "15ad4b",
-      "wall_time_seconds": 0.000008208,
+      "wall_time_seconds": 8.208e-06,
       "exit_code": 255,
       "original_token_count": 33,
       "output": "No ED25519 host key is known for [carrel.winlab.tw]:20031 and you have requested strict checking.\r\nHost key verification failed.\r\n"
@@ -561,7 +561,7 @@
     {
       "case": "public_https",
       "chunk_id": "74b607",
-      "wall_time_seconds": 0.000007209,
+      "wall_time_seconds": 7.209e-06,
       "exit_code": 0,
       "original_token_count": 5,
       "output": "carrel-scope-v08\n"
@@ -585,7 +585,7 @@
     {
       "case": "blocked_source_completion",
       "chunk_id": "b1233a",
-      "wall_time_seconds": 0.000023875,
+      "wall_time_seconds": 2.3875e-05,
       "exit_code": 28,
       "original_token_count": 0,
       "output": ""
@@ -1820,7 +1820,7 @@
       "wall_time_seconds": 0.671340209,
       "exit_code": 0,
       "original_token_count": 85,
-      "output": "/dev/sda3 ext4\nNAME          SIZE FSTYPE  MOUNTPOINTS\nsda    26843545600         \n├─sda1     3145728         \n├─sda2   130023424 vfat    /boot/efi\n└─sda3 21340601856 ext4    /\nsr0        4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda3      20922114048 6280921088 13664845824  32% /\n"
+      "output": "/dev/sda3 ext4\nNAME          SIZE FSTYPE  MOUNTPOINTS\nsda    26843545600         \n\u251c\u2500sda1     3145728         \n\u251c\u2500sda2   130023424 vfat    /boot/efi\n\u2514\u2500sda3 21340601856 ext4    /\nsr0        4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda3      20922114048 6280921088 13664845824  32% /\n"
     },
     {
       "case": "debian_owner_filesystem_growth",
@@ -1985,7 +1985,7 @@
     {
       "case": "public_tcp_body",
       "chunk_id": "36bc0c",
-      "wall_time_seconds": 0.000007,
+      "wall_time_seconds": 7e-06,
       "exit_code": 0,
       "original_token_count": 5,
       "output": "carrel-scope-v08\n"
@@ -2479,7 +2479,7 @@
     {
       "case": "paused_guard_pve_network_config",
       "chunk_id": "ea9158",
-      "wall_time_seconds": 0.000013417,
+      "wall_time_seconds": 1.3417e-05,
       "exit_code": 0,
       "original_token_count": 47,
       "output": "[{\"key\": \"net1\", \"value\": \"virtio=02:cb:03:02:01:01,bridge=p00301,firewall=0,mtu=1,rate=100\"}, {\"key\": \"net0\", \"value\": \"virtio=02:ca:03:02:00:01,bridge=t003,firewall=1,mtu=1,rate=12.5\"}]\n"
@@ -2960,15 +2960,15 @@
       "wall_time_seconds": 0.149784042,
       "exit_code": 0,
       "original_token_count": 92,
-      "output": "NAME           SIZE FSTYPE  MOUNTPOINTS\nsda     26843545600         \n├─sda1  20400029184 ext4    /\n├─sda14     4194304         \n├─sda15   111149056 vfat    /boot/efi\n└─sda16   957350400 ext4    /boot\nsr0         4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda1      19682557952 7190503424 12475277312  37% /\n"
+      "output": "NAME           SIZE FSTYPE  MOUNTPOINTS\nsda     26843545600         \n\u251c\u2500sda1  20400029184 ext4    /\n\u251c\u2500sda14     4194304         \n\u251c\u2500sda15   111149056 vfat    /boot/efi\n\u2514\u2500sda16   957350400 ext4    /boot\nsr0         4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda1      19682557952 7190503424 12475277312  37% /\n"
     },
     {
       "case": "ubuntu_initial_filesystem_and_service_timing",
       "chunk_id": "511980",
-      "wall_time_seconds": 0.000011292,
+      "wall_time_seconds": 1.1292e-05,
       "exit_code": 0,
       "original_token_count": 300,
-      "output": "scope-u-v08\n/dev/sda1 ext4\nNAME           SIZE FSTYPE  MOUNTPOINTS\nsda     21474836480         \n├─sda1  20400029184 ext4    /\n├─sda14     4194304         \n├─sda15   111149056 vfat    /boot/efi\n└─sda16   957350400 ext4    /boot\nsr0         4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda1      19682557952 7073775616 12592005120  36% /\n[   34.976387] scope-u-v08 systemd[1]: Started scope-v08-delay.service - /bin/sh -c \"sleep 25; systemctl enable --now scope-v08-app.service\".\n[   59.999034] scope-u-v08 systemctl[1675]: Created symlink /etc/systemd/system/multi-user.target.wants/scope-v08-app.service → /etc/systemd/system/scope-v08-app.service.\n[   60.363069] scope-u-v08 systemd[1]: Started scope-v08-app.service - Scope acceptance app.\n[   60.363651] scope-u-v08 systemd[1]: scope-v08-delay.service: Deactivated successfully.\n[   96.580215] scope-u-v08 python3[1720]: 127.0.0.1 - - [02/Oct/2026 15:39:42] \"GET / HTTP/1.1\" 200 -\n[  117.847519] scope-u-v08 python3[1720]: 127.0.0.1 - - [02/Oct/2026 15:40:03] \"GET / HTTP/1.1\" 200 -\n[  137.529623] scope-u-v08 python3[1720]: 127.0.0.1 - - [02/Oct/2026 15:40:23] \"GET / HTTP/1.1\" 200 -\n"
+      "output": "scope-u-v08\n/dev/sda1 ext4\nNAME           SIZE FSTYPE  MOUNTPOINTS\nsda     21474836480         \n\u251c\u2500sda1  20400029184 ext4    /\n\u251c\u2500sda14     4194304         \n\u251c\u2500sda15   111149056 vfat    /boot/efi\n\u2514\u2500sda16   957350400 ext4    /boot\nsr0         4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda1      19682557952 7073775616 12592005120  36% /\n[   34.976387] scope-u-v08 systemd[1]: Started scope-v08-delay.service - /bin/sh -c \"sleep 25; systemctl enable --now scope-v08-app.service\".\n[   59.999034] scope-u-v08 systemctl[1675]: Created symlink /etc/systemd/system/multi-user.target.wants/scope-v08-app.service \u2192 /etc/systemd/system/scope-v08-app.service.\n[   60.363069] scope-u-v08 systemd[1]: Started scope-v08-app.service - Scope acceptance app.\n[   60.363651] scope-u-v08 systemd[1]: scope-v08-delay.service: Deactivated successfully.\n[   96.580215] scope-u-v08 python3[1720]: 127.0.0.1 - - [02/Oct/2026 15:39:42] \"GET / HTTP/1.1\" 200 -\n[  117.847519] scope-u-v08 python3[1720]: 127.0.0.1 - - [02/Oct/2026 15:40:03] \"GET / HTTP/1.1\" 200 -\n[  137.529623] scope-u-v08 python3[1720]: 127.0.0.1 - - [02/Oct/2026 15:40:23] \"GET / HTTP/1.1\" 200 -\n"
     },
     {
       "case": "ubuntu_reboot_after_block_growth",
@@ -3048,7 +3048,7 @@
       "wall_time_seconds": 0.702543375,
       "exit_code": 0,
       "original_token_count": 102,
-      "output": "/dev/sda1 ext4\nNAME           SIZE FSTYPE  MOUNTPOINTS\nsda     26843545600         \n├─sda1  25768738304 ext4    /\n├─sda14     4194304         \n├─sda15   111149056 vfat    /boot/efi\n└─sda16   957350400 ext4    /boot\nsr0         4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda1      24883167232 7202971648 17663418368  29% /\ncarrel-ubuntu-scope-v08\n"
+      "output": "/dev/sda1 ext4\nNAME           SIZE FSTYPE  MOUNTPOINTS\nsda     26843545600         \n\u251c\u2500sda1  25768738304 ext4    /\n\u251c\u2500sda14     4194304         \n\u251c\u2500sda15   111149056 vfat    /boot/efi\n\u2514\u2500sda16   957350400 ext4    /boot\nsr0         4194304 iso9660 \nFilesystem       1B-blocks       Used   Available Use% Mounted on\n/dev/sda1      24883167232 7202971648 17663418368  29% /\ncarrel-ubuntu-scope-v08\n"
     },
     {
       "case": "delete_ubuntu_fixture",
@@ -3308,7 +3308,6 @@
       "output": "200\n"
     }
   ],
-  "deployed_revision": "24b5860b2129b7d527c6e42a47b5760812d5e435",
   "cleanup": {
     "machines": [
       "ubuntu",
@@ -3336,5 +3335,16 @@
       36978422816,
       36979334832
     ]
+  },
+  "initial_deployed_revision": "24b5860b2129b7d527c6e42a47b5760812d5e435",
+  "runtime_revisions": [
+    "24b5860b2129b7d527c6e42a47b5760812d5e435",
+    "ea659092f100ca1b6738d322f4de1eafaf0b037e",
+    "b9714f115227e062ed278d16efac98ea82565023"
+  ],
+  "release_sha256": {
+    "carrel": "02579fd0960028b0183dc0087f306a4a7760da9e9b24fd49007b785e6462c19d",
+    "carrel-pve-read": "7a5bbe9f5ea68d1bb3eee9779b31937b01175c453c05f0cda7a14917ccda82da",
+    "node-agent.py": "e8e6c097c1aba3a759a5e4fc6b7fdc973636be858f2d0f91540fdcce0ddbccd6"
   }
 }
