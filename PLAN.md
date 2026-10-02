@@ -1180,8 +1180,12 @@ Template sanitation removes SSH keys, guest status credentials, cloud-init state
 Results include tenant-scoped SSH aliases and the client stanza required to use them. An alias can look
 like `<machine>.<tenant>.winlab.tw`, but it selects the allocated port through local SSH configuration.
 DNS alone cannot select guests sharing an IPv4 address and port because SSH sends no destination-hostname
-routing field. Direct public-port commands remain available without client setup. Pure SSH provisioning
-and subsecond warm capacity are separate product decisions, not claims of this release.
+routing field. In local CLI clients, creation and connection requests include merging the returned
+tenant-qualified SSH stanza without replacing unrelated entries, checking HostName/User/Port with
+`ssh -G`, and presenting the short command. No separate alias request is needed. Status-only requests
+do not modify client configuration. Direct public-port commands remain the fallback when client file
+access is unavailable, setup is excluded by the user, or setup fails. Host-key checks stay enabled.
+Pure SSH provisioning and subsecond warm capacity are separate product decisions, not claims of this release.
 
 Live [0.5 acceptance](docs/evaluations/2026-10-02-fast-create.md) measured two Debian creations at
 about 42 seconds and an Ubuntu creation at 46 seconds, each returning verified readiness from one
