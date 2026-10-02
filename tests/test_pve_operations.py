@@ -209,3 +209,98 @@ sub encode_json { JSON::PP::encode_json($_[0]) }
     for arguments in [["delete"], ["inventory", "/nodes/other/status"]]:
         result = subprocess.run([*command, *arguments], capture_output=True, check=False)
         assert result.returncode and not result.stdout
+
+
+@pytest.mark.parametrize(
+    "action,before,after,command,onboot",
+    [
+        ("pause", "running", "paused", "suspend", 0),
+        ("resume", "paused", "running", "resume", 1),
+        ("start", "paused", "running", "resume", 1),
+        ("start", "stopped", "running", "start", 1),
+        ("shutdown", "running", "stopped", "shutdown", 0),
+        ("stop", "paused", "stopped", "stop", 0),
+        ("reboot", "running", "running", "reboot", 1),
+    ],
+)
+def test_power_verifies_transitions_and_never_implicitly_forces_shutdown(
+    monkeypatch, action, before, after, command, onboot
+):
+    module = script("node-agent.py")
+    states = iter([before, after])
+    calls = []
+    monkeypatch.setattr(module, "power_status", lambda m: next(states))
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append((a, kw)))
+    result = module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1 - onboot}, action)
+    assert result["power_state"] == after
+    assert result["changed"]
+    assert result["boot_changed"] == (action == "reboot" or before == "stopped")
+    assert calls[0][0][:3] == ("qm", command, 10100)
+    assert calls[-1][0] == ("qm", "set", 10100, "--onboot", onboot)
+    if action == "pause":
+        assert calls[0][0][-2:] == ("--todisk", "0")
+    if action == "shutdown":
+        assert calls[0][0][-2:] == ("--forceStop", "0")
+        assert not any(a[1] == "stop" for a, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "action,state,onboot",
+    [("start", "running", 1), ("shutdown", "stopped", 0), ("pause", "paused", 0), ("resume", "running", 1)],
+)
+def test_repeated_power_requests_are_noops(monkeypatch, action, state, onboot):
+    module = script("node-agent.py")
+    monkeypatch.setattr(module, "power_status", lambda m: state)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a))
+    result = module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": onboot}, action)
+    assert result == {"power_state": state, "changed": False, "boot_changed": False}
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "action,state",
+    [
+        ("pause", "stopped"),
+        ("resume", "stopped"),
+        ("reboot", "stopped"),
+        ("shutdown", "paused"),
+        ("reboot", "paused"),
+    ],
+)
+def test_invalid_power_transition_makes_no_changes(monkeypatch, action, state):
+    module = script("node-agent.py")
+    monkeypatch.setattr(module, "power_status", lambda m: state)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a))
+    with pytest.raises(ValueError):
+        module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, action)
+    assert calls == []
+
+
+def test_power_timeout_does_not_turn_into_force_stop_or_success(monkeypatch):
+    module = script("node-agent.py")
+    monkeypatch.setattr(module, "power_status", lambda m: "running")
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("graceful timeout")
+
+    monkeypatch.setattr(module, "run", fail)
+    with pytest.raises(RuntimeError, match="graceful timeout"):
+        module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, "shutdown")
+    assert len(calls) == 1 and calls[0][1] == "shutdown"
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a))
+    with pytest.raises(ValueError, match="not confirmed"):
+        module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, "pause")
+    assert not any(a[1] == "set" for a in calls)
+    for action in ("pause", "resume"):
+        with pytest.raises(ValueError, match="CT checkpoint"):
+            module.power_action({"vmid": 10100, "kind": "ct"}, {}, action)
+
+
+def test_qemu_paused_status_is_not_running(monkeypatch):
+    module = script("node-agent.py")
+    monkeypatch.setattr(module, "api", lambda *a, **kw: {"status": "running", "qmpstatus": "paused"})
+    assert module.power_status({"kind": "vm", "vmid": 10100}) == "paused"

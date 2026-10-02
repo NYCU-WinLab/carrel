@@ -72,6 +72,55 @@ for project dependencies. CTs keep their minimal distribution environment; use a
 creation, so discovery and previews are optional. The call waits up to 55 seconds for SSH and
 initialization readiness. If still pending, use the returned operation ID to continue waiting.
 
+### Everyday requests
+
+Use the known machine name directly. Normal member work does not need operator memories,
+infrastructure runbooks, hypervisor access, or a preliminary list/quota/catalog call.
+Choose the tenant only for project resources or an explicitly selected account.
+
+| Request | Direct tool call |
+|---|---|
+| Create a sandbox | `machine_create(name="sandbox")`, using saved keys or an inline public key |
+| Show status or connect | `machine_get(machine="sandbox")` |
+| Start or wake a VM | `machine_power(machine="sandbox", action="start")` |
+| Gracefully turn it off | `machine_power(machine="sandbox", action="shutdown")` |
+| Restart | `machine_power(machine="sandbox", action="reboot")` |
+| Pause / continue a VM | `machine_power(machine="sandbox", action="pause" / "resume")` |
+| Change RAM | `machine_resize(machine="sandbox", memory_mb=4096)` |
+| Save / restore disk contents | `snapshot_create` / `snapshot_rollback` with the machine and snapshot name |
+| Publish a running service | `domain_add` for HTTPS, `port_open` for TCP/UDP |
+| Permanently remove it | `machine_delete(machine="sandbox", confirm="sandbox")` |
+
+Member infrastructure mutations wait up to 55 seconds by default, so quick actions finish in one
+call. Inspect the returned operation. A successful result needs no extra poll/list/quota call.
+Only pending jobs need `operation_get`. Set `wait_seconds=0` for immediate submission.
+Successful responses default to a concise outcome, machine/access details and nonempty resource
+delta. Use `detail="full"` for complete accounting and internal identifiers; durable results always
+retain those details. Previews, errors, partial cleanup and recovery instructions are preserved.
+`machine_list` reports recorded state; `machine_get` observes live power state.
+
+Start also resumes a paused VM. Start, resume and reboot wait for SSH and initialization readiness;
+reboot and a stopped-to-running transition require a fresh boot report. Repeating start, shutdown,
+pause or resume in the requested state is safe. A repeated reboot is another reboot unless the same
+idempotency key identifies a lost submission.
+
+Pause freezes VM execution in RAM. It retains memory allocation, disks and quota, and cannot
+survive host power loss. It sets automatic boot off until resume/start. CT pause/resume is
+unsupported because PVE's CT suspension is experimental disk checkpointing. Resume a paused VM
+before graceful shutdown/reboot. `stop` force-powers off and is only for explicit force-stop
+requests; graceful shutdown never falls back to it. Shutdown preserves disks and reservations.
+Deletion permanently removes disks, snapshots and grants, and must represent explicit deletion
+intent. Its `confirm` field records that authorization; it does not require a redundant preview.
+
+Only send the resource fields requested when resizing. CPU/RAM reductions require a stopped guest;
+do not stop running work without authorization. Running guests may require a restart for configured
+CPU/RAM changes. Disk shrinking is unsupported. Snapshot rollback restores disk contents, not a
+paused process or RAM; resume or shut down a paused VM before disk rollback. Publishing configures routing; verify the actual application separately.
+
+Save the client's chosen public key once with `ssh_key_add` to omit `ssh_keys` on future creations.
+If no saved key is known, read only the known default public key and pass it inline. Do not inspect
+unrelated SSH aliases or scan private keys. Inline public keys are not saved automatically.
+
 Use `whoami` for the running `service.version`, your default tenant, capabilities and all personal/project quotas, including
 used, limit and remaining. `catalog_get` also returns the version, images, size presets and VM/CT restrictions; `capacity_get` reports
 shared physical capacity and admission headroom without exposing other tenants' machines.
@@ -119,7 +168,7 @@ For creation, pass your **public** key inline or save it with `ssh_key_add`. Onl
 returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
 For an authorized group, call `deployment_apply` directly, or apply the same specification as a previous
 `deployment_plan`. Creation returns a durable `operation` and waits up to 55 seconds by default.
-Set `wait_seconds=0` for immediate submission. Other infrastructure mutations return immediately.
+Set `wait_seconds=0` for immediate submission. Other member infrastructure mutations also wait up to 55 seconds.
 **Queued is not a capacity reservation or success**. A completed creation includes SSH and readiness in
 `operation.result`; no polling call is needed. Otherwise, `operation_get` with an ID waits up to 55 seconds
 (set `wait_seconds=0` for an immediate status). Poll at the returned interval, inspect the terminal state,
@@ -212,9 +261,6 @@ callable compatibility aliases but are omitted from discovery. Custom image stor
 supported, so `images_gb` is hidden from quota responses and requests; stored limits are preserved.
 GPU allocation is unsupported; hardware GPU inventory is unknown.
 
-Snapshots cover disk contents. Rollback can stop the guest; the result reports its actual
-`power_state` and, when stopped, the `machine_power` call needed to start it again.
-
 Implemented: VM/CT lifecycle, stable image templates, public SSH/port grants, tenant HTTPS domains,
 private L2 networks and NICs, explicit cross-tenant TCP grants, snapshots, quota requests/approval,
 audit records, and reconciliation. [PLAN.md](PLAN.md#154-member-platform-deployment) records the
@@ -250,8 +296,10 @@ python3 -m compileall -q scripts
 Go owns the MCP server, OAuth, durable jobs, admission, state and backups. The existing bounded
 Python node/edge mutation adapters and guest reporter remain; certificate issuance still uses
 certbot. The Python control-plane source is retained as a behavioral reference, with 79 frozen
-cross-language parity cases. `scripts/export-go-contract.py` and `scripts/export-go-parity.py`
-regenerate those reference fixtures; they are not runtime dependencies.
+cross-language parity cases. The live wire contract is `internal/carrel/contract.json`.
+`scripts/export-go-contract.py` exports the legacy Python contract to `internal/carrel/testdata/python-contract.json`,
+never over the current Go contract. `scripts/export-go-parity.py` regenerates the frozen reference
+fixtures; neither script is a runtime dependency.
 
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its

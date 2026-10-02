@@ -112,10 +112,10 @@ try:
   try:
    request=urllib.request.Request('http://10.200.0.3:8080/healthz',headers={{'Host':'carrel.winlab.tw'}})
    health=json.load(urllib.request.urlopen(request,timeout=2))
-   if health.get('version')=='0.6.0': break
+   if health.get('version')=='0.7.0': break
   except (OSError,ValueError): pass
   time.sleep(1)
- assert health and health.get('version')=='0.6.0', 'Go health check failed'
+ assert health and health.get('version')=='0.7.0', 'Go health check failed'
  ct('systemctl','is-active','carrel')
  print(json.dumps({{'health':health,'volumes':len(new['volumes']),'node_backup':str(stage),'control_backup':'/opt/carrel/rollback/go-{stamp}.tar.gz'}}))
 except BaseException:
@@ -135,7 +135,7 @@ finally:
     run(["ssh", "carrel01", "python3 -"], input=program)
     revision = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True).stdout.strip()
     report = {
-        "version": "0.6.0",
+        "version": "0.7.0",
         "revision": revision,
         "stamp": stamp,
         "sha256": hashes,

@@ -737,6 +737,52 @@ def create(m):
     return {"state": "running", "vmid": vmid}
 
 
+def power_status(m):
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    status = api("get", f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+    if status.get("qmpstatus") in ("paused", "suspended", "prelaunch"):
+        return "paused"
+    return status.get("status", "unknown")
+
+
+def power_action(m, cfg, op):
+    # CT suspend uses experimental disk checkpoints, not an in-memory pause.
+    if op in ("pause", "resume") and m["kind"] != "vm":
+        raise ValueError("pause/resume require a VM; CT checkpoint is unsupported")
+    cmd = "qm" if m["kind"] == "vm" else "pct"
+    vmid = m["vmid"]
+    before = power_status(m)
+    if before not in ("running", "stopped", "paused"):
+        raise ValueError("cannot confirm current power state")
+    if op in ("shutdown", "reboot") and before == "paused":
+        raise ValueError("resume the paused VM before graceful shutdown or reboot")
+    if op in ("pause", "resume", "reboot") and before == "stopped":
+        raise ValueError("start the stopped machine first")
+    desired = "stopped" if op in ("stop", "shutdown") else "paused" if op == "pause" else "running"
+    transition = before != desired or op == "reboot"
+    if transition:
+        actual = "resume" if op == "start" and before == "paused" else "suspend" if op == "pause" else op
+        args = [cmd, actual, vmid]
+        if op == "pause":
+            args += ["--todisk", "0"]
+        if op == "shutdown":
+            # Never fall back to forced power-off on a graceful shutdown timeout.
+            args += ["--timeout", "150", "--forceStop", "0"]
+        run(*args, timeout=180)
+    after = power_status(m) if transition else before
+    if after != desired:
+        raise ValueError(f"power transition not confirmed: expected {desired}, observed {after}")
+    onboot = 1 if desired == "running" else 0
+    config_changed = int(cfg.get("onboot", 0)) != onboot
+    if config_changed:
+        run(cmd, "set", vmid, "--onboot", onboot)
+    return {
+        "power_state": after,
+        "changed": transition or config_changed,
+        "boot_changed": op == "reboot" or (op == "start" and before == "stopped"),
+    }
+
+
 def action(req):
     m = req["machine"]
     if req["action"] == "delete" and not any(Path(f"/etc/pve/{kind}/{machine(m)}.conf").exists() for kind in ("qemu-server", "lxc")):
@@ -745,11 +791,8 @@ def action(req):
     cmd = "qm" if m["kind"] == "vm" else "pct"
     vmid = m["vmid"]
     op = req["action"]
-    if op in ["start", "shutdown", "stop", "reboot"]:
-        run(cmd, "set", vmid, "--onboot", "0" if op in ("stop", "shutdown") else "1")
-        running = "running" in run(cmd, "status", vmid)
-        if (op in ("stop", "shutdown") and running) or (op == "start" and not running) or op == "reboot":
-            run(cmd, op, vmid, timeout=180)
+    if op in ["start", "shutdown", "stop", "reboot", "pause", "resume"]:
+        return power_action(m, cfg, op)
     elif op == "delete":
         if req.get("confirm") != m["name"]:
             raise ValueError("confirmation mismatch")

@@ -1,4 +1,4 @@
-"""Freeze the Python 0.5 contract for the Go migration and differential tests."""
+"""Export the legacy Python contract for comparison, never overwrite the live Go contract."""
 
 import ast
 import json
@@ -28,6 +28,6 @@ data = {
     "capabilities": CAPABILITIES,
     "instructions": instructions,
 }
-dest = root / "internal/carrel/contract.json"
+dest = root / "internal/carrel/testdata/python-contract.json"
 dest.parent.mkdir(parents=True, exist_ok=True)
 dest.write_text(json.dumps(data, indent=2) + "\n")

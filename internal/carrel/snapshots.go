@@ -50,8 +50,11 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			restore = obj(e.Op["rollback_restore"])
 			if len(restore) == 0 {
 				status := obj(e.Call(D{"op": "status", "machine": m}))
+				if powerState(status) == "paused" {
+					fail("conflict", "Resume or shut down the VM before disk rollback; rollback cannot preserve paused memory")
+				}
 				report := obj(e.S.Get("guest_reports", str(m["vmid"])))
-				restore = D{"running": status["status"] == "running", "boot_id": report["boot_id"]}
+				restore = D{"running": powerState(status) == "running", "boot_id": report["boot_id"]}
 				e.Op["rollback_restore"] = restore
 				e.P.Operations.Save(e.Op)
 			}
@@ -77,6 +80,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			} else {
 				m["state"] = "stopped"
 			}
+			m["power_state"] = state
 			e.Put("machines", m["vmid"], n, m)
 			effects = D{"power_state": state, "power_state_restored": true}
 		}
