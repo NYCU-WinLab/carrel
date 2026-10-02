@@ -1,6 +1,9 @@
 package carrel
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // Compact only the MCP presentation. Durable results retain the full accounting
 // and allocation identities for retries, diagnostics and detail=full clients.
@@ -59,6 +62,18 @@ func operationSummary(op D) D {
 			out = append(out, machineSummary(m))
 		}
 		result["machines"] = out
+	}
+	if snapshot, ok := result["snapshot"]; ok {
+		result["snapshot"] = pick(obj(snapshot), "name", "state", "disk_gb")
+		delete(result, "snapshot_storage")
+	}
+	if port, ok := result["port"]; ok {
+		pub := pick(obj(port), "id", "public_port", "port", "proto", "state")
+		if op["tool"] == "port_open" {
+			pub["endpoint"] = fmt.Sprintf("carrel.winlab.tw:%d", integer(pub["public_port"]))
+			pub["verification"] = "routing_configured"
+		}
+		result["port"] = pub
 	}
 	r["result"] = result
 	return r

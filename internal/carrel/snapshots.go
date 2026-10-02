@@ -94,5 +94,9 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 	if dry {
 		q = e.Quota(t, delta)
 	}
-	return merge(D{"snapshot": snap, "snapshot_storage": e.SnapshotUsage(t), "dry_run": dry, "quota_after": q}, effects)
+	r := merge(D{"snapshot": snap, "snapshot_storage": e.SnapshotUsage(t), "dry_run": dry, "quota_after": q}, effects)
+	if !dry && tool == "snapshot_rollback" {
+		r["machine"] = e.PublicMachine(m, e.S.Objects("ports", n))
+	}
+	return r
 }
