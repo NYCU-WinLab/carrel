@@ -182,12 +182,16 @@ cleans up only resources introduced by a deployment; `keep` preserves them for d
 cleanup retains allocations and reports the remaining resources. Retry `cleanup_failed` to finish
 cleanup, then retry the resulting `rolled_back` job if a fresh deployment is wanted.
 
-Each machine also returns `ssh_config` and `ssh_short`. Install the stanza once in the connecting
-client's `~/.ssh/config` (or an included file) to use `ssh <machine>.<tenant>` or
-`ssh <machine>.<tenant>.winlab.tw`. These aliases select the existing public SSH port and guest user;
-they do not require DNS records. The direct `ssh -p ... user@carrel.winlab.tw` command remains available
-without setup. Verify the alias with `ssh -G` before presenting it as ready to use. Machine deletion and
-name reuse can change its port and host key; refresh its stanza and verify the new host identity.
+Each machine also returns `ssh_config` and `ssh_short`. For a local CLI agent, completing a creation
+or connection request includes installing this stanza in the client's `~/.ssh/config` (or an included
+file), preserving existing entries. Use the returned tenant-qualified alias, check its HostName/User/Port
+with `ssh -G <machine>.<tenant>`, and present `ssh_short` as the primary connection command. This setup
+is part of the request; do not wait for a separate request for an alias. Status-only requests need no
+local changes. If local file access is unavailable, the user excludes setup, or setup fails, return the
+direct `ssh -p ... user@carrel.winlab.tw` command and explain why the alias is not ready.
+The alternate `ssh <machine>.<tenant>.winlab.tw` uses the same stanza. These are local client aliases,
+not DNS routes. Machine deletion and name reuse can change the port and host key; refresh the relevant
+stanza and verify the new host identity. Never disable host-key checking or replace unrelated aliases.
 A bare SSH connection does not provision machines; creation remains authenticated through MCP.
 
 Read-only tools do not wait for the infrastructure writer. The Go scheduler serializes admission and
