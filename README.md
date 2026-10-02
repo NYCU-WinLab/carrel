@@ -69,7 +69,7 @@ Docker with Compose, Git, curl, jq, unzip and pkg-config. Docker starts automati
 belongs to the docker group (equivalent to root access within their own VM). Use a Python venv
 for project dependencies. CTs keep their minimal distribution environment; use a VM for Docker.
 `catalog_get.vm_environment` identifies the environment installed at the current site. Admission checks run within
-creation, so discovery and previews are optional. The call waits up to 45 seconds for SSH and
+creation, so discovery and previews are optional. The call waits up to 55 seconds for SSH and
 initialization readiness. If still pending, use the returned operation ID to continue waiting.
 
 Use `whoami` for the running `service.version`, your default tenant, capabilities and all personal/project quotas, including
@@ -118,10 +118,10 @@ Choose `restricted` explicitly when only designated callers should reach a servi
 For creation, pass your **public** key inline or save it with `ssh_key_add`. Only actual creation
 returns allocated identifiers and the public SSH command. VM user: `user`; CT user: `root`.
 For an authorized group, call `deployment_apply` directly, or apply the same specification as a previous
-`deployment_plan`. Creation returns a durable `operation` and waits up to 45 seconds by default.
+`deployment_plan`. Creation returns a durable `operation` and waits up to 55 seconds by default.
 Set `wait_seconds=0` for immediate submission. Other infrastructure mutations return immediately.
 **Queued is not a capacity reservation or success**. A completed creation includes SSH and readiness in
-`operation.result`; no polling call is needed. Otherwise, `operation_get` with an ID waits up to 45 seconds
+`operation.result`; no polling call is needed. Otherwise, `operation_get` with an ID waits up to 55 seconds
 (set `wait_seconds=0` for an immediate status). Poll at the returned interval, inspect the terminal state,
 and follow `next_action`. Certificate-budget waits return `waiting` and `ready_at`, release the
 infrastructure writer and resume automatically. Use `operation_retry` to resume a failure.
@@ -189,6 +189,8 @@ The [0.4 intent acceptance](docs/evaluations/2026-10-01-intent.md) records the c
 and restricted connectivity checks.
 The [0.4.2 native agent acceptance](docs/evaluations/2026-10-01-agent-intent.md) records natural-language
 discovery, previews, actual VM/publication/connection workflows and independent connectivity probes.
+The [0.5 direct creation acceptance](docs/evaluations/2026-10-02-fast-create.md) records 42-second Debian
+and 46-second Ubuntu creation, prepared development environments and linked-clone isolation/rollback.
 
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
@@ -234,6 +236,7 @@ SHA-256. It installs current updates and the development environment, verifies t
 retains unattended security updates, removes machine
 identity and SSH keys, and emits a hashed manifest. Copy both prepared images/manifests to the node,
 then run `scripts/build-templates.py --prepared-dir <directory> --vmid-base <fresh-id>` there.
+Allow at least 6 GiB of free image workspace plus space for the libguestfs appliance cache.
 After verifying the candidates, install the generated `templates.json` as `/etc/carrel/templates.json`.
 Keep previous generations for rollback. Existing template IDs are never overwritten.
 New VM disks use LVM-thin linked clones; guest writes remain isolated. Requested extra packages still

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare a key-free VM image in the development sandbox, never on the PVE host.
 
-Requires guestfs-tools and qemu-utils. Input must be a verified vendor image.
+Requires guestfs-tools, guestfish and qemu-utils. Input must be a verified vendor image.
 The output manifest is consumed by build-templates.py --prepared-dir on the node.
 """
 
@@ -39,8 +39,12 @@ def main():
     output = args.output_dir / (args.image + ".qcow2")
     if output.exists():
         parser.error("output already exists; use a new build directory")
-    run("qemu-img", "create", "-f", "qcow2", output, "10G")
-    run("virt-resize", "--expand", "/dev/sda1", args.source, output)
+    # Preserve partition numbers, GUIDs and boot-loader offsets. virt-resize can
+    # renumber Ubuntu's separate /boot partition and leave BIOS GRUB in rescue.
+    run("qemu-img", "convert", "-O", "qcow2", args.source, output)
+    run("qemu-img", "resize", output, "10G")
+    run("guestfish", "-a", output, "run", ":", "part-expand-gpt", "/dev/sda", ":",
+        "part-resize", "/dev/sda", "1", str(10 * 1024**3 // 512 - 34), ":", "resize2fs", "/dev/sda1")
     node_base = "https://nodejs.org/dist/latest-v24.x/"
     sums = urllib.request.urlopen(node_base + "SHASUMS256.txt", timeout=30).read().decode()
     node_hash, node_name = next(line.split() for line in sums.splitlines() if line.endswith("-linux-x64.tar.xz"))

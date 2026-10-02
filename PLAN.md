@@ -1160,7 +1160,7 @@ service reports 0.4.0 and final installed hashes match. See the
 ### 15.7 Direct creation and prepared development VMs (0.5, 2026-10-02)
 
 An authorized single-machine request uses `machine_create` directly. Discovery and previews remain
-available when requested. Creation calls wait up to 45 seconds for verified readiness; a bounded
+available when requested. Creation calls wait up to 55 seconds for verified readiness; a bounded
 wait or client disconnect preserves the durable worker. `wait_seconds` is response policy, excluded
 from idempotency identity. Pending work is continued with `operation_get`.
 
@@ -1181,3 +1181,10 @@ like `<machine>.<tenant>.winlab.tw`, but it selects the allocated port through l
 DNS alone cannot select guests sharing an IPv4 address and port because SSH sends no destination-hostname
 routing field. Direct public-port commands remain available without client setup. Pure SSH provisioning
 and subsecond warm capacity are separate product decisions, not claims of this release.
+
+Live [0.5 acceptance](docs/evaluations/2026-10-02-fast-create.md) measured two Debian creations at
+about 42 seconds and an Ubuntu creation at 46 seconds, each returning verified readiness from one
+tool call. The prior Debian server operation took 97.71 seconds, including 39.205 seconds of base
+package installation. Adapter timing attributes the remaining time primarily to PVE operations
+and guest readiness. Optimize these paths before considering a language rewrite. The current
+serialized writer can add queueing under concurrent demand; no concurrency SLA is established.

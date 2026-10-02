@@ -542,7 +542,7 @@ class Platform(Lifecycle, Intent):
                 self.store.log(who["sub"], t["n"], tool, args, "queued")
                 if tool in {"machine_create", "deployment_apply"}:
                     result["operation"] = await self.operations.wait(
-                        t, result["operation"]["id"], args.get("wait_seconds", 45)
+                        t, result["operation"]["id"], args.get("wait_seconds", 55)
                     )
                 return {"ok": True, **result}
         except Failure as e:
@@ -637,7 +637,7 @@ class Platform(Lifecycle, Intent):
         dry, n = a.get("dry_run", False), t["n"]
         if tool == "operation_get":
             if a.get("id"):
-                await self.operations.wait(t, a["id"], a.get("wait_seconds", 45))
+                await self.operations.wait(t, a["id"], a.get("wait_seconds", 55))
             ops = (
                 [self.operations.find(t, a["id"])]
                 if a.get("id")

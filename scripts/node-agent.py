@@ -6,6 +6,7 @@ passthrough operations. Only tagged carrel tenant VMIDs may be changed. The
 control plane owns authorization and quotas; this boundary owns host integrity.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hashlib
 import importlib.util
@@ -186,11 +187,13 @@ def tenant_config(t):
     return n, f"t{n:03d}"
 
 
-def ensure(path, key, value, **params):
-    existing = api("get", path)
+def ensure(path, key, value, *, existing=None, **params):
+    if existing is None:
+        existing = api("get", path)
     if any(x[key] == value for x in existing):
         return False
     api("create", path, **{key: value}, **params)
+    existing.append({key: value, **params})
     return True
 
 
@@ -314,13 +317,21 @@ def nic_value(m, nic):
 def reconcile(state):
     config = json.loads(CONFIG.read_text())
     changed = []
+    # Read topology once per reconciliation. Subnet reads are independent; all
+    # mutations remain serialized by the node adapter's infrastructure lock.
+    vnets = api("get", "/cluster/sdn/vnets")
+    existing_tenants = [tenant_config(t)[1] for t in state["tenants"]
+                        if any(v["vnet"] == tenant_config(t)[1] for v in vnets)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        subnets_by_vnet = dict(zip(existing_tenants, pool.map(
+            lambda vnet: api("get", f"/cluster/sdn/vnets/{vnet}/subnets"), existing_tenants)))
     for t in state["tenants"]:
         n, vnet = tenant_config(t)
         if ensure(
-            "/cluster/sdn/vnets", "vnet", vnet, zone="tenants", tag=100000 + n, alias="carrel-" + t["slug"]
+            "/cluster/sdn/vnets", "vnet", vnet, existing=vnets, zone="tenants", tag=100000 + n, alias="carrel-" + t["slug"]
         ):
             changed.append(vnet)
-        subnets = api("get", f"/cluster/sdn/vnets/{vnet}/subnets")
+        subnets = subnets_by_vnet.get(vnet, [])
         if not subnets:
             api(
                 "create",
@@ -339,6 +350,7 @@ def reconcile(state):
             "/cluster/sdn/vnets",
             "vnet",
             name,
+            existing=vnets,
             zone="private",
             tag=200000 + n * 100 + k,
             vlanaware=1,
@@ -347,7 +359,7 @@ def reconcile(state):
             changed.append(name)
     # Delete only owned private networks absent from the desired database.
     wanted = {f"p{x['tenant_n']:03d}{x['serial']:02d}" for x in state["networks"]}
-    for v in api("get", "/cluster/sdn/vnets"):
+    for v in vnets:
         if v["zone"] == "private" and v.get("alias", "").startswith("carrel-") and v["vnet"] not in wanted:
             api("delete", f"/cluster/sdn/vnets/{v['vnet']}")
             changed.append("removed-" + v["vnet"])
@@ -551,6 +563,8 @@ def cloud_init(m, *, prepared=False):
             *m.get("runcmd", []),
         ],
     }
+    if not data["packages"]:
+        del data["packages"]
     if m.get("readiness_token"):
         private_macs = " ".join(f"02:cb:{m['tenant_n']:02x}:{m['host']-10:02x}:{i:02x}:01" for i in range(1, 8))
         reporter = Path("/usr/local/lib/carrel/guest-report.py").read_text()

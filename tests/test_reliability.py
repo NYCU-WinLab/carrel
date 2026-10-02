@@ -619,7 +619,11 @@ def test_template_preparation_preserves_requested_package_install(monkeypatch, p
     )
     data = json.loads(files["/var/lib/vz/snippets/carrel-10100-user.json"].split("\n", 1)[1])
     assert data["package_update"] is (bool(packages) or not prepared)
-    assert data["packages"] == ([] if prepared else ["qemu-guest-agent", "unattended-upgrades"]) + packages
+    assert (
+        data.get("packages", [])
+        == ([] if prepared else ["qemu-guest-agent", "unattended-upgrades"]) + packages
+    )
+    assert ("packages" in data) is (bool(packages) or not prepared)
     assert "guest-exec" in data["write_files"][0]["content"]
     assert data["swap"]["size"] == "4096M"
     assert data["users"][0].get("groups", []) == (["docker"] if prepared else [])
@@ -638,7 +642,7 @@ def test_wait_is_request_policy_not_nested_machine_spec():
 
     for name in ("machine_create", "deployment_apply", "operation_get"):
         wait = BY_NAME[name].inputSchema["properties"]["wait_seconds"]
-        assert wait["default"] == wait["maximum"] == 45
+        assert wait["default"] == wait["maximum"] == 55
     assert (
         "wait_seconds"
         not in BY_NAME["deployment_plan"].inputSchema["properties"]["machines"]["items"]["properties"]
@@ -678,3 +682,19 @@ async def test_linked_clone_requires_immutable_thin_template(platform, monkeypat
         with pytest.raises(ValueError, match="immutable"):
             module.create(machine)
         assert not calls
+
+
+def test_topology_snapshot_tracks_new_vnets_without_duplicate_creates(monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    monkeypatch.setattr(module, "api", lambda *args, **kwargs: calls.append((args, kwargs)))
+    existing = [{"vnet": "t001", "zone": "tenants"}]
+    assert not module.ensure("/cluster/sdn/vnets", "vnet", "t001", existing=existing, zone="tenants")
+    assert module.ensure("/cluster/sdn/vnets", "vnet", "t002", existing=existing, zone="tenants")
+    assert not module.ensure("/cluster/sdn/vnets", "vnet", "t002", existing=existing, zone="tenants")
+    assert len(calls) == 1 and calls[0][0][0] == "create"
+    assert existing[-1] == {"vnet": "t002", "zone": "tenants"}

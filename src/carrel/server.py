@@ -41,7 +41,7 @@ def build(config, backend=None, verifier=None, store=None):
             "machines, connections (from/to/port), and publications (machine/protocol/port/sub for HTTPS) together. "
             "Use network_access=restricted for destinations that should accept only declared service connections. "
             "The default tenant mode allows all same-tenant traffic; extra networks/NICs are advanced unfiltered L2 experiments. "
-            "Creation waits up to 45 seconds for verified readiness and returns a durable operation. Inspect its state/result/error; only use operation_get if still pending. "
+            "Creation waits up to 55 seconds for verified readiness and returns a durable operation. Inspect its state/result/error; only use operation_get if still pending. "
             "Queued jobs have not reserved capacity. Use a stable idempotency_key after a lost submission response. "
             "Waiting jobs resume automatically; follow next_action. Completion returns SSH entries and public endpoints. For a local client, merge the returned ssh_config into its SSH configuration when authorized, verify with ssh -G, then present ssh_short. Before setup, use the direct ssh command. The alias needs no DNS change and is scoped by tenant. "
             "Publication verification=routing_configured does not verify an application's external HTTP response. "

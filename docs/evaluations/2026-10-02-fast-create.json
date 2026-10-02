@@ -1,0 +1,267 @@
+{
+  "version": "0.5.0",
+  "date": "2026-10-02",
+  "baseline": {
+    "operation": "7f69972d966f992040ffd5283de5afbb",
+    "server_seconds": 97.71,
+    "user_reported_workflow_seconds": 146,
+    "base_package_install_seconds": 39.205
+  },
+  "creations": [
+    {
+      "operation": "80f733bfe925acabd9c578cd78346dc5",
+      "image": "debian-13",
+      "tool_seconds": 42.025,
+      "server_seconds": 41.983,
+      "state": "succeeded",
+      "tool_calls": 1,
+      "ssh_ready": true,
+      "initialization": "complete"
+    },
+    {
+      "operation": "80546e972867d00ea3da367f896f85cb",
+      "image": "debian-13",
+      "tool_seconds": 42.376,
+      "server_seconds": 42.214,
+      "state": "succeeded",
+      "tool_calls": 1,
+      "ssh_ready": true,
+      "initialization": "complete"
+    },
+    {
+      "operation": "e1c29cd3088d4b204c8d1093f847a3eb",
+      "image": "ubuntu-24.04",
+      "tool_seconds": 46.214,
+      "server_seconds": 46.171,
+      "state": "succeeded",
+      "tool_calls": 1,
+      "ssh_ready": true,
+      "initialization": "complete"
+    }
+  ],
+  "adapter_timings": [
+    {
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "80f733bfe925acabd9c578cd78346dc5",
+      "seconds": 4.53
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "80f733bfe925acabd9c578cd78346dc5",
+      "seconds": 6.726
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "80f733bfe925acabd9c578cd78346dc5",
+      "seconds": 0.889
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "80f733bfe925acabd9c578cd78346dc5",
+      "seconds": 0.777
+    },
+    {
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "80f733bfe925acabd9c578cd78346dc5",
+      "seconds": 7.902
+    },
+    {
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "80546e972867d00ea3da367f896f85cb",
+      "seconds": 4.84
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "80546e972867d00ea3da367f896f85cb",
+      "seconds": 6.723
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "80546e972867d00ea3da367f896f85cb",
+      "seconds": 0.781
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "80546e972867d00ea3da367f896f85cb",
+      "seconds": 0.887
+    },
+    {
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "80546e972867d00ea3da367f896f85cb",
+      "seconds": 7.809
+    },
+    {
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "bd0b14c09df21f3363f64c6a07d0ffdb",
+      "seconds": 4.591
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "bd0b14c09df21f3363f64c6a07d0ffdb",
+      "seconds": 6.743
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "bd0b14c09df21f3363f64c6a07d0ffdb",
+      "seconds": 0.778
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "bd0b14c09df21f3363f64c6a07d0ffdb",
+      "seconds": 1.114
+    },
+    {
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "bd0b14c09df21f3363f64c6a07d0ffdb",
+      "seconds": 8.109
+    }
+  ],
+  "snapshot": {
+    "create": "47783a3d111bd8f7c8fe6de61a8084ec",
+    "rollback": "316a1500dcd9aa372c649e19d4e3d012",
+    "delete": "2fa5e2ab051d5ec0d96c010067952b36",
+    "marker_restored": true,
+    "power_state_restored": true
+  },
+  "validation": {
+    "tests": 150,
+    "ruff": true,
+    "format": true,
+    "scripts_compile": true,
+    "build": true,
+    "archive_excludes_task_artifacts": true,
+    "control_source_matches": true,
+    "node_source_matches": true
+  },
+  "templates": {
+    "debian-13": {
+      "vmid": 9010,
+      "sha256": "9e4f1d91d5c3ec2423b342ac2881747fa8b311e4487c45d34370518331bd8dd1"
+    },
+    "ubuntu-24.04": {
+      "vmid": 9013,
+      "sha256": "3143018d5e7de0ab85fd945400fcebe20445a26baf91873e2b4c528778d19e4f"
+    }
+  },
+  "limitations": [
+    "Three successful direct default creations are observations, not a latency percentile or SLA.",
+    "Extra packages and queueing can exceed the 55-second response window.",
+    "CT images remain minimal.",
+    "No SSH provisioning gateway or warm pool is implemented."
+  ],
+  "guest_probes": {
+    "debian": {
+      "hostname": "fast-debian-1002",
+      "user": "user",
+      "uid": 1000,
+      "gcc": "14.2.0",
+      "g++": "14.2.0",
+      "python": "Python 3.13.5",
+      "node": "v24.21.0",
+      "npm": "11.19.0",
+      "docker": "26.1.5+dfsg1",
+      "compose": "Docker Compose version 2.26.1-4",
+      "git": "git version 2.47.3",
+      "cmake": "cmake version 3.31.6",
+      "updates": "enabled",
+      "machine_id": "6091ace02c604fe1a7f025fd071aae9e",
+      "host_key": "256 SHA256:llnhKbFyPDg6WnllKs3F4dCu0LrHstauvS+2IGmi2ZE root@fast-debian-1002 (ED25519)",
+      "cloud_init": "status: done",
+      "venv_pip": "pip 25.1.1",
+      "docker_hello": true,
+      "compiled_c_cpp": true,
+      "qga_exec_blocked": true
+    },
+    "ubuntu": {
+      "hostname": "fast-ubuntu-fixed-1002",
+      "user": "user",
+      "uid": 1000,
+      "gcc": "13.3.0",
+      "g++": "13.3.0",
+      "python": "Python 3.12.3",
+      "node": "v24.21.0",
+      "npm": "11.19.0",
+      "docker": "29.1.3",
+      "compose": "Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1",
+      "git": "git version 2.43.0",
+      "cmake": "cmake version 3.28.3",
+      "updates": "enabled",
+      "machine_id": "bd3fc83f7ca3404c99f7ad46596afcbd",
+      "host_key": "256 SHA256:Qc3mYguGfGpiJn8ZGx3MyyqkJVJFgfIVZA8DXu/6wWs root@fast-ubuntu-fixed-1002 (ED25519)",
+      "cloud_init": "status: done",
+      "venv_pip": "pip 24.0",
+      "docker_hello": true,
+      "compiled_c_cpp": true,
+      "qga_exec_blocked": true
+    },
+    "isolation": {
+      "isolated": true,
+      "identities": {
+        "20031": {
+          "machine_id": "6091ace02c604fe1a7f025fd071aae9e",
+          "host_key": "256 SHA256:llnhKbFyPDg6WnllKs3F4dCu0LrHstauvS+2IGmi2ZE root@fast-debian-1002 (ED25519)",
+          "cloud_init": "status: done"
+        },
+        "20032": {
+          "machine_id": "e44233a2189642e68ca85c3e1587dba9",
+          "host_key": "256 SHA256:bR8qpocaib2ZmUvKERhjjqnlx7Xa3xwouroRbuxtb1U root@fast-debian-peer-1002 (ED25519)",
+          "cloud_init": "status: done"
+        }
+      }
+    }
+  },
+  "deployment": {
+    "version": "0.5.0",
+    "stamp": "20261002-015343",
+    "wheel_sha256": "47ee812bbc5c726a70e008dc91345e252c9a682f62b313eeaf7932c4839a4d44",
+    "control_backup": "/opt/carrel/rollback/fast-create-20261002-015343.tar.gz"
+  },
+  "cleanup": {
+    "test_guests_deleted": true,
+    "test_snapshots_deleted": true,
+    "task_private_key_removed": true,
+    "remaining_member_machines": [
+      "dev-01"
+    ],
+    "quota_used": {
+      "vcpu": 2,
+      "memory_mb": 2048,
+      "disk_gb": 20,
+      "machines": 1,
+      "ips": 1,
+      "public_ports": 1,
+      "snapshots": 0,
+      "snapshot_gb": 0
+    }
+  }
+}

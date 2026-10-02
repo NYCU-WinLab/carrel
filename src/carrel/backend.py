@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import time
 
 from .operations import current_operation
 
@@ -19,6 +20,7 @@ class Backend:
                 **request,
                 "request_id": hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(),
             }
+        started = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             "ssh",
             "-F",
@@ -43,6 +45,18 @@ class Backend:
             # details from the privileged adapter reach a member's MCP response.
             print(json.dumps({"event": "adapter_failure", "op": request["op"], "error": result.get("error")}))
             raise RuntimeError("node operation failed; allocation retained for repair")
+        print(
+            json.dumps(
+                {
+                    "event": "adapter_completed",
+                    "op": request["op"],
+                    "target": target,
+                    "operation": context["id"] if context else None,
+                    "seconds": round(time.monotonic() - started, 3),
+                }
+            ),
+            flush=True,
+        )
         return result["result"]
 
     async def reconcile(self, state):

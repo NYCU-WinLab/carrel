@@ -29,3 +29,6 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 110
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "scripts", "tests", "README.md", "PLAN.md", "pyproject.toml", "uv.lock"]
