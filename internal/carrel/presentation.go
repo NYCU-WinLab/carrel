@@ -70,6 +70,7 @@ func operationSummary(op D) D {
 	}
 	if m, ok := result["machine"]; ok {
 		result["machine"] = machineSummary(obj(m))
+		delete(result, "nics") // Named NICs are already included in the machine summary.
 	}
 	for _, key := range []string{"machines", "updated_machines"} {
 		if ms, ok := result[key]; ok {

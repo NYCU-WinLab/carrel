@@ -17,6 +17,17 @@ def script(name):
     return module
 
 
+def test_paused_nic_unplug_never_writes_pending_configuration(monkeypatch):
+    module = script("node-agent.py")
+    monkeypatch.setattr(module, "owned", lambda *args, **kwargs: {"net1": "existing"})
+    monkeypatch.setattr(module, "power_status", lambda m: "paused")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(ValueError, match="resume or shut down"):
+        module.action({"action": "nic_detach", "index": 1, "machine": {"kind": "vm", "vmid": 10100}})
+    assert not calls
+
+
 @pytest.fixture
 def gateway(tmp_path, monkeypatch):
     module = script("gateway-sync.py")
