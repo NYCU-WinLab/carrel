@@ -1217,3 +1217,52 @@ the client yields 335/11.22 ms and 338/10.98 ms. Rust saves about 63 ms in the p
 design; direct API access provides most of the improvement over either language spawning `pvesh`.
 The experiment also catches PVE API volume filtering under audit-only credentials. Any production
 HTTP reader must preserve all-volume visibility. No production transport change is part of this experiment.
+
+
+### 15.9 Go control plane (0.6, 2026-10-02)
+
+The Go service owns Streamable HTTP MCP, Keycloak OAuth/PKCE, SQLite state, intent planning,
+admission, a durable FIFO mutation queue, readiness and backups. Existing SQLite tables and
+OAuth bindings remain compatible; migration does not require member login. Python remains for
+the bounded root mutation adapters, guest reporter, deployment tooling and certbot. The former
+Python control plane is a test reference, not the service launched by systemd.
+
+Admission and shared PVE/network mutations use one writer. A persisted `prepared_result` releases
+that writer during SSH/guest-report readiness. Other allocations can begin, while edits to the
+same allocation wait. Deployment groups start all new guests before waiting. Report arrival wakes
+readiness immediately; a periodic SSH probe remains. Cancellation does not cancel accepted work.
+Recovery resumes the checkpoint, and adapter receipts retain Python-compatible request hashes.
+This does not introduce multi-node scheduling or independent parallel network writers.
+
+Display capacity observations have a two-second cache and coalesce simultaneous reads. Every
+admission reads fresh inventory and current SQLite reservations. Network-only plans skip compute
+inventory. Physical snapshot accounting runs in maintenance and snapshot operations, outside the
+ordinary network/create path. SSH transports reuse authenticated connections for up to 120 seconds.
+
+The fixed `carrel-pve-read` Go helper uses PVE HTTPS with the host CA and hostname verification,
+bounded parallel reads and no arbitrary paths, writes or stale fallback. Its only modes are
+`inventory` and `topology`. Full volume visibility is mandatory: PVEAuditor alone returns filtered
+storage content. The root-only `/etc/carrel/pve-read.json` credential has a privilege-separated
+`root@pam!carrel-go-reader` token, PVEAuditor at `/` and a custom role containing Datastore.Audit
+and Datastore.Allocate at `/storage/local-lvm`. This credential has a storage management privilege,
+even though the helper issues only GET requests. It never reaches CT 100, guests or clients.
+`scripts/configure-go-reader.py` provisions it, preserves it on repeat runs, and verifies removal
+before unlinking its configuration. Permissions are rechecked on each inventory query.
+
+Build static binaries in the development sandbox. `scripts/deploy-go.py --artifacts <directory>`
+checks no active jobs and compares all-volume identities with the old reader before enabling
+`go_pve_reader` in `/etc/carrel/node.json`. It saves a consistent database/config/certificate/service
+archive under CT 100's `/opt/carrel/rollback/` and node files in the printed node stage directory.
+Existing OAuth, certificates, guest templates and the certbot environment are preserved. The
+backup timer runs `carrel -backup`, retaining the existing private archive destination and format.
+A failed initial health check restores service/node files without overwriting newly written data.
+
+For a manual rollback, stop the control service, restore the saved service units and previous binary
+(if any), restore the saved node adapter and `node.json`, reload systemd and restart. The legacy
+Python environment remains available. Restore an older database only as an explicit disaster-recovery
+operation after reconciling all resource changes since that backup. If the Go reader is retired,
+disable its flag before removing its owned token/ACL/role with `configure-go-reader.py --remove`.
+
+Go race tests, 79 Python behavior fixtures and the existing Python reference tests validate the rewrite.
+The [Go evaluation](docs/evaluations/2026-10-02-go-control-plane.md) records live read-path measurements
+and rollout acceptance. This release adds no warm pool or SSH provisioning gateway.
