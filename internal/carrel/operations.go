@@ -60,7 +60,7 @@ func (o *Operations) CheckQueue(t D, tool string) {
 	}
 }
 func (o *Operations) Submit(tool string, a, w, t D) D {
-	args := without(a, "dry_run", "idempotency_key", "wait_seconds")
+	args := without(a, "dry_run", "idempotency_key", "wait_seconds", "detail")
 	fingerprint := digest(pythonJSON([]any{tool, args}))
 	key := str(a["idempotency_key"])
 	for _, old := range o.p.Store.Objects("operations", integer(t["n"])) {
@@ -279,6 +279,8 @@ func (o *Operations) apply(id string) {
 					previous := ""
 					if op["tool"] == "snapshot_rollback" {
 						previous = str(obj(op["rollback_restore"])["boot_id"])
+					} else if op["tool"] == "machine_power" {
+						previous = str(obj(op["power_restore"])["boot_id"])
 					}
 					e.WaitReady(m, previous)
 				}
@@ -307,7 +309,7 @@ func (o *Operations) apply(id string) {
 				op["result"] = merge(D{"ok": true}, result)
 				op["state"] = "succeeded"
 				op["phase"] = "complete"
-				op["resource_changes"] = true
+				op["resource_changes"] = fallback(result, "resource_changes", true)
 				delete(op, "ready_at")
 				delete(op, "prepared_result")
 			})

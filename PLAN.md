@@ -204,7 +204,8 @@ protocol error.
 | | `issue_comment` | `id`, `body`; more detail or "same here" |
 | | `issue_confirm` | `id`, `works: true \| false`; the reporter checks a fix, which closes or reopens the issue |
 
-`machine_create` returns a durable operation immediately. Success requires SSH readiness,
+Member infrastructure mutations return a durable operation and wait up to 55 seconds by default
+(`wait_seconds=0` submits immediately). Successful creation or start/resume/reboot requires SSH readiness,
 initialization completion and requested guest health checks, and includes the SSH command. The
 agent sends the member's public key; Carrel never generates or returns a private key. ISO support
 is deferred (section 7.8). Public endpoint results report `routing_configured`; application reachability
@@ -1275,3 +1276,35 @@ checkpoint restart without duplicate creation and real backup integrity all pass
 disposable guests are removed, original volumes/quotas restored and `ssh dev01` remains valid.
 These small samples do not establish an SLA. See the evaluation for client serialization,
 resource sizes, operation IDs, precise timings and retained Python helpers.
+
+
+### 15.10 Common member actions (0.7, 2026-10-02)
+
+Ordinary lifecycle guidance ships in the MCP instructions and relevant tool descriptions. It does
+not require another skill lookup, operator memory or topology discovery. The larger skill catalog
+in section 4.5 remains planned. The 40-tool member discovery surface is unchanged.
+
+- Extend the existing `machine_power` with VM `pause`/`resume`, using in-memory QEMU suspension.
+  CT suspension is deliberately unsupported because PVE implements it as experimental disk
+  checkpointing. Pause retains allocations, disables automatic boot, and does not survive host
+  power loss. Start resumes a paused VM; graceful shutdown/reboot require resuming it first.
+- Verify power transitions at the node, including QMP paused state. Repeated target-state requests
+  are no-ops. Graceful shutdown explicitly disables forced-stop fallback. CPU/RAM reservations
+  remain allocated when stopped or paused. Normal start/resume is allowed with existing
+  reservations even if a temporary quota grant has expired; no capacity is added.
+- All member infrastructure mutations and operation retries wait up to 55 seconds by default.
+  Start/reboot/resume persist the readiness checkpoint outside the shared writer. Start from stopped
+  and reboot require a new boot report; resume can keep its existing boot. Restart recovery reuses
+  the node receipt and persisted baseline rather than replaying an acknowledged mutation.
+- MCP summary presentation removes full before/after quota tables and internal allocation details
+  from successful operations. `detail=full` and durable storage retain them. Previews, pending
+  operations, failures, cleanup evidence and recovery instructions remain complete. Presentation
+  options do not affect idempotency identity. Machine list is explicitly recorded state; machine
+  get performs one live observation and cannot label a paused process SSH-ready.
+- The current Go contract is maintained directly. The Python exporter writes a separate reference
+  contract, preserving the frozen Python behavior baseline. No new scheduler, cache or warm pool
+  is introduced by this release.
+
+Validation: Go race tests/vet and static builds, 176 Python tests, Ruff and script compilation run
+on sandbox VM104. Live acceptance and release evidence are recorded in
+`docs/evaluations/2026-10-02-common-actions.md` after deployment.

@@ -177,7 +177,7 @@ func (a *App) Call(ctx context.Context, name string, args, who D) D {
 	if err := schema.Validate(args); err != nil {
 		return D{"ok": false, "error": D{"code": "invalid", "message": "Invalid tool arguments", "details": err.Error()}}
 	}
-	return a.Platform.Execute(ctx, name, args, who)
+	return memberResponse(name, args, a.Platform.Execute(ctx, name, without(args, "detail"), who))
 }
 func (p *Platform) Start() {
 	p.wg.Add(1)

@@ -33,14 +33,14 @@ func awaitState(t *testing.T, p *Platform, id, state string) D {
 }
 
 func TestRestartResumesReadinessWithoutRepeatingMutation(t *testing.T) {
-	for _, tool := range []string{"machine_create", "snapshot_rollback"} {
+	for _, tool := range []string{"machine_create", "snapshot_rollback", "machine_power"} {
 		t.Run(tool, func(t *testing.T) {
 			p, b := fixture(t)
 			m := seedMachine(p, "recover", 10100)
 			m["state"] = "initializing"
 			m["operation_id"] = "recover-job"
 			p.Store.Put("machines", 10100, 1, m)
-			op := D{"id": "recover-job", "tenant_n": 1, "tool": tool, "args": D{}, "who": person("alice", false), "state": "running", "phase": "waiting_for_guest", "prepared_result": D{"machine": D{"name": "recover"}}, "rollback_restore": D{"boot_id": "old-boot"}}
+			op := D{"id": "recover-job", "tenant_n": 1, "tool": tool, "args": D{}, "who": person("alice", false), "state": "running", "phase": "waiting_for_guest", "prepared_result": D{"machine": D{"name": "recover"}}, "rollback_restore": D{"boot_id": "old-boot"}, "power_restore": D{"boot_id": "old-boot"}}
 			p.Operations.Save(op)
 			p.Store.Put("guest_reports", 10100, 1, D{"boot_id": "new-boot", "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked"})
 			p.sshProbe = func(context.Context, D) bool { return true }

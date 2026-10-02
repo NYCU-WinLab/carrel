@@ -338,7 +338,7 @@
     },
     {
       "name": "machine_create",
-      "description": "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications.",
+      "description": "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications. Use the known default public key only if saved keys are unavailable; do not scan unrelated SSH configuration. Successful summary omits quota tables; detail=full retrieves them.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -523,7 +523,16 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait for verified readiness before returning, up to 55 seconds. Zero returns the durable job immediately. A timeout or disconnect does not cancel creation."
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -578,13 +587,22 @@
     },
     {
       "name": "machine_list",
-      "description": "List this tenant's allocated machines.",
+      "description": "List your machines with specifications, recorded state and SSH commands. Use when asked to list or when a target is unknown; not before actions on a known name. machine_get observes live status for one machine. detail=full includes complete allocation details.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "tenant": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [],
@@ -637,7 +655,7 @@
     },
     {
       "name": "machine_get",
-      "description": "Get a machine's specification, readiness, allowed connections, public SSH entry and current runtime power state/uptime. Use machine_metrics for detailed usage.",
+      "description": "Show status or connect to a known machine by name in one call. Returns live normalized power state, readiness and SSH configuration. No machine_list or metrics call is needed first. detail=full includes network rules and internal identifiers. A running hypervisor alone does not mean SSH or applications are ready.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -649,6 +667,15 @@
           "tenant": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -726,6 +753,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -780,7 +823,7 @@
     },
     {
       "name": "machine_delete",
-      "description": "Delete a machine and its grants permanently; confirm must match its name.",
+      "description": "Permanently delete the named machine, disks, snapshots and public grants. Use only for an explicit deletion request, never for shutdown or pause. confirm must equal its exact name; that field expresses the already authorized deletion, not a mandatory extra user round trip. Waits up to 55 seconds; no preliminary lookup is needed when the name is known.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -807,6 +850,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -862,7 +921,7 @@
     },
     {
       "name": "machine_power",
-      "description": "Start, stop, gracefully shut down, or reboot; persist the owner's intended onboot state.",
+      "description": "Control an existing machine by name in one call; no preliminary lookup or preview is required. start starts or resumes; shutdown gracefully turns off; stop force-powers off only when explicitly requested; reboot restarts. VM-only pause freezes execution in RAM, resume continues it; neither releases quota nor survives host power loss. No CT hibernation. Waits up to 55 seconds, verifies the power transition and SSH/initialization for start/reboot/resume. Already started/stopped/paused requests are safe no-ops. Returns the machine and access details; poll only if pending.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -874,9 +933,11 @@
           "action": {
             "enum": [
               "start",
-              "stop",
               "shutdown",
-              "reboot"
+              "stop",
+              "reboot",
+              "pause",
+              "resume"
             ]
           },
           "tenant": {
@@ -893,6 +954,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -948,7 +1025,7 @@
     },
     {
       "name": "machine_resize",
-      "description": "Resize CPU, RAM or disk after quota and capacity checks. CPU/RAM can shrink only while stopped; disk cannot shrink. Capacity is released only after the host confirms the change.",
+      "description": "Change only the requested CPU, memory_mb or disk_gb on the named machine. Performs quota/capacity checks and waits up to 55 seconds. CPU/RAM reductions require a stopped guest; do not shut down running work without authorization. Disk shrinking is unsupported. Returns the resulting allocation; configured CPU/RAM may require a restart to become effective in the guest.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -989,6 +1066,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -1142,6 +1235,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -1282,6 +1391,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -1365,6 +1490,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -1448,6 +1589,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -1503,7 +1660,7 @@
     },
     {
       "name": "ssh_key_add",
-      "description": "Save a public SSH key for future machines in this tenant.",
+      "description": "Save a public SSH key once in this tenant for future machine_create calls that omit ssh_keys. Repeated registration of the same key is safe. Never pass private keys. Inline creation keys are not saved automatically.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1526,6 +1683,15 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -1662,6 +1828,15 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -1750,6 +1925,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -1888,6 +2079,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -1974,6 +2181,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -2112,6 +2335,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -2203,6 +2442,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -2341,6 +2596,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [
@@ -2422,6 +2693,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -2570,6 +2857,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -2656,6 +2959,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -4215,7 +4534,16 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait for verified readiness before returning, up to 55 seconds. Zero returns the durable job immediately. A timeout or disconnect does not cancel creation."
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [],
@@ -4268,7 +4596,7 @@
     },
     {
       "name": "operation_get",
-      "description": "Get a background operation, or list the latest 50 tenant operations. With id, waits up to 55 seconds for completion to reduce repeated calls; other queries stay responsive. Use wait_seconds=0 for an immediate status. Queued means not reserved. Inspect terminal result/error/cleanup and follow next_action (revise_request means invalid inputs must be corrected, not retried); poll no faster than poll_after_seconds.",
+      "description": "Continue waiting for a pending operation with id, up to 55 seconds by default (zero for immediate status). No call is needed after a succeeded mutation. Without id, list the latest 50 tenant operations. Summary preserves next_action, failures, cleanup and pending reservation status; detail=full includes full accounting and identifiers. Follow next_action, and poll no faster than poll_after_seconds.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4286,6 +4614,15 @@
           "tenant": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
           }
         },
         "required": [],
@@ -4361,6 +4698,22 @@
             "type": "boolean",
             "default": false,
             "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
           }
         },
         "required": [
@@ -4589,7 +4942,16 @@
     "gpu_hardware_inventory": "unknown",
     "custom_image_upload": false,
     "custom_image_import": false,
-    "mcp_resources": false
+    "mcp_resources": false,
+    "machine_pause": {
+      "supported": true,
+      "kinds": [
+        "vm"
+      ],
+      "mode": "memory",
+      "releases_quota": false,
+      "survives_host_restart": false
+    }
   },
-  "instructions": "WinLab machines; tools only, no MCP resources. Use whoami when asked about identity or all visible tenants' used/limit/remaining quotas, service.version and capabilities. These are authoritative; capability questions do not need deployment previews. Use catalog_get for images/sizes, capacity_get only when asked about shared physical capacity. For a request to create one machine, call machine_create directly with a public key; defaults are Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. No discovery or preview is required. Use deployment_apply to describe machines, connections (from/to/port), and publications (machine/protocol/port/sub for HTTPS) together. Use network_access=restricted for destinations that should accept only declared service connections. The default tenant mode allows all same-tenant traffic; extra networks/NICs are advanced unfiltered L2 experiments. Creation waits up to 55 seconds for verified readiness and returns a durable operation. Inspect its state/result/error; only use operation_get if still pending. Queued jobs have not reserved capacity. Use a stable idempotency_key after a lost submission response. Waiting jobs resume automatically; follow next_action. Completion returns SSH entries and public endpoints. For a local client, merge the returned ssh_config into its SSH configuration when authorized, verify with ssh -G, then present ssh_short. Before setup, use the direct ssh command. The alias needs no DNS change and is scoped by tenant. Publication verification=routing_configured does not verify an application's external HTTP response. Follow next_action for failures: operation_retry preserves allocations; revise_request means fix invalid inputs before a new submission. Managed private networks assign IPs automatically. Machine readiness includes cloud-init completion and requested application checks; SSH alone is insufficient. Use VMs for Docker, Mininet and databases. memory_mb/swap_mb are MiB; disk_gb is GiB. Preview when the user asks to plan or compare before creating. Authorized creation can apply directly. Destructive operations still require their confirmation fields. deployment_plan is the complete preview; do not repeat it with deployment_apply(dry_run=true) or manually execute its resources one by one. Previews never reserve or write resources; audit is recorded. Trust quota_before/delta/quota_after and resource_changes=false; follow-up list/quota/key calls are unnecessary just to verify a preview. Missing SSH public keys do not block planning; they are required for actual creation and can be passed inline without saving. Previews do not test guest boot or commands. Tenant membership is verified on every request; eligible tenants register automatically after sign-in."
+  "instructions": "WinLab machines through MCP. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk, prepared development tools. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota/SSH check just to prove completion. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local SSH setup, merge returned ssh_config when authorized, preserve existing entries, verify only that alias with ssh -G, then present ssh_short. Otherwise present ssh. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power is live. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources."
 }

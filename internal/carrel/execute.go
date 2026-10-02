@@ -50,7 +50,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 		if err != nil {
 			panic(err)
 		}
-		if tool == "machine_create" || tool == "deployment_apply" {
+		if !named("admin_tools", tool) {
 			op = p.Operations.Wait(ctx, t, str(op["id"]), intAt(a, "wait_seconds", 55))
 		}
 		return D{"ok": true, "operation": op}
@@ -148,7 +148,9 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		if dry {
 			return D{"operation": publicOperation(e.P.Operations.Find(t, str(a["id"])))}
 		}
-		return e.P.Operations.Retry(t, str(a["id"]), w)
+		r := e.P.Operations.Retry(t, str(a["id"]), w)
+		r["operation"] = e.P.Operations.Wait(e.Ctx, t, str(a["id"]), intAt(a, "wait_seconds", 55))
+		return r
 	case "deployment_plan":
 		return e.DeploymentPlan(t, a)
 	case "deployment_apply":
@@ -184,7 +186,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			pub := e.PublicMachine(m, e.S.Objects("ports", n))
 			if tool == "machine_get" {
 				status := obj(e.Call(D{"op": "status", "machine": m}))
-				pub["runtime"] = D{"power_state": fallback(status, "status", fallback(status, "state", "unknown")), "uptime_seconds": status["uptime"], "observed_at": stamp()}
+				observePower(pub, status)
 			}
 			out = append(out, pub)
 		}
@@ -289,14 +291,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			}
 		}
 	case "machine_power":
-		request["action"] = a["action"]
-		if a["action"] == "start" || a["action"] == "reboot" {
-			zeros := D{}
-			for k := range without(DefaultQuota, "images_gb") {
-				zeros[k] = 0
-			}
-			e.Quota(t, zeros)
-		}
+		return e.PowerMachine(m, a, t)
 	case "machine_resize":
 		spec = merge(pick(m, "cpu", "memory_mb", "disk_gb"), pick(a, "cpu", "memory_mb", "disk_gb"))
 		if num(spec["disk_gb"]) < num(m["disk_gb"]) {
@@ -353,13 +348,6 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			m = merge(m, spec)
 			delete(m, "resize_from")
 			e.Put("machines", m["vmid"], n, m)
-		default:
-			state := "running"
-			if a["action"] == "stop" || a["action"] == "shutdown" {
-				state = "stopped"
-			}
-			m = merge(m, D{"state": state, "power_state": state, "ssh_ready": false})
-			e.Put("machines", m["vmid"], n, m)
 		}
 	}
 	q := e.Quota(t)
@@ -367,6 +355,14 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		q = e.Quota(t, delta)
 	}
 	r := D{"dry_run": dry, "quota_after": q}
+	if !dry {
+		if tool == "machine_delete" {
+			r["deleted"] = D{"name": m["name"], "state": "deleted"}
+		} else if tool == "machine_resize" {
+			r["machine"] = e.PublicMachine(m, e.S.Objects("ports", n))
+			r["configuration"] = "allocated; running guests may need a restart for CPU/RAM changes"
+		}
+	}
 	if dry && shrinking {
 		r["requirements"] = []string{"machine_stopped"}
 		r["ready_to_apply"] = m["state"] == "stopped"
