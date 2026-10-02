@@ -43,8 +43,34 @@ All development validation runs on sandbox VM104. The local Mac only edits and u
 
 ## Live acceptance
 
-Pending deployment of the merged runtime. Record disposable guest operations, networking,
-filesystem growth and complete cleanup here before publishing the release acceptance.
+Live evidence is in [the JSON record](2026-10-02-scope-fixes.json). Three disposable guests used
+VMIDs 10302/10303, reusing 10302 after deletion. Existing ubuntu and sysinfo-demo were preserved.
+
+| Scenario | Observed result |
+|---|---|
+| Warm-up | Debian with an intentional 25-second application delay completed in 58.421 seconds. Ubuntu deployment was observed with fresh failed app health, verified SSH and state initializing, then succeeded in 110.915 seconds without rollback. These include deliberately delayed test services and guest reporting, not default creation benchmarks. |
+| Existing isolation | Restricting the running VM and publishing HTTPS completed in 11.586 seconds. The allowed source received the expected body; another same-tenant source timed out. Owner SSH and public HTTPS remained usable. Switching back preserved existing grants until explicit revocation. |
+| Offline networking | Direct attachment to a stopped VM took 6.322 seconds and returned pending_guest_start. Composed attachment while paused took 7.281 seconds and returned pending_guest_resume. A fresh post-change interface report completed verification on resume. VM/CT private HTTP and SSH traffic worked in both directions. |
+| Paused removal | Initial live hot-unplug exposed a PVE pending-delete failure. After the correction, rejection took about 2 seconds, returned resolve_prerequisite and left PVE net0/net1 with no pending fields. Resume followed by retry of the same operation succeeded. |
+| Deletion/recovery | Snapshot, peer, private network, public port and HTTPS removal returned deleted. A duplicate machine name returned revise_request; retry kept attempts=1. A request for 11 public ports was rejected before creating an approval request. |
+| Capacity | Both prepared VM images accepted 20 to 25 GiB block growth while their filesystems initially stayed unchanged. Debian used ext4 on sda3, grew online with owner growpart/resize2fs, and retained 26,206,609,408 filesystem bytes after reboot. Ubuntu used ext4 on sda1 and automatically grew to 24,883,167,232 filesystem bytes after the authorized reboot. |
+
+The current tenant wildcard certificate was reused for live publication. First-issuance queue
+isolation is covered by the blocked-issuer scheduling regression, not a live ACME timing claim.
+Operation durations include time between retries. One stopped-VM start included installation of
+a persistent owner test service after a transient fixture service disappeared on shutdown; its
+62.331-second total is not a normal startup benchmark. The minimal CT lacked curl, so private HTTP
+was verified using bash TCP instead of installing dependencies. A first SSH connection to the
+existing demo accepted its previously unknown host key; no host-key checking was disabled.
+
+Cleanup restored the original 17 PVE volumes, with no 10302/10303 volumes, two machines, 70 GiB of
+allocated disk, no test NICs/networks/peers/snapshots, two original SSH grants and the original demo
+HTTPS grant. Task aliases and their dedicated known-host files were removed. Both original owner
+SSH logins passed and the existing demo returned HTTP 200. MCP authentication survived control
+restarts; deployment checks preserved all seven OAuth clients.
+
+The final observation guard also distinguishes a missing first report from a previous-boot report.
+This was found while observing Ubuntu initialization and is covered by a regression.
 
 ## Boundaries
 
