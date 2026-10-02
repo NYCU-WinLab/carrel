@@ -1,0 +1,841 @@
+{
+  "version": "0.5.1",
+  "date": "2026-10-02",
+  "source_commit": "ae275f173f0089cbe01e8d48390bac1d993c9a3c",
+  "creations": [
+    {
+      "operation": "0656f0ecfd01445b51c86dfb33ad6281",
+      "kind": "vm",
+      "image": "debian-13",
+      "state": "succeeded",
+      "tool_calls": 1,
+      "tool_seconds": 34.696,
+      "server_seconds": 34.649,
+      "ssh_ready": true,
+      "initialization": "complete"
+    },
+    {
+      "operation": "4eb933f049ecd3334f8330fd51f1357d",
+      "kind": "ct",
+      "image": "debian-13",
+      "state": "succeeded",
+      "tool_calls": 1,
+      "server_seconds": 17.71,
+      "ssh_ready": true,
+      "initialization": "complete"
+    }
+  ],
+  "startup_seconds": {
+    "python_start": [
+      0.0138,
+      0.0137,
+      0.0134
+    ],
+    "pve_module_environment_start": [
+      0.9844,
+      1.0006,
+      0.986
+    ],
+    "batched_inventory": [
+      1.3721,
+      1.3046,
+      1.368
+    ],
+    "batched_topology": [
+      0.994,
+      0.9937,
+      0.9944
+    ]
+  },
+  "mcp_capacity_get_seconds": 2.098,
+  "adapter_timings": [
+    {
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "0656f0ecfd01445b51c86dfb33ad6281",
+      "seconds": 1.614
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "0656f0ecfd01445b51c86dfb33ad6281",
+      "seconds": 2.275
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "0656f0ecfd01445b51c86dfb33ad6281",
+      "seconds": 0.849
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "0656f0ecfd01445b51c86dfb33ad6281",
+      "seconds": 0.775
+    },
+    {
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "0656f0ecfd01445b51c86dfb33ad6281",
+      "seconds": 7.977
+    },
+    {
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "4eb933f049ecd3334f8330fd51f1357d",
+      "seconds": 1.554
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "4eb933f049ecd3334f8330fd51f1357d",
+      "seconds": 2.234
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "4eb933f049ecd3334f8330fd51f1357d",
+      "seconds": 0.773
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "4eb933f049ecd3334f8330fd51f1357d",
+      "seconds": 0.907
+    },
+    {
+      "event": "adapter_completed",
+      "op": "create",
+      "target": "carrel-node",
+      "operation": "4eb933f049ecd3334f8330fd51f1357d",
+      "seconds": 12.201
+    },
+    {
+      "event": "adapter_completed",
+      "op": "inventory",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 1.592
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 7.81
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 0.805
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 1.003
+    },
+    {
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 2.99
+    },
+    {
+      "event": "adapter_completed",
+      "op": "action",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 2.287
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 2.362
+    },
+    {
+      "event": "adapter_completed",
+      "op": "reconcile",
+      "target": "carrel-edge",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 3.298
+    },
+    {
+      "event": "adapter_completed",
+      "op": "storage_usage",
+      "target": "carrel-node",
+      "operation": "df12b3cd2d761a8739014ff6db45675f",
+      "seconds": 0.816
+    }
+  ],
+  "network_acceptance": {
+    "operation": "df12b3cd2d761a8739014ff6db45675f",
+    "server_seconds": 87.315,
+    "managed_private_network": true,
+    "vm_private_address": "10.77.2.11/24",
+    "ct_private_address": "10.77.2.12/24",
+    "bidirectional_private_ssh_banner": true,
+    "default_route_unchanged": true,
+    "primary_dns_unchanged": true,
+    "internal_dns_both_guests": true,
+    "owner_ssh_both_guests": true,
+    "external_https": {
+      "url": "https://pvefast.zyx1121.winlab.tw",
+      "body": "carrel-pve-fast-20261002",
+      "tls_verified": true
+    }
+  },
+  "tests": {
+    "pytest_passed": 157,
+    "ruff_check": true,
+    "ruff_format": true,
+    "scripts_compile": true,
+    "sdist_and_wheel_build": true,
+    "execution_location": "sandbox VM 104"
+  },
+  "limits": [
+    "Single-node B09 measurements; node profiles have one sample per version and mode.",
+    "Full creation compares one Debian VM with two earlier 0.5.0 Debian runs, not a controlled load benchmark.",
+    "Startup probes have three samples each; no Rust or direct HTTP API comparison was run.",
+    "No cache, warm pool, scheduler concurrency or PVE mutation rewrite was added.",
+    "Private-network expansion includes NIC application, guest readiness and publication work; its entire elapsed time is not a topology read benchmark."
+  ],
+  "node_profiles": {
+    "before-inventory": {
+      "operation": "inventory",
+      "seconds": 4.3712,
+      "commands": [
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/nodes/carrel01/storage/local-lvm/content"
+          ],
+          "seconds": 1.2222
+        },
+        {
+          "command": [
+            "lvs",
+            "--reportformat",
+            "json"
+          ],
+          "seconds": 0.0458
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/resources"
+          ],
+          "seconds": 0.9999
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/nodes/carrel01/storage/local-lvm/status"
+          ],
+          "seconds": 1.106
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/nodes/carrel01/status"
+          ],
+          "seconds": 0.9965
+        }
+      ]
+    },
+    "after-inventory": {
+      "operation": "inventory",
+      "seconds": 1.4389,
+      "commands": [
+        {
+          "command": [
+            "/usr/local/lib/carrel/pve-read.pl",
+            "inventory"
+          ],
+          "seconds": 1.3804
+        },
+        {
+          "command": [
+            "lvs",
+            "--reportformat",
+            "json"
+          ],
+          "seconds": 0.0579
+        }
+      ]
+    },
+    "before-reconcile": {
+      "operation": "reconcile",
+      "seconds": 4.8321,
+      "commands": [
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets"
+          ],
+          "seconds": 0.9933
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t002/subnets"
+          ],
+          "seconds": 1.013
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t004/subnets"
+          ],
+          "seconds": 1.0125
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t001/subnets"
+          ],
+          "seconds": 1.014
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t003/subnets"
+          ],
+          "seconds": 1.0137
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t006/subnets"
+          ],
+          "seconds": 1.0102
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t007/subnets"
+          ],
+          "seconds": 1.0097
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t008/subnets"
+          ],
+          "seconds": 1.0109
+        },
+        {
+          "command": [
+            "pvesh",
+            "get",
+            "/cluster/sdn/vnets/t005/subnets"
+          ],
+          "seconds": 1.0125
+        },
+        {
+          "command": [
+            "ip",
+            "route",
+            "replace"
+          ],
+          "seconds": 0.0018
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.002
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0019
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0017
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "nft",
+            "-c",
+            "-f"
+          ],
+          "seconds": 0.0229
+        },
+        {
+          "command": [
+            "nft",
+            "-f",
+            "/etc/carrel/conntrack.nft"
+          ],
+          "seconds": 0.0238
+        },
+        {
+          "command": [
+            "systemctl",
+            "start",
+            "carrel-conntrack"
+          ],
+          "seconds": 0.0083
+        },
+        {
+          "command": [
+            "pct",
+            "exec",
+            "101",
+            "--",
+            "cat",
+            "/etc/carrel-hosts"
+          ],
+          "seconds": 0.8329
+        },
+        {
+          "command": [
+            "pct",
+            "exec",
+            "101",
+            "--",
+            "cat",
+            "/etc/caddy/Caddyfile"
+          ],
+          "seconds": 0.84
+        },
+        {
+          "command": [
+            "nft",
+            "-c",
+            "-f"
+          ],
+          "seconds": 0.0275
+        },
+        {
+          "command": [
+            "nft",
+            "-f",
+            "/etc/carrel/private-host.nft"
+          ],
+          "seconds": 0.0268
+        }
+      ]
+    },
+    "after-reconcile": {
+      "operation": "reconcile",
+      "seconds": 2.0219,
+      "commands": [
+        {
+          "command": [
+            "/usr/local/lib/carrel/pve-read.pl",
+            "topology"
+          ],
+          "seconds": 0.9911
+        },
+        {
+          "command": [
+            "ip",
+            "route",
+            "replace"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.002
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0019
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0018
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0017
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0016
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "qdisc",
+            "show"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "tc",
+            "filter",
+            "replace"
+          ],
+          "seconds": 0.0015
+        },
+        {
+          "command": [
+            "nft",
+            "-c",
+            "-f"
+          ],
+          "seconds": 0.0322
+        },
+        {
+          "command": [
+            "nft",
+            "-f",
+            "/etc/carrel/conntrack.nft"
+          ],
+          "seconds": 0.0271
+        },
+        {
+          "command": [
+            "systemctl",
+            "start",
+            "carrel-conntrack"
+          ],
+          "seconds": 0.0084
+        },
+        {
+          "command": [
+            "pct",
+            "exec",
+            "101",
+            "--",
+            "python3",
+            "-c"
+          ],
+          "seconds": 0.8808
+        },
+        {
+          "command": [
+            "nft",
+            "-c",
+            "-f"
+          ],
+          "seconds": 0.0285
+        },
+        {
+          "command": [
+            "nft",
+            "-f",
+            "/etc/carrel/private-host.nft"
+          ],
+          "seconds": 0.0241
+        }
+      ]
+    }
+  },
+  "deployment": {
+    "version": "0.5.1",
+    "stamp": "20261002-022316",
+    "wheel_sha256": "d8e6cf6507280e6f171c1d7b0714031df82a1255cfa636bf3d63a101a9a09a55",
+    "control_backup": "/opt/carrel/rollback/pve-fast-20261002-022316.tar.gz",
+    "node_backup": "/var/lib/carrel/pve-fast-20261002/node-before-20261002-022316.tar.gz"
+  },
+  "deployment_verification": {
+    "version": "0.5.1",
+    "control_source_matches": true,
+    "installed_package_matches": true,
+    "node_helpers_match": true,
+    "sha256": {
+      "control": {
+        "carrel/intent.py": "bcde48103009c96d9b40eff94ba959b7ab77a02c518cda92fbf7c12ff0ece366",
+        "carrel/auth.py": "72b59e0ad8c99b359e4109d1a17aee09031c8ddf23011cc3a752f4e7fa359e3a",
+        "carrel/store.py": "6cafcb051fedaf61b9c1ecc542287875f6b8eed051fdf8ccccd00bb737e1320e",
+        "carrel/backup.py": "9d59f35455dc76a143783486a4deaa2ffa340fe2043e6ac93786e8a4687cd900",
+        "carrel/server.py": "8ea0cd6464174322e88712cd2d8f666fd9e5fd20bb2c3f4dba008f3030a604db",
+        "carrel/capacity.py": "0fb6196b5bae4b248af9b31a35254f88356f5cf166e35a9a504e6aa1e004be7b",
+        "carrel/backend.py": "1fc75ab32a47fa0d5aaa87fb3a1b16cab8eb8634c6e41407ec4f28e835370cf5",
+        "carrel/tools.py": "5429d21eb4b7dccc7756e20cdac029f61f464fb1e5878687d9b5d8063915c63f",
+        "carrel/domains.py": "a01b0626db0036ec671c97a712c1c209a092b67fc2f2f1a3779547f451c4a0cd",
+        "carrel/__init__.py": "277fc2076e912621ad8f5961686c2d699f81a47184dd9afedbacd4365c66d6ee",
+        "carrel/platform.py": "9859003fd6824707418bcf44b553db7050fe711ef92a8a3a55572c1b057fd961",
+        "carrel/operations.py": "9746684a63e286553a7ada538045a6b25b52204ea6fdd895482d33fc4a1c39a9",
+        "carrel/pages.py": "e79e57775d6e69cb7567e4652eabc51e76013ddb60d86915e1df498b66b7815a",
+        "carrel/lifecycle.py": "ff5bb1a94658586b0e20953834b856655e44b6c8341aa4be64129a094df7c624"
+      },
+      "node": {
+        "node-agent.py": "b632ca49fa4e9759de988c3594cbffa9dfb6fd1acfe0ccfba79dd33f9471ebd7",
+        "pve-read.pl": "e3d9e72e9e3295d3fb2df0d3c23b8cea9095dfd4c4d92c4c71a51c84662d2c82",
+        "gateway-sync.py": "8123bcc90eb2620190c6ee95e4bb7ed3e826dcd3f49676aa492d6cb82b06b119"
+      }
+    }
+  },
+  "cleanup": {
+    "operations": [
+      {
+        "id": "0abf7b2de63235b63af694bdfa2d09d3",
+        "tool": "domain_remove",
+        "state": "succeeded"
+      },
+      {
+        "id": "6b6bbbfd0d4803fde5dc9b729288821e",
+        "tool": "machine_delete",
+        "state": "succeeded"
+      },
+      {
+        "id": "605269b201749f7705b6e93f9db868a3",
+        "tool": "machine_delete",
+        "state": "succeeded"
+      },
+      {
+        "id": "e275eb768915728caf642259544bef7c",
+        "tool": "network_delete",
+        "state": "succeeded"
+      }
+    ],
+    "quota_after": {
+      "vcpu": 2,
+      "memory_mb": 2048,
+      "disk_gb": 20,
+      "machines": 1,
+      "ips": 1,
+      "public_ports": 1,
+      "domains": 0,
+      "networks": 0,
+      "snapshots": 0,
+      "snapshot_gb": 0
+    },
+    "test_guests_absent": true,
+    "test_volumes_absent": true,
+    "test_network_absent": true,
+    "test_gateway_entries_absent": true,
+    "task_private_key_removed": true,
+    "existing_dev01_ssh_verified": true
+  }
+}

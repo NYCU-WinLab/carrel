@@ -1188,3 +1188,24 @@ tool call. The prior Debian server operation took 97.71 seconds, including 39.20
 package installation. Adapter timing attributes the remaining time primarily to PVE operations
 and guest readiness. Optimize these paths before considering a language rewrite. The current
 serialized writer can add queueing under concurrent demand; no concurrency SLA is established.
+
+### 15.8 PVE observations and gateway updates (0.5.1, 2026-10-02)
+
+Fixed local read helpers load the PVE API handlers once for each inventory/topology observation.
+Admission still obtains fresh data and counts all local-lvm image/rootdir volumes, current pool
+pressure and existing reservations. No cross-request cache is introduced. Ownership checks,
+mutation serialization and generated firewall policy remain unchanged.
+
+Tenant DNS and Caddy updates now enter CT 101 once. Unchanged configurations avoid reloads;
+stopped services recover. Caddy validation precedes replacement, writes are atomic and successful
+apply receipts ensure retries after a failed service action. The helper only writes fixed paths.
+
+157 tests and live VM/CT SSH, internal DNS, managed private networking, external HTTPS and full
+cleanup pass. Node inventory falls from 4.37 to 1.44 seconds and unchanged eight-tenant node network
+reconciliation from 4.83 to 2.02 seconds. A default Debian VM returns ready in 34.70 seconds from
+one MCP call. Sample counts, remaining limitations and deployed hashes are in the
+[PVE operations acceptance](docs/evaluations/2026-10-02-pve-operations.md).
+
+Startup probes measure Python at about 14 ms and the PVE module/environment at about one second.
+Direct HTTP API access may remove the remaining module startup regardless of language, but no
+Rust/HTTP comparison was run. Warm pools and a language rewrite are not part of this release.

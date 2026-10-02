@@ -191,6 +191,9 @@ The [0.4.2 native agent acceptance](docs/evaluations/2026-10-01-agent-intent.md)
 discovery, previews, actual VM/publication/connection workflows and independent connectivity probes.
 The [0.5 direct creation acceptance](docs/evaluations/2026-10-02-fast-create.md) records 42-second Debian
 and 46-second Ubuntu creation, prepared development environments and linked-clone isolation/rollback.
+The [0.5.1 PVE operations acceptance](docs/evaluations/2026-10-02-pve-operations.md) records fresh
+inventory at 1.44 seconds, unchanged node network reconciliation at 2.02 seconds and one Debian
+creation at 34.70 seconds, with live private-network, DNS, HTTPS and cleanup checks.
 
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
