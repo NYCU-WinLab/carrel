@@ -268,6 +268,10 @@ The [0.7 common actions acceptance](docs/evaluations/2026-10-02-common-actions.m
 single-call power operations, VM memory pause/resume, concise results, direct publication endpoints
 and live lifecycle/snapshot/publication checks with cleanup.
 
+The [v0.7.2 scope audit](docs/evaluations/2026-10-02-scope-audit.md) records open gaps in readiness,
+offline NIC configuration, recovery, result presentation and quota requests, with isolated
+reproductions and a proposed implementation order. It is an audit, not a completed fix release.
+
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.

@@ -1328,3 +1328,13 @@ machine access, declared connections and published endpoints. Full results, dura
 pending/error recovery data retain the receipt. Discovery guidance directs feature questions to
 `catalog_get` and asks clients to inspect only relevant tool definitions, avoiding repeated server
 instructions across a dump of every tool. Local SSH alias setup remains the default completion step.
+
+### 15.12 Member scope audit (v0.7.2 baseline, 2026-10-02)
+
+The [scope audit](docs/evaluations/2026-10-02-scope-audit.md) maps all 40 member tools to user
+outcomes and records seven reproduced behavior problems plus an existing-machine isolation gap.
+These findings are open, not implemented changes. First address stale readiness, offline NIC
+configuration and premature application-health rollback. Then make summaries, deletion receipts
+and recovery guidance usable without extra discovery; align quota request validation and
+idempotency with approval. Existing-machine isolation changes and guest-visible resize completion
+need explicit acceptance cases. The audit adds no runtime feature or deployment requirement.

@@ -1,0 +1,31 @@
+{
+  "service": {
+    "name": "carrel",
+    "version": "0.7.2"
+  },
+  "existing_restricted_destination": {
+    "request": {
+      "from": "ubuntu",
+      "to": "sysinfo-demo",
+      "port": 8080,
+      "protocol": "tcp"
+    },
+    "ok": true,
+    "ready_to_apply": true,
+    "resource_changes": false
+  },
+  "existing_tenant_destination": {
+    "request": {
+      "from": "sysinfo-demo",
+      "to": "ubuntu",
+      "port": 5432,
+      "protocol": "tcp"
+    },
+    "error": {
+      "code": "invalid",
+      "machine": "ubuntu",
+      "message": "Use network_access=restricted on the destination to enforce declared connections"
+    },
+    "ok": false
+  }
+}
