@@ -86,6 +86,7 @@ func (e *Execution) NICReadiness(m, nic D) {
 		fail("conflict", "Cannot determine guest power state after NIC configuration", D{"recovery": "retry_infrastructure"})
 	}
 	m["power_state"], m["state"], m["ssh_ready"] = state, state, false
+	m["network_configured_at"] = now()
 	m["network_verification"] = "pending_guest_start"
 	if state == "paused" {
 		m["network_verification"] = "pending_guest_resume"

@@ -200,7 +200,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 			if nic["ip"] == nil || m["kind"] == "ct" {
 				continue
 			}
-			if !current || find(dicts(r["interfaces"]), func(i D) bool { return i["mac"] == nic["mac"] && i["ip"] == nic["ip"] && integer(i["mtu"]) == 1450 }) == nil {
+			if !current || num(r["reported_at"]) < num(m["network_configured_at"]) || find(dicts(r["interfaces"]), func(i D) bool { return i["mac"] == nic["mac"] && i["ip"] == nic["ip"] && integer(i["mtu"]) == 1450 }) == nil {
 				network = false
 			}
 		}

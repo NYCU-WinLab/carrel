@@ -34,7 +34,8 @@ func TestRunningNICRequiresReportedInterface(t *testing.T) {
 	p.Store.Put("networks", network["id"], 1, network)
 	b.call = func(r D, _ string) (any, error) { return D{"status": "running"}, nil }
 	p.sshProbe = func(context.Context, D) bool { return true }
-	p.Store.Put("guest_reports", 10100, 1, D{"reported_at": now(), "initialization_status": "complete", "application_status": "not_checked"})
+	oldNIC := p.execution(context.Background()).NICSpec(p.Store.Get("machines", "10100"), network, 1)
+	p.Store.Put("guest_reports", 10100, 1, D{"reported_at": now() - 1, "initialization_status": "complete", "application_status": "not_checked", "interfaces": []D{pick(oldNIC, "ip", "mac", "mtu")}})
 	runQueue(p)
 	result := p.Execute(context.Background(), "machine_nic_attach", D{"machine": "db", "network": "private", "wait_seconds": 0}, person("alice", false))
 	id := str(obj(result["operation"])["id"])

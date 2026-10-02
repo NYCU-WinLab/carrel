@@ -364,7 +364,7 @@ func (e *Execution) AllocatePort(t D) int {
 	return 0
 }
 func (e *Execution) PublicMachine(m D, ports []D) D {
-	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation")
+	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at")
 	report := obj(e.S.Get("guest_reports", str(m["vmid"])))
 	if m["kind"] == "ct" && m["state"] == "ready" {
 		report = merge(report, D{"initialization_status": "complete", "application_status": "not_checked"})
