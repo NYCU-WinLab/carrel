@@ -22,7 +22,7 @@ func observePower(machine, status D) {
 	if state != "running" || old != "running" {
 		machine["ssh_ready"] = false
 		obj(machine["readiness"])["ssh_ready"] = false
-		if state != "running" || old != "running" {
+		if state != "running" || !contains([]string{"initializing", "provisioning"}, machine["state"]) {
 			machine["state"] = state
 		}
 	}
