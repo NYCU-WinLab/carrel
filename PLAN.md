@@ -1306,5 +1306,6 @@ in section 4.5 remains planned. The 40-tool member discovery surface is unchange
   is introduced by this release.
 
 Validation: Go race tests/vet and static builds, 177 Python tests, Ruff and script compilation run
-on sandbox VM104. Live acceptance and release evidence are recorded in
-`docs/evaluations/2026-10-02-common-actions.md` after deployment.
+on sandbox VM104. Live acceptance passed on disposable VM/CT guests, including paused restart/shutdown,
+owner SSH, snapshot rollback, external HTTPS/TCP and complete cleanup. See
+`docs/evaluations/2026-10-02-common-actions.md` and its JSON evidence.

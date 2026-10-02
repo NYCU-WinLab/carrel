@@ -251,6 +251,10 @@ The [0.6 Go acceptance](docs/evaluations/2026-10-02-go-control-plane.md) records
 single-call Debian VM, two overlapping VM creations in 39 seconds, persisted-job recovery
 across restart, existing login continuity and live network/snapshot/backup checks.
 
+The [0.7 common actions acceptance](docs/evaluations/2026-10-02-common-actions.md) records
+single-call power operations, VM memory pause/resume, concise results, direct publication endpoints
+and live lifecycle/snapshot/publication checks with cleanup.
+
 Guest boot, package execution and connectivity are never verified by a plan. Never put private SSH keys or tokens in tool
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.
