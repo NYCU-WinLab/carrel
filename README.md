@@ -395,6 +395,10 @@ identity and SSH keys, and emits a hashed manifest. Copy the prepared image/mani
 then run `scripts/build-templates.py --prepared-dir <directory> --image debian-13-minimal --vmid-base <fresh-id>` there.
 Repeat `--image` to import several images; omitting it retains the two-development-image workflow.
 Allow at least 6 GiB of free image workspace plus space for the libguestfs appliance cache.
+If a sandbox's loopback DNS stub cannot be used by libguestfs, run preparation in a private
+mount namespace with `/run/systemd/resolve/resolv.conf` bind-mounted over `/etc/resolv.conf`.
+Do not change the shared sandbox resolver. Kernel access may require sudo. APT index failures
+abort preparation; a failed candidate must not be activated.
 After verifying the candidates, pass their generated `templates.json` to
 `scripts/deploy-go.py --artifacts <sandbox-built-directory> --templates <directory>/templates.json`.
 The deployment merges candidates into the existing template map, validates immutable templates,

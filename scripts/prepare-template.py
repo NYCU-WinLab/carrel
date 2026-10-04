@@ -86,12 +86,15 @@ def main():
         verify += " && ! command -v node && ! command -v docker && ! command -v gcc"
     blocked = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
     run(
-        "virt-customize", "-a", output, "--update",
+        "virt-customize", "-a", output,
+        "--write", '/etc/apt/apt.conf.d/99carrel-build:APT::Update::Error-Mode "any";\n',
+        "--update",
         "--install", ",".join(packages),
         *extra,
         "--write", "/etc/qemu/qemu-ga.conf:[general]\nblock-rpcs=" + blocked + "\n",
         "--run-command", "systemctl enable qemu-guest-agent fstrim.timer apt-daily.timer apt-daily-upgrade.timer",
         "--run-command", "export PATH=/usr/local/bin:/usr/sbin:$PATH; " + verify + " && apt-get clean",
+        "--delete", "/etc/apt/apt.conf.d/99carrel-build",
         "--run-command", "cloud-init clean --logs --machine-id --seed",
     )
     run("virt-sysprep", "-a", output, "--operations", "defaults", "--hostname", "localhost")
