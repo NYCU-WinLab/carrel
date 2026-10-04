@@ -56,16 +56,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared-dir", type=Path)
     parser.add_argument("--vmid-base", type=int, default=9010)
+    parser.add_argument("--image", action="append", choices=["debian-13-minimal", "debian-13", "ubuntu-24.04"],
+                        help="Prepared image to import; repeat for several. Defaults to both development images.")
     args = parser.parse_args()
     if args.prepared_dir:
-        if not 9010 <= args.vmid_base <= 9998:
-            parser.error("use fresh template IDs from 9010 through 9998")
+        images = args.image or ["debian-13", "ubuntu-24.04"]
+        if len(set(images)) != len(images) or not 9010 <= args.vmid_base <= 10000 - len(images):
+            parser.error("use unique images and fresh template IDs from 9010 through 9999")
         candidates = {}
-        for offset, image in enumerate(("debian-13", "ubuntu-24.04")):
+        for offset, image in enumerate(images):
             manifest = json.loads((args.prepared_dir / (image + ".json")).read_text())
             path = args.prepared_dir / (image + ".qcow2")
             if manifest["image"] != image or manifest.get("prepared") is not True:
                 raise RuntimeError("expected a prepared image manifest")
+            if image == "debian-13-minimal" and manifest.get("environment") != "minimal":
+                raise RuntimeError("expected a minimal environment manifest")
             with path.open("rb") as stream:
                 if hashlib.file_digest(stream, "sha256").hexdigest() != manifest["sha256"]:
                     raise RuntimeError("prepared image digest mismatch")

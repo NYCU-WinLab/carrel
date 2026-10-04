@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var DefaultQuota = D{"vcpu": 8, "memory_mb": 16384, "disk_gb": 100, "machines": 4, "ips": 4, "public_ports": 10, "domains": 10, "networks": 4, "snapshots": 4, "snapshot_gb": 100, "images_gb": 20}
+var DefaultQuota = D{"vcpu": 8, "memory_mb": 16384, "disk_gb": 100, "machines": 8, "ips": 8, "public_ports": 10, "domains": 10, "networks": 4, "snapshots": 4, "snapshot_gb": 100, "images_gb": 20}
 
 type sqlAccess interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -41,8 +41,13 @@ CREATE TABLE IF NOT EXISTS tenants(n INTEGER PRIMARY KEY AUTOINCREMENT,subject T
 CREATE TABLE IF NOT EXISTS objects(kind TEXT NOT NULL,id TEXT NOT NULL,tenant INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id),FOREIGN KEY(tenant) REFERENCES tenants(n));
 CREATE INDEX IF NOT EXISTS objects_tenant ON objects(tenant,kind);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,actor TEXT NOT NULL,tenant INTEGER,tool TEXT NOT NULL,args TEXT NOT NULL,outcome TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS oauth(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,expires INTEGER NOT NULL,PRIMARY KEY(kind,id));`)
+CREATE TABLE IF NOT EXISTS oauth(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,expires INTEGER NOT NULL,PRIMARY KEY(kind,id));
+CREATE TABLE IF NOT EXISTS migrations(id TEXT PRIMARY KEY,applied_at INTEGER NOT NULL);`)
 	if e != nil {
+		db.Close()
+		return nil, e
+	}
+	if e = s.migrateSmallDefaults(); e != nil {
 		db.Close()
 		return nil, e
 	}

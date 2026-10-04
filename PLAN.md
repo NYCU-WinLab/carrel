@@ -167,7 +167,7 @@ protocol error.
 | | `quota_request` | `tenant`, `dimension`, `amount`, `reason`, `until` |
 | | `request_list` | own requests and their state |
 | Catalog | `images_list` | `kind: vm \| ct`; platform images with version, end of support date and default flag, plus the tenant's own images and ISOs |
-| | `sizes_list` | presets `small`, `medium`, `large` |
+| | `sizes_list` | presets `tiny`, `small`, `medium`, `large` |
 | Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
 | | `machine_get`, `machine_list` | state, primary address, SSH line, image support status |
 | | `machine_resize` | CPU/RAM may shrink while stopped; disk only grows |
@@ -346,6 +346,14 @@ Special domains and ports are not a dimension: each one needs an admin's approva
 ### 5.2 Quota versus admission
 
 Quota is a ceiling, not a guarantee of unused physical capacity. Admission is checked separately.
+
+Personal and project defaults are 8 machines, 8 IPs, 8 vCPU, 16384 MiB RAM and 100 GiB disk.
+Eight default 1 vCPU / 1024 MiB / 10 GiB machines consume 8 vCPU / 8 GiB / 80 GiB. CPU growth
+then requires quota headroom or approval; stopping does not release reservations. Every machine
+uses one of the tenant's 10 public ports for SSH, leaving two for extra TCP/UDP publications.
+HTTPS domains do not consume this port block. Domains (10), networks (4), snapshots (4) and
+snapshot space (100 GiB) retain their existing defaults. More than 10 SSH machines requires
+an address/port allocation design change, not merely a larger machine quota.
 
 | Layer | Rule (initial values, tuned after the hardware inventory) |
 |---|---|
@@ -600,11 +608,19 @@ within 90 days of it.
 
 | Setting | Why |
 |---|---|
-| Campus apt mirror, `qemu-guest-agent`, 4 GB swap file unless `swap_mb` says otherwise (`0` for Kubernetes nodes), `vm.swappiness=10` | Carried from the old host's cloud-init snippet |
+| Debian 13 minimal, 1 vCPU / 1024 MiB RAM / 10 GiB disk (`tiny`); 1024 MiB swap unless `swap_mb` says otherwise (`0` for Kubernetes nodes), `vm.swappiness=10` | Small service default with explicit growth |
 | `fstrim.timer` on, disks `discard=on`, `ssd=1`, `iothread=1`, `virtio-scsi-single` | Space freed in the guest returns to the pool |
 | Unattended security upgrades, timezone Asia/Taipei | Tenants forget |
 | CPU type `x86-64-v2-AES`; `host` only with `nested_virt` | Machines can migrate between nodes |
 | Serial console on | Needed for `machine_console_log` |
+
+The prepared `debian-13-minimal` image contains cloud-init, SSH, sudo, Python for management,
+QEMU guest agent, security updates, curl, rsync and growpart. It excludes Node, Docker and
+compilers. The existing `debian-13` and `ubuntu-24.04` VM images retain their prepared development
+environment and default to `small` (2 vCPU / 2048 MiB / 20 GiB). `medium` and `large` remain
+4/8192/40 and 8/16384/80. Explicit size/resource fields override defaults without changing the
+image. Catalog image metadata declares environment, default_size and default_swap_mb. New CTs
+use their existing minimal distribution images with `tiny` and zero swap.
 
 ### 7.4 CT defaults
 
@@ -1096,8 +1112,8 @@ Administrator deployment order (scripts have fixed B09 IDs/addresses and refuse 
 5. Create/verify the Keycloak client definition through an authorized administrator; use disposable
    member accounts with `verify-oauth.py` and `verify-platform.py` for acceptance.
 
-The current quota is a conservative shared default: 8 vCPU, 16 GiB RAM, 100 GiB allocated disk,
-4 machines/IPs, 10 public ports/domains, 4 private networks and 4 snapshots. Project/subgroup-specific
+The initial quota was a conservative shared default: 8 vCPU, 16 GiB RAM, 100 GiB allocated disk,
+4 machines/IPs (raised to 8 in section 15.14), 10 public ports/domains, 4 private networks and 4 snapshots. Project/subgroup-specific
 policy remains open decision 2. Snapshots reserve a full disk size before adapter work; rollback refuses changed NIC or
 resource configuration. Interrupted disk growth keeps the larger quota reservation and can be
 retried with the same `machine_resize` arguments. Temporary quota expiry stops over-limit machines and prevents restarting
@@ -1372,3 +1388,30 @@ only affect future guests; control backups exclude tenant disks. Live acceptance
 disposable guests with all temporary resources removed. Paused NIC removal now rejects before
 PVE can write a pending unplug; resume or shutdown is an explicit prerequisite. Full disaster recovery, custom images,
 multi-node scheduling and console/key recovery remain deferred. Member tool count remains 40.
+
+### 15.14 Minimal defaults and eight-machine quota (0.9, 2026-10-04)
+
+The default VM is `debian-13-minimal`, `tiny`: 1 vCPU, 1024 MiB RAM, 10 GiB disk and
+1024 MiB swap. Explicit development images keep their prior `small` preset. Single-machine
+creation and deployment plan/apply resolve the same defaults; MCP schemas, instructions and
+catalog explain both environments and resource overrides. Guest management and isolation
+remain identical across prepared images. Minimal preparation performs no Node download or
+Docker installation and never assigns a nonexistent docker group.
+
+A one-time transactional migration raises untouched 4-machine/IP defaults to 8, with audit
+events. Custom lower/higher limits, explicit admin decisions and approved temporary grants
+are preserved, including their expiry behavior. Other dimensions and existing guests remain
+unchanged. A failed migration prevents startup and rolls back its transaction. Physical
+admission and ten-port blocks remain enforced; this is not unlimited creation or guaranteed
+future resize capacity.
+
+Build and inspect the new image in the sandbox, import at a fresh template ID, and merge its
+manifest during deployment. Activation requires an immutable prepared minimal template and
+updates the catalog environment metadata together with the control/node programs. Existing
+development templates remain available. Rollback restores programs, template selection and
+configuration; it does not blindly restore an older database or guest disks.
+
+Resize still separates confirmed block allocation from owner-verified guest capacity. Agents
+inspect the actual root device over owner SSH, grow its partition/filesystem where appropriate,
+and verify `df` before reporting usable space. CPU/RAM changes may require an authorized restart;
+reductions require a stopped guest and disk shrinking remains unsupported.

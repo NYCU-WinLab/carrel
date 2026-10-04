@@ -625,7 +625,7 @@ def test_template_preparation_preserves_requested_package_install(monkeypatch, p
     )
     assert ("packages" in data) is (bool(packages) or not prepared)
     assert "guest-exec" in data["write_files"][0]["content"]
-    assert data["swap"]["size"] == "4096M"
+    assert data["swap"]["size"] == "1024M"
     assert data["users"][0].get("groups", []) == (["docker"] if prepared else [])
 
 
