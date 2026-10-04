@@ -88,7 +88,7 @@ def main():
     run(
         "virt-customize", "-a", output,
         "--write", '/etc/apt/apt.conf.d/99carrel-build:APT::Update::Error-Mode "any";\n',
-        "--update",
+        "--run-command", "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade",
         "--install", ",".join(packages),
         *extra,
         "--write", "/etc/qemu/qemu-ga.conf:[general]\nblock-rpcs=" + blocked + "\n",
