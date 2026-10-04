@@ -288,11 +288,14 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["name"] == a["name"] }) != nil {
 		fail("conflict", "Machine name is already allocated", D{"recovery": "revise_request", "machine": a["name"]})
 	}
-	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", "small")]), pick(a, "cpu", "memory_mb", "disk_gb"))
-	kind, image := textAt(a, "kind", "vm"), textAt(a, "image", "debian-13")
-	if find(dicts(Contract["images"]), func(i D) bool { return i["name"] == image && i["kind"] == kind }) == nil {
+	kind := textAt(a, "kind", "vm")
+	defaultImage := find(dicts(Contract["images"]), func(i D) bool { return i["kind"] == kind && boolean(i["default"]) })
+	image := textAt(a, "image", str(defaultImage["name"]))
+	installed := find(dicts(Contract["images"]), func(i D) bool { return i["name"] == image && i["kind"] == kind })
+	if installed == nil {
 		fail("invalid", "Image is not available")
 	}
+	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", textAt(installed, "default_size", "tiny"))]), pick(a, "cpu", "memory_mb", "disk_gb"))
 	keys := arr(a["ssh_keys"])
 	if len(keys) == 0 {
 		for _, k := range e.S.Objects("keys", integer(t["n"])) {
@@ -307,7 +310,7 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	}
 	swap := 0
 	if kind == "vm" {
-		swap = 4096
+		swap = 1024
 	}
 	var token any
 	if !dry {

@@ -524,7 +524,7 @@ def keys(values):
     return "\n".join(values) + "\n"
 
 
-def cloud_init(m, *, prepared=False):
+def cloud_init(m, *, prepared=False, environment="development"):
     keys(m["ssh_keys"])
     blocked = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
     data = {
@@ -537,7 +537,7 @@ def cloud_init(m, *, prepared=False):
                 "shell": "/bin/bash",
                 "sudo": "ALL=(ALL) NOPASSWD:ALL",
                 "ssh_authorized_keys": m["ssh_keys"],
-                **({"groups": ["docker"]} if prepared else {}),
+                **({"groups": ["docker"]} if prepared and environment == "development" else {}),
             }
         ],
         "disable_root": True,
@@ -582,11 +582,11 @@ def cloud_init(m, *, prepared=False):
             ["sysctl", "--system"],
             ["python3", "/usr/local/lib/carrel/bootstrap.py"],
         ]
-    if m.get("swap_mb", 4096):
+    if m.get("swap_mb", 1024):
         data["swap"] = {
             "filename": "/swapfile",
-            "size": str(integer(m.get("swap_mb", 4096), 0, 65536)) + "M",
-            "maxsize": str(m.get("swap_mb", 4096)) + "M",
+            "size": str(integer(m.get("swap_mb", 1024), 0, 65536)) + "M",
+            "maxsize": str(m.get("swap_mb", 1024)) + "M",
         }
     name = f"carrel-{m['vmid']}-user.json"
     write("/var/lib/vz/snippets/" + name, "#cloud-config\n" + json.dumps(data), 0o600)
@@ -601,13 +601,17 @@ def cloud_init(m, *, prepared=False):
 
 
 def vm_template(image):
-    defaults = {"debian-13": 9000, "ubuntu-24.04": 9001}
+    defaults = {"debian-13-minimal": None, "debian-13": 9000, "ubuntu-24.04": 9001}
     if image not in defaults:
         raise ValueError("image not installed")
     path = Path("/etc/carrel/templates.json")
     configured = json.loads(path.read_text()) if path.exists() else {}
     value = configured.get(image, {"vmid": defaults[image], "prepared": False})
-    return {"vmid": integer(value["vmid"], 9000, 9999), "prepared": value.get("prepared") is True}
+    environment = value.get("environment", "development")
+    if image == "debian-13-minimal" and (not value.get("prepared") or environment != "minimal"):
+        raise ValueError("prepared Debian minimal template is not installed")
+    return {"vmid": integer(value["vmid"], 9000, 9999), "prepared": value.get("prepared") is True,
+            "environment": environment}
 
 
 def create(m):
@@ -669,7 +673,7 @@ def create(m):
             "--nameserver",
             "10.200.0.2",
             "--cicustom",
-            cloud_init(m, prepared=template["prepared"]),
+            cloud_init(m, prepared=template["prepared"], environment=template.get("environment", "development")),
             "--ciuser",
             "user",
             "--sshkeys",

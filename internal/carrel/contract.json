@@ -115,7 +115,7 @@
     },
     {
       "name": "catalog_get",
-      "description": "Use this for questions about Carrel features, images or the development environment. Get exact service.version, installed images, size presets, VM/CT restrictions, MiB/GiB units and supported capabilities together. No deployment preview needed to discover support.",
+      "description": "Use this for questions about Carrel features, images or the development environment. Get exact service.version, installed images, size presets, VM/CT restrictions, MiB/GiB units and supported capabilities together. No deployment preview needed to discover support. Images include environment, default_size and default_swap_mb; minimal and development are distinct prepared images.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -338,7 +338,7 @@
     },
     {
       "name": "machine_create",
-      "description": "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications. Use the known default public key only if saved keys are unavailable; do not scan unrelated SSH configuration. Successful summary omits quota tables; detail=full retrieves them. For local CLI clients, creation includes merging returned ssh_config while preserving existing entries, verifying its tenant-qualified alias with ssh -G, and presenting ssh_short. Use direct ssh only if client setup is unavailable, excluded or fails.",
+      "description": "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications. Use the known default public key only if saved keys are unavailable; do not scan unrelated SSH configuration. Successful summary omits quota tables; detail=full retrieves them. For local CLI clients, creation includes merging returned ssh_config while preserving existing entries, verifying its tenant-qualified alias with ssh -G, and presenting ssh_short. Use direct ssh only if client setup is unavailable, excluded or fails. Minimal has no Node, Docker or compilers. Choose image=debian-13 or ubuntu-24.04 for prepared development tools and default size=small (2 vCPU/2 GiB/20 GiB). Explicit size/resource fields override image defaults. CTs default to tiny with no swap. Choose larger resources for builds and Docker stacks.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -354,16 +354,20 @@
           },
           "image": {
             "enum": [
+              "debian-13-minimal",
               "debian-13",
               "ubuntu-24.04"
-            ]
+            ],
+            "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04."
           },
           "size": {
             "enum": [
+              "tiny",
               "small",
               "medium",
               "large"
-            ]
+            ],
+            "description": "Defaults to tiny for minimal VMs/CTs, small for development VMs. Explicit resource fields override this preset."
           },
           "cpu": {
             "type": "integer",
@@ -407,7 +411,7 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 65536,
-            "description": "Swap in MiB."
+            "description": "Swap in MiB, within the virtual disk. Default 1024 for VMs, 0 for CTs; set 0 to disable."
           },
           "packages": {
             "type": "array",
@@ -3848,7 +3852,7 @@
     },
     {
       "name": "deployment_plan",
-      "description": "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. This is the complete preview: apply the same specification once with deployment_apply when authorized; do not repeat a dry-run or create each resource separately. Publications can reference existing machine names with no machines array. Use access to change an existing machine ingress mode, together with connections if needed. Preview explains lost or added connectivity; set access.confirm to its name when authorized.",
+      "description": "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. This is the complete preview: apply the same specification once with deployment_apply when authorized; do not repeat a dry-run or create each resource separately. Publications can reference existing machine names with no machines array. Use access to change an existing machine ingress mode, together with connections if needed. Preview explains lost or added connectivity; set access.confirm to its name when authorized. Machine defaults match machine_create: Debian 13 minimal, tiny (1 vCPU/1 GiB/10 GiB), 1 GiB swap. Development images debian-13 and ubuntu-24.04 default to small. Explicit size/resource fields override image defaults.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3870,16 +3874,20 @@
                 },
                 "image": {
                   "enum": [
+                    "debian-13-minimal",
                     "debian-13",
                     "ubuntu-24.04"
-                  ]
+                  ],
+                  "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04."
                 },
                 "size": {
                   "enum": [
+                    "tiny",
                     "small",
                     "medium",
                     "large"
-                  ]
+                  ],
+                  "description": "Defaults to tiny for minimal VMs/CTs, small for development VMs. Explicit resource fields override this preset."
                 },
                 "cpu": {
                   "type": "integer",
@@ -3923,7 +3931,7 @@
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 65536,
-                  "description": "Swap in MiB."
+                  "description": "Swap in MiB, within the virtual disk. Default 1024 for VMs, 0 for CTs; set 0 to disable."
                 },
                 "packages": {
                   "type": "array",
@@ -4235,7 +4243,7 @@
     },
     {
       "name": "deployment_apply",
-      "description": "Create a group of machines, connections and publications in one call when authorized. Use deployment_plan only when a preview is wanted, then apply the same specification. Reserves the entire group and waits up to 55 seconds for completion; result includes SSH and public endpoints. Only call operation_get if still pending. Default rollback removes only newly created resources; keep retains them for repair. Reuse idempotency_key after a lost response. For local CLI clients, creation includes merging returned ssh_config while preserving existing entries, verifying its tenant-qualified alias with ssh -G, and presenting ssh_short. Use direct ssh only if client setup is unavailable, excluded or fails. Use access to change an existing machine ingress mode, together with connections if needed. Preview explains lost or added connectivity; set access.confirm to its name when authorized.",
+      "description": "Create a group of machines, connections and publications in one call when authorized. Use deployment_plan only when a preview is wanted, then apply the same specification. Reserves the entire group and waits up to 55 seconds for completion; result includes SSH and public endpoints. Only call operation_get if still pending. Default rollback removes only newly created resources; keep retains them for repair. Reuse idempotency_key after a lost response. For local CLI clients, creation includes merging returned ssh_config while preserving existing entries, verifying its tenant-qualified alias with ssh -G, and presenting ssh_short. Use direct ssh only if client setup is unavailable, excluded or fails. Use access to change an existing machine ingress mode, together with connections if needed. Preview explains lost or added connectivity; set access.confirm to its name when authorized. Machine defaults match machine_create: Debian 13 minimal, tiny (1 vCPU/1 GiB/10 GiB), 1 GiB swap. Development images debian-13 and ubuntu-24.04 default to small. Explicit size/resource fields override image defaults.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4257,16 +4265,20 @@
                 },
                 "image": {
                   "enum": [
+                    "debian-13-minimal",
                     "debian-13",
                     "ubuntu-24.04"
-                  ]
+                  ],
+                  "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04."
                 },
                 "size": {
                   "enum": [
+                    "tiny",
                     "small",
                     "medium",
                     "large"
-                  ]
+                  ],
+                  "description": "Defaults to tiny for minimal VMs/CTs, small for development VMs. Explicit resource fields override this preset."
                 },
                 "cpu": {
                   "type": "integer",
@@ -4310,7 +4322,7 @@
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 65536,
-                  "description": "Swap in MiB."
+                  "description": "Swap in MiB, within the virtual disk. Default 1024 for VMs, 0 for CTs; set 0 to disable."
                 },
                 "packages": {
                   "type": "array",
@@ -4943,31 +4955,57 @@
   ],
   "images": [
     {
-      "name": "debian-13",
+      "name": "debian-13-minimal",
       "kind": "vm",
       "default": true,
-      "support_until": "2030-06-30"
+      "support_until": "2030-06-30",
+      "environment": "minimal",
+      "default_size": "tiny",
+      "default_swap_mb": 1024
+    },
+    {
+      "name": "debian-13",
+      "kind": "vm",
+      "default": false,
+      "support_until": "2030-06-30",
+      "environment": "development",
+      "default_size": "small",
+      "default_swap_mb": 1024
     },
     {
       "name": "debian-13",
       "kind": "ct",
       "default": true,
-      "support_until": "2030-06-30"
+      "support_until": "2030-06-30",
+      "environment": "minimal",
+      "default_size": "tiny",
+      "default_swap_mb": 0
     },
     {
       "name": "ubuntu-24.04",
       "kind": "vm",
       "default": false,
-      "support_until": "2029-04-30"
+      "support_until": "2029-04-30",
+      "environment": "development",
+      "default_size": "small",
+      "default_swap_mb": 1024
     },
     {
       "name": "ubuntu-24.04",
       "kind": "ct",
       "default": false,
-      "support_until": "2029-04-30"
+      "support_until": "2029-04-30",
+      "environment": "minimal",
+      "default_size": "tiny",
+      "default_swap_mb": 0
     }
   ],
   "sizes": {
+    "tiny": {
+      "cpu": 1,
+      "memory_mb": 1024,
+      "disk_gb": 10
+    },
     "small": {
       "cpu": 2,
       "memory_mb": 2048,
@@ -5013,5 +5051,5 @@
     },
     "existing_machine_access": true
   },
-  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 VM, 2 vCPU, 2 GiB RAM, 20 GiB disk, prepared development tools. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources."
+  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
 }

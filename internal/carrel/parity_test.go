@@ -63,9 +63,48 @@ func TestPythonBehaviorParity(t *testing.T) {
 			}
 			p := NewPlatform(s, &fakeBackend{inventory: baseInventory()}, D{})
 			defer p.Close()
-			got := p.Execute(context.Background(), str(tc["tool"]), obj(tc["args"]), obj(tc["who"]))
+			// The frozen 0.5 fixtures retain their explicit legacy defaults. Current
+			// default selection and quotas are covered by defaults_test.go.
+			args := clone(obj(tc["args"]))
+			legacySpec := func(a D) D {
+				swap := 4096
+				if a["kind"] == "ct" {
+					swap = 0
+				}
+				return merge(D{"image": "debian-13", "size": "small", "swap_mb": swap}, a)
+			}
+			if tc["tool"] == "machine_create" {
+				args = legacySpec(args)
+			}
+			if tc["tool"] == "deployment_plan" || tc["tool"] == "deployment_apply" {
+				if args["machines"] != nil {
+					machines := []D{}
+					for _, m := range dicts(args["machines"]) {
+						machines = append(machines, legacySpec(m))
+					}
+					args["machines"] = machines
+				}
+			}
+			got := p.Execute(context.Background(), str(tc["tool"]), args, obj(tc["who"]))
 			a := normalizeParity(copyValue(got))
 			b := normalizeParity(tc["expected"])
+			if tc["tool"] == "catalog_get" || tc["tool"] == "sizes_list" {
+				delete(obj(obj(a)["sizes"]), "tiny")
+			}
+			if tc["tool"] == "catalog_get" || tc["tool"] == "images_list" {
+				images := []D{}
+				for _, im := range dicts(obj(a)["images"]) {
+					if im["name"] == "debian-13-minimal" {
+						continue
+					}
+					im = without(im, "environment", "default_size", "default_swap_mb")
+					if im["name"] == "debian-13" {
+						im["default"] = true
+					}
+					images = append(images, im)
+				}
+				obj(a)["images"] = images
+			}
 			// The legacy fixture predates VM pause and live top-level power state.
 			// Validate those additions in actions_test.go; compare the rest unchanged.
 			if tc["tool"] == "whoami" || tc["tool"] == "catalog_get" {

@@ -63,11 +63,29 @@ on first use. There is no separate policy acknowledgement or registration step.
 Use Carrel only for authorized lab work; abuse, scanning other tenants and outbound SMTP are prohibited.
 
 A request for one machine needs only `machine_create` with a name and public key (or previously saved keys).
-It defaults to a Debian 13 VM with 2 vCPU, 2 GiB RAM and 20 GiB disk.
-Prepared VM images include GCC/G++, make, CMake, Python with pip/venv, Node.js 24 LTS with npm,
+It defaults to a prepared **Debian 13 minimal VM with 1 vCPU, 1 GiB RAM, 10 GiB disk and 1 GiB swap**.
+The `debian-13-minimal` image includes SSH, cloud-init, Python for Carrel management, QEMU guest
+agent, unattended security updates, curl, rsync and growpart. Node, Docker and compilers are not
+preinstalled. Build applications on a suitably sized development machine and deploy their runtime
+artifacts, or request a larger development VM for builds and Docker stacks.
+
+Choose `image="debian-13"` or `image="ubuntu-24.04"` for the prepared development environment.
+These images default to `small` (2 vCPU, 2 GiB RAM, 20 GiB disk) and include GCC/G++, make, CMake, Python with pip/venv, Node.js 24 LTS with npm,
 Docker with Compose, Git, curl, jq, unzip and pkg-config. Docker starts automatically; the VM user
 belongs to the docker group (equivalent to root access within their own VM). Use a Python venv
-for project dependencies. CTs keep their minimal distribution environment; use a VM for Docker.
+for project dependencies. CTs default to Debian 13, `tiny`, and no swap; use a VM for Docker.
+
+| Preset | vCPU | RAM (GiB) | Disk (GiB) |
+| --- | ---: | ---: | ---: |
+| `tiny` (minimal default) | 1 | 1 | 10 |
+| `small` | 2 | 2 | 20 |
+| `medium` | 4 | 8 | 40 |
+| `large` | 8 | 16 | 80 |
+
+An explicit `size` replaces the image's default preset; individual `cpu`, `memory_mb` and `disk_gb`
+override that preset. VM swap defaults to 1024 MiB within the disk; `swap_mb=0` disables it.
+Resource choice and image choice are independent: a larger minimal VM still has a minimal environment.
+`catalog_get.images` reports each image's environment, default size and default swap.
 `catalog_get.vm_environment` identifies the environment installed at the current site. Admission checks run within
 creation, so discovery and previews are optional. The call waits up to 55 seconds for SSH and
 initialization readiness. If still pending, use the returned operation ID to continue waiting.
@@ -141,6 +159,15 @@ shared physical capacity and admission headroom without exposing other tenants' 
 `quota_get` refreshes one tenant. `memory_mb` and `swap_mb` mean **MiB**; `disk_gb` means **GiB**.
 `machine_get` returns readiness, access rules, SSH and timestamped `runtime` power state/uptime;
 it does not return the raw hypervisor payload. Use `machine_metrics` for detailed usage.
+
+Personal and project tenants default to **8 machines / 8 IPs**, with aggregate limits of 8 vCPU,
+16 GiB RAM and 100 GiB disk. Eight `tiny` VMs use 8 vCPU, 8 GiB RAM and 80 GiB disk. Increasing
+CPU after filling that allocation requires releasing CPU quota or an approved quota increase.
+Stopping or pausing a VM retains its reservations. Available quota does not reserve physical
+capacity; creation and growth also pass the node's admission checks.
+Each machine's SSH occupies one of 10 tenant public ports, so eight machines leave two ports for
+additional TCP/UDP publications. Tenant HTTPS domains use the gateway without consuming these ports.
+Defaults for domains (10), networks (4), snapshots (4) and snapshot space (100 GiB) are unchanged.
 
 When a preview is wanted, dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
 machines, allowed connections and public endpoints. Plans resolve names within the selected tenant and check
@@ -361,16 +388,29 @@ fixtures; neither script is a runtime dependency.
 
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
-SHA-256. It installs current updates and the development environment, verifies the official Node.js archive,
-retains unattended security updates, removes machine
-identity and SSH keys, and emits a hashed manifest. Copy both prepared images/manifests to the node,
-then run `scripts/build-templates.py --prepared-dir <directory> --vmid-base <fresh-id>` there.
+SHA-256. Select `debian-13-minimal` for the minimal environment, or `debian-13` / `ubuntu-24.04`
+for the development environment with the verified official Node.js archive. Preparation discovers
+the actual ext4 root partition, preserves its numbering, retains security updates, removes machine
+identity and SSH keys, and emits a hashed manifest. Copy the prepared image/manifest to the node,
+then run `scripts/build-templates.py --prepared-dir <directory> --image debian-13-minimal --vmid-base <fresh-id>` there.
+Repeat `--image` to import several images; omitting it retains the two-development-image workflow.
 Allow at least 6 GiB of free image workspace plus space for the libguestfs appliance cache.
-After verifying the candidates, install the generated `templates.json` as `/etc/carrel/templates.json`.
+After verifying the candidates, pass their generated `templates.json` to
+`scripts/deploy-go.py --artifacts <sandbox-built-directory> --templates <directory>/templates.json`.
+The deployment merges candidates into the existing template map, validates immutable templates,
+updates the catalog's installed-environment metadata, and retains rollback copies. The prepared
+minimal template is required before activating 0.9.0; it never falls back to a development image.
 Keep previous generations for rollback. Existing template IDs are never overwritten.
 New VM disks use LVM-thin linked clones; guest writes remain isolated. Requested extra packages still
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.
+
+On the first 0.9.0 startup, a transactional migration raises untouched legacy machine/IP limits
+from 4 to 8 and records `quota_defaults_migrate` audit events. Other resource limits, custom lower
+or higher limits, successful explicit admin changes and approved quota grants are preserved.
+The migration runs once; later admin choices survive restarts. Existing guest allocations and
+software are unchanged. The frozen Python reference and historical acceptance reports retain
+their original defaults; current defaults are tested separately against the live Go MCP contract.
 
 The scripts are site-specific administrator operations, not the planned general `install.sh`.
 The deployment order is documented in [PLAN 15.4](PLAN.md#154-member-platform-deployment): prepare
