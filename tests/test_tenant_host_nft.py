@@ -16,7 +16,11 @@ def load():
 
 def dropped_ifaces(nft):
     # The patterns of the input chain's catch-all `iifname { ... } counter drop` rule.
-    line = next(x for x in nft.splitlines() if x.strip().startswith("iifname {") and x.strip().endswith("counter drop"))
+    line = next(
+        x
+        for x in nft.splitlines()
+        if x.strip().startswith("iifname {") and x.strip().endswith("counter drop")
+    )
     return re.findall(r'"([^"]+)"', line)
 
 
