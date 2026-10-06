@@ -7,6 +7,29 @@ import socket
 import subprocess
 
 
+# Tenant vnets are t001, t002, ... (node-agent's f"t{n:03d}") and guest taps are tap*.
+# nft has no character classes, so "t" plus a digit is spelled out; a bare "t*" would
+# also drop host interfaces such as tailscale0.
+TENANT_IFACES = ", ".join([f'"t{d}*"' for d in range(10)] + ['"tap*"'])
+
+TENANT_HOST_NFT = f"""add table inet carrel_tenant_host
+flush table inet carrel_tenant_host
+table inet carrel_tenant_host {{
+ chain input {{
+  type filter hook input priority -25; policy accept;
+  iifname {{ {TENANT_IFACES}, "vrf_tenants" }} udp sport 68 udp dport 67 accept
+  ip saddr 10.200.0.0/16 udp sport 68 udp dport 67 accept
+  ip saddr {{ 10.200.0.2, 10.200.0.3 }} accept
+  ip saddr 10.200.0.0/16 counter drop
+  iifname {{ {TENANT_IFACES} }} counter drop
+  iifname "vrf_tenants" counter drop
+  udp dport 4789 counter drop
+  tcp dport 179 counter drop
+ }}
+}}
+"""
+
+
 def run(*args):
     p = subprocess.run(args, check=True, text=True, capture_output=True)
     return p.stdout.strip()
@@ -55,22 +78,7 @@ def main():
         json.dumps({"protected_addresses": [address + "/32", "140.113.194.229/32", "140.113.60.189/32"]})
     )
     # A separate owned table, never a flush of Proxmox/staging/edge rules.
-    Path("/etc/carrel/tenant-host.nft").write_text("""add table inet carrel_tenant_host
-flush table inet carrel_tenant_host
-table inet carrel_tenant_host {
- chain input {
-  type filter hook input priority -25; policy accept;
-  iifname { "t*", "vrf_tenants" } udp sport 68 udp dport 67 accept
-  ip saddr 10.200.0.0/16 udp sport 68 udp dport 67 accept
-  ip saddr { 10.200.0.2, 10.200.0.3 } accept
-  ip saddr 10.200.0.0/16 counter drop
-  iifname "t*" counter drop
-  iifname "vrf_tenants" counter drop
-  udp dport 4789 counter drop
-  tcp dport 179 counter drop
- }
-}
-""")
+    Path("/etc/carrel/tenant-host.nft").write_text(TENANT_HOST_NFT)
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
