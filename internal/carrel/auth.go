@@ -26,6 +26,19 @@ var scopes = []string{"openid", "profile", "email", "offline_access"}
 
 const clientTTL = 86400 * 90
 
+// refreshGrace keeps a rotated refresh token usable for a short window. Several
+// client processes can share one stored credential; the one that loses a race
+// still holds the previous token and would otherwise be signed out.
+// The issued response is held in process memory only (never in the database)
+// and is dropped on expiry, revoke or restart.
+const refreshGrace = 60 * time.Second
+
+type rotated struct {
+	client  string
+	tokens  D
+	expires time.Time
+}
+
 type IdentityVerifier interface {
 	Verify(context.Context, string) (D, error)
 }
@@ -140,6 +153,44 @@ type OAuth struct {
 	Verifier                 IdentityVerifier
 	HTTP                     *http.Client
 	locks                    [64]sync.Mutex
+	replayMu                 sync.Mutex
+	replay                   map[string]rotated
+}
+
+// replayed returns the response already issued for a refresh token rotated
+// within refreshGrace. Callers hold the client lock, so a racing request waits
+// for the rotation to finish before it looks here.
+func (o *OAuth) replayed(key, cid string) D {
+	o.replayMu.Lock()
+	defer o.replayMu.Unlock()
+	now := time.Now()
+	for k, v := range o.replay {
+		if now.After(v.expires) {
+			delete(o.replay, k)
+		}
+	}
+	if v, ok := o.replay[key]; ok && v.client == cid {
+		return v.tokens
+	}
+	return nil
+}
+func (o *OAuth) remember(key, cid string, tokens D) {
+	o.replayMu.Lock()
+	defer o.replayMu.Unlock()
+	if o.replay == nil {
+		o.replay = map[string]rotated{}
+	}
+	o.replay[key] = rotated{client: cid, tokens: tokens, expires: time.Now().Add(refreshGrace)}
+}
+func (o *OAuth) forget(refresh string) {
+	o.replayMu.Lock()
+	defer o.replayMu.Unlock()
+	delete(o.replay, digest(refresh))
+	for k, v := range o.replay {
+		if v.tokens["refresh_token"] == refresh {
+			delete(o.replay, k)
+		}
+	}
 }
 
 func (o *OAuth) allowedRedirect(s string) bool {
@@ -325,6 +376,7 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				o.Store.OAuthPop("refresh", digest(token))
 			}
+			o.forget(token)
 			jsonResponse(w, 200, D{})
 			return
 		}
@@ -361,6 +413,11 @@ func (o *OAuth) exchange(w http.ResponseWriter, r *http.Request, client D, resou
 		kind = "refresh"
 		token := q.Get("refresh_token")
 		key = digest(token)
+		if tokens := o.replayed(key, cid); tokens != nil {
+			w.Header().Set("Pragma", "no-cache")
+			jsonResponse(w, 200, tokens)
+			return
+		}
 		txn = o.Store.OAuthGet(kind, key)
 		if txn == nil || txn["client"] != cid {
 			oauthError(w, "invalid_grant", 400)
@@ -428,6 +485,9 @@ func (o *OAuth) exchange(w http.ResponseWriter, r *http.Request, client D, resou
 		}
 		tx.OAuthPut("client", cid, client, duration)
 	})
+	if grant == "refresh_token" && refresh != "" && refresh != body.Get("refresh_token") {
+		o.remember(key, cid, tokens)
+	}
 	w.Header().Set("Pragma", "no-cache")
 	jsonResponse(w, 200, tokens)
 }

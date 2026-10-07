@@ -127,6 +127,44 @@ func TestOfflineRefreshRotationAndOutage(t *testing.T) {
 		})
 	}
 }
+func TestRotatedRefreshTokenReplaysWithinGrace(t *testing.T) {
+	p, _ := fixture(t)
+	s := p.Store
+	s.OAuthPut("client", "desktop", D{"client_id": "desktop"}, 0)
+	s.OAuthPut("client", "other", D{"client_id": "other"}, 0)
+	s.OAuthPut("refresh", digest("old"), D{"client": "desktop", "offline": true}, 0)
+	calls := 0
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		jsonResponse(w, 200, D{"access_token": "access", "refresh_token": "new", "refresh_expires_in": 0, "expires_in": 300, "scope": "openid offline_access"})
+	}))
+	defer issuer.Close()
+	o := &OAuth{Store: s, Origin: "https://carrel.test", Issuer: issuer.URL, ClientID: "carrel-mcp", HTTP: issuer.Client(), Verifier: testVerifier{who: person("alice", false)}}
+	refresh := func(cid, token string) *httptest.ResponseRecorder {
+		return authRequest(o, "/oauth/token", url.Values{"client_id": {cid}, "grant_type": {"refresh_token"}, "refresh_token": {token}})
+	}
+	if w := refresh("desktop", "old"); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	w := refresh("desktop", "old")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"refresh_token":"new"`) || calls != 1 {
+		t.Fatal("racing refresh not replayed", w.Code, w.Body, calls)
+	}
+	if w := refresh("other", "old"); w.Code != 400 {
+		t.Fatal("replay crossed clients", w.Code)
+	}
+	o.replay[digest("old")] = rotated{client: "desktop", tokens: D{"refresh_token": "new"}, expires: time.Now().Add(-time.Second)}
+	if w := refresh("desktop", "old"); w.Code != 400 {
+		t.Fatal("expired grace accepted", w.Code)
+	}
+	o.remember(digest("old"), "desktop", D{"refresh_token": "new"})
+	if w := authRequest(o, "/oauth/revoke", url.Values{"client_id": {"desktop"}, "token": {"new"}}); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if w := refresh("desktop", "old"); w.Code != 400 {
+		t.Fatal("revoked token still replayed", w.Code)
+	}
+}
 func TestCodeExchangeIsBoundToClientRedirectAndPKCE(t *testing.T) {
 	p, _ := fixture(t)
 	s := p.Store
