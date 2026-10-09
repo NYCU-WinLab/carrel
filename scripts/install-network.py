@@ -75,7 +75,13 @@ def main():
     Path("/etc/carrel").mkdir(exist_ok=True)
     Path("/var/lib/carrel").mkdir(exist_ok=True)
     Path("/etc/carrel/node.json").write_text(
-        json.dumps({"protected_addresses": [address + "/32", "140.113.194.229/32", "140.113.60.189/32"]})
+        json.dumps(
+            {
+                "protected_addresses": [address + "/32", "140.113.194.229/32", "140.113.60.189/32"],
+                # The edge's public HTTPS gateway (PLAN 6.4 hairpin): carrel and lab sites live there.
+                "public_entries": [{"address": "140.113.194.229/32", "port": 443}],
+            }
+        )
     )
     # A separate owned table, never a flush of Proxmox/staging/edge rules.
     Path("/etc/carrel/tenant-host.nft").write_text(TENANT_HOST_NFT)
