@@ -443,7 +443,10 @@ Every tenant machine gets the security group of its tenant:
    so without this rule a tenant could reach hosts such as Proxmox Backup Server, the QDevice or
    the old host's guests.
 5. Drop traffic addressed to any node itself, except DHCP (section 6.9). Routing through the
-   anycast gateway still works.
+   anycast gateway still works. Public entry points listed in `node.json` `public_entries` are
+   accepted above this drop: today only TCP 443 on the edge (`140.113.194.229`), the HTTPS gateway
+   the internet already reaches, so tenants can use carrel and lab sites by their public names
+   (the hairpin in section 6.4). SSH, `1121`, `8006` and WireGuard on that host stay dropped.
 
 `ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports

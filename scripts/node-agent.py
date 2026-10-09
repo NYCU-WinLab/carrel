@@ -78,6 +78,12 @@ def guest_firewall(m, state, config):
     ]
     if m.get("network_access", "tenant") == "tenant":
         rules.append(f"IN ACCEPT -source 10.200.{n}.0/24")
+    # Public entry points on protected hosts (the edge's HTTPS gateway): the internet can
+    # already reach them, so tenants may too. Management ports on the same host stay dropped.
+    for entry in config.get("public_entries", []):
+        dest = ipaddress.ip_network(entry["address"], strict=False)
+        port = integer(entry["port"], 1, 65535)
+        rules.append(f"OUT ACCEPT -dest {dest} -p tcp -dport {port}")
     for block in [
         "10.0.0.0/8",
         "172.16.0.0/12",
