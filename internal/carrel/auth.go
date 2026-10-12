@@ -45,6 +45,7 @@ type IdentityVerifier interface {
 type IssuerUnavailable struct{ error }
 type Verifier struct {
 	Issuer, Audience string
+	JWKS             string
 	HTTP             *http.Client
 	mu               sync.Mutex
 	keys             map[string]*rsa.PublicKey
@@ -90,7 +91,11 @@ func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 	if v.keys[kid] == nil && time.Since(v.loaded) < 5*time.Second {
 		return nil, errors.New("unknown signing key")
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", v.Issuer+"/protocol/openid-connect/certs", nil)
+	jwksURL := v.JWKS
+	if jwksURL == "" {
+		jwksURL = v.Issuer + "/protocol/openid-connect/certs"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
 	if err != nil {
 		return nil, err
 	}

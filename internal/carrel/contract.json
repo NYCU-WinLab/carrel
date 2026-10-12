@@ -3851,6 +3851,507 @@
       }
     },
     {
+      "name": "app_link",
+      "description": "Bind a GitHub repository branch to a machine so every push deploys (PLAN 7.9). GitHub Actions builds; carrel stores the release; carrel-deployd in the machine switches it and rolls back on a failed health check. Returns install (run once on the machine over SSH with sudo; contains the app's agent token, shown only here) and workflow (commit to .github/workflows/carrel.yml). Runtime secrets go in /srv/apps/<name>/env on the machine. Publish the port separately with domain_add.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "repo": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$",
+            "description": "GitHub owner/name."
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^[A-Za-z0-9._/-]+$",
+            "default": "main"
+          },
+          "start": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Shell command run in the release directory as the machine user, with PORT set; for example 'node server.js'."
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Local port the app listens on; the health check requests http://127.0.0.1:<port>/."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "machine",
+          "name",
+          "repo",
+          "start",
+          "port"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "app_list",
+      "description": "List apps with agent state and recent releases.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "app_get",
+      "description": "Show one app: linked repository, agent state (not_installed, connected, agent_offline), current and previous release, and the last releases with failure logs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "app_deploy",
+      "description": "Deploy a stored release again. The agent switches to it on its next poll.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "release": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "app",
+          "release"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "app_rollback",
+      "description": "Switch the app back to its previous release.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "app_unlink",
+      "description": "Unlink an app: deletes stored releases and revokes the agent token. The machine and its deployed files stay as they are.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "confirm": {
+            "type": "string",
+            "description": "Must equal the app name."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "app",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "not_found",
+                  "conflict",
+                  "forbidden",
+                  "invalid",
+                  "pending_approval",
+                  "guest_not_ready"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "deployment_plan",
       "description": "Preview machines, allowed service connections and public endpoints together. Use machine names; no host or physical topology needed. Set network_access=restricted on connection destinations to enforce isolation; tenant mode allows all tenant machines. Optional networks/attachments are advanced L2 experiments. Checks aggregate quota/capacity; missing SSH keys become requirements. No resource writes or reservations. This is the complete preview: apply the same specification once with deployment_apply when authorized; do not repeat a dry-run or create each resource separately. Publications can reference existing machine names with no machines array. Use access to change an existing machine ingress mode, together with connections if needed. Preview explains lost or added connectivity; set access.confirm to its name when authorized. Machine defaults match machine_create: Debian 13 minimal, tiny (1 vCPU/1 GiB/10 GiB), 1 GiB swap. Development images debian-13 and ubuntu-24.04 default to small. Explicit size/resource fields override image defaults.",
       "inputSchema": {
@@ -4884,6 +5385,12 @@
     "request_list_all",
     "request_approve",
     "request_reject",
+    "app_link",
+    "app_list",
+    "app_get",
+    "app_deploy",
+    "app_rollback",
+    "app_unlink",
     "deployment_plan",
     "deployment_apply",
     "operation_get",
@@ -4901,6 +5408,10 @@
     "usage_report"
   ],
   "mutations": [
+    "app_deploy",
+    "app_link",
+    "app_rollback",
+    "app_unlink",
     "deployment_apply",
     "domain_add",
     "domain_remove",
@@ -5051,5 +5562,5 @@
     },
     "existing_machine_access": true
   },
-  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
+  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; TCP/UDP -> port_open. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is complete; do not repeat with deployment_apply(dry_run=true). Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
 }

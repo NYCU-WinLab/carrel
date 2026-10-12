@@ -26,7 +26,7 @@ def main():
     parser.add_argument("--templates", type=Path,
                         help="Optional candidate templates.json to merge after immutable-template validation")
     args = parser.parse_args()
-    names = ("carrel", "carrel-pve-read")
+    names = ("carrel", "carrel-pve-read", "carrel-deployd")
     artifacts = args.artifacts.resolve()
     for name in names:
         if not (artifacts / name).is_file():
@@ -132,6 +132,8 @@ try:
  config=Path('/etc/carrel/node.json'); value=json.loads(config.read_text());value['go_pve_reader']=True
  config.write_text(json.dumps(value,indent=2)+'\\n')
  subprocess.run(['pct','push','100',str(stage/'carrel'),'/usr/local/bin/carrel.next','--perms','755'],check=True)
+ # Served to tenant machines at /apps/v1/carrel-deployd (PLAN 7.9).
+ subprocess.run(['pct','push','100',str(stage/'carrel-deployd'),'/usr/local/lib/carrel/carrel-deployd','--perms','755'],check=True)
  activated=True
  ct('python3','-c',{activate!r})
  ct('systemctl','daemon-reload')

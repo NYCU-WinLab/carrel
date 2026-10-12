@@ -240,6 +240,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return D{"requests": publicRequests(e.S.Objects("requests", n))}
 	case "quota_request":
 		return e.QuotaRequest(a, w, t)
+	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink":
+		return e.AppTool(tool, a, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil
@@ -315,6 +317,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			m["state"] = "deleting"
 			e.Put("machines", m["vmid"], n, m)
 			e.Reconcile()
+			e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
 			e.Transaction(func(tx *Execution) {
 				for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports"} {
 					for _, o := range tx.S.Objects(kind, n) {
