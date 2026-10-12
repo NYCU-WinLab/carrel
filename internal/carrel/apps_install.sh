@@ -32,7 +32,11 @@ cat >"/etc/carrel-deployd/$app.json" <<JSON
 {"origin": "@ORIGIN@", "token": "$CARREL_APP_TOKEN", "app": "$app", "port": $port, "user": "$user"}
 JSON
 umask 022
-printf '%s\n' "$start" >"/etc/carrel-deployd/$app.start"
+# The app user reads the start command, so it lives outside the 0700 token directory.
+install -d -m 0755 /etc/carrel-app
+printf '%s\n' "$start" >"/etc/carrel-app/$app.start"
+chmod 0644 "/etc/carrel-app/$app.start"
+rm -f "/etc/carrel-deployd/$app.start"
 
 install -d -o "$user" -g "$(id -gn "$user")" -m 0755 "/srv/apps/$app" "/srv/apps/$app/releases"
 if [ ! -e "/srv/apps/$app/env" ]; then
@@ -51,7 +55,7 @@ User=$user
 WorkingDirectory=/srv/apps/$app/current
 Environment=PORT=$port
 EnvironmentFile=-/srv/apps/$app/env
-ExecStart=/bin/sh /etc/carrel-deployd/$app.start
+ExecStart=/bin/sh /etc/carrel-app/$app.start
 Restart=on-failure
 RestartSec=2
 

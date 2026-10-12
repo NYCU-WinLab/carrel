@@ -313,3 +313,20 @@ func TestLiveReportClearsPendingWithoutDeploying(t *testing.T) {
 		t.Fatalf("pending not cleared: %s", encoded(app))
 	}
 }
+
+func TestInstallKeepsStartCommandReadableByTheAppUser(t *testing.T) {
+	if !strings.Contains(appsInstallScript, "ExecStart=/bin/sh /etc/carrel-app/$app.start") || !strings.Contains(appsInstallScript, `chmod 0644 "/etc/carrel-app/$app.start"`) {
+		t.Fatal("app unit must read its start command from the world-readable /etc/carrel-app")
+	}
+	if strings.Contains(appsInstallScript, `>"/etc/carrel-deployd/$app.start"`) {
+		t.Fatal("start command written into the 0700 token directory")
+	}
+}
+
+func TestWorkflowSnippetDoesNotPackItself(t *testing.T) {
+	p, _, _ := appFixture(t)
+	w := p.execution(context.Background()).appWorkflow(D{"slug": "alice"}, D{"name": "site", "branch": "main"})
+	if !strings.Contains(w, `tar czf "$RUNNER_TEMP/app.tar.gz" --exclude=.git .`) || !strings.Contains(w, "artifact: ${{ runner.temp }}/app.tar.gz") {
+		t.Fatalf("workflow packs into its own source tree:\n%s", w)
+	}
+}
