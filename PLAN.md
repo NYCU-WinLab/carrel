@@ -58,6 +58,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-30 | B09 first node is `carrel01` at `192.168.13.159`; future nodes get distinct names instead of reusing the room name as an SSH alias |
 | 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it |
 | 2026-09-30 | B09 has no allocated public ingress. Use the old PVE public address, existing CT 200 TLS gateway, a new CT 207 proxy, and a dedicated WireGuard link to B09; the old PVE stays outside the cluster |
+| 2026-10-12 | Apps deploy on push: GitHub Actions builds, a GitHub OIDC token authorizes the upload, and an agent the member installs in the machine switches releases (section 7.9) |
 
 ### 1.6 Current core and deferred work
 
@@ -84,6 +85,8 @@ service. Live tool discovery and the acceptance reports are the authority for im
 | Machine | A VM or an unprivileged CT owned by one tenant | VMID |
 | Network | A private layer 2 segment owned by one tenant (section 6.8) | VNet id |
 | Image | A cloud image or ISO a tenant imported (section 7.8) | tenant, name |
+| App | A repository branch bound to one machine, deployed on every push (section 7.9) | tenant, name |
+| Release | One built artifact of an app, with its commit SHA and state | app, id |
 | Grant | One allocation: a port, a domain (own or special), a peer rule, a snapshot | id |
 | Request | A quota, domain or port request waiting for an admin (section 5.3) | id |
 | Zone | A DNS zone carrel manages, and the tenants it is open to (section 6.10) | zone name |
@@ -193,6 +196,11 @@ protocol error.
 | | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or an owned special domain, `target_port` |
 | | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `machine`, `target_port`, `reason` (section 6.10) |
 | | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
+| Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`, optional `sub`; returns the install line and the workflow snippet (section 7.9) |
+| | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
+| | `app_deploy` | `app`, `release`; deploys a stored release again |
+| | `app_rollback` | `app`; switches back to the previous release |
+| | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
 | Insight | `machine_metrics` | CPU, memory, disk and network from the hypervisor |
 | | `audit_log` | own calls only |
@@ -234,7 +242,7 @@ Version 1 ships these skills. Each one is named after an intent a member actuall
 | `choose-machine` | "I need a machine for X" | VM or CT, image, size, `nested_virt`; Docker, OVS and Mininet always get a VM |
 | `sdn-coursework` | SDN and NFV homework | Ubuntu LTS VM with `nested_virt`, Mininet, Open vSwitch and a controller, and the address ranges to avoid inside the VM |
 | `web-service` | publish a web app | a systemd service, `port_open` or `domain_add`, TLS handled by the gateway, never a public database port, names outside the tenant's subtree through `domain_request` |
-| `continuous-deployment` | deploy on every push from GitHub or GitLab | a self-hosted runner inside the machine, or an SSH deploy through the tenant's port; tokens and deploy keys stay inside the machine |
+| `continuous-deployment` | deploy on every push from GitHub or GitLab | GitHub: `app_link`, the install line over SSH, the workflow with `carrel-deploy`, runtime secrets in the app's `env` file (section 7.9); GitLab: a self-hosted runner inside the machine, or an SSH deploy through the tenant's port, with tokens and deploy keys inside the machine |
 | `nextjs` | a Next.js site or app | Node LTS in a VM sized for `next build` (at least 2 GB), `output: "standalone"` run by systemd, `domain_add` to its port with TLS at the gateway, environment in a `0600` file, database and cache reached through `peer_allow`, deploys through `continuous-deployment` |
 | `docker-host` | run containers | Docker in a VM, compose files, where volumes live, disk sizing |
 | `database` | a PostgreSQL database for an app or a project | PostgreSQL in a VM (stateful work never goes in a CT), listening on the primary address only, other machines let in with `peer_allow` and never `port_open` on 5432, SCRAM passwords kept inside the machine, `pg_dump` on a timer plus a snapshot before upgrades, disk sized for data and dumps |
@@ -732,6 +740,68 @@ key injection, the SSH check and graceful shutdown.
   mandatory, and imports stay private to the tenant.
 - **CTs** keep to the platform images in version 1.
 
+### 7.9 Apps: deploy on push
+
+An app binds one GitHub repository branch to one tenant machine. Every push builds in GitHub
+Actions and lands on the machine as a new release, with the old one kept for rollback. The machine
+stays a pet machine: the member can still SSH in and change anything, and carrel never enters it.
+
+**Flow**
+
+1. The member's agent calls `app_link` with the machine, repository, branch, start command, port
+   and optional domain. carrel returns an install line and a workflow snippet.
+2. The agent runs the install line on the machine over its own SSH. It installs `carrel-deployd`
+   (a small static binary run by systemd) with a token scoped to this one app. carrel has no other
+   way into the machine (section 7.7).
+3. The agent commits the workflow to the repository. The workflow builds, then calls the reusable
+   action `NYCU-WinLab/carrel-deploy@v1`:
+
+   ```yaml
+   permissions:
+     id-token: write
+   steps:
+     - uses: actions/checkout@v4
+     - run: npm ci && npm run build && tar czf app.tar.gz .next/standalone
+     - uses: NYCU-WinLab/carrel-deploy@v1
+       with:
+         app: my-site
+         artifact: app.tar.gz
+   ```
+
+4. The action uploads the artifact to carrel with a GitHub OIDC token (a short-lived token GitHub
+   signs for each job). The repository holds no carrel secret.
+5. carrel checks the token, stores the artifact as a release and marks it pending.
+6. `carrel-deployd` long-polls carrel over outbound HTTPS, downloads the release, unpacks it to
+   `/srv/apps/<app>/releases/<id>`, switches the `current` link, restarts `carrel-app@<app>` and
+   checks the port. A failed check switches back to the previous release and reports `failed`.
+
+**OIDC checks**: issuer `https://token.actions.githubusercontent.com`, audience
+`carrel.winlab.tw`, `repository_id` (not the name, so a renamed or recreated repository does not
+inherit the link), `ref` equal to the linked branch, and `event_name` of `push` or
+`workflow_dispatch`. Pull requests from forks get no OIDC token, so they cannot deploy.
+
+**Why the build runs in GitHub Actions**: the default machine has 1 GiB of memory and cannot run
+`next build`. GitHub runners have 7 GB, cost carrel nothing to operate, and keep build tools and
+caches off tenant disks. NYCU-WinLab is on the GitHub Team plan: public repositories build free,
+private ones share 3,000 minutes per month.
+
+**What stays inside the machine**
+
+- Runtime secrets live in `/srv/apps/<app>/env` (mode `0600`), written by the member's agent over
+  SSH. They never pass through carrel or GitHub.
+- Application logs stay in the machine's journal. `carrel-deployd` reports only release state, the
+  health check result and, on failure, the last 50 lines of `carrel-app@<app>`.
+- The member may stop or remove `carrel-deployd` at any time. The app then shows `agent_offline`.
+
+**Artifacts**: at most 500 MB per release, the last 3 releases kept per app, counted against
+`images_gb`. Releases older than the last 3 are deleted when a new one is stored.
+
+**Observability**: each release is a span in sensorium with app, commit SHA, duration and result,
+so an admin agent can answer which commit runs where (section 9.1).
+
+**Version 1 limits**: GitHub only. GitLab CI also issues OIDC tokens (`id_tokens`), so the same
+design extends to it later. One app per machine port; one machine per app.
+
 ## 8. Hosts and sites
 
 ### 8.1 The installer
@@ -922,8 +992,9 @@ old host.
 - IPv6 (open decision 13.6).
 - Machines spanning sites, live migration across sites.
 - A web UI, apart from the machine console page (section 7.8).
-- A build and deploy pipeline inside carrel. Deployment runs inside the tenant's machine, guided
-  by the `continuous-deployment` skill.
+- Builds inside carrel. Apps build in GitHub Actions and carrel only stores and hands out releases
+  (section 7.9).
+- Apps from GitLab (section 7.9).
 
 ### 11.3 Milestones
 
@@ -940,6 +1011,7 @@ old host.
 | M8 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
 | M9 Import (production only) | Every guest chosen under section 10.7 runs on the new site under its owner, its names answer from outside the campus, every check of 10.7 that applies to it passes, and its source stays stopped on the old host for 14 days |
 | M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing (a machine with an ISO attached included), and machines land on both nodes; with real peers now, a VXLAN or BGP packet carrying a forged node address on the public interface and a frame with a guessed VNI never arrive (the cases of M1 and M5); a machine created on the new node from an image fetched on the first gets a verified copy |
+| M11 Apps | A clean agent given "Deploy this Next.js repo to my machine on every push" ends with the site answering on its domain; the next push serves the new commit; a push that fails its health check leaves the previous release serving; a workflow in another repository, or on another branch, is refused |
 
 ## 12. Lessons carried from the old host
 
@@ -981,12 +1053,15 @@ old host.
 14. B09 additional-node links: only `nic1` (1 Gbit/s) is connected on the first node. Dedicated
     corosync and underlay links, a QDevice for two nodes, and backup storage must be supplied before
     expansion.
+15. App artifact limits (section 7.9): 500 MB per release and 3 kept releases are first guesses.
+    Revisit after real apps.
 
 ## 14. Vocabulary
 
 | Term | Meaning |
 |---|---|
 | admission | the physical capacity check at create or start, separate from quota |
+| `carrel-deployd` | the agent a member installs in a machine to receive app releases (section 7.9) |
 | exit node | the node with the public address; does SNAT and DNAT |
 | fetch network | the reserved network `N = 255`, used only by the image fetcher's namespace on each node |
 | grant | one allocation: a port, a domain (own or special), a peer rule, a snapshot |
