@@ -133,6 +133,7 @@ try:
  config.write_text(json.dumps(value,indent=2)+'\\n')
  subprocess.run(['pct','push','100',str(stage/'carrel'),'/usr/local/bin/carrel.next','--perms','755'],check=True)
  # Served to tenant machines at /apps/v1/carrel-deployd (PLAN 7.9).
+ ct('install','-d','-m','755','/usr/local/lib/carrel')
  subprocess.run(['pct','push','100',str(stage/'carrel-deployd'),'/usr/local/lib/carrel/carrel-deployd','--perms','755'],check=True)
  activated=True
  ct('python3','-c',{activate!r})
