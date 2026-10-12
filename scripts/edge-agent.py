@@ -84,12 +84,21 @@ def proxy(state, base):
     front = "\n".join(frontend) + "\n"
     path = "/home/user/gateway/carrel.Caddyfile"
     old = run("pct", "exec", "200", "--", "cat", path)
-    if old != front or certificates_changed:
+    # Survives a failed validate or reload, so a retry reloads even when the files already match.
+    unloaded = base / "frontend.unloaded"
+    if old != front or certificates_changed or unloaded.exists():
+        unloaded.touch()
         local = base / "frontend.Caddyfile"
         local.write_text(front)
         push(200, local, path)
-        run("pct", "exec", "200", "--", "caddy", "validate", "--config", "/home/user/gateway/Caddyfile")
+        # The gateway Caddyfile reads secrets from the service's EnvironmentFile.
+        run(
+            "pct", "exec", "200", "--", "systemd-run", "--wait", "--pipe", "--collect", "--quiet",
+            "-p", "EnvironmentFile=/home/user/gateway/.env",
+            "/usr/bin/caddy", "validate", "--config", "/home/user/gateway/Caddyfile", "--adapter", "caddyfile",
+        )
         run("pct", "exec", "200", "--", "systemctl", "reload", "caddy")
+        unloaded.unlink()
     routes = [
         "{",
         " admin localhost:2019",
