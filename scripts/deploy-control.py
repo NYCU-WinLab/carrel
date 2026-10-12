@@ -140,7 +140,10 @@ Host carrel-edge
         "database": "/var/lib/carrel/carrel.db",
         "cloudflare_token": token,
         "cloudflare_zone": zones[0]["id"],
-        "hosted_redirects": ["https://chatgpt.com/connector_platform/oauth/callback"],
+        "hosted_redirects": [
+            "https://chatgpt.com/connector_platform/oauth/callback",
+            "https://claude.ai/api/mcp/auth_callback",
+        ],
     }
     push_ct("carrel01", 100, "/etc/carrel/config.json", json.dumps(config), 0o640)
     ssh("carrel01", "pct exec 100 -- chown root:carrel /etc/carrel/config.json")
