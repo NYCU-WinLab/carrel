@@ -33,6 +33,8 @@ def proxy(state, base):
     for d in domains:
         if d["name"] != label(d["sub"]) + "." + d["slug"] + ".winlab.tw":
             raise ValueError("domain outside tenant subtree")
+    # Survives a failed push, validate or reload, so a retry reloads even when the files already match.
+    unloaded = base / "frontend.unloaded"
     certificates_changed = False
     for cert in state.get("certificates", []):
         slug = label(cert["slug"])
@@ -55,7 +57,9 @@ def proxy(state, base):
         old = subprocess.run(
             ["pct", "exec", "200", "--", "cat", remote + "/fullchain.pem"], text=True, capture_output=True
         )
-        if old.returncode or old.stdout != cert["fullchain"]:
+        # A leftover marker also re-pushes, in case only the fullchain landed last time.
+        if old.returncode or old.stdout != cert["fullchain"] or unloaded.exists():
+            unloaded.touch()
             push(200, crt, remote + "/fullchain.pem")
             push(200, key, remote + "/privkey.pem")
             certificates_changed = True
@@ -84,8 +88,6 @@ def proxy(state, base):
     front = "\n".join(frontend) + "\n"
     path = "/home/user/gateway/carrel.Caddyfile"
     old = run("pct", "exec", "200", "--", "cat", path)
-    # Survives a failed validate or reload, so a retry reloads even when the files already match.
-    unloaded = base / "frontend.unloaded"
     if old != front or certificates_changed or unloaded.exists():
         unloaded.touch()
         local = base / "frontend.Caddyfile"
@@ -122,7 +124,9 @@ def proxy(state, base):
         ]
     routes += [" handle {", "  respond 404", " }", "}"]
     proxy_conf = "\n".join(routes) + "\n"
-    if run("pct", "exec", "207", "--", "cat", "/etc/caddy/Caddyfile") != proxy_conf:
+    proxy_unloaded = base / "proxy.unloaded"
+    if run("pct", "exec", "207", "--", "cat", "/etc/caddy/Caddyfile") != proxy_conf or proxy_unloaded.exists():
+        proxy_unloaded.touch()
         local = base / "proxy.Caddyfile"
         local.write_text(proxy_conf)
         # Debian's Caddy runs unprivileged and needs read permission on its config.
@@ -131,6 +135,7 @@ def proxy(state, base):
             "pct", "exec", "207", "--", "/usr/local/bin/caddy", "validate", "--config", "/etc/caddy/Caddyfile"
         )
         run("pct", "exec", "207", "--", "systemctl", "reload", "caddy")
+        proxy_unloaded.unlink()
 
 
 def main():
