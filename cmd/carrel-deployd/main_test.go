@@ -59,15 +59,24 @@ func TestExtractRejectsEscapes(t *testing.T) {
 		"dotdot":        {{name: "../evil", body: "x", kind: tar.TypeReg}},
 		"absolute link": {{name: "l", link: "/etc", kind: tar.TypeSymlink}},
 		"outside link":  {{name: "l", link: "../..", kind: tar.TypeSymlink}},
-		"through link":  {{name: "l", link: "sub", kind: tar.TypeSymlink}, {name: "sub/", kind: tar.TypeDir}, {name: "l/x", body: "x", kind: tar.TypeReg}},
+		"chained links": {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "evil", link: "d/up/d/up/../../../evil", kind: tar.TypeSymlink}, {name: "evil", body: "x", kind: tar.TypeReg}},
 	} {
 		base := t.TempDir()
 		if err := extract(archive(t, entries...), filepath.Join(base, "release"), os.Getuid(), os.Getgid()); err == nil {
 			t.Fatalf("%s: accepted", name)
 		}
-		if _, err := os.Stat(filepath.Join(base, "evil")); err == nil {
-			t.Fatalf("%s: wrote outside", name)
+		for _, outside := range []string{filepath.Join(base, "evil"), filepath.Join(filepath.Dir(base), "evil")} {
+			if _, err := os.Stat(outside); err == nil {
+				t.Fatalf("%s: wrote %s", name, outside)
+			}
 		}
+	}
+}
+
+func TestExtractRefusesExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := extract(archive(t, entry{name: "a", body: "x", kind: tar.TypeReg}), dir, os.Getuid(), os.Getgid()); err == nil {
+		t.Fatal("extracted into an existing directory")
 	}
 }
 

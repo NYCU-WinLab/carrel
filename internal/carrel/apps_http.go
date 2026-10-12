@@ -10,7 +10,7 @@ import (
 //go:embed apps_install.sh
 var appsInstallScript string
 
-var appStatus = map[string]int{"forbidden": 403, "not_found": 404, "invalid": 400, "conflict": 409, "quota_exceeded": 409}
+var appStatus = map[string]int{"forbidden": 403, "not_found": 404, "invalid": 400, "conflict": 409, "quota_exceeded": 409, "capacity_exhausted": 507}
 
 // appHandler turns a failed call into a JSON error with a matching status.
 func appHandler(f func(http.ResponseWriter, *http.Request) D) http.HandlerFunc {
@@ -63,7 +63,7 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 	})
 	mux.Handle("POST /apps/v1/{tenant}/{app}/releases", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.githubClaims(r)
-		return D{"release": p.ReceiveRelease(r.Context(), r.PathValue("tenant"), r.PathValue("app"), c, r.Body)}
+		return D{"release": p.ReceiveRelease(r.Context(), r.PathValue("tenant"), r.PathValue("app"), c, r.ContentLength, r.Body)}
 	}))
 	mux.Handle("GET /apps/v1/{tenant}/{app}/releases/{id}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.githubClaims(r)

@@ -38,6 +38,7 @@ func appFixture(t *testing.T) (*Platform, *App, string) {
 	t.Helper()
 	p, _ := fixture(t)
 	p.Config["apps_dir"] = t.TempDir()
+	p.Config["apps_disk_headroom_bytes"] = 0
 	seedMachine(p, "web", 10100)
 	a := NewApp(p, nil)
 	a.github = fakeGitHub{
@@ -268,5 +269,47 @@ func TestGitHubVerifierChecksSignatureAudienceAndClaims(t *testing.T) {
 	delete(missing, "repository_id")
 	if _, err := v.VerifyGitHub(context.Background(), sign(missing, key)); err == nil {
 		t.Fatal("token without repository_id accepted")
+	}
+}
+
+func TestOneUploadPerAppAtATime(t *testing.T) {
+	_, a, _ := appFixture(t)
+	reader, writer := io.Pipe()
+	done := make(chan int)
+	go func() {
+		req := httptest.NewRequest("POST", "https://carrel.test/apps/v1/alice/site/releases", reader)
+		req.Header.Set("Authorization", "Bearer good")
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, req)
+		done <- w.Code
+	}()
+	writer.Write([]byte("partial"))
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		code, out := upload(t, a, "good", "second")
+		if code == 409 && obj(out["error"])["code"] == "conflict" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second upload was not refused: %d %s", code, encoded(out))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	writer.Close()
+	if code := <-done; code != 200 {
+		t.Fatalf("first upload failed: %d", code)
+	}
+	if code, _ := upload(t, a, "good", "third"); code != 200 {
+		t.Fatalf("upload after the first finished got %d", code)
+	}
+}
+
+func TestLiveReportClearsPendingWithoutDeploying(t *testing.T) {
+	p, a, agent := appFixture(t)
+	_, out := upload(t, a, "good", "one")
+	id := str(obj(out["release"])["id"])
+	do(t, a, "POST", "/apps/v1/agent/report", agent, strings.NewReader(`{"release":"`+id+`","state":"live"}`))
+	if app := p.Store.Get("apps", "1-site"); app["pending"] != nil || app["current"] != id {
+		t.Fatalf("pending not cleared: %s", encoded(app))
 	}
 }

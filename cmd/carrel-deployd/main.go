@@ -53,7 +53,10 @@ type agent struct {
 	health time.Duration
 }
 
-const kept = 3
+const (
+	kept        = 3
+	maxUnpacked = 4 << 30
+)
 
 func main() {
 	path := flag.String("config", "", "agent configuration")
@@ -158,7 +161,6 @@ func (a *agent) deploy(ctx context.Context, r release) {
 	a.report(ctx, r.ID, "deploying", "", "")
 	dir := filepath.Join(a.root, "releases", r.ID)
 	if err := a.fetch(ctx, r, dir); err != nil {
-		os.RemoveAll(dir)
 		a.report(ctx, r.ID, "failed", err.Error(), "")
 		return
 	}
@@ -187,7 +189,13 @@ func (a *agent) deploy(ctx context.Context, r release) {
 	slog.Info("deploy_live", "release", r.ID)
 }
 
+// fetch downloads and unpacks a release. A directory that already exists
+// came from an earlier complete unpack of the same release, so it is reused;
+// this keeps the running release in place when it is deployed again.
 func (a *agent) fetch(ctx context.Context, r release, dir string) error {
+	if _, err := os.Lstat(dir); err == nil {
+		return nil
+	}
 	resp, err := a.request(ctx, "GET", "/apps/v1/agent/releases/"+r.ID, nil)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
@@ -214,31 +222,36 @@ func (a *agent) fetch(ctx context.Context, r release, dir string) error {
 		return err
 	}
 	defer tmp.Close()
-	os.RemoveAll(dir)
-	if err := extract(tmp, dir, a.uid, a.gid); err != nil {
+	staging := dir + ".unpack"
+	os.RemoveAll(staging)
+	if err := extract(tmp, staging, a.uid, a.gid); err != nil {
+		os.RemoveAll(staging)
 		return fmt.Errorf("unpack: %w", err)
 	}
-	return nil
+	return os.Rename(staging, dir)
 }
 
-// extract unpacks a tar.gz into dir. Entries may not leave dir, and symbolic
-// links may only point inside it.
+// extract unpacks a tar.gz into dir, which must not exist. Every write goes
+// through os.Root, so no entry or link can reach outside dir, and existing
+// links are never followed. Unpacked content is capped at maxUnpacked.
 func extract(r io.Reader, dir string, uid, gid int) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return err
 	}
 	tr := tar.NewReader(gz)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.Mkdir(dir, 0755); err != nil {
 		return err
 	}
 	if err := os.Lchown(dir, uid, gid); err != nil {
 		return err
 	}
-	inside := func(p string) bool {
-		rel, err := filepath.Rel(dir, p)
-		return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
 	}
+	defer root.Close()
+	var total int64
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -247,60 +260,53 @@ func extract(r io.Reader, dir string, uid, gid int) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dir, h.Name)
-		if !inside(target) {
-			return fmt.Errorf("entry %q leaves the release", h.Name)
+		name := filepath.Clean(h.Name)
+		if name == "." {
+			continue
 		}
-		if parent := filepath.Dir(target); !inside(parent) || hasLink(dir, parent) {
-			return fmt.Errorf("entry %q goes through a link", h.Name)
+		if !filepath.IsLocal(name) {
+			return fmt.Errorf("entry %q leaves the release", h.Name)
 		}
 		mode := os.FileMode(h.Mode).Perm() &^ 0o022
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, mode|0o700); err != nil {
+			if err := root.MkdirAll(name, mode|0o700); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			total += h.Size
+			if total > maxUnpacked {
+				return errors.New("unpacked release exceeds 4 GiB")
+			}
+			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
 				return err
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(f, tr)
+			_, err = io.Copy(f, io.LimitReader(tr, h.Size))
 			f.Close()
 			if err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
-			if filepath.IsAbs(h.Linkname) || !inside(filepath.Join(filepath.Dir(target), h.Linkname)) {
+			if filepath.IsAbs(h.Linkname) || !filepath.IsLocal(filepath.Join(filepath.Dir(name), h.Linkname)) {
 				return fmt.Errorf("link %q points outside the release", h.Name)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
 				return err
 			}
-			if err := os.Symlink(h.Linkname, target); err != nil {
+			if err := root.Symlink(h.Linkname, name); err != nil {
 				return err
 			}
 		default:
 			continue
 		}
-		if err := os.Lchown(target, uid, gid); err != nil {
+		if err := root.Lchown(name, uid, gid); err != nil {
 			return err
 		}
 	}
-}
-
-// hasLink reports whether any directory between dir and p is a symbolic link.
-func hasLink(dir, p string) bool {
-	for p != dir && len(p) > len(dir) {
-		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			return true
-		}
-		p = filepath.Dir(p)
-	}
-	return false
 }
 
 // swap points link at target atomically.

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,6 +26,7 @@ const (
 	githubIssuer    = "https://token.actions.githubusercontent.com"
 	maxReleaseBytes = 500 << 20
 	keptReleases    = 3
+	diskHeadroom    = 2 * GiB
 	appAgentWait    = 25 * time.Second
 )
 
@@ -276,7 +278,46 @@ func (e *Execution) storedBytes(n int) float64 {
 	return total
 }
 
-func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitHubClaims, body io.Reader) D {
+// reserveUpload holds space for one upload before any byte is written: one
+// upload per app, the tenant's images_gb including uploads in flight, and
+// free disk under apps_dir after every reservation.
+func (p *Platform) reserveUpload(e *Execution, app D, size int64) func() {
+	n, id := integer(app["tenant_n"]), str(app["id"])
+	p.uploadMu.Lock()
+	defer p.uploadMu.Unlock()
+	if p.uploads == nil {
+		p.uploads = map[string]int64{}
+	}
+	if _, busy := p.uploads[id]; busy {
+		fail("conflict", "Another upload for this app is in progress")
+	}
+	var tenant, all int64
+	for key, v := range p.uploads {
+		all += v
+		if strings.HasPrefix(key, fmt.Sprintf("%d-", n)) {
+			tenant += v
+		}
+	}
+	t := e.S.TenantN(n)
+	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+float64(tenant+size) > limit {
+		fail("quota_exceeded", "Stored releases would exceed images_gb", D{"dimension": "images_gb"})
+	}
+	must(os.MkdirAll(p.appsDir(), 0700))
+	var fs syscall.Statfs_t
+	must(syscall.Statfs(p.appsDir(), &fs))
+	headroom := int64(num(fallback(p.Config, "apps_disk_headroom_bytes", float64(diskHeadroom))))
+	if free := int64(fs.Bavail) * int64(fs.Bsize); free-all-size < headroom {
+		fail("capacity_exhausted", "carrel has no room for this release now")
+	}
+	p.uploads[id] = size
+	return func() {
+		p.uploadMu.Lock()
+		delete(p.uploads, id)
+		p.uploadMu.Unlock()
+	}
+}
+
+func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitHubClaims, length int64, body io.Reader) D {
 	e := p.execution(ctx)
 	var app D
 	func() {
@@ -286,6 +327,14 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 		e.authorizeRelease(app, c)
 	}()
 	n := integer(app["tenant_n"])
+	size := int64(maxReleaseBytes)
+	if length > maxReleaseBytes {
+		fail("invalid", "Release exceeds 500 MB")
+	}
+	if length > 0 {
+		size = length
+	}
+	defer p.reserveUpload(e, app, size)()
 	id := randomID()[:16]
 	dir := filepath.Join(p.appsDir(), str(app["id"]))
 	must(os.MkdirAll(dir, 0700))
@@ -293,15 +342,15 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 	must(err)
 	defer os.Remove(tmp.Name())
 	h := sha256.New()
-	size, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(body, maxReleaseBytes+1))
+	written, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(body, size+1))
 	closeErr := tmp.Close()
 	if err != nil || closeErr != nil {
 		fail("invalid", "Upload did not complete")
 	}
-	if size > maxReleaseBytes {
-		fail("invalid", "Release exceeds 500 MB")
+	if written > size {
+		fail("invalid", "Release is larger than declared or exceeds 500 MB")
 	}
-	if size == 0 {
+	if written == 0 {
 		fail("invalid", "Release is empty")
 	}
 	p.writer.Lock()
@@ -309,11 +358,11 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 	app = e.appBySlug(slug, name)
 	e.authorizeRelease(app, c)
 	t := e.S.TenantN(n)
-	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+float64(size) > limit {
+	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+float64(written) > limit {
 		fail("quota_exceeded", "Stored releases would exceed images_gb", D{"dimension": "images_gb"})
 	}
 	must(os.Rename(tmp.Name(), p.releasePath(str(app["id"]), id)))
-	r := D{"id": id, "app": app["id"], "vmid": app["vmid"], "sha": c.SHA, "ref": c.Ref, "run_url": c.RunURL, "size": size, "sha256": hex.EncodeToString(h.Sum(nil)), "state": "pending", "created_at": now()}
+	r := D{"id": id, "app": app["id"], "vmid": app["vmid"], "sha": c.SHA, "ref": c.Ref, "run_url": c.RunURL, "size": written, "sha256": hex.EncodeToString(h.Sum(nil)), "state": "pending", "created_at": now()}
 	e.Transaction(func(tx *Execution) {
 		tx.S.Put("releases", id, n, r)
 		if app["repo_id"] == nil {
@@ -323,7 +372,7 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 		tx.S.Put("apps", app["id"], n, app)
 	})
 	e.pruneReleases(app)
-	e.S.Log("github:"+c.Repository, n, "app_release", D{"app": app["name"], "release": id, "sha": c.SHA, "size": size}, "ok")
+	e.S.Log("github:"+c.Repository, n, "app_release", D{"app": app["name"], "release": id, "sha": c.SHA, "size": written}, "ok")
 	return publicRelease(r)
 }
 
@@ -331,7 +380,7 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 func (e *Execution) pruneReleases(app D) {
 	keep := map[string]bool{str(app["current"]): true, str(app["previous"]): true, str(app["pending"]): true}
 	for i, r := range e.Releases(app) {
-		if i < keptReleases || keep[str(r["id"])] {
+		if i < keptReleases || keep[str(r["id"])] || r["state"] == "deploying" {
 			continue
 		}
 		e.S.Remove("releases", r["id"])
@@ -435,6 +484,9 @@ func (p *Platform) AgentReport(ctx context.Context, token string, body D) D {
 			app["pending"] = nil
 		}
 	case "live":
+		if app["pending"] == id {
+			app["pending"] = nil
+		}
 		r["deployed_at"], r["error"], r["log"] = now(), nil, nil
 		if app["current"] != id {
 			if old := p.Store.Get("releases", str(app["current"])); old != nil && old["state"] == "live" {
@@ -444,6 +496,9 @@ func (p *Platform) AgentReport(ctx context.Context, token string, body D) D {
 			app["previous"], app["current"] = app["current"], id
 		}
 	case "failed":
+		if app["pending"] == id {
+			app["pending"] = nil
+		}
 		r["error"] = truncate(str(body["error"]), 256)
 		r["log"] = truncate(str(body["log"]), 8192)
 	}
