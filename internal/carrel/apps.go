@@ -190,12 +190,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Replace with the real build; pack exactly what the start command runs.
-      - run: tar czf app.tar.gz .
+      - run: tar czf "$RUNNER_TEMP/app.tar.gz" --exclude=.git .
       - uses: NYCU-WinLab/carrel-deploy@v1
         with:
           tenant: %s
           app: %s
-          artifact: app.tar.gz
+          artifact: ${{ runner.temp }}/app.tar.gz
 `, app["branch"], t["slug"], app["name"])
 }
 
