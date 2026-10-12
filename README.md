@@ -55,7 +55,7 @@ clients supporting OAuth revocation can also call the advertised revocation endp
 Existing logins created before 0.4.1 need one new login to obtain offline access.
 
 Other MCP clients can use the same URL and OAuth discovery. Dynamic registration accepts
-loopback callbacks and the explicitly configured ChatGPT callback. A new hosted client's callback
+loopback callbacks and the explicitly configured ChatGPT and Claude callbacks. A new hosted client's callback
 must be added by an administrator; arbitrary callback origins are refused.
 
 Signing in accepts the lab use rules; eligible personal and project tenants are created automatically
