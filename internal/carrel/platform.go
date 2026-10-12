@@ -55,6 +55,8 @@ type Platform struct {
 	wg                 sync.WaitGroup
 	reportMu           sync.Mutex
 	reports            map[int]chan struct{}
+	uploadMu           sync.Mutex
+	uploads            map[string]int64
 	sshProbe           func(context.Context, D) bool
 	certificatePrepare func(D) D
 }

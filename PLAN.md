@@ -196,7 +196,7 @@ protocol error.
 | | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or an owned special domain, `target_port` |
 | | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `machine`, `target_port`, `reason` (section 6.10) |
 | | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
-| Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`, optional `sub`; returns the install line and the workflow snippet (section 7.9) |
+| Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
 | | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
 | | `app_rollback` | `app`; switches back to the previous release |
@@ -664,6 +664,9 @@ README says exactly that.
 - Imported guests (section 10.6) are the exception until their owner hardens them: they arrive with
   the old host's guest agent settings and with whatever keys the old template baked in. carrel
   reports both at import and puts them on the owner's checklist.
+- `carrel-deployd` (section 7.9) runs whatever release carrel hands it, so installing it is the
+  owner's choice, made over the owner's own SSH. It cannot change the start command, and removing
+  it ends the delivery.
 - Machines from custom images (section 7.8) keep whatever guest agent settings the tenant's image
   has. carrel reads `guest-info` on first boot and shows in `machine_get` whether `guest-exec` and
   the file commands are enabled.
@@ -748,11 +751,13 @@ stays a pet machine: the member can still SSH in and change anything, and carrel
 
 **Flow**
 
-1. The member's agent calls `app_link` with the machine, repository, branch, start command, port
-   and optional domain. carrel returns an install line and a workflow snippet.
+1. The member's agent calls `app_link` with the machine, repository, branch, start command and
+   port. carrel returns an install line and a workflow snippet. A public name is a separate
+   `domain_add` to the same port.
 2. The agent runs the install line on the machine over its own SSH. It installs `carrel-deployd`
-   (a small static binary run by systemd) with a token scoped to this one app. carrel has no other
-   way into the machine (section 7.7).
+   (a small static binary run by systemd) with a token scoped to this one app, and writes the start
+   command into a local file that carrel cannot change. carrel has no other way into the machine
+   (section 7.7).
 3. The agent commits the workflow to the repository. The workflow builds, then calls the reusable
    action `NYCU-WinLab/carrel-deploy@v1`:
 
@@ -772,13 +777,17 @@ stays a pet machine: the member can still SSH in and change anything, and carrel
    signs for each job). The repository holds no carrel secret.
 5. carrel checks the token, stores the artifact as a release and marks it pending.
 6. `carrel-deployd` long-polls carrel over outbound HTTPS, downloads the release, unpacks it to
-   `/srv/apps/<app>/releases/<id>`, switches the `current` link, restarts `carrel-app@<app>` and
-   checks the port. A failed check switches back to the previous release and reports `failed`.
+   `/srv/apps/<app>/releases/<id>`, switches the `current` link, restarts `carrel-app-<app>` and
+   checks the port: any HTTP answer below 500 on `127.0.0.1:<port>` within 60 seconds. A failed
+   check switches back to the previous release and reports `failed` with the last 50 log lines.
+7. The action polls the release until it is `live` or `failed`, so the workflow run fails when the
+   deploy fails.
 
 **OIDC checks**: issuer `https://token.actions.githubusercontent.com`, audience
-`carrel.winlab.tw`, `repository_id` (not the name, so a renamed or recreated repository does not
-inherit the link), `ref` equal to the linked branch, and `event_name` of `push` or
-`workflow_dispatch`. Pull requests from forks get no OIDC token, so they cannot deploy.
+`carrel.winlab.tw`, `repository` equal to the linked repository, `ref` equal to the linked branch,
+and `event_name` of `push` or `workflow_dispatch`. The first accepted deploy pins `repository_id`,
+so a deleted and recreated repository with the same name cannot deploy afterwards. Pull requests
+from forks get no OIDC token, so they cannot deploy.
 
 **Why the build runs in GitHub Actions**: the default machine has 1 GiB of memory and cannot run
 `next build`. GitHub runners have 7 GB, cost carrel nothing to operate, and keep build tools and
@@ -790,7 +799,7 @@ private ones share 3,000 minutes per month.
 - Runtime secrets live in `/srv/apps/<app>/env` (mode `0600`), written by the member's agent over
   SSH. They never pass through carrel or GitHub.
 - Application logs stay in the machine's journal. `carrel-deployd` reports only release state, the
-  health check result and, on failure, the last 50 lines of `carrel-app@<app>`.
+  health check result and, on failure, the last 50 lines of `carrel-app-<app>`.
 - The member may stop or remove `carrel-deployd` at any time. The app then shows `agent_offline`.
 
 **Artifacts**: at most 500 MB per release, the last 3 releases kept per app, counted against

@@ -20,6 +20,7 @@ type App struct {
 	Platform *Platform
 	handler  http.Handler
 	verifier IdentityVerifier
+	github   OIDCVerifier
 	mu       sync.Mutex
 	minute   int64
 	requests int
@@ -32,7 +33,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	if verifier == nil {
 		verifier = NewVerifier(issuer)
 	}
-	a := &App{Platform: p, verifier: verifier, schemas: map[string]*jsonschema.Schema{}}
+	a := &App{Platform: p, verifier: verifier, github: NewGitHubVerifier(strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://")), schemas: map[string]*jsonschema.Schema{}}
 	compiler := jsonschema.NewCompiler()
 	for _, d := range dicts(Contract["tools"]) {
 		name := str(d["name"])
@@ -112,6 +113,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			jsonResponse(w, 200, D{"ok": true})
 		}
 	})
+	a.appRoutes(mux)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authorization := r.Header.Get("Authorization")
 		var who D
@@ -163,7 +165,9 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 				return
 			}
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 262144)
+		if !(r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases")) {
+			r.Body = http.MaxBytesReader(w, r.Body, 262144)
+		}
 		mux.ServeHTTP(w, r)
 	})
 	return a
