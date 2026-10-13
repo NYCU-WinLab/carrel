@@ -12,6 +12,13 @@ import subprocess
 import sys
 
 
+# The carrel.winlab.tw page (NYCU-WinLab/carrel.winlab.tw), served from the
+# compose host. Carrel's own routes (internal/carrel/server.go) keep going to
+# the control plane.
+SITE = "10.10.10.117:3110"
+CONTROL_PATHS = ("/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/internal/*", "/apps/*")
+
+
 def run(*args):
     p = subprocess.run(args, text=True, capture_output=True, check=True)
     return p.stdout
@@ -109,9 +116,16 @@ def proxy(state, base):
         ":80 {",
         " @carrel host carrel.winlab.tw",
         " handle @carrel {",
-        "  reverse_proxy 10.200.0.3:8080 {",
-        "   flush_interval -1",
-        "   stream_close_delay 5m",
+        # Carrel serves only these paths; everything else is the public page.
+        f"  @control path {' '.join(CONTROL_PATHS)}",
+        "  handle @control {",
+        "   reverse_proxy 10.200.0.3:8080 {",
+        "    flush_interval -1",
+        "    stream_close_delay 5m",
+        "   }",
+        "  }",
+        "  handle {",
+        f"   reverse_proxy {SITE}",
         "  }",
         " }",
     ]

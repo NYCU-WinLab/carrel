@@ -130,3 +130,16 @@ def test_proxy_retry_reloads_after_a_failed_reload(tmp_path, monkeypatch):
     module.proxy(STATE, tmp_path)
     assert len(edge.reloads("207")) == 2
     assert not (tmp_path / "proxy.unloaded").exists()
+
+
+def test_carrel_host_sends_only_control_paths_to_carrel(tmp_path, monkeypatch):
+    module = load()
+    edge = Edge(module, monkeypatch)
+    module.proxy(STATE, tmp_path)
+    conf = edge.files["/etc/caddy/Caddyfile"]
+    block = conf[conf.index(" handle @carrel {") :]
+    control = "  @control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /internal/* /apps/*"
+    assert control in block
+    # Control routes are matched first; the page takes whatever is left.
+    assert block.index("10.200.0.3:8080") < block.index("reverse_proxy " + module.SITE)
+    assert "handle @tenants" not in block.split(" }\n", 1)[0]
