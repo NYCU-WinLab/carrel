@@ -144,6 +144,10 @@ def test_carrel_host_sends_only_control_paths_to_carrel(tmp_path, monkeypatch):
     assert control in block
     # Control routes are matched first; the page takes whatever is left of
     # carrel.winlab.tw, and tenant domains stay outside the carrel host.
-    assert block.index("10.200.0.3:8080") < block.index("  handle {") < block.index("reverse_proxy " + module.SITE)
+    assert (
+        block.index("10.200.0.3:8080")
+        < block.index("  handle {")
+        < block.index("reverse_proxy " + module.SITE)
+    )
     assert "@tenants" not in block
     assert conf.index("handle @tenants") > end
