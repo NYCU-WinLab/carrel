@@ -114,6 +114,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		}
 	})
 	a.appRoutes(mux)
+	a.statusRoute(mux, p)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authorization := r.Header.Get("Authorization")
 		var who D

@@ -16,7 +16,7 @@ import sys
 # compose host. Carrel's own routes (internal/carrel/server.go) keep going to
 # the control plane.
 SITE = "10.10.10.117:3110"
-CONTROL_PATHS = ("/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/internal/*", "/apps/*")
+CONTROL_PATHS = ("/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*")
 
 
 def run(*args):
