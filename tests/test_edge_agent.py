@@ -140,7 +140,7 @@ def test_carrel_host_sends_only_control_paths_to_carrel(tmp_path, monkeypatch):
     start = conf.index(" handle @carrel {")
     end = conf.index("\n }\n", start)
     block = conf[start:end]
-    control = "  @control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /internal/* /apps/*"
+    control = "  @control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /status /internal/* /apps/*"
     assert control in block
     # Control routes are matched first; the page takes whatever is left of
     # carrel.winlab.tw, and tenant domains stay outside the carrel host.
