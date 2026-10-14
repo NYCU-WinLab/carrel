@@ -497,25 +497,36 @@ func (o *OAuth) exchange(w http.ResponseWriter, r *http.Request, client D, resou
 	jsonResponse(w, 200, tokens)
 }
 
+// consentStyle is ui.winlab.tw's consent block (@winlab/consent) in its
+// spotlight layout, written out with the same tokens because this page is
+// served without React or scripts. Fonts come from the site at the same
+// origin; without them the page falls back to system fonts.
 const consentStyle = `
-:root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --bg: #fafaf9; --text: #242422; --muted: #71716b; --line: #deded9; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); }
-main { min-height: 100svh; display: grid; place-items: center; padding: 24px; }
-section { width: 100%; max-width: 360px; }
-h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.5px; }
-p { margin: 16px 0 28px; color: var(--muted); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
-strong { color: var(--text); font-weight: 600; }
-.actions { display: flex; justify-content: flex-end; gap: 10px; }
-button { min-height: 44px; padding: 10px 24px; border: 1px solid var(--line); border-radius: 8px;
-  background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
-button.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
-button:hover { opacity: .8; }
-button:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
+@font-face { font-family: Inter; src: url(/fonts/inter-latin.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Noto Sans TC"; src: url(/fonts/noto-sans-tc-consent.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+:root { color-scheme: light dark; font-family: Inter, "Noto Sans TC", sans-serif; font-size: 16px; line-height: 1.5rem;
+  --background: oklch(1 0 0); --foreground: oklch(0.145 0 0); --muted: oklch(0.97 0 0); --muted-foreground: oklch(0.556 0 0);
+  --primary: oklch(0.378 0.182 262.5); --primary-foreground: oklch(0.985 0 0); --border: oklch(0.922 0 0); --ring: oklch(0.708 0 0); }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #191919; --text: #efefeb; --muted: #a4a49d; --line: #42423e; }
+  :root { --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0);
+    --primary: oklch(0.68 0.168 262.5); --primary-foreground: oklch(0.145 0 0); --border: oklch(1 0 0 / 10%); --ring: oklch(0.556 0 0); }
 }
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--background); color: var(--foreground); }
+header { position: fixed; top: 1.5rem; left: 1.5rem; display: flex; gap: .5rem; color: var(--muted-foreground); }
+header span:last-child { color: var(--foreground); }
+main { min-height: 100svh; display: flex; align-items: center; justify-content: center; padding: 6rem 1.5rem; }
+form { width: 100%; max-width: 42rem; display: flex; flex-direction: column; align-items: center; gap: 3rem; text-align: center; }
+h1 { font-size: 1.5rem; line-height: 2rem; font-weight: 500; }
+.text { display: flex; flex-direction: column; gap: 1rem; color: var(--muted-foreground); overflow-wrap: anywhere; }
+strong { color: var(--foreground); font-weight: 500; }
+.actions { display: flex; gap: 1rem; }
+button { height: 2.5rem; padding: 0 1rem; border: 1px solid var(--border); border-radius: 1rem; background: var(--background);
+  color: var(--foreground); font: inherit; font-weight: 500; cursor: pointer; transition: background-color 150ms; outline: 2px solid transparent; outline-offset: 2px; }
+button:hover { background: var(--muted); }
+button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
+button.primary:hover { background: color-mix(in oklch, var(--primary) 90%, transparent); }
+button:focus-visible { box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent); }
 `
 
 func consentPage(w http.ResponseWriter, name, redirect, nonce string) {
@@ -533,9 +544,9 @@ func consentPage(w http.ResponseWriter, name, redirect, nonce string) {
 		panic("invalid callback host")
 	}
 	sum := sha256.Sum256([]byte(consentStyle))
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'; form-action 'self' "+u.Scheme+"://"+u.Host+"; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'; font-src 'self'; form-action 'self' "+u.Scheme+"://"+u.Host+"; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("Referrer-Policy", "strict-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>連接 Carrel</title><style>%s</style></head><body><main><section aria-labelledby="title"><h1 id="title">連接 Carrel</h1><p>允許 <strong>%s</strong> 以你的帳號權限管理 Carrel 資源。</p><p>登入會持續保留，關閉瀏覽器後仍可使用。你可以在 WinLab 帳號的應用程式頁面撤銷存取。</p><form method="post" action="/oauth/consent"><input type="hidden" name="consent" value="%s"><div class="actions"><button name="allow" value="no">取消</button><button class="primary" name="allow" value="yes">允許</button></div></form></section></main></body></html>`, consentStyle, html.EscapeString(name), html.EscapeString(nonce))
+	fmt.Fprintf(w, `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>連接 Carrel</title><style>%s</style></head><body><header><span>WinLab</span><span aria-hidden="true">/</span><span>Carrel</span></header><main><form method="post" action="/oauth/consent" aria-labelledby="title"><h1 id="title">連接 Carrel</h1><div class="text"><p>允許 <strong>%s</strong> 以你的帳號權限管理 Carrel 資源。</p><p>登入會持續保留，關閉瀏覽器後仍可使用。你可以在 WinLab 帳號的應用程式頁面撤銷存取。</p></div><input type="hidden" name="consent" value="%s"><div class="actions"><button name="allow" value="no">取消</button><button class="primary" name="allow" value="yes">允許</button></div></form></main></body></html>`, consentStyle, html.EscapeString(name), html.EscapeString(nonce))
 }
