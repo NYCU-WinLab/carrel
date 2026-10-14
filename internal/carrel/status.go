@@ -14,7 +14,9 @@ import (
 // share. A tenant is named only when its slug is already public: it is
 // active and serves at least one ready *.<slug>.winlab.tw domain. Every
 // other tenant with machines is summed into "others" without a name.
-// Machine names, addresses, keys and domains are never listed.
+// Machine names, addresses, keys and domains are never listed. "quota" is
+// the default budget: every member gets one, and every project group gets
+// another of its own on top of its members' budgets.
 func (e *Execution) PublicStatus() D {
 	c := e.Capacity(nil, true)
 	physical := obj(c["physical"])
@@ -55,8 +57,19 @@ func (e *Execution) PublicStatus() D {
 			"disk_gib":   D{"total": disk["total"], "used": disk["used"]},
 		},
 		"allocated": c["allocatable"],
+		"quota":     D{"member": budget(DefaultQuota), "project": budget(DefaultQuota)},
 		"tenants":   tenants,
 		"others":    others,
+	}
+}
+
+// budget is the part of a quota the status page shows.
+func budget(q D) D {
+	return D{
+		"machines":   num(q["machines"]),
+		"vcpu":       num(q["vcpu"]),
+		"memory_gib": num(q["memory_mb"]) / 1024,
+		"disk_gib":   num(q["disk_gb"]),
 	}
 }
 
