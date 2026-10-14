@@ -224,6 +224,9 @@ func TestOAuthRedirectAndConsentBoundaries(t *testing.T) {
 	if strings.Contains(w.Body.String(), "<script>") || !strings.Contains(w.Header().Get("Content-Security-Policy"), "http://[::1]:1234") {
 		t.Fatal("unsafe consent page")
 	}
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "font-src 'self'") || strings.Contains(csp, "script-src") {
+		t.Fatal("consent page CSP", csp)
+	}
 }
 func TestOAuthIssuerOutageDoesNotInvalidateLogin(t *testing.T) {
 	p, _ := fixture(t)
