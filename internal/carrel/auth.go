@@ -522,7 +522,7 @@ h1 { font-size: 1.5rem; line-height: 2rem; font-weight: 500; }
 strong { color: var(--foreground); font-weight: 500; }
 .actions { display: flex; gap: 1rem; }
 button { height: 2.5rem; padding: 0 1rem; border: 1px solid var(--border); border-radius: 1rem; background: var(--background);
-  color: var(--foreground); font: inherit; font-weight: 500; cursor: pointer; transition: background-color 150ms; outline: none; }
+  color: var(--foreground); font: inherit; font-weight: 500; cursor: pointer; transition: background-color 150ms; outline: 2px solid transparent; outline-offset: 2px; }
 button:hover { background: var(--muted); }
 button.primary { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
 button.primary:hover { background: color-mix(in oklch, var(--primary) 90%, transparent); }
