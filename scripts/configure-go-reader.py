@@ -8,6 +8,7 @@ PVEAuditor by itself can silently return an empty, incomplete volume inventory.
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -27,7 +28,10 @@ def command(*args, optional=False):
 def node_storage():
     # Guest storage id from node.json (PLAN 8.2); nodes without it keep local-lvm.
     config = json.loads(NODE_CONFIG.read_text()) if NODE_CONFIG.exists() else {}
-    return config.get("storage", "local-lvm")
+    storage = config.get("storage", "local-lvm")
+    if not isinstance(storage, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage):
+        raise SystemExit("Invalid storage id in node.json")
+    return storage
 
 
 def remove(storage):

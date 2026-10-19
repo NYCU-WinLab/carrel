@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import urllib.request
 
@@ -16,7 +17,10 @@ def run(*args):
 def node_storage():
     # Guest storage id from node.json (PLAN 8.2); nodes without it keep local-lvm.
     path = Path("/etc/carrel/node.json")
-    return json.loads(path.read_text()).get("storage", "local-lvm") if path.exists() else "local-lvm"
+    storage = json.loads(path.read_text()).get("storage", "local-lvm") if path.exists() else "local-lvm"
+    if not isinstance(storage, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage):
+        raise SystemExit("Invalid storage id in node.json")
+    return storage
 
 
 def build(vmid, name, path, storage):
@@ -73,6 +77,8 @@ def main():
                         help="Prepared image to import; repeat for several. Defaults to both development images.")
     args = parser.parse_args()
     storage = args.storage or node_storage()
+    if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage):
+        parser.error("invalid storage id")
     if args.prepared_dir:
         images = args.image or ["debian-13", "ubuntu-24.04"]
         if len(set(images)) != len(images) or not 9010 <= args.vmid_base <= 10000 - len(images):
