@@ -140,7 +140,14 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 	must(os.WriteFile(filepath.Join(cert, "archive", "certificate"), []byte("certificate"), 0600))
 	must(os.Symlink("../archive/certificate", filepath.Join(cert, "live", "certificate")))
 	p.Store.OAuthPut("client", "old-client", D{"client_id": "old-client"}, 0)
+	nodeDown := false
 	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "node_files" {
+			if nodeDown {
+				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
+			}
+			return D{"node": "carrel01", "files": D{"node.json": `{"storage": "local-zfs"}`, "templates.json": "{}", "pve-read.json": "SECRET"}}, nil
+		}
 		if r["op"] != "backup" || target != "carrel-edge" {
 			t.Fatal("wrong backup destination")
 		}
@@ -180,10 +187,22 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 		if !files["etc/carrel/node_key"] || !files["certificates/live/certificate"] {
 			t.Fatal("incomplete backup")
 		}
+		if !nodeDown && (!files["nodes/carrel01/node.json"] || !files["nodes/carrel01/templates.json"]) {
+			t.Fatal("node files missing from the backup")
+		}
+		if files["nodes/carrel01/pve-read.json"] {
+			t.Fatal("a node file outside the list reached the backup")
+		}
 		return D{"stored": true}, nil
 	}
 	if _, err := p.Backup(context.Background(), config); err != nil {
 		t.Fatal(err)
+	}
+	// One node down: everything else is still backed up, and the node is named.
+	nodeDown = true
+	result, err := p.Backup(context.Background(), config)
+	if err != nil || !equal(result["missing_nodes"], []any{"carrel-node"}) {
+		t.Fatalf("%v %v", err, encoded(result))
 	}
 }
 

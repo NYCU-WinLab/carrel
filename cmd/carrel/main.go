@@ -57,7 +57,12 @@ func main() {
 			slog.Error("backup_failed", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("backup_complete", "result", result)
+		if result["missing_nodes"] != nil {
+			// The archive landed, but some node files are not in it.
+			slog.Warn("backup_complete_without_nodes", "result", result)
+		} else {
+			slog.Info("backup_complete", "result", result)
+		}
 		return
 	}
 	app := carrel.NewApp(platform, nil)
