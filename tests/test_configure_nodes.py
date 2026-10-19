@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,3 +110,21 @@ def test_a_node_name_cannot_inject_ssh_options():
     site = {**SITE, "nodes": [*SITE["nodes"], {"name": "x\n  ProxyCommand sh", "address": "192.168.19.105"}]}
     with pytest.raises(SystemExit):
         load("configure-nodes.py").targets(site, "carrel01")
+
+
+def test_bootstrap_runs_only_on_the_first_exit_node_of_the_site(monkeypatch, tmp_path):
+    module = load("bootstrap-platform.py")
+    (tmp_path / "site.json").write_text(json.dumps(SITE))
+    real = Path
+    monkeypatch.setattr(
+        module, "Path", lambda p: tmp_path / "site.json" if str(p) == "/etc/carrel/site.json" else real(p)
+    )
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "carrel02")
+    monkeypatch.setattr(sys, "argv", ["bootstrap-platform.py", "--role", "site", "--admin-key", "k"])
+    try:
+        module.main()
+    except AssertionError as e:
+        assert "first exit node" in str(e)
+    else:
+        raise AssertionError("bootstrap ran on a node that is not the first exit node")
