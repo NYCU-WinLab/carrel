@@ -382,3 +382,11 @@ func TestPythonCompatibleRequestHash(t *testing.T) {
 		t.Fatal(fmt.Sprintf("%s != %s", got, want))
 	}
 }
+func TestCapacityNamesTheNodeStorage(t *testing.T) {
+	if got := storageID(D{}); got != "local-lvm" {
+		t.Fatalf("default storage %q", got)
+	}
+	if got := storageID(D{"storage_id": "local-zfs"}); got != "local-zfs" {
+		t.Fatalf("configured storage %q", got)
+	}
+}

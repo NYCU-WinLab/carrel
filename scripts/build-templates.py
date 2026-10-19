@@ -13,10 +13,21 @@ def run(*args):
     return subprocess.run([str(a) for a in args], check=True, text=True, capture_output=True).stdout.strip()
 
 
-def build(vmid, name, path):
-    conf = Path(f"/etc/pve/qemu-server/{vmid}.conf")
-    if conf.exists():
-        text = conf.read_text()
+def node_storage():
+    # Guest storage id from node.json (PLAN 8.2); nodes without it keep local-lvm.
+    path = Path("/etc/carrel/node.json")
+    return json.loads(path.read_text()).get("storage", "local-lvm") if path.exists() else "local-lvm"
+
+
+def build(vmid, name, path, storage):
+    # VMIDs are unique across the cluster, and a linked clone works only on the
+    # node that holds its template: look at every node, build only on this one.
+    confs = [c for c in Path("/etc/pve/nodes").glob(f"*/qemu-server/{vmid}.conf")]
+    local = Path(f"/etc/pve/qemu-server/{vmid}.conf")
+    if confs and not local.exists():
+        raise RuntimeError("Refusing a template VMID used on another node")
+    if local.exists():
+        text = local.read_text()
         if f"name: carrel-template-{name}\n" not in text or "template: 1" not in text:
             raise RuntimeError("Refusing occupied template VMID")
         return
@@ -46,19 +57,22 @@ def build(vmid, name, path):
         "--tags",
         "carrel-template",
     )
-    run("qm", "set", vmid, "--scsi0", f"local-lvm:0,import-from={path},discard=on,ssd=1,iothread=1")
+    run("qm", "set", vmid, "--scsi0", f"{storage}:0,import-from={path},discard=on,ssd=1,iothread=1")
     run("qm", "resize", vmid, "scsi0", "10G")
-    run("qm", "set", vmid, "--ide2", "local-lvm:cloudinit", "--boot", "order=scsi0")
+    run("qm", "set", vmid, "--ide2", f"{storage}:cloudinit", "--boot", "order=scsi0")
     run("qm", "template", vmid)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared-dir", type=Path)
-    parser.add_argument("--vmid-base", type=int, default=9010)
+    parser.add_argument("--vmid-base", type=int, default=9010,
+                        help="First template VMID; use this node's block of 20 from PLAN 6.1")
+    parser.add_argument("--storage", help="Guest storage id; defaults to node.json, then local-lvm")
     parser.add_argument("--image", action="append", choices=["debian-13-minimal", "debian-13", "ubuntu-24.04"],
                         help="Prepared image to import; repeat for several. Defaults to both development images.")
     args = parser.parse_args()
+    storage = args.storage or node_storage()
     if args.prepared_dir:
         images = args.image or ["debian-13", "ubuntu-24.04"]
         if len(set(images)) != len(images) or not 9010 <= args.vmid_base <= 10000 - len(images):
@@ -75,7 +89,7 @@ def main():
                 if hashlib.file_digest(stream, "sha256").hexdigest() != manifest["sha256"]:
                     raise RuntimeError("prepared image digest mismatch")
             vmid = args.vmid_base + offset
-            build(vmid, image + "-" + manifest["sha256"][:12], path)
+            build(vmid, image + "-" + manifest["sha256"][:12], path, storage)
             candidates[image] = {"vmid": vmid, "prepared": True, **manifest}
         # Activation is separate so administrators can retain the previous generation.
         (args.prepared_dir / "templates.json").write_text(json.dumps(candidates, indent=2) + "\n")
@@ -93,7 +107,7 @@ def main():
             hashlib.file_digest(f, "sha512").hexdigest()
             == "95e110dfcdbd0ed8a82a75ed9579802f9950cabf51a810dcc6388e81bc778188713878b9f28d583a0ea602fbf48b35996ae9ad37f584166d8fbd6489df248f53"
         )
-    build(9000, "debian-13", debian)
+    build(9000, "debian-13", debian, storage)
     base = "https://cloud-images.ubuntu.com/releases/noble/release/"
     ubuntu = cache / "ubuntu-24.04-server-cloudimg-amd64.img"
     sums = urllib.request.urlopen(base + "SHA256SUMS", timeout=20).read().decode()
@@ -104,7 +118,7 @@ def main():
         urllib.request.urlretrieve(base + ubuntu.name, ubuntu)
     with ubuntu.open("rb") as f:
         assert hashlib.file_digest(f, "sha256").hexdigest() == expected
-    build(9001, "ubuntu-24.04", ubuntu)
+    build(9001, "ubuntu-24.04", ubuntu, storage)
     for image in ["debian-13-standard_13.1-2_amd64.tar.zst", "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"]:
         if not Path("/var/lib/vz/template/cache/" + image).exists():
             run("pveam", "download", "local", image)

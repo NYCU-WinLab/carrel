@@ -83,8 +83,11 @@ path.write_text(json.dumps(config,indent=2)+'\n')
 Path('/etc/carrel/templates.next.json').unlink()
 """
     program = f"""from pathlib import Path
-import hashlib,json,os,shutil,subprocess,time,urllib.request
+import hashlib,json,os,shutil,socket,subprocess,time,urllib.request
 stage=Path({stage!r})
+node=socket.gethostname().split('.')[0]
+node_config=Path('/etc/carrel/node.json')
+storage=json.loads(node_config.read_text()).get('storage','local-lvm') if node_config.exists() else 'local-lvm'
 def ct(*args): subprocess.run(['pct','exec','100','--',*args],check=True)
 def capture(*args): return subprocess.check_output(args,text=True)
 for name,expected in {hashes!r}.items():
@@ -98,8 +101,8 @@ assert minimal.get('prepared') is True and minimal.get('environment')=='minimal'
 for image,entry in templates.items():
  vmid=entry['vmid']
  assert isinstance(vmid,int) and 9000<=vmid<=9999, 'Invalid template VMID'
- cfg=json.loads(capture('pvesh','get',f'/nodes/carrel01/qemu/{{vmid}}/config','--output-format','json'))
- assert cfg.get('template')==1 and cfg.get('scsi0','').startswith('local-lvm:base-'), 'Expected immutable LVM-thin template'
+ cfg=json.loads(capture('pvesh','get',f'/nodes/{{node}}/qemu/{{vmid}}/config','--output-format','json'))
+ assert cfg.get('template')==1 and cfg.get('scsi0','').startswith(storage+':base-'), 'Expected an immutable template on the guest storage of this node'
 subprocess.run(['python3',str(stage/'configure-go-reader.py')],check=True)
 # PVEAuditor alone silently hides volumes. Compare complete stable volume identities before enabling.
 old=json.loads(capture('/usr/local/lib/carrel/pve-read.pl','inventory'))

@@ -684,6 +684,34 @@ async def test_linked_clone_requires_immutable_thin_template(platform, monkeypat
         assert not calls
 
 
+@pytest.mark.parametrize("disk", ["local-zfs:base-9010-disk-0", "local-lvm:base-9010-disk-0"])
+async def test_linked_clone_template_must_live_on_the_configured_storage(
+    platform, monkeypatch, tmp_path, disk
+):
+    await platform.execute("machine_create", {"name": "linked", "ssh_keys": [KEY]}, person())
+    machine = platform.store.objects("machines", 1)[0]
+    spec = importlib.util.spec_from_file_location(
+        "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs"}))
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
+    monkeypatch.setattr(module, "api", lambda *args: {"template": 1, "scsi0": disk})
+    monkeypatch.setattr(module, "cloud_init", lambda m, **kwargs: "prepared-snippet")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "stopped")
+    if disk.startswith("local-zfs:"):
+        assert module.create(machine)["state"] == "running"
+        assert any(c[:2] == ("qm", "clone") for c in calls)
+    else:
+        with pytest.raises(ValueError, match="guest storage"):
+            module.create(machine)
+        assert not calls
+
+
 def test_topology_snapshot_tracks_new_vnets_without_duplicate_creates(monkeypatch):
     spec = importlib.util.spec_from_file_location(
         "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"

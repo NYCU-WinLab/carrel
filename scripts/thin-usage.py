@@ -64,14 +64,16 @@ def run(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=60).stdout
 
 
-def collect(machines):
-    volumes = json.loads(run("lvs", "--reportformat", "json", "-o", "lv_name,thin_id", "pve"))["report"][0]["lv"]
+def collect(machines, vg="pve", pool="data"):
+    volumes = json.loads(run("lvs", "--reportformat", "json", "-o", "lv_name,thin_id", vg))["report"][0]["lv"]
+    # Device mapper doubles hyphens inside VG and LV names.
+    mapper = "/dev/mapper/" + vg.replace("-", "--") + "-" + pool.replace("-", "--")
     held = False
     try:
-        run("dmsetup", "message", "/dev/mapper/pve-data-tpool", "0", "reserve_metadata_snap")
+        run("dmsetup", "message", mapper + "-tpool", "0", "reserve_metadata_snap")
         held = True
-        xml = run("thin_dump", "--metadata-snap", "/dev/mapper/pve-data_tmeta")
+        xml = run("thin_dump", "--metadata-snap", mapper + "_tmeta")
         return account(xml, volumes, machines)
     finally:
         if held:
-            run("dmsetup", "message", "/dev/mapper/pve-data-tpool", "0", "release_metadata_snap")
+            run("dmsetup", "message", mapper + "-tpool", "0", "release_metadata_snap")
