@@ -82,14 +82,15 @@ def test_gateway_serves_the_origin_and_tenant_wildcards_over_tls(tmp_path, monke
     module = load("node-agent.py")
     monkeypatch.setattr(module, "run", real_run(module))
     caddy, certificates = module.gateway_tls(state(tmp_path), {3: "zyx1121"})
-    assert set(certificates) == {"origin", "zyx1121"}
+    assert set(certificates) == {"_origin", "zyx1121"}
     assert "http:// {\n redir https://{host}{uri} 308\n}" in caddy
     origin = caddy.split("https://carrel.winlab.tw {")[1].split("\n}\n")[0]
     assert (
-        "tls /etc/caddy/carrel-certs/origin/fullchain.pem /etc/caddy/carrel-certs/origin/privkey.pem"
+        "tls /etc/caddy/carrel-certs/_origin/fullchain.pem /etc/caddy/carrel-certs/_origin/privkey.pem"
         in origin
     )
     assert "@control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /status /internal/* /apps/*" in origin
+    assert "hide .*" in origin and "flush_interval -1" in origin
     assert "reverse_proxy 10.200.0.3:8080" in origin and "root * /srv/carrel-site" in origin
     tenant = caddy.split("https://*.zyx1121.winlab.tw {")[1]
     assert "@d7 host book.zyx1121.winlab.tw" in tenant and "reverse_proxy 10.200.3.10:3000" in tenant
@@ -140,13 +141,18 @@ def test_gateway_sync_writes_certificates_for_caddy_and_removes_stale_ones(tmp_p
         module.shutil, "chown", lambda path, user, group: owners.append((Path(path).name, group))
     )
     (tmp_path / "certs" / "gone").mkdir(parents=True)
-    digest = module.certificates({"zyx1121": {"fullchain": "A", "privkey": "B"}})
+    digest, stale = module.certificates({"zyx1121": {"fullchain": "A", "privkey": "B"}})
     assert (tmp_path / "certs/zyx1121/privkey.pem").read_text() == "B"
     assert oct((tmp_path / "certs/zyx1121/privkey.pem").stat().st_mode & 0o777) == "0o640"
-    assert not (tmp_path / "certs/gone").exists()
+    # Stale directories wait until Caddy accepted the new routes.
+    assert stale == [tmp_path / "certs" / "gone"] and (tmp_path / "certs/gone").exists()
     assert ("privkey.pem.carrel-next", "caddy") in owners
-    assert digest != module.certificates({"zyx1121": {"fullchain": "A", "privkey": "C"}})
-    for bad in ({"../x": {"fullchain": "A", "privkey": "B"}}, {"zyx1121": {"fullchain": "A"}}):
+    assert digest != module.certificates({"zyx1121": {"fullchain": "A", "privkey": "C"}})[0]
+    for bad in (
+        {"../x": {"fullchain": "A", "privkey": "B"}},
+        {"zyx1121": {"fullchain": "A"}},
+        {"origin": {"fullchain": "A", "privkey": "B"}, "_x": {}},
+    ):
         with pytest.raises(ValueError):
             module.certificates(bad)
 
@@ -187,3 +193,17 @@ def test_reconcile_keeps_no_private_key_on_the_host(tmp_path, monkeypatch):
     module.reconcile(state)
     desired = written[str(tmp_path / "desired.json")]
     assert "SECRET" not in desired and "carrel.winlab.tw" in desired
+
+
+def test_a_tenant_named_origin_keeps_its_own_certificate(tmp_path, monkeypatch):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "run", real_run(module))
+    s = state(tmp_path)
+    s["tenants"] = [{"n": 3, "slug": "origin"}]
+    s["domains"][0]["name"] = "book.origin.winlab.tw"
+    s["certificates"] = [{"slug": "origin", **pem(tmp_path, "tenant", "*.origin.winlab.tw")}]
+    caddy, certificates = module.gateway_tls(s, {3: "origin"})
+    assert set(certificates) == {"_origin", "origin"}
+    assert certificates["_origin"] != certificates["origin"]
+    paths = [line.split()[1] for line in caddy.splitlines() if line.strip().startswith("tls ")]
+    assert len(paths) == 2 and len(set(paths)) == 2

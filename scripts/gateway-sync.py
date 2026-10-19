@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -26,36 +27,41 @@ def write(path, content):
     pending.replace(path)
 
 
-def certificates(bundles):
-    """Write each PEM pair readable by Caddy only; return a digest of the set.
+def private_directory(path):
+    path.mkdir(mode=0o750, parents=True, exist_ok=True)
+    path.chmod(0o750)
+    shutil.chown(path, "root", "caddy")
 
-    Names are fixed directories (a tenant slug or "origin"); stale ones go.
+
+def certificates(bundles):
+    """Write each PEM pair readable by Caddy only.
+
+    Names are fixed directories: a tenant slug, or "_origin" for carrel's own
+    name, which no slug can match. Returns a digest of the set and the stale
+    directories, which go only after Caddy accepted the new routes.
     """
     if not isinstance(bundles, dict):
         raise ValueError("expected certificate bundles")
-    CERTS.mkdir(mode=0o750, parents=True, exist_ok=True)
-    shutil.chown(CERTS, "root", "caddy")
+    private_directory(CERTS)
     digest = hashlib.sha256()
     for name in sorted(bundles):
         pair = bundles[name]
-        if not re.fullmatch(r"origin|[a-z][a-z0-9-]{0,31}", name) or set(pair) != {"fullchain", "privkey"}:
+        if not re.fullmatch(r"_origin|[a-z][a-z0-9-]{0,31}", name) or set(pair) != {"fullchain", "privkey"}:
             raise ValueError("invalid certificate bundle")
-        directory = CERTS / name
-        directory.mkdir(mode=0o750, exist_ok=True)
-        shutil.chown(directory, "root", "caddy")
+        private_directory(CERTS / name)
         for file in ("fullchain", "privkey"):
-            path = directory / (file + ".pem")
+            path = CERTS / name / (file + ".pem")
             if not path.exists() or path.read_text() != pair[file]:
                 pending = path.with_name(path.name + ".carrel-next")
-                pending.write_text(pair[file])
-                pending.chmod(0o640)
+                pending.unlink(missing_ok=True)
+                # Created 0640 from the start: a key is never world-readable.
+                with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640), "w") as stream:
+                    stream.write(pair[file])
                 shutil.chown(pending, "root", "caddy")
                 pending.replace(path)
             digest.update((name + file + pair[file]).encode())
-    for stale in CERTS.iterdir():
-        if stale.is_dir() and stale.name not in bundles:
-            shutil.rmtree(stale)
-    return digest.hexdigest()
+    stale = [p for p in CERTS.iterdir() if p.is_dir() and p.name not in bundles]
+    return digest.hexdigest(), stale
 
 
 def apply(state):
@@ -69,7 +75,7 @@ def apply(state):
     changes = []
     # Caddy validates the files the routes name, so they land first; a new
     # certificate alone changes the receipt and reloads Caddy.
-    cert_digest = certificates(state["certificates"]) if "certificates" in state else ""
+    cert_digest, stale = certificates(state["certificates"]) if "certificates" in state else ("", [])
     for name, path, service in [("hosts", HOSTS, "carrel-dns"), ("caddy", CADDY, "caddy")]:
         content = state[name]
         digest = hashlib.sha256((content + (cert_digest if name == "caddy" else "")).encode()).hexdigest()
@@ -95,6 +101,8 @@ def apply(state):
         else:
             # Recover stopped services without rewriting or reloading healthy ones.
             run("systemctl", "start", service)
+    for directory in stale:
+        shutil.rmtree(directory)
     return {"changed": changes}
 
 
