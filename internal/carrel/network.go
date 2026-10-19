@@ -1,6 +1,9 @@
 package carrel
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+)
 
 func (e *Execution) sameOperation(o D) bool { return e.Op != nil && o["operation_id"] == e.Op["id"] }
 func (e *Execution) NetworkAction(tool string, a, t D) D {
@@ -252,7 +255,12 @@ func (e *Execution) Reconcile() D {
 	// node goes first; it holds the infra gateway and creates new VNets.
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
-	result := D{"node": e.Call(request, nodes[0].Target)}
+	first := request
+	if str(e.P.Config["ingress"]) == "exit" {
+		// The first node holds the infra gateway, which terminates TLS here.
+		first = D{"op": "reconcile", "state": merge(state, D{"origin": originHost(e.P.Config)})}
+	}
+	result := D{"node": e.Call(first, nodes[0].Target)}
 	if len(nodes) > 1 {
 		// The other nodes catch up on the next reconcile: one node down for an
 		// upgrade (PLAN 8.3) must not stop every change on the site.
@@ -300,4 +308,13 @@ func (e *Execution) RefreshStorage() {
 			e.Put("storage_usage", t, t, sample)
 		}
 	})
+}
+
+// originHost is the host name of carrel's public origin, such as carrel.winlab.tw.
+func originHost(c D) string {
+	u, err := url.Parse(str(c["origin"]))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

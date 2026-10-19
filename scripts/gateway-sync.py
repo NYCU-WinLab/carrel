@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Apply only the tenant gateway's DNS hosts and HTTP routes in one CT entry."""
+"""Apply only the tenant gateway's DNS hosts, routes and TLS files in one CT entry."""
 
 import hashlib
 import json
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 
 HOSTS = Path("/etc/carrel-hosts")
 CADDY = Path("/etc/caddy/Caddyfile")
 STATE = Path("/var/lib/carrel-gateway")
+CERTS = Path("/etc/caddy/carrel-certs")
 
 
 def run(*args):
@@ -23,15 +26,53 @@ def write(path, content):
     pending.replace(path)
 
 
+def certificates(bundles):
+    """Write each PEM pair readable by Caddy only; return a digest of the set.
+
+    Names are fixed directories (a tenant slug or "origin"); stale ones go.
+    """
+    if not isinstance(bundles, dict):
+        raise ValueError("expected certificate bundles")
+    CERTS.mkdir(mode=0o750, parents=True, exist_ok=True)
+    shutil.chown(CERTS, "root", "caddy")
+    digest = hashlib.sha256()
+    for name in sorted(bundles):
+        pair = bundles[name]
+        if not re.fullmatch(r"origin|[a-z][a-z0-9-]{0,31}", name) or set(pair) != {"fullchain", "privkey"}:
+            raise ValueError("invalid certificate bundle")
+        directory = CERTS / name
+        directory.mkdir(mode=0o750, exist_ok=True)
+        shutil.chown(directory, "root", "caddy")
+        for file in ("fullchain", "privkey"):
+            path = directory / (file + ".pem")
+            if not path.exists() or path.read_text() != pair[file]:
+                pending = path.with_name(path.name + ".carrel-next")
+                pending.write_text(pair[file])
+                pending.chmod(0o640)
+                shutil.chown(pending, "root", "caddy")
+                pending.replace(path)
+            digest.update((name + file + pair[file]).encode())
+    for stale in CERTS.iterdir():
+        if stale.is_dir() and stale.name not in bundles:
+            shutil.rmtree(stale)
+    return digest.hexdigest()
+
+
 def apply(state):
     # No caller-controlled paths, command names, services or validation flags.
-    if set(state) != {"hosts", "caddy"} or any(not isinstance(v, str) for v in state.values()):
+    keys = set(state)
+    if keys not in ({"hosts", "caddy"}, {"hosts", "caddy", "certificates"}) or any(
+        not isinstance(state[k], str) for k in ("hosts", "caddy")
+    ):
         raise ValueError("expected hosts and caddy text")
     STATE.mkdir(parents=True, exist_ok=True)
     changes = []
+    # Caddy validates the files the routes name, so they land first; a new
+    # certificate alone changes the receipt and reloads Caddy.
+    cert_digest = certificates(state["certificates"]) if "certificates" in state else ""
     for name, path, service in [("hosts", HOSTS, "carrel-dns"), ("caddy", CADDY, "caddy")]:
         content = state[name]
-        digest = hashlib.sha256(content.encode()).hexdigest()
+        digest = hashlib.sha256((content + (cert_digest if name == "caddy" else "")).encode()).hexdigest()
         receipt = STATE / (name + ".sha256")
         changed = not path.exists() or path.read_text() != content
         applied = receipt.exists() and receipt.read_text() == digest
