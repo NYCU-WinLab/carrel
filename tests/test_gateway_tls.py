@@ -207,3 +207,46 @@ def test_a_tenant_named_origin_keeps_its_own_certificate(tmp_path, monkeypatch):
     assert certificates["_origin"] != certificates["origin"]
     paths = [line.split()[1] for line in caddy.splitlines() if line.strip().startswith("tls ")]
     assert len(paths) == 2 and len(set(paths)) == 2
+
+
+def test_reconcile_confirms_the_origin_pair_only_after_the_gateway_took_it(tmp_path, monkeypatch):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "clsact")
+    monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "pve_read", lambda mode: {"vnets": [], "subnets": {}})
+    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
+    monkeypatch.setattr(module, "public_ingress", lambda: None)
+    monkeypatch.setattr(module, "write", lambda path, data, mode=0o640: True)
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    (tmp_path / "node.json").write_text('{"protected_addresses": []}')
+    pair = {"fullchain": "CHAIN", "privkey": "KEY"}
+    state = {
+        "tenants": [],
+        "networks": [],
+        "machines": [],
+        "domains": [],
+        "ports": [],
+        "peers": [],
+        "certificates": [],
+        "origin": "carrel.winlab.tw",
+        "origin_certificate": pair,
+    }
+    # No CT 101 on this node: nothing to confirm.
+    assert "certificates" not in module.reconcile(dict(state))
+    real = Path
+    redirects = {
+        "/etc/pve/lxc/101.conf": tmp_path / "gw",
+        "/usr/local/lib/carrel/gateway-sync.py": tmp_path / "sync.py",
+    }
+    monkeypatch.setattr(module, "Path", lambda p: redirects.get(str(p), real(p)))
+    (tmp_path / "gw").write_text("")
+    monkeypatch.setattr(module, "site", lambda: {"public": {"address": "140.113.60.184/27"}})
+    monkeypatch.setattr(module, "gateway_tls", lambda s, slugs: ("caddy", {"_origin": pair}))
+    gateway_sync = tmp_path / "sync.py"
+    gateway_sync.write_text("")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "clsact")
+    result = module.reconcile(dict(state))
+    assert result["certificates"] == {"_origin": __import__("hashlib").sha256(b"CHAIN").hexdigest()}
+    assert any(c[:3] == ("pct", "exec", "101") for c in calls)

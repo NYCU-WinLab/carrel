@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"sync"
 	"time"
@@ -21,6 +22,14 @@ var nodeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 func ValidateNodes(c D) error {
 	if v := c["ingress"]; v != nil && v != "edge" && v != "exit" {
 		return errors.New("ingress must be edge or exit")
+	}
+	if a, ok := c["public_address"]; ok && a != nil {
+		if ip, err := netip.ParseAddr(str(a)); err != nil || !ip.Is4() {
+			return errors.New("public_address must be an IPv4 address")
+		}
+	}
+	if c["ingress"] == "exit" && (str(c["public_address"]) == "" || originHost(c) == "") {
+		return errors.New("ingress exit needs public_address and origin")
 	}
 	if v, ok := c["nodes"]; ok && v != nil {
 		if _, list := v.([]any); !list {

@@ -700,6 +700,7 @@ WantedBy=multi-user.target
             run("systemctl", "enable", "carrel-ports")
     # The gateway goes last: one tenant's bad certificate must not hold up
     # ports and private DHCP for everyone else.
+    gateway_tls_synced = {}
     if Path("/etc/pve/lxc/101.conf").exists():
         slugs = {t["n"]: label(t["slug"]) for t in state["tenants"]}
         hosts = "".join(f"{m['ip']} {m['name']}.{slugs[m['tenant_n']]}.internal\n" for m in state["machines"])
@@ -720,10 +721,18 @@ WantedBy=multi-user.target
         run("pct", "exec", "101", "--", "python3", "-c",
             Path("/usr/local/lib/carrel/gateway-sync.py").read_text(),
             input=json.dumps(payload))
+        gateway_tls_synced = payload.get("certificates", {})
     # Private keys reach the gateway only; the host keeps no copy.
     kept = {k: v for k, v in state.items() if k not in ("certificates", "origin_certificate")}
     write(STATE / "desired.json", json.dumps(kept, sort_keys=True))
-    return {"changed": changed}
+    # The control plane moves a record to this site only after the gateway
+    # confirmed it holds that name's certificate.
+    result = {"changed": changed}
+    if gateway_tls_synced:
+        result["certificates"] = {
+            name: hashlib.sha256(pair["fullchain"].encode()).hexdigest() for name, pair in gateway_tls_synced.items()
+        }
+    return result
 
 
 def keys(values):

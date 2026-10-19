@@ -209,6 +209,10 @@ func (p *Platform) Start() {
 				return
 			}
 			p.execution(p.ctx).MaintainDomains()
+			if err := attempt(func() { p.execution(p.ctx).MaintainOrigin() }); err != nil {
+				failure := obj(failureResult(err)["error"])
+				slog.Error("origin_maintenance_failed", "type", "maintenance", "code", failure["code"], "backend_code", failure["backend_code"])
+			}
 			p.execution(p.ctx).RefreshStorage()
 			if !sleep(p.ctx, 300*time.Second) {
 				return
