@@ -157,3 +157,33 @@ def test_gateway_sync_accepts_certificates_only_as_an_extra_key():
         module.apply({"hosts": "", "caddy": "", "path": "/etc/shadow"})
     with pytest.raises(ValueError):
         module.apply(json.loads('{"hosts": "", "caddy": 1}'))
+
+
+def test_reconcile_keeps_no_private_key_on_the_host(tmp_path, monkeypatch):
+    module = load("node-agent.py")
+    written = {}
+    monkeypatch.setattr(
+        module, "write", lambda path, data, mode=0o640: written.__setitem__(str(path), data) or True
+    )
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "clsact")
+    monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "pve_read", lambda mode: {"vnets": [], "subnets": {}})
+    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
+    monkeypatch.setattr(module, "public_ingress", lambda: None)
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    (tmp_path / "node.json").write_text('{"protected_addresses": []}')
+    state = {
+        "tenants": [],
+        "networks": [],
+        "machines": [],
+        "domains": [],
+        "ports": [],
+        "peers": [],
+        "certificates": [{"slug": "x", "fullchain": "C", "privkey": "SECRET-KEY"}],
+        "origin": "carrel.winlab.tw",
+        "origin_certificate": {"fullchain": "C", "privkey": "SECRET-ORIGIN"},
+    }
+    module.reconcile(state)
+    desired = written[str(tmp_path / "desired.json")]
+    assert "SECRET" not in desired and "carrel.winlab.tw" in desired

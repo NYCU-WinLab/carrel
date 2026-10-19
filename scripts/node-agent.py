@@ -712,7 +712,9 @@ WantedBy=multi-user.target
         if write("/etc/systemd/system/carrel-ports.service", unit):
             run("systemctl", "daemon-reload")
             run("systemctl", "enable", "carrel-ports")
-    write(STATE / "desired.json", json.dumps(state, sort_keys=True))
+    # Private keys reach the gateway only; the host keeps no copy.
+    kept = {k: v for k, v in state.items() if k not in ("certificates", "origin_certificate")}
+    write(STATE / "desired.json", json.dumps(kept, sort_keys=True))
     return {"changed": changed}
 
 
