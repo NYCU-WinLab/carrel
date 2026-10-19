@@ -247,9 +247,21 @@ func (e *Execution) Reconcile() D {
 		machines = append(machines, without(m, "ssh_keys", "runcmd"))
 	}
 	state["machines"] = machines
-	node := e.Call(D{"op": "reconcile", "state": without(state, "certificates")})
-	edge := e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
-	return D{"node": node, "edge": edge}
+	// Every node reconciles: SDN and guest firewalls are cluster-wide, while
+	// DHCP, rate limits and connection tracking live on each node. The first
+	// node goes first; it holds the infra gateway and creates new VNets.
+	request := D{"op": "reconcile", "state": without(state, "certificates")}
+	nodes := e.P.Nodes()
+	result := D{"node": e.Call(request, nodes[0].Target)}
+	if len(nodes) > 1 {
+		each := D{nodes[0].Name: result["node"]}
+		for _, n := range nodes[1:] {
+			each[n.Name] = e.Call(request, n.Target)
+		}
+		result["nodes"] = each
+	}
+	result["edge"] = e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
+	return result
 }
 
 // RefreshStorage asks each node about the machines it holds and adds a

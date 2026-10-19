@@ -210,3 +210,37 @@ func TestUnknownNodeRecordsAndUnreachableNodesDoNotStopObservations(t *testing.T
 		t.Fatal("accepted a node list that is not a list")
 	}
 }
+func TestReconcileRunsOnEveryNodeFirstNodeFirst(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	var mu sync.Mutex
+	order := []string{}
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" {
+			mu.Lock()
+			order = append(order, target)
+			mu.Unlock()
+			return D{"changed": []any{}}, nil
+		}
+		return inner(r, target)
+	}
+	r := p.execution(context.Background()).Reconcile()
+	if !equal(order, []any{"node-01", "node-02", "node-03", "carrel-edge"}) && !equalStrings(order, []string{"node-01", "node-02", "node-03", "carrel-edge"}) {
+		t.Fatalf("order %v", order)
+	}
+	if len(obj(r["nodes"])) != 3 || r["node"] == nil || r["edge"] == nil {
+		t.Fatal(encoded(r))
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

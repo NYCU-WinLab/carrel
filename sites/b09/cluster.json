@@ -1,0 +1,19 @@
+{
+  "site": "b09",
+  "cluster": "carrel",
+  "storage": "local-zfs",
+  "underlay_interface": "vmbr0",
+  "nodes": [
+    {"name": "carrel01", "address": "192.168.19.101"},
+    {"name": "carrel02", "address": "192.168.19.102"},
+    {"name": "carrel03", "address": "192.168.19.103"},
+    {"name": "carrel04", "address": "192.168.19.104"}
+  ],
+  "exit_nodes": ["carrel01"],
+  "public": {
+    "address": "140.113.60.184/27",
+    "gateway": "140.113.60.190",
+    "vlan": 60
+  },
+  "protected_addresses": ["140.113.60.189/32", "140.113.194.229/32"]
+}
