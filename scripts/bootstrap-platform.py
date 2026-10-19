@@ -96,6 +96,18 @@ def underlay():
     return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
 
 
+def peer_ssh():
+    # PLAN 15.15 gap 5: the control plane reaches the other nodes' adapters
+    # over SSH on their management addresses (masqueraded as this node).
+    site = Path("/etc/carrel/site.json")
+    if not site.exists():
+        return []
+    config = json.loads(site.read_text())
+    node = run("hostname", "-s", capture=True)
+    peers = [str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"] if n["name"] != node]
+    return [f'iifname "vmbr98" ip saddr 10.200.0.3 ip daddr {{ {", ".join(peers)} }} tcp dport 22 accept'] if peers else []
+
+
 def packages(vmid, role):
     run("pct", "exec", str(vmid), "--", "apt-get", "update", "-qq")
     wanted = ["ca-certificates", "curl"]
@@ -151,6 +163,7 @@ UNDERLAY
   iifname "vmbr98" meta nfproto ipv6 drop
   iifname "vmbr98" ct state established,related accept
   iifname "vmbr98" ip daddr 10.200.0.0/16 accept
+PEER_SSH
   iifname "vmbr98" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } drop
   iifname "vmbr98" tcp dport 25 drop
   oifname "vmbr98" ct state established,related accept
@@ -170,6 +183,7 @@ UNDERLAY
 }
 """
         rules = rules.replace("UNDERLAY", "\n".join("  " + rule for rule in underlay()))
+        rules = rules.replace("PEER_SSH\n", "".join("  " + rule + "\n" for rule in peer_ssh()))
         write("/etc/carrel/infra.nft", rules)
         run("nft", "-c", "-f", "/etc/carrel/infra.nft")
         run("nft", "-f", "/etc/carrel/infra.nft")

@@ -1560,8 +1560,9 @@ it is empty:
    drop UDP 4789 and TCP 179 on every interface.
 4. **Exit node and ingress.** `vmbr0` becomes VLAN-aware, and the exit node holds
    `140.113.60.184/27` on `vmbr0.60`. That change also decides the exit node's routing: the host
-   default moves to `.190`, or policy routing keeps management on `.254`. Tenant SNAT and the
-   public port DNAT use `.184`. The infra gateway serves HTTPS on `.184:443`. CT 207 and
+   default moves to `.190`, or policy routing keeps management on `.254`. The public port DNAT
+   uses `.184`; tenant egress stays on the management path through the lab router
+   (`140.113.60.189`, decided 2026-10-19). The infra gateway serves HTTPS on `.184:443`. CT 207 and
    `wg-carrel` retire for carrel. `public_entries` and `protected_addresses` change to the new
    address. The Cloudflare records of `carrel.winlab.tw` and every `*.<slug>.winlab.tw` move from
    `140.113.194.229` to `.184`. This step changes DNS and certificates, so it gets an independent
@@ -1588,15 +1589,20 @@ it is empty:
 - Installed on the cluster: the site file on every node, `install-network.py` (SDN peers, underlay
   filter), `140.113.60.184/27` with its protection on carrel01, and `bootstrap-platform.py` (CT 100
   without the control plane yet, CT 101 with Caddy 2.11.4 and `carrel-dns`).
-- Open: gap 5 (control plane reach to every node), gap 7 (installer hostname checks and deploy
-  aliases), gap 8 (backups of node files). Follow-ups: #45, #48, #51.
+- Gap 5: `scripts/configure-nodes.py` on the first exit node copies the node programs to every
+  node, authorizes CT 100's node key once in the cluster-wide `authorized_keys`
+  (`from="10.200.0.3,<exit node address>"`), and writes CT 100's SSH targets, pinned host keys
+  and `config.json` `nodes`. `infra.nft` lets CT 100 reach the other nodes' SSH.
+- Open: gap 7 (installer hostname checks and deploy aliases), gap 8 (backups of node files).
+  Follow-ups: #45, #48, #51.
 - `ingress: exit` and `public_address` stay unset until the move: the new control plane then moves
   the records itself, after its gateway confirms each certificate.
 
 **The move**, after the gaps close:
 
 1. Install carrel on the cluster. Restore the CT 100 database and configuration from the latest
-   `carrel -backup`, and recreate CT 101.
+   `carrel -backup`, and recreate CT 101. Then run `configure-nodes.py` again: the restored
+   `ssh_config`, `known_hosts` and node key come from the R640 site.
 2. Import the templates on every node.
 3. Lower the Cloudflare TTLs one day ahead.
 4. Tell the owners, then move the tenant VMs with `qm remote-migrate`, one tenant at a time. The
