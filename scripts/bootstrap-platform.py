@@ -125,7 +125,13 @@ def main():
     p.add_argument("--storage", default="local-lvm", help="Guest storage id for the infra CTs (PLAN 8.2)")
     a = p.parse_args()
     assert os.geteuid() == 0
-    assert run("hostname", "-s", capture=True) == ("carrel01" if a.role == "site" else "pve")
+    host = run("hostname", "-s", capture=True)
+    site = Path("/etc/carrel/site.json")
+    if a.role == "site" and site.exists():
+        # The site file names the first exit node, which holds CT 100 and 101.
+        assert host == json.loads(site.read_text())["exit_nodes"][0], "run on the first exit node of the site file"
+    else:
+        assert host == ("carrel01" if a.role == "site" else "pve")
     run("apt-get", "update", "-qq")
     run("apt-get", "install", "-y", "wireguard-tools", "dnsmasq-base")
     secret = Path("/etc/wireguard/carrel.key")

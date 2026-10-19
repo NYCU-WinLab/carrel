@@ -9,6 +9,7 @@ or hypervisor. Private rollback archives remain on their original hosts.
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,13 @@ def main():
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--templates", type=Path,
                         help="Optional candidate templates.json to merge after immutable-template validation")
+    parser.add_argument("--host", default="carrel01",
+                        help="SSH target of the node that holds CT 100 (the first exit node)")
     args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9_.@][A-Za-z0-9_.@-]*", args.host):
+        parser.error("invalid host")
+    # The health check expects the version this checkout builds.
+    version = re.search(r'const Version = "([^"]+)"', (ROOT / "internal/carrel/value.go").read_text())[1]
     names = ("carrel", "carrel-pve-read", "carrel-deployd")
     artifacts = args.artifacts.resolve()
     for name in names:
@@ -33,7 +40,7 @@ def main():
             raise SystemExit("Missing sandbox-built binary: " + name)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")  # noqa: UP017 (macOS Python 3.9)
     stage = "/var/lib/carrel/go-upgrade-" + stamp
-    run(["ssh", "carrel01", "install -d -m 700 " + stage])
+    run(["ssh", args.host, "install -d -m 700 " + stage])
     sources = [
         *(artifacts / name for name in names),
         ROOT / "scripts/node-agent.py",
@@ -41,13 +48,17 @@ def main():
         # Helpers node-agent loads or calls; they change together with it.
         ROOT / "scripts/thin-usage.py",
         ROOT / "scripts/pve-read.pl",
+        ROOT / "scripts/guest-report.py",
+        ROOT / "scripts/gateway-sync.py",
+        # Copies the programs to the other site nodes and checks CT 100 reaches them.
+        ROOT / "scripts/configure-nodes.py",
     ]
     if args.templates:
         if args.templates.name != "templates.json":
             parser.error("candidate manifest must be named templates.json")
         sources.append(args.templates.resolve())
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
-    run(["scp", *map(str, sources), "carrel01:" + stage + "/"])
+    run(["scp", *map(str, sources), args.host + ":" + stage + "/"])
     preflight = """import sqlite3,json
 c=sqlite3.connect('/var/lib/carrel/carrel.db')
 active=[json.loads(v)['id'] for (v,) in c.execute("SELECT data FROM objects WHERE kind='operations'") if json.loads(v)['state'] not in ('succeeded','failed','rolled_back','cleanup_failed')]
@@ -92,7 +103,7 @@ node=socket.gethostname().split('.')[0]
 node_config=Path('/etc/carrel/node.json')
 storage=json.loads(node_config.read_text()).get('storage','local-lvm') if node_config.exists() else 'local-lvm'
 assert isinstance(storage,str) and re.fullmatch(r'[a-z][a-z0-9_.-]{{0,62}}',storage), 'Invalid storage id in node.json'
-helpers={{'thin-usage.py':'644','pve-read.pl':'755'}}
+helpers={{'thin-usage.py':'644','pve-read.pl':'755','guest-report.py':'644','gateway-sync.py':'644'}}
 def ct(*args): subprocess.run(['pct','exec','100','--',*args],check=True)
 def capture(*args): return subprocess.check_output(args,text=True)
 for name,expected in {hashes!r}.items():
@@ -119,6 +130,7 @@ ct('systemctl','stop','carrel-backup.timer')
 ct('systemctl','stop','carrel-backup.service')
 ct('systemctl','stop','carrel')
 activated=False
+configured=False
 try:
  ct('python3','-c',{preflight!r})
  ct('python3','-c',{backup!r})
@@ -144,6 +156,11 @@ try:
  target=Path('/usr/local/lib/carrel/node-agent.py')
  subprocess.run(['install','-m','755',str(stage/'node-agent.py'),str(target)+'.next'],check=True)
  os.replace(str(target)+'.next',target)
+ if Path('/etc/carrel/site.json').exists():
+  # Same programs on every site node; CT 100 must reach each adapter.
+  # It rewrites CT 100's node list and SSH files, which a rollback restores.
+  configured=True
+  subprocess.run(['python3',str(stage/'configure-nodes.py')],check=True)
  config=Path('/etc/carrel/node.json'); value=json.loads(config.read_text());value['go_pve_reader']=True
  config.write_text(json.dumps(value,indent=2)+'\\n')
  subprocess.run(['pct','push','100',str(stage/'carrel'),'/usr/local/bin/carrel.next','--perms','755'],check=True)
@@ -159,17 +176,19 @@ try:
   try:
    request=urllib.request.Request('http://10.200.0.3:8080/healthz',headers={{'Host':'carrel.winlab.tw'}})
    health=json.load(urllib.request.urlopen(request,timeout=2))
-   if health.get('version')=='0.9.0': break
+   if health.get('version')=={version!r}: break
   except (OSError,ValueError): pass
   time.sleep(1)
- assert health and health.get('version')=='0.9.0', 'Go health check failed'
+ assert health and health.get('version')=={version!r}, 'Go health check failed'
  ct('systemctl','is-active','carrel')
  print(json.dumps({{'health':health,'volumes':len(new['volumes']),'node_backup':str(stage),'control_backup':'/opt/carrel/rollback/go-{stamp}.tar.gz'}}))
 except BaseException:
  ct('systemctl','stop','carrel')
- if activated:
-  restore="from pathlib import Path; import tarfile; a=tarfile.open('/opt/carrel/rollback/go-{stamp}.tar.gz'); names=['etc/systemd/system/carrel.service','etc/systemd/system/carrel-backup.service','etc/carrel/config.json','usr/local/bin/carrel']; [a.extract(n,'/',filter='data') for n in names if n in a.getnames()]"
-  ct('python3','-c',restore)
+ if activated or configured:
+  names=['etc/carrel/config.json','etc/carrel/ssh_config','etc/carrel/known_hosts']
+  if activated: names+=['etc/systemd/system/carrel.service','etc/systemd/system/carrel-backup.service','usr/local/bin/carrel']
+  restore="import json,sys,tarfile; a=tarfile.open('/opt/carrel/rollback/go-{stamp}.tar.gz'); names=json.loads(sys.argv[1]); [a.extract(n,'/',filter='data') for n in names if n in a.getnames()]"
+  ct('python3','-c',restore,json.dumps(names))
  for name,path in [('node-agent.py','/usr/local/lib/carrel/node-agent.py'),('node.json','/etc/carrel/node.json')]:
   if (stage/('before-'+name)).exists(): shutil.copyfile(stage/('before-'+name),path)
  if (stage/'before-carrel-pve-read').exists(): shutil.copy2(stage/'before-carrel-pve-read','/usr/local/lib/carrel/carrel-pve-read')
@@ -184,10 +203,10 @@ except BaseException:
 finally:
  ct('systemctl','start','carrel-backup.timer')
 """
-    run(["ssh", "carrel01", "python3 -"], input=program)
+    run(["ssh", args.host, "python3 -"], input=program)
     revision = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True).stdout.strip()
     report = {
-        "version": "0.9.0",
+        "version": version,
         "revision": revision,
         "stamp": stamp,
         "sha256": hashes,

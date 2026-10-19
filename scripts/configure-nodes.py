@@ -31,7 +31,11 @@ BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
 
 
 def run(*args, input=None):
-    return subprocess.run([str(a) for a in args], check=True, text=True, capture_output=True, input=input).stdout
+    p = subprocess.run([str(a) for a in args], text=True, capture_output=True, input=input, check=False)
+    if p.returncode:
+        # Name the step and keep the tail of its error; inputs are never echoed.
+        raise SystemExit(f"{args[0]} {args[1] if len(args) > 1 else ''} failed: {p.stderr.strip()[-400:]}")
+    return p.stdout
 
 
 def peer(n):
