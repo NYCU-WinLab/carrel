@@ -247,9 +247,31 @@ func (e *Execution) Reconcile() D {
 		machines = append(machines, without(m, "ssh_keys", "runcmd"))
 	}
 	state["machines"] = machines
-	node := e.Call(D{"op": "reconcile", "state": without(state, "certificates")})
-	edge := e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
-	return D{"node": node, "edge": edge}
+	// Every node reconciles: SDN and guest firewalls are cluster-wide, while
+	// DHCP, rate limits and connection tracking live on each node. The first
+	// node goes first; it holds the infra gateway and creates new VNets.
+	request := D{"op": "reconcile", "state": without(state, "certificates")}
+	nodes := e.P.Nodes()
+	result := D{"node": e.Call(request, nodes[0].Target)}
+	if len(nodes) > 1 {
+		// The other nodes catch up on the next reconcile: one node down for an
+		// upgrade (PLAN 8.3) must not stop every change on the site.
+		each, unreachable := D{nodes[0].Name: result["node"]}, []any{}
+		for _, n := range nodes[1:] {
+			if f := attempt(func() { each[n.Name] = e.Call(request, n.Target) }); f != nil {
+				if _, ok := f.(Failure); !ok {
+					panic(f)
+				}
+				unreachable = append(unreachable, n.Name)
+			}
+		}
+		result["nodes"] = each
+		if len(unreachable) > 0 {
+			result["unreachable_nodes"] = unreachable
+		}
+	}
+	result["edge"] = e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
+	return result
 }
 
 // RefreshStorage asks each node about the machines it holds and adds a

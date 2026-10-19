@@ -169,7 +169,7 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
 
     monkeypatch.setattr(module, "run", run)
     monkeypatch.setattr(module, "api", lambda *a, **kw: mutations.append((a, kw)))
-    monkeypatch.setattr(module, "private_dhcp", lambda state: None)
+    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
     state = {"tenants": [{"n": 1, "slug": "alice"}], "networks": [], "machines": [], "domains": []}
     assert module.reconcile(state)["changed"] == []
     assert len(entries) == 1 and len(reads) == 1 and not mutations

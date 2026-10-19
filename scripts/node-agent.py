@@ -24,6 +24,7 @@ NODE = socket.gethostname().split(".")[0]
 CONFIG = Path("/etc/carrel/node.json")
 STORAGE_CONFIG = Path("/etc/pve/storage.cfg")
 PVE_NODES = Path("/etc/pve/nodes")
+SITE = Path("/etc/carrel/site.json")
 
 
 def storage_id():
@@ -246,7 +247,16 @@ def ensure(path, key, value, *, existing=None, **params):
 
 
 
-def private_dhcp(state):
+def serves_private_dhcp():
+    # A private network is one layer 2 segment across the site's nodes: one
+    # DHCP server and one .1, on the first exit node. Nodes without a site file
+    # are single-node sites and serve their own.
+    if not SITE.exists():
+        return True
+    return json.loads(SITE.read_text())["exit_nodes"][0] == NODE
+
+
+def private_dhcp(state, serve=True):
     """Each DHCP server lives in its own unrouted namespace, never on the host LAN."""
     infra_path = Path("/etc/carrel/infra.nft")
     if infra_path.exists():
@@ -271,7 +281,7 @@ RestartSec=3
 """
     if write("/etc/systemd/system/carrel-private-dhcp@.service", unit):
         run("systemctl", "daemon-reload")
-    wanted = {net["id"] for net in state["networks"] if net.get("mode") == "managed"}
+    wanted = {net["id"] for net in state["networks"] if net.get("mode") == "managed"} if serve else set()
     existing = {path.stem.removeprefix("private-") for path in Path("/etc/carrel").glob("private-p*.conf")}
     existing.update(path.name.removeprefix("carrel-") for path in Path("/run/netns").glob("carrel-p*"))
     existing.update(path.name.removeprefix("d") for path in Path("/sys/class/net").glob("dp*"))
@@ -294,7 +304,7 @@ RestartSec=3
         ipv6 = Path(f"/proc/sys/net/ipv6/conf/{id}/disable_ipv6")
         if ipv6.exists():
             ipv6.write_text("1")
-        if net.get("mode") != "managed":
+        if net.get("mode") != "managed" or not serve:
             continue
         subnet = ipaddress.IPv4Network(net["cidr"])
         if subnet.prefixlen not in (24, 25) or not subnet.is_private:
@@ -425,7 +435,8 @@ def reconcile(state):
                 raise RuntimeError(
                     "SDN reload left a missing tenant bridge; inspect the node networking task"
                 )
-    if state["tenants"]:
+    # Only exit nodes have the cross-VRF pair; other nodes route to them over EVPN.
+    if state["tenants"] and Path("/sys/class/net/xvrfp_tenants").exists():
         # Route through the cross-VRF pair in both directions. Separate tracking
         # zones keep the outer SNAT tuple distinct from the tenant-side tuple.
         # Otherwise a SYN-ACK re-entering the VRF is INVALID in PVE's nft firewall.
@@ -471,6 +482,10 @@ def reconcile(state):
             "drop/ok",
         )
     interfaces = [f"{'tap' if m['kind'] == 'vm' else 'veth'}{machine(m)}i0" for m in state["machines"]]
+    # Same-tenant traffic between nodes enters through the VNet's VXLAN port;
+    # it must share the guests' zone, or the reply of a cross-node connection
+    # finds no entry and is dropped as invalid.
+    interfaces += [f"vxlan_{tenant_config(t)[1]}" for t in state["tenants"]]
     interface_rule = (
         "iifname { " + ", ".join('"' + i + '"' for i in interfaces) + " } ct zone set 1" if interfaces else ""
     )
@@ -542,7 +557,7 @@ table inet carrel_conntrack {{
         run("pct", "exec", "101", "--", "python3", "-c",
             Path("/usr/local/lib/carrel/gateway-sync.py").read_text(),
             input=json.dumps({"hosts": hosts, "caddy": caddy}))
-    private_dhcp(state)
+    private_dhcp(state, serve=serves_private_dhcp())
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     return {"changed": changed}
 

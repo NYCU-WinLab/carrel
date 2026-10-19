@@ -6,6 +6,7 @@ WireGuard secrets are generated on each host and never written to git.
 """
 
 import argparse
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -78,6 +79,23 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage):
     run("pct", "exec", str(vmid), "--", "systemctl", "restart", "systemd-journald")
 
 
+def underlay():
+    # Same rule as install-network.py (PLAN 6.3): VXLAN and BGP from the other
+    # site nodes on the underlay interface only; dropped everywhere else.
+    site = Path("/etc/carrel/site.json")
+    rules = []
+    if site.exists():
+        config = json.loads(site.read_text())
+        node = run("hostname", "-s", capture=True)
+        addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"]}
+        peers = [a for n, a in addresses.items() if n != node]
+        if peers and node in addresses:
+            for match in ("udp dport 4789", "tcp dport 179"):
+                rules.append(f'iifname "{config["underlay_interface"]}" ip saddr {{ {", ".join(peers)} }} '
+                             f"ip daddr {addresses[node]} {match} accept")
+    return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
+
+
 def packages(vmid, role):
     run("pct", "exec", str(vmid), "--", "apt-get", "update", "-qq")
     wanted = ["ca-certificates", "curl"]
@@ -125,8 +143,7 @@ table inet carrel_infra {
   iifname "vmbr98" ct state established,related accept
   iifname "vmbr98" ip saddr 10.200.0.3 tcp dport 22 accept
   iifname "vmbr98" counter drop
-  udp dport 4789 counter drop
-  tcp dport 179 counter drop
+UNDERLAY
  }
  chain forward {
   type filter hook forward priority -15; policy accept;
@@ -150,6 +167,7 @@ table inet carrel_infra {
  }
 }
 """
+        rules = rules.replace("UNDERLAY", "\n".join("  " + rule for rule in underlay()))
         write("/etc/carrel/infra.nft", rules)
         run("nft", "-c", "-f", "/etc/carrel/infra.nft")
         run("nft", "-f", "/etc/carrel/infra.nft")
