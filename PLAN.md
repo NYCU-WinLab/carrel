@@ -55,10 +55,14 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-27 | carrel ignores the Keycloak groups `vm-users` and `vm-sudoers` |
 | 2026-09-27 | Admin notifications and alerts go by email |
 | 2026-09-27 | The old host keeps running outside carrel. Selected guests move; the rest stay, with the room-bound services, the DERP relay and the tailnet subnet router (section 10.7) |
-| 2026-09-30 | B09 first node is `carrel01` at `192.168.13.159`; future nodes get distinct names instead of reusing the room name as an SSH alias |
-| 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it |
-| 2026-09-30 | B09 has no allocated public ingress. Use the old PVE public address, existing CT 200 TLS gateway, a new CT 207 proxy, and a dedicated WireGuard link to B09; the old PVE stays outside the cluster |
+| 2026-09-30 | B09 first node is `carrel01` at `192.168.13.159`; future nodes get distinct names instead of reusing the room name as an SSH alias (superseded 2026-10-19) |
+| 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it (superseded 2026-10-19) |
+| 2026-09-30 | B09 has no allocated public ingress. Use the old PVE public address, existing CT 200 TLS gateway, a new CT 207 proxy, and a dedicated WireGuard link to B09; the old PVE stays outside the cluster (superseded 2026-10-19) |
 | 2026-10-12 | Apps deploy on push: GitHub Actions builds, a GitHub OIDC token authorizes the upload, and an agent the member installs in the machine switches releases (section 7.9) |
+| 2026-10-19 | B09 becomes the four-node cluster `carrel` (`carrel01` to `carrel04`, `192.168.19.101` to `.104`). The R640 node retires after its guests move. carrel supports several nodes before the move (section 15.15) |
+| 2026-10-19 | B09 storage is ZFS `local-zfs` on a stripe of two disks per node, with no disk redundancy. Recovery uses independent backups |
+| 2026-10-19 | Public ingress uses `140.113.60.184/27` on VLAN 60 at the exit node. CT 207 and the WireGuard hop through the old PVE retire for carrel |
+| 2026-10-19 | No QDevice: every place it could run fails together with B09 |
 
 ### 1.6 Current core and deferred work
 
@@ -71,8 +75,8 @@ implementation details. Advanced L2 tools remain available for network experimen
 Reliability, tenant isolation, ownership-safe retries, quota accounting and cleanup are core work.
 The longer catalog below is a roadmap, not a claim that every tool exists or a requirement to ship
 all of it before the core is useful. Custom ISO/image import, legacy workload migration, special
-names/ports, a full skill catalog, issue workflow, alumni scheduling and multiple nodes are deferred
-until there is a concrete need. This change adds no scheduler, workflow language or separate intent
+names/ports, a full skill catalog, issue workflow and alumni scheduling are deferred until there is
+a concrete need. Multiple nodes became core work on 2026-10-19 (section 15.15). This change adds no scheduler, workflow language or separate intent
 service. Live tool discovery and the acceptance reports are the authority for implemented features.
 
 ## 2. Object model
@@ -825,8 +829,8 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
 
 | Item | Decision |
 |---|---|
-| Node names and management addresses | stable names `carrel01`, `carrel02`; fixed management addresses; site `b09` identifies the room |
-| Storage | LVM-thin on the existing hardware RAID, with storage id `local-lvm` on every B09 node. Migrations copy local disks. No ZFS replication; recovery uses independent backups |
+| Node names and management addresses | stable names `carrel01` to `carrel04`; fixed management addresses `192.168.19.101` to `.104`; site `b09` identifies the room |
+| Storage | One storage id on every node of a site, read from site configuration, never hardcoded. B09: ZFS `local-zfs` on a two-disk stripe per node (2026-10-19; the R640 node used LVM-thin `local-lvm`). Migrations copy local disks. No ZFS replication; recovery uses independent backups |
 | Tenant networks | EVPN zone for primary networks, VXLAN zone for private networks (section 6.2) |
 | VMIDs and templates | site-unique ranges (section 6.1) |
 | Data model | site then node from day one (section 2) |
@@ -841,6 +845,8 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
    HA, but local LVM-thin alone cannot restart a failed node's guests elsewhere: their disks are
    still on that failed node. Planned migrations copy disks while the source is healthy; host
    failure recovery uses independent backups until shared storage is supplied and tested.
+   B09 runs four nodes without a QDevice: 4 votes, quorum 3. Only one node may be down at a time,
+   so drain and upgrade one node at a time.
 4. The exit node is a single point for ingress. A second public address as a VIP removes it.
 5. `/etc/pve` is shared by the cluster (firewall, SDN, pools, permissions, storage definitions).
    Interfaces, disks, templates and NAT are per node, and the installer keeps them identical.
@@ -917,6 +923,9 @@ every release candidate and runs the acceptance sentences of section 11.3 agains
 differences from production: staging has its own DNS zone (open decision 13.11) and uses the
 Let's Encrypt staging CA, so a run never issues real certificates or touches `winlab.tw` records.
 M9 (import) is production only and is checked once, by hand, against its sentence.
+
+Until its migration, the empty four-node B09 cluster is the staging site for multi-node work
+(section 15.15).
 
 ### 10.6 Importing machines
 
@@ -1058,10 +1067,12 @@ old host.
     control plane.
 13. Resolved 2026-09-30: public TLS and explicit tenant port grants on `140.113.194.229`,
     through CT 207 and WireGuard. The management ProxyJump account is not member ingress.
-    Real OAuth, public SSH and tenant HTTPS were verified; see 15.4.
-14. B09 additional-node links: only `nic1` (1 Gbit/s) is connected on the first node. Dedicated
-    corosync and underlay links, a QDevice for two nodes, and backup storage must be supplied before
-    expansion.
+    Real OAuth, public SSH and tenant HTTPS were verified; see 15.4. Superseded 2026-10-19: the
+    four-node cluster takes ingress on `140.113.60.184` (section 15.15).
+14. B09 links and backups. Resolved 2026-10-19: four nodes, no QDevice. Open: every node has one
+    connected 1 Gbit/s port, so corosync, the VXLAN underlay, management and VLAN 60 share it.
+    A second link (the X540 and X710 ports have no cable) and backup storage outside the cluster
+    are still needed. The striped pools make backups the only recovery from a disk failure.
 15. App artifact limits (section 7.9): 500 MB per release and 3 kept releases are first guesses.
     Revisit after real apps.
 
@@ -1502,3 +1513,81 @@ Resize still separates confirmed block allocation from owner-verified guest capa
 inspect the actual root device over owner SSH, grow its partition/filesystem where appropriate,
 and verify `df` before reporting usable space. CPU/RAM changes may require an authorized restart;
 reductions require a stopped guest and disk shrinking remains unsupported.
+
+### 15.15 Four-node cluster (2026-10-19)
+
+**Hardware**, the same on every node (`carrel01` to `carrel04`, management `192.168.19.101` to
+`.104/24`, gateway `.254`):
+
+- Intel D51B-1U, 2x Xeon E5-2630 v4 (40 threads), 125 GiB RAM.
+- 2x 300 GB 10k SAS disks. The installer made `rpool` a ZFS stripe of both disks: 552 GiB, no
+  redundancy. The stripe stays by decision (section 1.5).
+- 4x X540 10GBase-T and 4x X710 SFP+ ports. One port links at 1 Gbit/s (`nic1` on `carrel01`,
+  `nic2` on the others). The other ports have no cable.
+- Management is untagged. VLAN 60 arrives tagged on the same port: `140.113.60.160/27`, gateway
+  `140.113.60.190`. carrel uses `140.113.60.184`. A capture on `carrel01` saw the tagged frames,
+  and the gateway's ARP requests for `.184` got no answer, so the address is free.
+
+**Done on 2026-10-19**:
+
+1. Apt: the enterprise repositories are disabled. PVE and Ceph `no-subscription`, Debian and
+   Debian security use `mirror.twds.com.tw`. The original files are in `/root/apt-backup-20261019`.
+2. `full-upgrade` to `pve-manager` 9.2.21 on every node. The kernel did not change, so no reboot
+   is pending.
+3. Cluster `carrel`: created on `carrel01`, then the other three joined. Corosync link 0 uses the
+   management addresses. 4 votes, quorum 3.
+4. `/etc/hosts` on every node lists all four nodes.
+
+The bridge is not VLAN-aware yet. SDN, the firewall and carrel itself are not installed, and no
+guest exists.
+
+**Gaps to close before the move**. One change per pull request, each tested on this cluster while
+it is empty:
+
+1. **Storage and templates per node.** `local-lvm` is hardcoded in `node-agent.py`,
+   `build-templates.py`, `deploy-go.py`, `bootstrap-platform.py`, `pve-read.pl`,
+   `internal/pveread` and `configure-go-reader.py`, and `lvs pve/data` assumes LVM-thin. Read the
+   storage id from site configuration. `templates.json` maps each image to one VMID; make it map
+   each image to one VMID per node, from that node's block of section 6.1, and import one prepared
+   image on every node. Linked clones work only on the node that holds the template.
+2. **A node on every machine.** The Go `Backend` targets one `carrel-node`, machine records have no
+   node, and admission reads one node under the scope `carrel01`. Add per-node targets, placement
+   by free capacity, admission over all nodes and a `node_list` that returns every node. Existence
+   checks read `/etc/pve/nodes/*/`, not the local symlink. cloud-init snippets on `local` exist only
+   on the node that wrote them, so the snippet must exist wherever the machine starts.
+3. **Underlay.** Implement the rule of section 6.3 on the management interface, the only link
+   today. The `peers` of both zones list the four management addresses. Today the nftables rules
+   drop UDP 4789 and TCP 179 on every interface.
+4. **Exit node and ingress.** `vmbr0` becomes VLAN-aware, and the exit node holds
+   `140.113.60.184/27` on `vmbr0.60`. That change also decides the exit node's routing: the host
+   default moves to `.190`, or policy routing keeps management on `.254`. Tenant SNAT and the
+   public port DNAT use `.184`. The infra gateway serves HTTPS on `.184:443`. CT 207 and
+   `wg-carrel` retire for carrel. `public_entries` and `protected_addresses` change to the new
+   address. The Cloudflare records of `carrel.winlab.tw` and every `*.<slug>.winlab.tw` move from
+   `140.113.194.229` to `.184`. This step changes DNS and certificates, so it gets an independent
+   review.
+5. **Control plane reach.** CT 100 must reach the node agent on every node. Today `infra.nft` drops
+   CT 100 traffic to `192.168.0.0/16`, and node `authorized_keys` accept only
+   `from="10.200.0.3"`. CTs 100 and 101 stay on the exit node.
+6. **Private DHCP.** The `carrel-pNNNNN` namespace puts the subnet's `.1` on every node that
+   reconciles. On a layer 2 network shared by four nodes, exactly one node may hold it.
+7. **Installer.** `install-network.py` accepts only `carrel01` and `carrel-stg01`,
+   `bootstrap-platform.py` asserts the hostname, and the deploy scripts hardcode the SSH aliases
+   `carrel01` and `pve`.
+8. **Backups.** `carrel -backup` leaves out `node.json`, `templates.json`, `pve-read.json`, the
+   nftables files and the WireGuard key. Tenant disk backups need storage outside the cluster
+   (open decision 13.14).
+
+**The move**, after the gaps close:
+
+1. Install carrel on the cluster. Restore the CT 100 database and configuration from the latest
+   `carrel -backup`, and recreate CT 101.
+2. Import the templates on every node.
+3. Lower the Cloudflare TTLs one day ahead.
+4. Tell the owners, then move the tenant VMs with `qm remote-migrate`, one tenant at a time. The
+   target storage is `local-zfs`, and the VNets keep their names. On 2026-10-19 the R640 node held
+   9 tenant VMs of 5 tenants: 12 vCPU, 15 GiB RAM, 130 GiB allocated. Staging VM 190 does not move.
+5. Switch the records to `.184` and check from outside the campus (section 10.7).
+6. Keep the sources stopped on the R640 node for 14 days, then retire it. Its name `carrel01` is
+   also on the tailnet, in admin SSH aliases and in sensorium. Rename those before the new
+   `carrel01` joins the tailnet.
