@@ -529,6 +529,9 @@ def reconcile(state):
     # it must share the guests' zone, or the reply of a cross-node connection
     # finds no entry and is dropped as invalid.
     interfaces += [f"vxlan_{tenant_config(t)[1]}" for t in state["tenants"]]
+    # Routed tenant traffic between nodes (egress to the exit node, replies of
+    # public DNAT) crosses the zone's L3VNI port; it needs the same zone.
+    interfaces.append("vrfvx_tenants")
     interface_rule = (
         "iifname { " + ", ".join('"' + i + '"' for i in interfaces) + " } ct zone set 1" if interfaces else ""
     )
@@ -543,7 +546,7 @@ add table inet carrel_conntrack
 flush table inet carrel_conntrack
 table inet carrel_conntrack {{
  chain prerouting {{ type filter hook prerouting priority -300; policy accept;
-  iifname {{ "xvrfp_tenants", "vrf_tenants" }} ct zone set 1
+  iifname {{ "xvrfp_tenants", "vrf_tenants", "vrfbr_tenants" }} ct zone set 1
  }}
 }}
 """
@@ -603,8 +606,10 @@ table inet carrel_conntrack {{
     private_dhcp(state, serve=serves_private_dhcp())
     address = public_ingress()
     if address:
-        if write("/etc/carrel/ports.nft", ports_nft(state, address)):
-            run("nft", "-c", "-f", "/etc/carrel/ports.nft")
+        rules = ports_nft(state, address)
+        write("/etc/carrel/ports.nft.next", rules)
+        run("nft", "-c", "-f", "/etc/carrel/ports.nft.next")
+        write("/etc/carrel/ports.nft", rules)
         run("nft", "-f", "/etc/carrel/ports.nft")
         unit = """[Unit]
 Description=Carrel public port forwarding

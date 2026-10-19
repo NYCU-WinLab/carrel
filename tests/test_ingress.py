@@ -31,11 +31,13 @@ def test_only_the_first_exit_node_holds_the_public_address():
 
 def test_public_interface_keeps_host_ports_off_the_internet():
     nft = load("install-network.py").public_nft("vmbr0.60", "140.113.60.184")
-    input_chain = nft.split("chain input")[1].split("}")[0]
+    input_chain = nft.split("chain input")[1].split("\n }")[0]
     assert 'iifname "vmbr0.60" ct state established,related accept' in input_chain
     assert input_chain.strip().splitlines()[-1].strip() == 'iifname "vmbr0.60" counter drop'
-    forward = nft.split("chain forward")[1].split("}")[0]
+    forward = nft.split("chain forward")[1].split("\n }")[0]
     assert 'iifname "vmbr0.60" ct status dnat accept' in forward
+    spoofed = forward.index("10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10")
+    assert spoofed < forward.index("ct status dnat accept")
     assert forward.strip().splitlines()[-1].strip() == 'iifname "vmbr0.60" counter drop'
     assert 'iifname "vmbr0.60" ct state new ct mark set 0x60' in nft
     # Marking the arriving packets would route them past the local table.
@@ -52,6 +54,8 @@ def test_public_interface_routes_replies_back_out_the_public_gateway():
     assert "ip rule add fwmark 0x60 lookup 160 priority 1600" in stanza
     assert "ip rule add from 140.113.60.184 lookup 160 priority 1601" in stanza
     assert "disable_ipv6" in stanza
+    assert "post-up ip route replace 140.113.60.160/27 dev vmbr0.60 table 160" in stanza
+    assert stanza.index("pre-up nft list table inet carrel_public") < stanza.index("post-up")
     assert "gateway" not in stanza.split("address")[1].split("post-up")[0]
 
 

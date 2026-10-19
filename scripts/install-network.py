@@ -79,6 +79,7 @@ table inet carrel_public {{
  }}
  chain forward {{
   type filter hook forward priority -30; policy accept;
+  iifname "{interface}" ip saddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 }} counter drop
   iifname "{interface}" ct state established,related accept
   iifname "{interface}" ct status dnat accept
   iifname "{interface}" counter drop
@@ -92,11 +93,13 @@ table inet carrel_public {{
 
 
 def public_interface(interface, cidr, gateway, address):
+    network = ipaddress.IPv4Interface(cidr).network
     rules = [
         (f"fwmark {PUBLIC_MARK} lookup {PUBLIC_TABLE} priority 1600"),
         (f"from {address} lookup {PUBLIC_TABLE} priority 1601"),
     ]
-    up = [f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
+    up = [f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
+          f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
     up += [f"    post-up ip rule del {r} 2>/dev/null; ip rule add {r}" for r in rules]
     down = [f"    pre-down ip rule del {r} 2>/dev/null || true" for r in rules]
     return "\n".join([
@@ -104,6 +107,8 @@ def public_interface(interface, cidr, gateway, address):
         f"auto {interface}",
         f"iface {interface} inet static",
         f"    address {cidr}",
+        # Never bring the address up without its protection.
+        "    pre-up nft list table inet carrel_public > /dev/null",
         f"    post-up echo 1 > /proc/sys/net/ipv6/conf/{interface}/disable_ipv6",
         *up,
         *down,
