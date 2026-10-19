@@ -1562,7 +1562,7 @@ it is empty:
    `140.113.60.184/27` on `vmbr0.60`. That change also decides the exit node's routing: the host
    default moves to `.190`, or policy routing keeps management on `.254`. The public port DNAT
    uses `.184`; tenant egress stays on the management path through the lab router
-   (`140.113.60.189`, decided 2026-10-20). The infra gateway serves HTTPS on `.184:443`. CT 207 and
+   (`140.113.60.189`, decided 2026-10-19). The infra gateway serves HTTPS on `.184:443`. CT 207 and
    `wg-carrel` retire for carrel. `public_entries` and `protected_addresses` change to the new
    address. The Cloudflare records of `carrel.winlab.tw` and every `*.<slug>.winlab.tw` move from
    `140.113.194.229` to `.184`. This step changes DNS and certificates, so it gets an independent
@@ -1601,7 +1601,8 @@ it is empty:
 **The move**, after the gaps close:
 
 1. Install carrel on the cluster. Restore the CT 100 database and configuration from the latest
-   `carrel -backup`, and recreate CT 101.
+   `carrel -backup`, and recreate CT 101. Then run `configure-nodes.py` again: the restored
+   `ssh_config`, `known_hosts` and node key come from the R640 site.
 2. Import the templates on every node.
 3. Lower the Cloudflare TTLs one day ahead.
 4. Tell the owners, then move the tenant VMs with `qm remote-migrate`, one tenant at a time. The

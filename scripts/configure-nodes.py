@@ -17,7 +17,9 @@ It never prints a key or a secret, and keeps every config.json key it does not o
 
 import ipaddress
 import json
+import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 
@@ -47,6 +49,8 @@ def targets(site, node):
     """The first exit node keeps the alias carrel-node; the others use their names."""
     out = []
     for n in site["nodes"]:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", n["name"]):
+            raise SystemExit("invalid node name in the site file")
         address = str(ipaddress.IPv4Address(n["address"]))
         if n["name"] == node:
             out.insert(0, {"name": n["name"], "target": "carrel-node", "host": "10.200.0.1", "address": address})
@@ -60,9 +64,19 @@ def authorized_line(key, exit_address):
 
 
 def merge_authorized(text, line, key):
-    # Replace older node-agent lines for the same key (single-node from= lists).
-    kept = [x for x in text.splitlines() if not (COMMAND in x and key in x)]
+    # Exactly one node-agent line: older ones go whatever their key or options.
+    kept = [x for x in text.splitlines() if "/usr/local/lib/carrel/node-agent.py" not in x]
     return "\n".join([*kept, line]) + "\n"
+
+
+def replace_file(path, text, mode):
+    # Write beside the target and rename: an interrupted run never leaves the
+    # cluster-wide authorized_keys empty.
+    target = path.resolve()
+    pending = target.with_name(target.name + ".carrel-next")
+    with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w") as stream:
+        stream.write(text)
+    os.replace(pending, target)
 
 
 def ssh_config(existing, nodes):
@@ -114,7 +128,7 @@ def main():
     ct("sh", "-c", 'mkdir -p /etc/carrel && { test -f /etc/carrel/node_key || ssh-keygen -q -t ed25519 -N "" -f /etc/carrel/node_key; }')
     ct("sh", "-c", "id carrel >/dev/null 2>&1 && chown carrel:carrel /etc/carrel/node_key || true; chmod 600 /etc/carrel/node_key")
     key = " ".join(ct("cat", "/etc/carrel/node_key.pub").split()[:2])
-    AUTHORIZED.write_text(merge_authorized(AUTHORIZED.read_text() if AUTHORIZED.exists() else "", authorized_line(key, me["address"]), key))
+    replace_file(AUTHORIZED, merge_authorized(AUTHORIZED.read_text() if AUTHORIZED.exists() else "", authorized_line(key, me["address"]), key), 0o600)
     # 3. CT 100: targets, pinned host keys, the node list.
     entries = []
     for n in nodes:
@@ -124,9 +138,9 @@ def main():
             host_key = run("ssh", *peer(n), "root@" + n["address"], "cat /etc/ssh/ssh_host_ed25519_key.pub")
         entries.append((n["host"], " ".join(host_key.split()[:2])))
     current = ct("sh", "-c", "cat /etc/carrel/ssh_config 2>/dev/null || true")
-    ct("sh", "-c", "cat > /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, nodes))
+    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, nodes))
     current = ct("sh", "-c", "cat /etc/carrel/known_hosts 2>/dev/null || true")
-    ct("sh", "-c", "cat > /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
+    ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
     listed = json.dumps([{"name": n["name"], "target": n["target"]} for n in nodes])
     # Edited in place inside CT 100 so no other key leaves it.
     ct("python3", "-c", (

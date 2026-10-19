@@ -43,6 +43,8 @@ def test_one_authorized_line_serves_every_node_and_replaces_older_ones():
     )
     merged = module.merge_authorized(existing, line, KEY).splitlines()
     assert merged == ["ssh-rsa AAAA root@carrel02", line]
+    other = 'restrict,command="/usr/local/lib/carrel/node-agent.py",from="10.200.0.3" ssh-ed25519 OLDKEY'
+    assert module.merge_authorized(other + "\n" + "\n".join(merged), line, KEY).splitlines() == merged
     assert module.merge_authorized("\n".join(merged), line, KEY).splitlines() == merged
 
 
@@ -85,3 +87,25 @@ def test_infra_firewall_lets_the_control_plane_reach_peer_ssh(monkeypatch, tmp_p
     assert module.peer_ssh() == [
         'iifname "vmbr98" ip saddr 10.200.0.3 ip daddr { 192.168.19.102, 192.168.19.103, 192.168.19.104 } tcp dport 22 accept'
     ]
+
+
+def test_authorized_keys_are_replaced_by_rename(tmp_path):
+    module = load("configure-nodes.py")
+    target = tmp_path / "authorized_keys"
+    target.write_text("old\n")
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    module.replace_file(link, "new\n", 0o600)
+    assert target.read_text() == "new\n" and link.is_symlink()
+    assert (
+        oct(target.stat().st_mode & 0o777) == "0o600"
+        and not (tmp_path / "authorized_keys.carrel-next").exists()
+    )
+
+
+def test_a_node_name_cannot_inject_ssh_options():
+    import pytest
+
+    site = {**SITE, "nodes": [*SITE["nodes"], {"name": "x\n  ProxyCommand sh", "address": "192.168.19.105"}]}
+    with pytest.raises(SystemExit):
+        load("configure-nodes.py").targets(site, "carrel01")
