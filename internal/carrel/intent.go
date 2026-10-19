@@ -163,7 +163,8 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	before, after := e.Quota(t), e.Quota(t, delta)
 	admission := D{"accepted": true, "reserved": false, "reason": "no_compute_or_storage_growth"}
 	if len(machines) > 0 {
-		admission = e.Admission(num(delta["vcpu"]), num(delta["memory_mb"]), num(delta["disk_gb"]), nil, false)
+		// A deployment's new machines share one node, so their connections stay local.
+		e.placement, admission = e.Place(num(delta["vcpu"]), num(delta["memory_mb"]), num(delta["disk_gb"]))
 	}
 	planned, requirements := []D{}, accessRequirements
 	for _, m := range machines {
@@ -286,7 +287,7 @@ func (e *Execution) DeploymentApply(t, a, w D) D {
 				ns = append(ns, network["id"])
 			}
 			for _, r := range dicts(a["machines"]) {
-				m, _ := tx.AllocateMachine(t, tx.MachineSpec(t, r, false))
+				m, _ := tx.AllocateMachine(t, e.placement.record(tx.MachineSpec(t, r, false)))
 				ms = append(ms, m["vmid"])
 			}
 			for _, r := range dicts(a["attachments"]) {
@@ -321,7 +322,7 @@ func (e *Execution) DeploymentApply(t, a, w D) D {
 			op["phase"] = "resources_reserved"
 			tx.S.Put("operations", op["id"], n, op)
 		})
-		e.P.inventory.Invalidate()
+		e.P.invalidateInventory()
 	}
 	deployment := obj(op["deployment"])
 	e.CheckBindings(t, deployment)

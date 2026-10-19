@@ -251,10 +251,27 @@ func (e *Execution) Reconcile() D {
 	edge := e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
 	return D{"node": node, "edge": edge}
 }
+
+// RefreshStorage asks each node about the machines it holds and adds a
+// tenant's samples across nodes.
 func (e *Execution) RefreshStorage() {
 	_ = attempt(func() {
-		for _, sample := range dicts(e.Call(D{"op": "storage_usage", "machines": e.S.Objects("machines")})) {
-			e.Put("storage_usage", sample["tenant_n"], integer(sample["tenant_n"]), sample)
+		totals := map[int]D{}
+		for _, n := range e.P.Nodes() {
+			machines := filter(e.S.Objects("machines"), func(m D) bool { return e.P.nodeOf(m).Name == n.Name })
+			for _, sample := range dicts(e.Call(D{"op": "storage_usage", "machines": machines}, n.Target)) {
+				t := integer(sample["tenant_n"])
+				if old := totals[t]; old != nil {
+					for _, k := range []string{"retained_snapshot_bytes", "unique_total_bytes"} {
+						sample[k] = num(old[k]) + num(sample[k])
+					}
+					sample["available"] = boolean(old["available"]) && boolean(sample["available"])
+				}
+				totals[t] = sample
+			}
+		}
+		for t, sample := range totals {
+			e.Put("storage_usage", t, t, sample)
 		}
 	})
 }

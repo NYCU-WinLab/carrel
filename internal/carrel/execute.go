@@ -210,7 +210,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		}
 		m := e.MachineSpec(t, a, dry)
 		after := e.Quota(t, machineDelta(m))
-		admission := e.Admission(num(m["cpu"]), num(m["memory_mb"]), num(m["disk_gb"]), nil, false)
+		node, admission := e.Place(num(m["cpu"]), num(m["memory_mb"]), num(m["disk_gb"]))
+		m = node.record(m)
 		if dry {
 			planned := plannedMachine(m)
 			return D{"machine": planned, "quota_after": after, "admission": admission, "requirements": planned["requirements"], "units": Units, "connection": D{"available_after": "create", "public_ssh": true}}
@@ -225,7 +226,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 				tx.S.Put("operations", e.Op["id"], n, e.Op)
 			}
 		})
-		e.P.inventory.Invalidate()
+		e.P.invalidateInventory()
 		e.Provision(m, false)
 		return D{"machine": e.PublicMachine(m, []D{grant}), "quota_after": e.Quota(t)}
 	case "machine_power", "machine_delete", "machine_resize", "machine_metrics":
@@ -296,7 +297,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		e.Quota(t, delta)
 		for _, v := range delta {
 			if num(v) > 0 {
-				e.Admission(0, 0, 0, merge(m, spec), false)
+				e.Admission(e.P.nodeOf(m), 0, 0, 0, merge(m, spec), false)
 				break
 			}
 		}
@@ -311,7 +312,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			e.Put("machines", m["vmid"], n, m)
 		}
 		e.Call(request)
-		e.P.inventory.Invalidate()
+		e.P.invalidateInventory()
 		switch tool {
 		case "machine_delete":
 			m["state"] = "deleting"

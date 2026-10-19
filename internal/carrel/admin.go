@@ -16,7 +16,14 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		}
 		return D{"tenants": out}
 	case "node_list":
-		return D{"inventory": e.Call(D{"op": "inventory"})}
+		nodes := []D{}
+		for _, n := range e.P.Nodes() {
+			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "inventory": e.Call(D{"op": "inventory"}, n.Target)})
+		}
+		if len(nodes) == 1 {
+			return D{"inventory": nodes[0]["inventory"]}
+		}
+		return D{"inventory": nodes[0]["inventory"], "nodes": nodes}
 	case "reconcile_run":
 		if dry {
 			counts := D{}
@@ -96,7 +103,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 				e.P.notifyReport(integer(m["vmid"]))
 			}
 			e.S.Exec("UPDATE tenants SET status='suspended' WHERE n=?", t["n"])
-			e.P.inventory.Invalidate()
+			e.P.invalidateInventory()
 		}
 	}
 	return D{"dry_run": dry, "quota_after": e.Quota(t)}

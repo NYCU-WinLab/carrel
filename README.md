@@ -410,6 +410,13 @@ block of 20 (PLAN 6.1), because a linked clone works only on the node that holds
 `build-templates.py` refuses a VMID that exists on another node. The guest storage id is `storage`
 in `/etc/carrel/node.json` (default `local-lvm`, the R640 node); B09 cluster nodes use `local-zfs`.
 Set it before `configure-go-reader.py` and template import.
+Several nodes are listed in `/etc/carrel/config.json` as
+`"nodes": [{"name": "carrel01", "target": "carrel-node-01"}, ...]`, where `target` is a `Host` in
+`/etc/carrel/ssh_config`. A new machine goes to the node that admits it with the most admission
+memory left, and the new machines of one deployment share a node. Each machine record keeps its
+node, and every machine request goes to that node. Without `nodes`, carrel uses `carrel-node`
+alone and records no node. Network reconciliation still runs on the first node only
+(PLAN 15.15, gaps 3 and 4).
 New VM disks are linked clones on the guest storage (LVM-thin or ZFS); guest writes remain isolated. Requested extra packages still
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.

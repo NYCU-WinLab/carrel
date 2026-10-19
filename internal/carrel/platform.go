@@ -48,7 +48,8 @@ type Platform struct {
 	writer             sync.Mutex
 	certificates       sync.Mutex
 	registration       sync.Mutex
-	inventory          ObservationCache
+	inventoryMu        sync.Mutex
+	inventories        map[string]*ObservationCache
 	Operations         *Operations
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -66,6 +67,7 @@ type Execution struct {
 	Ctx                 context.Context
 	Op                  D
 	publicationPrepared bool
+	placement           nodeRef
 }
 
 func NewPlatform(s *Store, b Backend, c D) *Platform {
@@ -88,10 +90,15 @@ func (e *Execution) Put(kind string, id any, n int, v D) {
 	}
 	e.S.Put(kind, id, n, v)
 }
+
+// Call asks a node adapter. Machine requests go to the machine's node; other
+// requests without a target go to the first node.
 func (e *Execution) Call(r D, target ...string) any {
-	to := "carrel-node"
+	to := e.P.Nodes()[0].Target
 	if len(target) > 0 {
 		to = target[0]
+	} else if m, ok := r["machine"].(map[string]any); ok {
+		to = e.P.nodeOf(m).Target
 	}
 	if e.Op != nil && (r["op"] == "create" || r["op"] == "action") {
 		identity := without(r, "machine")
@@ -369,7 +376,7 @@ func (e *Execution) AllocatePort(t D) int {
 	return 0
 }
 func (e *Execution) PublicMachine(m D, ports []D) D {
-	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at")
+	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node")
 	report := obj(e.S.Get("guest_reports", str(m["vmid"])))
 	if m["kind"] == "ct" && m["state"] == "ready" {
 		report = merge(report, D{"initialization_status": "complete", "application_status": "not_checked"})

@@ -23,6 +23,7 @@ STATE = Path("/var/lib/carrel")
 NODE = socket.gethostname().split(".")[0]
 CONFIG = Path("/etc/carrel/node.json")
 STORAGE_CONFIG = Path("/etc/pve/storage.cfg")
+PVE_NODES = Path("/etc/pve/nodes")
 
 
 def storage_id():
@@ -517,7 +518,8 @@ table inet carrel_conntrack {{
     if write("/etc/carrel/dhcp.conf", "\n".join(dhcp) + "\n"):
         run("dnsmasq", "--test", "--conf-file=/etc/carrel/dhcp.conf")
         run("systemctl", "restart", "carrel-dhcp")
-    if NODE == "carrel01":
+    # The infra gateway CT 101 lives on one node; only that node syncs it.
+    if Path("/etc/pve/lxc/101.conf").exists():
         slugs = {t["n"]: label(t["slug"]) for t in state["tenants"]}
         hosts = "".join(f"{m['ip']} {m['name']}.{slugs[m['tenant_n']]}.internal\n" for m in state["machines"])
         routes = ["{", " auto_https off", "}", ":80 {"]
@@ -688,6 +690,9 @@ def create(m):
     manifest = STATE / f"create-{vmid}.json"
     marker = provision_marker(m)
     exists = any(Path(f"/etc/pve/{kind}/{vmid}.conf").exists() for kind in ("qemu-server", "lxc"))
+    # /etc/pve/qemu-server is this node only; VMIDs are unique across the cluster.
+    if not exists and any(path for kind in ("qemu-server", "lxc") for path in PVE_NODES.glob(f"*/{kind}/{vmid}.conf")):
+        raise ValueError("VMID exists on another node")
     saved = json.loads(manifest.read_text()) if manifest.exists() else {}
     if exists:
         try:
