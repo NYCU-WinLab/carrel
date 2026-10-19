@@ -114,7 +114,7 @@ func TestCapacityCacheNeverAdmitsFromStaleData(t *testing.T) {
 	b.mu.Lock()
 	obj(b.inventory["storage"])["used"] = 1490 * GiB
 	b.mu.Unlock()
-	err := attempt(func() { e.Admission(1, 1024, 20, nil, false) })
+	err := attempt(func() { e.Admission(p.Nodes()[0], 1, 1024, 20, nil, false) })
 	if err == nil || obj(failureResult(err)["error"])["code"] != "capacity_exhausted" {
 		t.Fatalf("stale admission: %v", err)
 	}

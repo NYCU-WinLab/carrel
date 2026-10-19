@@ -26,7 +26,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 		}
 		e.Quota(t, delta)
 		if snap == nil {
-			e.Admission(0, 0, num(m["disk_gb"]), nil, true)
+			e.Admission(e.P.nodeOf(m), 0, 0, num(m["disk_gb"]), nil, true)
 			snap = D{"id": id, "vmid": m["vmid"], "name": a["name"], "disk_gb": m["disk_gb"], "configuration": configuration}
 		}
 	} else if snap == nil {
@@ -85,7 +85,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			e.Put("machines", m["vmid"], n, m)
 			effects = D{"power_state": state, "power_state_restored": true}
 		}
-		e.P.inventory.Invalidate()
+		e.P.invalidateInventory()
 		e.RefreshStorage()
 	}
 	if dry && tool == "snapshot_create" {

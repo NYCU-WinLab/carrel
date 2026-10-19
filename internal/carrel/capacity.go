@@ -1,7 +1,6 @@
 package carrel
 
 import (
-	"context"
 	"time"
 )
 
@@ -68,49 +67,26 @@ func summarize(inventory D, reservations, snapshots []D, at time.Time) D {
 		usedMem = num(mem["used"]) / GiB
 		freeMem = (totalMem - num(mem["used"])) / GiB
 	}
-	return D{"checked_at": at.UTC().Format(time.RFC3339Nano), "scope": "carrel01; shared with infrastructure and other tenants", "units": D{"memory": "GiB", "disk": "GiB", "cpu_utilization": "fraction"}, "physical": D{"cpu": D{"logical_cpus": info["cpus"], "cores": cores, "utilization": status["cpu"]}, "memory": D{"total": totalMem / GiB, "used": usedMem, "free": freeMem}, "disk": D{"storage": storageID(inventory), "total": totalDisk / GiB, "used": num(storage["used"]) / GiB, "free": (totalDisk - num(storage["used"])) / GiB, "metadata_fraction": metadata, "snapshot_reserved_gib": reserved / GiB}}, "allocatable": D{"vcpu": D{"limit": cpuLimit, "committed": cpu, "remaining": max(0, cpuLimit-cpu)}, "memory_gib": D{"limit": memLimit / GiB, "committed": memory / GiB, "remaining": max(0, memLimit-memory) / GiB}, "disk_gib": D{"limit": diskLimit / GiB, "committed": disk / GiB, "remaining": diskRemaining}}, "policy": D{"cpu_overcommit": 4, "memory_reserve_gib": 8, "memory_fraction": 0.9, "disk_overcommit": 1.5, "disk_usage_ceiling": 0.8, "snapshot_headroom_gib": max(0, totalDisk*0.8-num(storage["used"])-reserved) / GiB, "storage_admission_blocked": blocked, "disk_accounting": source, "cpu_memory_accounting": "running unmanaged guests plus all allocated Carrel machines (including stopped)", "tenant_quotas_apply_separately": true, "stopped_machines_retain_capacity": true, "cpu_is_shared": true, "quota_is_a_ceiling_not_a_capacity_reservation": true, "reserves_capacity": false}, "gpu": D{"allocation_supported": false, "inventory": "unknown"}}
+	return D{"checked_at": at.UTC().Format(time.RFC3339Nano), "scope": scope(inventory), "units": D{"memory": "GiB", "disk": "GiB", "cpu_utilization": "fraction"}, "physical": D{"cpu": D{"logical_cpus": info["cpus"], "cores": cores, "utilization": status["cpu"]}, "memory": D{"total": totalMem / GiB, "used": usedMem, "free": freeMem}, "disk": D{"storage": storageID(inventory), "total": totalDisk / GiB, "used": num(storage["used"]) / GiB, "free": (totalDisk - num(storage["used"])) / GiB, "metadata_fraction": metadata, "snapshot_reserved_gib": reserved / GiB}}, "allocatable": D{"vcpu": D{"limit": cpuLimit, "committed": cpu, "remaining": max(0, cpuLimit-cpu)}, "memory_gib": D{"limit": memLimit / GiB, "committed": memory / GiB, "remaining": max(0, memLimit-memory) / GiB}, "disk_gib": D{"limit": diskLimit / GiB, "committed": disk / GiB, "remaining": diskRemaining}}, "policy": D{"cpu_overcommit": 4, "memory_reserve_gib": 8, "memory_fraction": 0.9, "disk_overcommit": 1.5, "disk_usage_ceiling": 0.8, "snapshot_headroom_gib": max(0, totalDisk*0.8-num(storage["used"])-reserved) / GiB, "storage_admission_blocked": blocked, "disk_accounting": source, "cpu_memory_accounting": "running unmanaged guests plus all allocated Carrel machines (including stopped)", "tenant_quotas_apply_separately": true, "stopped_machines_retain_capacity": true, "cpu_is_shared": true, "quota_is_a_ceiling_not_a_capacity_reservation": true, "reserves_capacity": false}, "gpu": D{"allocation_supported": false, "inventory": "unknown"}}
 }
 func (e *Execution) Capacity(proposed D, cached bool) D {
-	reservations := e.S.Objects("machines")
-	if proposed != nil {
-		reservations = filter(reservations, func(m D) bool { return integer(m["vmid"]) != integer(proposed["vmid"]) })
-		reservations = append(reservations, proposed)
-	}
-	var inventory any
-	at := time.Now()
-	if cached {
-		var err error
-		inventory, at, err = e.P.inventory.Get(e.Ctx, 2*time.Second, func(ctx context.Context) (any, error) {
-			return e.P.Backend.Call(ctx, D{"op": "inventory"}, "carrel-node")
-		})
-		must(err)
-	} else {
-		inventory = e.Call(D{"op": "inventory"})
-		at = time.Now()
-	}
-	return summarize(obj(inventory), reservations, e.S.Objects("snapshots"), at)
+	return combine(e.nodeCapacities(proposed, cached))
 }
-func (e *Execution) Admission(cpu, memory, disk float64, proposed D, snapshot bool) D {
-	c := e.Capacity(proposed, false)
-	for k, amount := range map[string]float64{"vcpu": cpu, "memory_gib": memory / 1024, "disk_gib": disk} {
-		allocation := obj(obj(c["allocatable"])[k])
-		if amount+num(allocation["committed"]) > num(allocation["limit"]) {
-			fail("capacity_exhausted", "Node admission limit", D{"dimension": k, "requested": amount, "remaining": allocation["remaining"]})
-		}
+
+// Admission checks one node: the node of the machine that grows. New machines
+// get their node from Place first.
+func (e *Execution) Admission(node nodeRef, cpu, memory, disk float64, proposed D, snapshot bool) D {
+	admission, _ := e.admitOn(node, cpu, memory, disk, proposed, snapshot)
+	return admission
+}
+
+// scope names the node a summary covers; inventories without a node name
+// come from the single R640 node.
+func scope(inventory D) string {
+	if node, ok := inventory["node"].(string); ok && node != "" {
+		return node + "; shared with infrastructure and other tenants"
 	}
-	policy := obj(c["policy"])
-	if snapshot && disk > num(policy["snapshot_headroom_gib"]) {
-		fail("capacity_exhausted", "Snapshot worst-case reservation exceeds safe physical headroom")
-	}
-	growing := disk > 0
-	if proposed != nil {
-		old := e.S.Get("machines", str(proposed["vmid"]))
-		growing = growing || num(proposed["disk_gb"]) > num(old["disk_gb"])
-	}
-	if growing && boolean(policy["storage_admission_blocked"]) {
-		fail("capacity_exhausted", "Storage usage exceeds admission ceiling")
-	}
-	return D{"accepted": true, "checked_at": c["checked_at"], "reserved": false}
+	return "carrel01; shared with infrastructure and other tenants"
 }
 
 // storageID names the node's guest storage; inventories from nodes that predate

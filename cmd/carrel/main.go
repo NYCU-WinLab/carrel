@@ -36,6 +36,10 @@ func main() {
 		slog.Error("invalid configuration")
 		os.Exit(1)
 	}
+	if err := carrel.ValidateNodes(cfg); err != nil {
+		slog.Error("invalid node configuration", "error", err)
+		os.Exit(1)
+	}
 	store, err := carrel.OpenStore(cfg["database"].(string))
 	if err != nil {
 		slog.Error("open database", "error", err)
