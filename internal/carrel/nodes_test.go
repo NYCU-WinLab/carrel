@@ -177,3 +177,36 @@ func TestNodeListShowsEveryNode(t *testing.T) {
 		t.Fatal(encoded(nodes))
 	}
 }
+
+func TestUnknownNodeRecordsAndUnreachableNodesDoNotStopObservations(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	p.Store.Put("machines", 10150, 1, D{"vmid": 10150, "tenant_n": 1, "name": "gone", "node": "carrel09", "cpu": 1, "memory_mb": 1024, "disk_gb": 10})
+	e := p.execution(context.Background())
+	if node, _ := e.Place(1, 1024, 10); node.Name != "carrel02" {
+		t.Fatalf("placed on %s", node.Name)
+	}
+	if err := attempt(func() { p.nodeOf(D{"node": "carrel09"}) }); err == nil {
+		t.Fatal("requests for a machine on an unconfigured node must still fail")
+	}
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if target == "node-03" {
+			// SSHBackend reports an unreachable adapter as backend_unavailable.
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "unreachable"}}}
+		}
+		return inner(r, target)
+	}
+	c := e.Capacity(nil, true)
+	if c["unavailable_nodes"] != 1 || c["node_count"] != 2 {
+		t.Fatal(encoded(c))
+	}
+	if err := attempt(func() { e.Capacity(nil, false) }); err == nil {
+		t.Fatal("a fresh read skipped an unreachable node")
+	}
+	if node, _ := e.Place(1, 1024, 10); node.Name != "carrel02" {
+		t.Fatalf("placed on %s", node.Name)
+	}
+	if err := ValidateNodes(D{"nodes": "carrel01"}); err == nil {
+		t.Fatal("accepted a node list that is not a list")
+	}
+}
