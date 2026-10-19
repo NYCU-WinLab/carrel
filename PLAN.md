@@ -1578,6 +1578,21 @@ it is empty:
    nftables files and the WireGuard key. Tenant disk backups need storage outside the cluster
    (open decision 13.14).
 
+**Status on 2026-10-19 (late)**:
+
+- Closed: gap 1 (#42), gap 2 (#43, #44), gap 3 and gap 6 (#46), gap 4 (#47 ports and the public
+  address, #49 TLS on the gateway, #50 the origin certificate and DNS records). Each was tested on
+  this cluster while it was empty; the reviews found and fixed cross-node conntrack zones (VXLAN and
+  L3VNI ports), a reconcile stopped by one down node, a tenant slug colliding with the origin
+  certificate, and record moves before the gateway held the certificate.
+- Installed on the cluster: the site file on every node, `install-network.py` (SDN peers, underlay
+  filter), `140.113.60.184/27` with its protection on carrel01, and `bootstrap-platform.py` (CT 100
+  without the control plane yet, CT 101 with Caddy 2.11.4 and `carrel-dns`).
+- Open: gap 5 (control plane reach to every node), gap 7 (installer hostname checks and deploy
+  aliases), gap 8 (backups of node files). Follow-ups: #45, #48, #51.
+- `ingress: exit` and `public_address` stay unset until the move: the new control plane then moves
+  the records itself, after its gateway confirms each certificate.
+
 **The move**, after the gaps close:
 
 1. Install carrel on the cluster. Restore the CT 100 database and configuration from the latest
