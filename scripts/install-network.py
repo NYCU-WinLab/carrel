@@ -49,6 +49,72 @@ table inet carrel_tenant_host {{
 """
 
 
+PUBLIC_MARK = "0x60"
+PUBLIC_TABLE = 160
+
+
+def public_nft(interface, address):
+    """Host protection and return routing for the public address on the exit node.
+
+    Nothing on the public interface reaches the host itself except replies and
+    ping: SSH, 8006 and every other host port stay off the internet. Only
+    connections that DNAT sends to a tenant or the infra gateway are forwarded.
+    Connections that arrive here carry a mark, and only their replies get the
+    routing mark: the arriving packets must still reach local addresses, which
+    the l3mdev rule order puts after the policy rules.
+    """
+    return f"""add table inet carrel_public
+flush table inet carrel_public
+table inet carrel_public {{
+ chain prerouting {{
+  type filter hook prerouting priority mangle; policy accept;
+  iifname "{interface}" ct state new ct mark set {PUBLIC_MARK}
+  ct mark {PUBLIC_MARK} ct direction reply meta mark set {PUBLIC_MARK}
+ }}
+ chain input {{
+  type filter hook input priority -30; policy accept;
+  iifname "{interface}" ct state established,related accept
+  iifname "{interface}" meta nfproto ipv4 icmp type echo-request limit rate 10/second accept
+  iifname "{interface}" counter drop
+ }}
+ chain forward {{
+  type filter hook forward priority -30; policy accept;
+  iifname "{interface}" ip saddr {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 }} counter drop
+  iifname "{interface}" ct state established,related accept
+  iifname "{interface}" ct status dnat accept
+  iifname "{interface}" counter drop
+ }}
+ chain postrouting {{
+  type nat hook postrouting priority srcnat; policy accept;
+  oifname "{interface}" ip saddr 10.200.0.0/16 snat to {address}
+ }}
+}}
+"""
+
+
+def public_interface(interface, cidr, gateway, address):
+    network = ipaddress.IPv4Interface(cidr).network
+    rules = [
+        (f"fwmark {PUBLIC_MARK} lookup {PUBLIC_TABLE} priority 1600"),
+        (f"from {address} lookup {PUBLIC_TABLE} priority 1601"),
+    ]
+    up = [f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
+          f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
+    up += [f"    post-up ip rule del {r} 2>/dev/null; ip rule add {r}" for r in rules]
+    down = [f"    pre-down ip rule del {r} 2>/dev/null || true" for r in rules]
+    return "\n".join([
+        "# Managed by carrel install-network.py: the site's public address (PLAN 15.15).",
+        f"auto {interface}",
+        f"iface {interface} inet static",
+        f"    address {cidr}",
+        # Never bring the address up without its protection.
+        "    pre-up nft list table inet carrel_public > /dev/null",
+        f"    post-up echo 1 > /proc/sys/net/ipv6/conf/{interface}/disable_ipv6",
+        *up,
+        *down,
+    ]) + "\n"
+
+
 # The single-node table: no peers, so VXLAN and BGP are dropped everywhere.
 TENANT_HOST_NFT = tenant_host_nft(underlay_rules("vmbr0", "", []))
 
@@ -68,12 +134,18 @@ def site_layout(node, site):
     exits = site["exit_nodes"]
     if not exits or any(e not in addresses for e in exits):
         raise SystemExit("exit nodes must be site nodes")
-    public = str(ipaddress.IPv4Interface(site["public"]["address"]).ip) + "/32"
+    cidr = ipaddress.IPv4Interface(site["public"]["address"])
+    public = str(cidr.ip) + "/32"
     protected = [a + "/32" for a in addresses.values()] + [public]
     protected += [str(ipaddress.IPv4Network(p)) for p in site.get("protected_addresses", [])]
     return {"address": addresses[node], "peers": [a for n, a in addresses.items() if n != node],
             "all": list(addresses.values()), "exit_nodes": exits, "interface": site["underlay_interface"],
-            "protected": protected, "entries": [{"address": public, "port": 443}]}
+            "protected": protected, "entries": [{"address": public, "port": 443}],
+            # The first exit node holds the public address and terminates ingress.
+            "public": {"interface": f'{site["underlay_interface"]}.{int(site["public"]["vlan"])}',
+                       "cidr": str(cidr), "address": str(cidr.ip),
+                       "gateway": str(ipaddress.IPv4Address(site["public"]["gateway"]))}
+            if node == exits[0] else None}
 
 
 def run(*args):
@@ -153,6 +225,31 @@ def main():
     Path("/etc/carrel/tenant-host.nft").write_text(
         tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"]))
     )
+    public = layout.get("public")
+    if public:
+        # Load the protection before the address exists, at boot and now.
+        Path("/etc/carrel/public.nft").write_text(public_nft(public["interface"], public["address"]))
+        run("nft", "-c", "-f", "/etc/carrel/public.nft")
+        run("nft", "-f", "/etc/carrel/public.nft")
+        Path("/etc/systemd/system/carrel-public.service").write_text("""[Unit]
+Description=Carrel public address protection
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/carrel/public.nft
+ExecReload=/usr/sbin/nft -f /etc/carrel/public.nft
+[Install]
+WantedBy=multi-user.target
+""")
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "carrel-public")
+        Path("/etc/network/interfaces.d/carrel-public").write_text(
+            public_interface(public["interface"], public["cidr"], public["gateway"], public["address"])
+        )
+        run("ifup", public["interface"])
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
@@ -224,7 +321,8 @@ WantedBy=multi-user.target
     if "snippets" not in content:
         run("pvesm", "set", "local", "--content", ",".join(sorted(content | {"snippets"})))
     print(json.dumps({"node": node, "zones": ["tenants", "private"], "firewall": "nftables",
-                      "peers": layout["peers"], "exit_nodes": layout["exit_nodes"]}))
+                      "peers": layout["peers"], "exit_nodes": layout["exit_nodes"],
+                      "public": (public or {}).get("cidr")}))
 
 
 if __name__ == "__main__":

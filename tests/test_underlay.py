@@ -124,4 +124,6 @@ def test_vxlan_ports_share_the_guest_conntrack_zone(monkeypatch, tmp_path):
         "peers": [],
     }
     module.reconcile(state)
-    assert 'iifname { "vxlan_t003" } ct zone set 1' in written["/etc/carrel/conntrack.nft"]
+    conntrack = written["/etc/carrel/conntrack.nft"]
+    assert 'iifname { "vxlan_t003", "vrfvx_tenants" } ct zone set 1' in conntrack
+    assert 'iifname { "xvrfp_tenants", "vrf_tenants", "vrfbr_tenants" } ct zone set 1' in conntrack

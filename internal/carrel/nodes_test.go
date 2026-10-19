@@ -279,3 +279,32 @@ func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
 		t.Fatal("the gateway node may not be skipped")
 	}
 }
+
+func TestExitIngressSkipsTheExternalEdge(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	p.Config["ingress"] = "exit"
+	targets := []string{}
+	var mu sync.Mutex
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" {
+			mu.Lock()
+			targets = append(targets, target)
+			mu.Unlock()
+			return D{}, nil
+		}
+		return inner(r, target)
+	}
+	r := p.execution(context.Background()).Reconcile()
+	if _, ok := r["edge"]; ok || len(targets) != 3 {
+		t.Fatalf("edge reconciled: %v %v", targets, encoded(r))
+	}
+	for _, v := range []any{"edge", "exit", nil} {
+		if err := ValidateNodes(D{"ingress": v}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateNodes(D{"ingress": "both"}); err == nil {
+		t.Fatal("accepted an unknown ingress mode")
+	}
+}

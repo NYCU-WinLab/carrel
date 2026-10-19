@@ -19,6 +19,9 @@ var nodeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 // ValidateNodes rejects a node list that could route a machine to the wrong
 // adapter; the control plane refuses to start with it.
 func ValidateNodes(c D) error {
+	if v := c["ingress"]; v != nil && v != "edge" && v != "exit" {
+		return errors.New("ingress must be edge or exit")
+	}
 	if v, ok := c["nodes"]; ok && v != nil {
 		if _, list := v.([]any); !list {
 			return errors.New("nodes must be a list")
