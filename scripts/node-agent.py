@@ -1135,7 +1135,7 @@ def main():
     req = json.loads(data)
     op = req["op"]
     with (STATE / "node.lock").open("w") as lock:
-        if op not in ("inventory", "status", "metrics"):
+        if op not in ("inventory", "status", "metrics", "node_files"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         if req.get("request_id") and op in ("create", "action"):
@@ -1180,6 +1180,15 @@ def main():
             owned(m)
             kind = "qemu" if m["kind"] == "vm" else "lxc"
             out = api("get", f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+        elif op == "node_files":
+            # For the control plane's backup: only files without secrets
+            # (pve-read.json holds a token and is rebuilt by its installer).
+            files = {}
+            for name in ("node.json", "templates.json", "site.json"):
+                path = Path("/etc/carrel") / name
+                if path.exists():
+                    files[name] = path.read_text()
+            out = {"node": NODE, "files": files}
         elif op == "metrics":
             m = req["machine"]
             owned(m)

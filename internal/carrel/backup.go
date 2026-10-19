@@ -11,7 +11,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// nodeFiles are the files under /etc/carrel on each node that a backup keeps:
+// none holds a secret, and none can be rebuilt from the database.
+var nodeFiles = []string{"node.json", "templates.json", "site.json"}
 
 func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err error) {
 	defer func() {
@@ -97,6 +102,30 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	}
+	// Node files a reconcile cannot derive (PLAN 15.15 gap 8). A node that
+	// does not answer is reported; the backup of everything else still lands.
+	missing := []any{}
+	for _, n := range p.Nodes() {
+		reply, err := p.Backend.Call(ctx, D{"op": "node_files"}, n.Target)
+		name := str(obj(reply)["node"])
+		if err != nil || !nodeName.MatchString(name) {
+			missing = append(missing, n.Target)
+			continue
+		}
+		for file, content := range obj(obj(reply)["files"]) {
+			if !contains(nodeFiles, file) {
+				continue
+			}
+			data := []byte(str(content))
+			header := &tar.Header{Name: "nodes/" + name + "/" + file, Mode: 0600, Size: int64(len(data)), ModTime: time.Now(), Typeflag: tar.TypeReg}
+			if e = archive.WriteHeader(header); e != nil {
+				return nil, e
+			}
+			if _, e = archive.Write(data); e != nil {
+				return nil, e
+			}
+		}
+	}
 	if e = archive.Close(); e != nil {
 		return nil, e
 	}
@@ -109,6 +138,9 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	response, e := p.Backend.Call(ctx, D{"op": "backup", "archive": base64.StdEncoding.EncodeToString(buffer.Bytes())}, "carrel-edge")
 	if e != nil {
 		return nil, e
+	}
+	if len(missing) > 0 {
+		return merge(obj(response), D{"missing_nodes": missing}), nil
 	}
 	return obj(response), nil
 }
