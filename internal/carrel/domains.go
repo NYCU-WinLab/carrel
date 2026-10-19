@@ -77,11 +77,21 @@ func (e *Execution) DomainRecord(t D, remove bool) {
 		e.CF("DELETE", "/"+str(records[0]["id"]), nil)
 	} else if !remove && len(records) == 0 {
 		e.CF("POST", "", D{"type": "A", "name": name, "content": address, "ttl": 120, "proxied": false, "comment": owner})
-	} else if !remove && own && records[0]["content"] != address {
-		// A site with its own address takes over the records carrel owns. A
-		// control plane without public_address never rewrites them back.
+	} else if !remove && own && str(e.P.Config["ingress"]) == "exit" && records[0]["content"] != address && e.tenantCertificateHeld(t) {
+		// A site with its own address takes over the records carrel owns once
+		// its gateway confirmed the tenant's certificate. A control plane
+		// without public_address never rewrites them back.
 		e.CF("PATCH", "/"+str(records[0]["id"]), D{"content": address})
 	}
+}
+
+func (e *Execution) tenantCertificateHeld(t D) bool {
+	cert := find(e.S.Objects("certificates", integer(t["n"])), func(c D) bool { return c["slug"] == t["slug"] })
+	if cert == nil {
+		return false
+	}
+	path := textAt(cert, "fullchain_path", filepath.Join(e.CertificateDir(), "config", "live", str(t["slug"]), "fullchain.pem"))
+	return e.gatewayHolds(str(t["slug"]), path)
 }
 
 // publicAddress is where carrel's records point: the site's own public

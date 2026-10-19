@@ -233,7 +233,7 @@ def test_reconcile_confirms_the_origin_pair_only_after_the_gateway_took_it(tmp_p
         "origin_certificate": pair,
     }
     # No CT 101 on this node: nothing to confirm.
-    assert "origin_certificate" not in module.reconcile(dict(state))
+    assert "certificates" not in module.reconcile(dict(state))
     real = Path
     redirects = {
         "/etc/pve/lxc/101.conf": tmp_path / "gw",
@@ -248,5 +248,5 @@ def test_reconcile_confirms_the_origin_pair_only_after_the_gateway_took_it(tmp_p
     calls = []
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "clsact")
     result = module.reconcile(dict(state))
-    assert result["origin_certificate"] == __import__("hashlib").sha256(b"CHAIN").hexdigest()
+    assert result["certificates"] == {"_origin": __import__("hashlib").sha256(b"CHAIN").hexdigest()}
     assert any(c[:3] == ("pct", "exec", "101") for c in calls)

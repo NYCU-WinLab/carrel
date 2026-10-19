@@ -49,7 +49,8 @@ type Platform struct {
 	writer             sync.Mutex
 	certificates       sync.Mutex
 	registration       sync.Mutex
-	originDelivered    atomic.Value
+	originPair         atomic.Value
+	delivered          atomic.Value
 	inventoryMu        sync.Mutex
 	inventories        map[string]*ObservationCache
 	Operations         *Operations

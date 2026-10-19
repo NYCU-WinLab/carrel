@@ -51,7 +51,7 @@ func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
 	keyDER, err := x509.MarshalPKCS8PrivateKey(pair.PrivateKey)
 	must(err)
 	base := t.TempDir()
-	live := filepath.Join(base, "config", "live", "origin")
+	live := filepath.Join(base, "config", "live", originLineage)
 	must(os.MkdirAll(live, 0700))
 	must(os.WriteFile(filepath.Join(live, "fullchain.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]}), 0600))
 	must(os.WriteFile(filepath.Join(live, "privkey.pem"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600))
@@ -67,6 +67,9 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 	tenant := p.Store.TenantN(1)
 	name := "*." + str(tenant["slug"]) + ".winlab.tw"
 	dns.records[name] = []D{{"id": "r1", "content": "140.113.194.229", "comment": "carrel:b09:tenant:1"}}
+	crt := filepath.Join(t.TempDir(), "fullchain.pem")
+	must(os.WriteFile(crt, []byte("TENANT-CHAIN"), 0600))
+	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": tenant["slug"], "fullchain_path": crt})
 	e := p.execution(context.Background())
 	delete(p.Config, "public_address")
 	e.DomainRecord(tenant, false)
@@ -74,6 +77,17 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 		t.Fatalf("a control plane without public_address rewrote a record: %v", dns.writes)
 	}
 	p.Config["public_address"] = "140.113.60.184"
+	e.DomainRecord(tenant, false)
+	if len(dns.writes) != 0 {
+		t.Fatal("moved a tenant record before the gateway confirmed its certificate")
+	}
+	p.delivered.Store(map[string]any{str(tenant["slug"]): fingerprint("TENANT-CHAIN")})
+	p.Config["ingress"] = "edge"
+	e.DomainRecord(tenant, false)
+	if len(dns.writes) != 0 {
+		t.Fatal("moved a tenant record without ingress exit")
+	}
+	p.Config["ingress"] = "exit"
 	e.DomainRecord(tenant, false)
 	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
 		t.Fatal(encoded(dns.writes))
@@ -94,14 +108,14 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 		if r["op"] == "reconcile" && target == "carrel-node" {
 			sent = obj(r["state"])
 			if pair := obj(sent["origin_certificate"]); confirm && pair["fullchain"] != nil {
-				return D{"origin_certificate": fingerprint(pair["fullchain"])}, nil
+				return D{"certificates": D{"_origin": fingerprint(pair["fullchain"])}}, nil
 			}
 		}
 		return D{}, nil
 	}
 	// Start without a lineage: the first pass issues (certbot is /bin/true here,
 	// so the test puts the files back as certbot would).
-	live := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", "origin")
+	live := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", originLineage)
 	moved := live + ".issued"
 	must(os.Rename(live, moved))
 	p.Config["certbot"] = writeCertbot(t, moved, live)
@@ -150,4 +164,32 @@ func writeCertbot(t *testing.T, from, to string) string {
 	path := filepath.Join(t.TempDir(), "certbot")
 	must(os.WriteFile(path, []byte("#!/bin/sh\nmv "+from+" "+to+"\n"), 0700))
 	return path
+}
+
+func TestATenantNamedOriginCannotTakeCarrelsLineage(t *testing.T) {
+	p, _, _ := originFixture(t)
+	ours := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", originLineage, "fullchain.pem")
+	tenant := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", "origin")
+	must(os.MkdirAll(tenant, 0700))
+	must(os.WriteFile(filepath.Join(tenant, "fullchain.pem"), []byte("tenant"), 0600))
+	crt, _, ok := p.execution(context.Background()).originFiles()
+	if !ok || crt != ours {
+		t.Fatalf("origin read %s", crt)
+	}
+}
+
+func TestOriginFilesKeepTheLastMatchingPairDuringRenewal(t *testing.T) {
+	p, _, _ := originFixture(t)
+	e := p.execution(context.Background())
+	crt, key, ok := e.originFiles()
+	if !ok {
+		t.Fatal("no pair")
+	}
+	live := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", originLineage)
+	must(os.Remove(filepath.Join(live, "privkey.pem")))
+	must(os.WriteFile(filepath.Join(live, "privkey.pem"), []byte("mid-rotation"), 0600))
+	again, againKey, ok := e.originFiles()
+	if !ok || again != crt || againKey != key {
+		t.Fatal("sent a mismatched pair during renewal")
+	}
 }

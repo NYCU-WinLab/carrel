@@ -256,20 +256,21 @@ func (e *Execution) Reconcile() D {
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
 	first := request
-	origin := ""
-	if str(e.P.Config["ingress"]) == "exit" {
+	exit := str(e.P.Config["ingress"]) == "exit"
+	if exit {
 		// The first node holds the infra gateway, which terminates TLS here.
 		gateway := merge(state, D{"origin": originHost(e.P.Config)})
 		if crt, key, ok := e.originFiles(); ok {
-			gateway["origin_certificate"], origin = originPair(crt, key), crt
+			gateway["origin_certificate"] = originPair(crt, key)
 		}
 		first = D{"op": "reconcile", "state": gateway}
 	}
 	result := D{"node": e.Call(first, nodes[0].Target)}
-	if origin != "" && obj(result["node"])["origin_certificate"] == fingerprint(obj(obj(first["state"])["origin_certificate"])["fullchain"]) {
-		// The gateway confirmed it holds this pair: MaintainOrigin may move
-		// carrel's record now.
-		e.P.originDelivered.Store(origin)
+	if exit {
+		// Fingerprints of the pairs the gateway confirmed it holds: records
+		// move to this site only for those (MaintainOrigin, DomainRecord).
+		held, _ := obj(result["node"])["certificates"].(map[string]any)
+		e.P.delivered.Store(held)
 	}
 	if len(nodes) > 1 {
 		// The other nodes catch up on the next reconcile: one node down for an

@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -14,27 +15,43 @@ import (
 // control plane issues the certificate through DNS-01, the gateway receives it
 // on the next reconcile, and only then does the record move to the site.
 //
-// The certbot lineage "origin" is the state: it belongs to no tenant, so it has
-// no database object. Which pair the gateway holds is kept in memory; after a
-// restart the first reconcile delivers it again before the record can move.
+// The certbot lineage "_origin" is the state: it belongs to no tenant, so it
+// has no database object, and no tenant slug can take its name. Which pairs
+// the gateway holds is kept in memory; after a restart the first reconcile
+// delivers them again before any record can move.
 
 const originOwner = "carrel:origin"
 
 // The record publish-entry.py created for the external edge.
 const edgeOriginOwner = "Owned by carrel B09 external edge"
 
-// originFiles returns the pinned archive pair of the origin lineage.
+const originLineage = "_origin"
+
+// originFiles returns the pinned archive pair of the origin lineage. While
+// certbot swaps the live links the two may not match; the last pair that did
+// is used instead, since archive files never change.
 func (e *Execution) originFiles() (string, string, bool) {
-	live := filepath.Join(e.CertificateDir(), "config", "live", "origin")
-	crt, err := filepath.EvalSymlinks(filepath.Join(live, "fullchain.pem"))
-	if err != nil {
-		return "", "", false
+	live := filepath.Join(e.CertificateDir(), "config", "live", originLineage)
+	crt, err1 := filepath.EvalSymlinks(filepath.Join(live, "fullchain.pem"))
+	key, err2 := filepath.EvalSymlinks(filepath.Join(live, "privkey.pem"))
+	if err1 == nil && err2 == nil {
+		if _, err := tls.LoadX509KeyPair(crt, key); err == nil {
+			e.P.originPair.Store([2]string{crt, key})
+			return crt, key, true
+		}
 	}
-	key, err := filepath.EvalSymlinks(filepath.Join(live, "privkey.pem"))
-	if err != nil {
-		return "", "", false
+	if last, ok := e.P.originPair.Load().([2]string); ok {
+		return last[0], last[1], true
 	}
-	return crt, key, true
+	return "", "", false
+}
+
+// gatewayHolds reports whether the gateway confirmed the certificate in path
+// under name on its last reconcile.
+func (e *Execution) gatewayHolds(name, path string) bool {
+	held, _ := e.P.delivered.Load().(map[string]any)
+	b, err := os.ReadFile(path)
+	return err == nil && held != nil && held[name] == fingerprint(string(b))
 }
 
 // EnsureOriginCertificate issues or renews carrel's own certificate. A first
@@ -52,7 +69,7 @@ func (e *Execution) EnsureOriginCertificate() D {
 			return D{"state": "queued"}
 		}
 	}
-	e.issueCertificate("origin", host)
+	e.issueCertificate(originLineage, host)
 	return D{"state": "ready"}
 }
 
@@ -67,7 +84,7 @@ func (e *Execution) MaintainOrigin() {
 		e.EnsureOriginCertificate()
 		return
 	}
-	if delivered, _ := e.P.originDelivered.Load().(string); delivered != crt {
+	if !e.gatewayHolds("_origin", crt) {
 		return
 	}
 	host := originHost(e.P.Config)
