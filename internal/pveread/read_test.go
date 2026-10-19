@@ -117,3 +117,36 @@ func TestHTTPFailureAndRedirectDoNotExposeToken(t *testing.T) {
 		})
 	}
 }
+func TestInventoryReadsTheConfiguredStorage(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data := any(map[string]any{})
+		switch {
+		case r.URL.Path == "/api2/json/access/permissions":
+			if r.URL.Query().Get("path") != "/storage/local-zfs" {
+				t.Errorf("permissions path %q", r.URL.Query().Get("path"))
+			}
+			data = map[string]any{"/storage/local-zfs": map[string]any{"Datastore.Audit": 1, "Datastore.Allocate": 1}}
+		case strings.Contains(r.URL.Path, "/storage/") && !strings.Contains(r.URL.Path, "/storage/local-zfs/"):
+			t.Errorf("read another storage: %s", r.URL.Path)
+		case strings.HasSuffix(r.URL.Path, "/content"), strings.HasSuffix(r.URL.Path, "/resources"):
+			data = []any{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	t.Cleanup(server.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := New(Config{Base: server.URL, CA: ca, Node: "carrel02", Storage: "local-zfs", Authorization: "PVEAPIToken=fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reader.Close)
+	if _, err := reader.Read(context.Background(), "inventory"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{Base: server.URL, CA: ca, Node: "carrel02", Storage: "../access", Authorization: "x"}); err == nil {
+		t.Fatal("accepted an invalid storage id")
+	}
+}

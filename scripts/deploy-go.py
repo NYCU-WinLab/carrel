@@ -38,6 +38,9 @@ def main():
         *(artifacts / name for name in names),
         ROOT / "scripts/node-agent.py",
         ROOT / "scripts/configure-go-reader.py",
+        # Helpers node-agent loads or calls; they change together with it.
+        ROOT / "scripts/thin-usage.py",
+        ROOT / "scripts/pve-read.pl",
     ]
     if args.templates:
         if args.templates.name != "templates.json":
@@ -83,8 +86,13 @@ path.write_text(json.dumps(config,indent=2)+'\n')
 Path('/etc/carrel/templates.next.json').unlink()
 """
     program = f"""from pathlib import Path
-import hashlib,json,os,shutil,subprocess,time,urllib.request
+import hashlib,json,os,re,shutil,socket,subprocess,time,urllib.request
 stage=Path({stage!r})
+node=socket.gethostname().split('.')[0]
+node_config=Path('/etc/carrel/node.json')
+storage=json.loads(node_config.read_text()).get('storage','local-lvm') if node_config.exists() else 'local-lvm'
+assert isinstance(storage,str) and re.fullmatch(r'[a-z][a-z0-9_.-]{{0,62}}',storage), 'Invalid storage id in node.json'
+helpers={{'thin-usage.py':'644','pve-read.pl':'755'}}
 def ct(*args): subprocess.run(['pct','exec','100','--',*args],check=True)
 def capture(*args): return subprocess.check_output(args,text=True)
 for name,expected in {hashes!r}.items():
@@ -98,8 +106,8 @@ assert minimal.get('prepared') is True and minimal.get('environment')=='minimal'
 for image,entry in templates.items():
  vmid=entry['vmid']
  assert isinstance(vmid,int) and 9000<=vmid<=9999, 'Invalid template VMID'
- cfg=json.loads(capture('pvesh','get',f'/nodes/carrel01/qemu/{{vmid}}/config','--output-format','json'))
- assert cfg.get('template')==1 and cfg.get('scsi0','').startswith('local-lvm:base-'), 'Expected immutable LVM-thin template'
+ cfg=json.loads(capture('pvesh','get',f'/nodes/{{node}}/qemu/{{vmid}}/config','--output-format','json'))
+ assert cfg.get('template')==1 and cfg.get('scsi0','').startswith(storage+':base-'), 'Expected an immutable template on the guest storage of this node'
 subprocess.run(['python3',str(stage/'configure-go-reader.py')],check=True)
 # PVEAuditor alone silently hides volumes. Compare complete stable volume identities before enabling.
 old=json.loads(capture('/usr/local/lib/carrel/pve-read.pl','inventory'))
@@ -117,6 +125,9 @@ try:
  for name,path in [('node-agent.py','/usr/local/lib/carrel/node-agent.py'),('node.json','/etc/carrel/node.json')]:
   shutil.copy2(path,stage/('before-'+name))
   os.chmod(stage/('before-'+name),0o600)
+ for name in helpers:
+  if Path('/usr/local/lib/carrel/'+name).exists():
+   shutil.copy2('/usr/local/lib/carrel/'+name,stage/('before-'+name))
  if template_path.exists(): shutil.copy2(template_path,stage/'before-templates.json')
  template_next=stage/'templates.merged.json';template_next.write_text(json.dumps(templates,indent=2)+'\\n')
  subprocess.run(['install','-m','600',str(template_next),str(template_path)+'.next'],check=True)
@@ -126,6 +137,10 @@ try:
  if target.exists(): shutil.copy2(target,stage/'before-carrel-pve-read')
  subprocess.run(['install','-m','755',str(stage/'carrel-pve-read'),str(target)+'.next'],check=True)
  os.replace(str(target)+'.next',target)
+ for name,mode in helpers.items():
+  target=Path('/usr/local/lib/carrel/'+name)
+  subprocess.run(['install','-m',mode,str(stage/name),str(target)+'.next'],check=True)
+  os.replace(str(target)+'.next',target)
  target=Path('/usr/local/lib/carrel/node-agent.py')
  subprocess.run(['install','-m','755',str(stage/'node-agent.py'),str(target)+'.next'],check=True)
  os.replace(str(target)+'.next',target)
@@ -158,6 +173,8 @@ except BaseException:
  for name,path in [('node-agent.py','/usr/local/lib/carrel/node-agent.py'),('node.json','/etc/carrel/node.json')]:
   if (stage/('before-'+name)).exists(): shutil.copyfile(stage/('before-'+name),path)
  if (stage/'before-carrel-pve-read').exists(): shutil.copy2(stage/'before-carrel-pve-read','/usr/local/lib/carrel/carrel-pve-read')
+ for name in helpers:
+  if (stage/('before-'+name)).exists(): shutil.copy2(stage/('before-'+name),'/usr/local/lib/carrel/'+name)
  if (stage/'before-templates.json').exists(): shutil.copy2(stage/'before-templates.json',template_path)
  elif not had_template_map: template_path.unlink(missing_ok=True)
  ct('python3','-c',"from pathlib import Path; Path('/etc/carrel/templates.next.json').unlink(missing_ok=True)")

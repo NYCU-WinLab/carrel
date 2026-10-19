@@ -405,7 +405,12 @@ The deployment merges candidates into the existing template map, validates immut
 updates the catalog's installed-environment metadata, and retains rollback copies. The prepared
 minimal template is required before activating 0.9.0; it never falls back to a development image.
 Keep previous generations for rollback. Existing template IDs are never overwritten.
-New VM disks use LVM-thin linked clones; guest writes remain isolated. Requested extra packages still
+Each node keeps its own `templates.json` and imports the same prepared image at VMIDs from its own
+block of 20 (PLAN 6.1), because a linked clone works only on the node that holds its template.
+`build-templates.py` refuses a VMID that exists on another node. The guest storage id is `storage`
+in `/etc/carrel/node.json` (default `local-lvm`, the R640 node); B09 cluster nodes use `local-zfs`.
+Set it before `configure-go-reader.py` and template import.
+New VM disks are linked clones on the guest storage (LVM-thin or ZFS); guest writes remain isolated. Requested extra packages still
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.
 

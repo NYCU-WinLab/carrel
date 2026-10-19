@@ -8,11 +8,13 @@ PVEAuditor by itself can silently return an empty, incomplete volume inventory.
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 from pathlib import Path
 
 CONFIG = Path("/etc/carrel/pve-read.json")
+NODE_CONFIG = Path("/etc/carrel/node.json")
 TOKEN = "carrel-go-reader"
 ROLE = "CarrelReadStorage"
 TOKEN_ID = "root@pam!" + TOKEN
@@ -23,10 +25,19 @@ def command(*args, optional=False):
     return result.stdout
 
 
-def remove():
+def node_storage():
+    # Guest storage id from node.json (PLAN 8.2); nodes without it keep local-lvm.
+    config = json.loads(NODE_CONFIG.read_text()) if NODE_CONFIG.exists() else {}
+    storage = config.get("storage", "local-lvm")
+    if not isinstance(storage, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage):
+        raise SystemExit("Invalid storage id in node.json")
+    return storage
+
+
+def remove(storage):
     command("pveum", "acl", "delete", "/", "--tokens", TOKEN_ID, "--roles", "PVEAuditor", optional=True)
     command(
-        "pveum", "acl", "delete", "/storage/local-lvm", "--tokens", TOKEN_ID, "--roles", ROLE, optional=True
+        "pveum", "acl", "delete", "/storage/" + storage, "--tokens", TOKEN_ID, "--roles", ROLE, optional=True
     )
     command("pveum", "user", "token", "remove", "root@pam", TOKEN, optional=True)
     command("pveum", "role", "delete", ROLE, optional=True)
@@ -52,7 +63,7 @@ def main():
         if config.get("token_id") != TOKEN_ID or config.get("role_name") != ROLE:
             raise SystemExit("Refusing a reader credential owned outside this installer")
         if args.remove:
-            remove()
+            remove(config.get("storage", "local-lvm"))
             CONFIG.unlink()
             print(json.dumps({"reader_credential_removed": True}))
         else:
@@ -64,6 +75,7 @@ def main():
     tokens = json.loads(command("pveum", "user", "token", "list", "root@pam", "--output-format", "json"))
     if any(r["roleid"] == ROLE for r in roles) or any(t["tokenid"] == TOKEN for t in tokens):
         raise SystemExit("Reader role or token already exists without its credential file")
+    storage = node_storage()
     try:
         command("pveum", "role", "add", ROLE, "--privs", "Datastore.Audit Datastore.Allocate")
         token = json.loads(
@@ -83,11 +95,12 @@ def main():
             )
         )
         command("pveum", "acl", "modify", "/", "--tokens", TOKEN_ID, "--roles", "PVEAuditor")
-        command("pveum", "acl", "modify", "/storage/local-lvm", "--tokens", TOKEN_ID, "--roles", ROLE)
+        command("pveum", "acl", "modify", "/storage/" + storage, "--tokens", TOKEN_ID, "--roles", ROLE)
         node = socket.gethostname().split(".")[0]
         config = {
             "base": f"https://{node}:8006",
             "node": node,
+            "storage": storage,
             "ca": "/etc/pve/pve-root-ca.pem",
             "authorization": "PVEAPIToken=" + TOKEN_ID + "=" + token["value"],
             "token_id": TOKEN_ID,
@@ -97,7 +110,7 @@ def main():
         with os.fdopen(os.open(CONFIG, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as stream:
             json.dump(config, stream)
     except BaseException:
-        remove()
+        remove(storage)
         raise
     print(
         json.dumps(
@@ -105,7 +118,7 @@ def main():
                 "reader_credential": "created",
                 "path": str(CONFIG),
                 "mode": "0600",
-                "roles": {"/": "PVEAuditor", "/storage/local-lvm": ROLE},
+                "roles": {"/": "PVEAuditor", "/storage/" + storage: ROLE},
             }
         )
     )

@@ -22,6 +22,36 @@ import time
 STATE = Path("/var/lib/carrel")
 NODE = socket.gethostname().split(".")[0]
 CONFIG = Path("/etc/carrel/node.json")
+STORAGE_CONFIG = Path("/etc/pve/storage.cfg")
+
+
+def storage_id():
+    # One guest storage id per site (PLAN 8.2). Nodes installed before the
+    # setting existed keep their LVM-thin pool.
+    config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    value = config.get("storage", "local-lvm")
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", value):
+        raise ValueError("invalid storage id")
+    return value
+
+
+def storage_definition(storage, text=None):
+    # Parse storage.cfg directly: pvesh would load every PVE module on the
+    # inventory path that admission calls for each allocation.
+    found = None
+    for line in (STORAGE_CONFIG.read_text() if text is None else text).splitlines():
+        if line and not line[0].isspace():
+            if found is not None:
+                break
+            kind, _, name = line.partition(":")
+            if name.strip() == storage:
+                found = {"type": kind.strip()}
+        elif found is not None and line.strip():
+            key, _, value = line.strip().partition(" ")
+            found[key] = value.strip()
+    if found is None or found["type"] not in ("lvmthin", "zfspool"):
+        raise ValueError("guest storage must be an LVM-thin or ZFS pool")
+    return found
 
 
 def pve_read(mode):
@@ -606,6 +636,39 @@ def cloud_init(m, *, prepared=False, environment="development"):
     return "user=local:snippets/" + name + ",network=local:snippets/" + network_name
 
 
+def pool_usage(definition, status):
+    if definition["type"] == "zfspool":
+        # ZFS has no separate metadata area to run out of.
+        total = status.get("total") or 0
+        return {"data_fraction": (status.get("used") or 0) / total if total else 0, "metadata_fraction": 0}
+    pool = json.loads(run("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o",
+                          "lv_name,data_percent,metadata_percent",
+                          f"{definition['vgname']}/{definition['thinpool']}"))["report"][0]["lv"][0]
+    return {"data_fraction": float(pool["data_percent"] or 0) / 100,
+            "metadata_fraction": float(pool["metadata_percent"] or 0) / 100}
+
+
+def zfs_usage(machines, pool):
+    # ZFS accounts blocks per dataset: a linked clone's usedbydataset excludes
+    # the template's blocks, and usedbysnapshots counts what only snapshots hold.
+    owners = {m["vmid"]: m["tenant_n"] for m in machines}
+    totals = {n: {"live": 0, "snapshots": 0} for n in set(owners.values())}
+    rows = run("zfs", "list", "-H", "-p", "-d", "1", "-t", "filesystem,volume",
+               "-o", "name,usedbydataset,usedbysnapshots", pool)
+    for row in rows.splitlines():
+        name, live, snapshots = row.split("\t")
+        match = re.fullmatch(r"(?:vm|subvol)-(\d+)-(?:disk-\d+|cloudinit)", name.rsplit("/", 1)[-1])
+        if match and int(match[1]) in owners:
+            usage = totals[owners[int(match[1])]]
+            usage["live"] += int(live)
+            usage["snapshots"] += int(snapshots)
+    now = time.time()
+    return [{"tenant_n": n, "sampled_at": now, "available": True,
+             "retained_snapshot_bytes": v["snapshots"],
+             "unique_total_bytes": v["live"] + v["snapshots"],
+             "accounting": "zfs_usedbydataset_plus_usedbysnapshots"} for n, v in totals.items()]
+
+
 def vm_template(image):
     defaults = {"debian-13-minimal": None, "debian-13": 9000, "ubuntu-24.04": 9001}
     if image not in defaults:
@@ -655,8 +718,8 @@ def create(m):
         template = saved.get("template", {"prepared": False})
         if not exists:
             cfg = api("get", f"/nodes/{NODE}/qemu/{template['vmid']}/config")
-            if not cfg.get("template") or not cfg.get("scsi0", "").startswith("local-lvm:base-"):
-                raise ValueError("expected an immutable LVM-thin template")
+            if not cfg.get("template") or not cfg.get("scsi0", "").startswith(storage_id() + ":base-"):
+                raise ValueError("expected an immutable template on this node's guest storage")
             run("qm", "clone", template["vmid"], vmid, "--full", "0", "--name", m["name"], "--description", marker, timeout=600)
         run(
             "qm",
@@ -719,7 +782,7 @@ def create(m):
                 "--swap",
                 m.get("swap_mb", 0),
                 "--rootfs",
-                f"local-lvm:{m['disk_gb']}",
+                f"{storage_id()}:{m['disk_gb']}",
                 "--net0",
                 net + f",name=eth0,ip={m['ip']}/24,gw=10.200.{n}.1,type=veth",
                 "--nameserver",
@@ -900,22 +963,25 @@ def main():
             # including templates and unused disks, for conservative admission.
             observed = pve_read("inventory")
             volumes = observed.pop("volumes")
-            pools = json.loads(run("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o", "lv_name,data_percent,metadata_percent", "pve/data"))["report"][0]["lv"]
-            pool = pools[0]
+            storage = storage_id()
             out = {
-                "thin_pool": {"data_fraction": float(pool["data_percent"] or 0) / 100,
-                              "metadata_fraction": float(pool["metadata_percent"] or 0) / 100},
+                "thin_pool": pool_usage(storage_definition(storage), observed["storage"]),
                 "node": NODE,
+                "storage_id": storage,
                 **observed,
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
             }
         elif op == "storage_usage":
             for m in req["machines"]:
                 machine(m)
-            spec = importlib.util.spec_from_file_location("thin_usage", "/usr/local/lib/carrel/thin-usage.py")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            out = module.collect(req["machines"])
+            definition = storage_definition(storage_id())
+            if definition["type"] == "zfspool":
+                out = zfs_usage(req["machines"], definition["pool"])
+            else:
+                spec = importlib.util.spec_from_file_location("thin_usage", "/usr/local/lib/carrel/thin-usage.py")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                out = module.collect(req["machines"], definition["vgname"], definition["thinpool"])
         elif op == "status":
             m = req["machine"]
             owned(m)

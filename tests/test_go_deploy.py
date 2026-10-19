@@ -2,6 +2,7 @@
 
 import ast
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,3 +51,7 @@ def test_upgrade_payloads_compile_and_keep_existing_database(tmp_path, monkeypat
     assert "var/lib/carrel/carrel.db" not in rollback
     assert "/usr/local/lib/carrel/carrel-pve-read" in program
     assert "/usr/local/lib/carrel/carrel-deployd" in program
+    # node-agent loads these helpers, so they ship, back up and roll back with it.
+    shipped = json.loads((tmp_path / "deploy-go.json").read_text())["sha256"]
+    assert {"node-agent.py", "thin-usage.py", "pve-read.pl"} <= shipped.keys()
+    assert "helpers={'thin-usage.py':'644','pve-read.pl':'755'}" in program

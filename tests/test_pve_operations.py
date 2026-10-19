@@ -96,6 +96,9 @@ def test_gateway_validates_before_replacing_working_routes(gateway, monkeypatch)
 def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, capsys):
     module = script("node-agent.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    (tmp_path / "storage.cfg").write_text("lvmthin: local-lvm\n\tthinpool data\n\tvgname pve\n")
+    monkeypatch.setattr(module, "STORAGE_CONFIG", tmp_path / "storage.cfg")
     observed = {
         "resources": [],
         "storage": {"total": 1000 * GIB, "used": 100 * GIB},
@@ -203,7 +206,8 @@ sub handle {
     (tmp_path / "JSON.pm").write_text("""package JSON;
 use JSON::PP ();
 use Exporter 'import';
-our @EXPORT_OK = qw(encode_json);
+our @EXPORT_OK = qw(decode_json encode_json);
+sub decode_json { JSON::PP::decode_json($_[0]) }
 sub encode_json { JSON::PP::encode_json($_[0]) }
 1;
 """)

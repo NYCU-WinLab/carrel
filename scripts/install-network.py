@@ -74,15 +74,17 @@ def main():
             run("pvesh", "create", "/cluster/sdn/" + path, "--" + key, ident, *args)
     Path("/etc/carrel").mkdir(exist_ok=True)
     Path("/var/lib/carrel").mkdir(exist_ok=True)
-    Path("/etc/carrel/node.json").write_text(
-        json.dumps(
-            {
-                "protected_addresses": [address + "/32", "140.113.194.229/32", "140.113.60.189/32"],
-                # The edge's public HTTPS gateway (PLAN 6.4 hairpin): carrel and lab sites live there.
-                "public_entries": [{"address": "140.113.194.229/32", "port": 443}],
-            }
-        )
+    # Keep keys this installer does not own, such as storage and go_pve_reader.
+    node_config = Path("/etc/carrel/node.json")
+    config = json.loads(node_config.read_text()) if node_config.exists() else {}
+    config.update(
+        {
+            "protected_addresses": [address + "/32", "140.113.194.229/32", "140.113.60.189/32"],
+            # The edge's public HTTPS gateway (PLAN 6.4 hairpin): carrel and lab sites live there.
+            "public_entries": [{"address": "140.113.194.229/32", "port": 443}],
+        }
     )
+    node_config.write_text(json.dumps(config))
     # A separate owned table, never a flush of Proxmox/staging/edge rules.
     Path("/etc/carrel/tenant-host.nft").write_text(TENANT_HOST_NFT)
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]

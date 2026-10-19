@@ -27,7 +27,7 @@ def write(path, data, mode=0o644):
     return True
 
 
-def ct(vmid, name, ip, bridge, gateway, memory, key):
+def ct(vmid, name, ip, bridge, gateway, memory, key, storage):
     config = Path(f"/etc/pve/lxc/{vmid}.conf")
     if config.exists():
         if f"hostname: {name}\n" not in config.read_text() or "carrel-infra" not in config.read_text():
@@ -54,7 +54,7 @@ def ct(vmid, name, ip, bridge, gateway, memory, key):
         "--swap",
         "0",
         "--rootfs",
-        "local-lvm:12",
+        f"{storage}:12",
         "--onboot",
         "1",
         "--startup",
@@ -92,6 +92,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--role", choices=["site", "edge"], required=True)
     p.add_argument("--admin-key", required=True)
+    p.add_argument("--storage", default="local-lvm", help="Guest storage id for the infra CTs (PLAN 8.2)")
     a = p.parse_args()
     assert os.geteuid() == 0
     assert run("hostname", "-s", capture=True) == ("carrel01" if a.role == "site" else "pve")
@@ -169,12 +170,12 @@ WantedBy=multi-user.target
         )
         run("systemctl", "daemon-reload")
         run("systemctl", "enable", "--now", "carrel-infra-firewall")
-        ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key)
-        ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key)
+        ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, a.storage)
+        ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, a.storage)
         packages(100, "control")
         packages(101, "gateway")
     else:
-        ct(207, "carrel-proxy", "10.10.10.207", "vnet10", "10.10.10.1", 512, a.admin_key)
+        ct(207, "carrel-proxy", "10.10.10.207", "vnet10", "10.10.10.1", 512, a.admin_key, a.storage)
         packages(207, "proxy")
     print(json.dumps({"role": a.role, "wireguard_public_key": pub.stdout.strip()}))
 
