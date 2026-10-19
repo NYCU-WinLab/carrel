@@ -118,7 +118,5 @@ def test_rollback_restores_what_configure_nodes_rewrote(tmp_path, monkeypatch):
         assert name in rollback
     assert program.index("configured=True") < program.index("configure-nodes.py')],check=True)")
     with pytest.raises(SystemExit):
-        monkeypatch.setattr(
-            sys, "argv", [str(path), "--artifacts", str(tmp_path), "--host", "-oProxyCommand=x"]
-        )
+        monkeypatch.setattr(sys, "argv", [str(path), "--artifacts", str(tmp_path), "--host=-J.x"])
         deploy.main()
