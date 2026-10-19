@@ -415,8 +415,14 @@ Several nodes are listed in `/etc/carrel/config.json` as
 `/etc/carrel/ssh_config`. A new machine goes to the node that admits it with the most admission
 memory left, and the new machines of one deployment share a node. Each machine record keeps its
 node, and every machine request goes to that node. Without `nodes`, carrel uses `carrel-node`
-alone and records no node. Network reconciliation still runs on the first node only
-(PLAN 15.15, gaps 3 and 4).
+alone and records no node. The first node must reconcile; the others catch up on the next pass.
+A site with its own public address (PLAN 15.15) sets `"ingress": "exit"` and
+`"public_address": "<IPv4>"`. Its first exit node then terminates TLS and publishes ports, and the
+external edge only keeps the backups. The control plane issues carrel's own certificate (certbot
+lineage `origin`) through DNS-01. The gateway receives it on the next reconcile, and only then do
+carrel's records (the origin and every `*.<slug>.winlab.tw`) move to that address. A control plane
+without `public_address` never rewrites records, so an old site cannot move them back. Stop the old
+control plane before the new one starts.
 New VM disks are linked clones on the guest storage (LVM-thin or ZFS); guest writes remain isolated. Requested extra packages still
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.

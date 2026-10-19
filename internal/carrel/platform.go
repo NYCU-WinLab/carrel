@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +49,7 @@ type Platform struct {
 	writer             sync.Mutex
 	certificates       sync.Mutex
 	registration       sync.Mutex
+	originDelivered    atomic.Value
 	inventoryMu        sync.Mutex
 	inventories        map[string]*ObservationCache
 	Operations         *Operations

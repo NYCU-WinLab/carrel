@@ -299,9 +299,17 @@ func TestExitIngressSkipsTheExternalEdge(t *testing.T) {
 	if _, ok := r["edge"]; ok || len(targets) != 3 {
 		t.Fatalf("edge reconciled: %v %v", targets, encoded(r))
 	}
-	for _, v := range []any{"edge", "exit", nil} {
+	for _, v := range []any{"edge", nil} {
 		if err := ValidateNodes(D{"ingress": v}); err != nil {
 			t.Fatal(err)
+		}
+	}
+	if err := ValidateNodes(D{"ingress": "exit", "public_address": "140.113.60.184", "origin": "https://carrel.winlab.tw"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []D{{"ingress": "exit"}, {"public_address": "fe80::1"}, {"public_address": "x"}} {
+		if err := ValidateNodes(c); err == nil {
+			t.Fatalf("accepted %v", c)
 		}
 	}
 	if err := ValidateNodes(D{"ingress": "both"}); err == nil {

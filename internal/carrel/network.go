@@ -256,11 +256,20 @@ func (e *Execution) Reconcile() D {
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
 	first := request
+	origin := ""
 	if str(e.P.Config["ingress"]) == "exit" {
 		// The first node holds the infra gateway, which terminates TLS here.
-		first = D{"op": "reconcile", "state": merge(state, D{"origin": originHost(e.P.Config)})}
+		gateway := merge(state, D{"origin": originHost(e.P.Config)})
+		if crt, key, ok := e.originFiles(); ok {
+			gateway["origin_certificate"], origin = originPair(crt, key), crt
+		}
+		first = D{"op": "reconcile", "state": gateway}
 	}
 	result := D{"node": e.Call(first, nodes[0].Target)}
+	if origin != "" {
+		// MaintainOrigin moves carrel's record only after the gateway took it.
+		e.P.originDelivered.Store(origin)
+	}
 	if len(nodes) > 1 {
 		// The other nodes catch up on the next reconcile: one node down for an
 		// upgrade (PLAN 8.3) must not stop every change on the site.

@@ -72,11 +72,25 @@ func (e *Execution) DomainRecord(t D, remove bool) {
 	if len(records) > 0 && (len(records) != 1 || records[0]["comment"] != owner) {
 		fail("conflict", "Refusing DNS record owned outside carrel")
 	}
+	address, own := publicAddress(e.P.Config)
 	if remove && len(records) > 0 {
 		e.CF("DELETE", "/"+str(records[0]["id"]), nil)
 	} else if !remove && len(records) == 0 {
-		e.CF("POST", "", D{"type": "A", "name": name, "content": "140.113.194.229", "ttl": 120, "proxied": false, "comment": owner})
+		e.CF("POST", "", D{"type": "A", "name": name, "content": address, "ttl": 120, "proxied": false, "comment": owner})
+	} else if !remove && own && records[0]["content"] != address {
+		// A site with its own address takes over the records carrel owns. A
+		// control plane without public_address never rewrites them back.
+		e.CF("PATCH", "/"+str(records[0]["id"]), D{"content": address})
 	}
+}
+
+// publicAddress is where carrel's records point: the site's own public
+// address, or the external edge on sites that predate one.
+func publicAddress(c D) (string, bool) {
+	if a := str(c["public_address"]); a != "" {
+		return a, true
+	}
+	return "140.113.194.229", false
 }
 func (e *Execution) CertificateDir() string {
 	return textAt(e.P.Config, "certificate_dir", "/var/lib/carrel/certificates")
@@ -102,6 +116,18 @@ func (e *Execution) EnsureCertificate(t D) D {
 		}
 	}
 	e.DomainRecord(t, false)
+	crt, key := e.issueCertificate(str(t["slug"]), "*."+str(t["slug"])+".winlab.tw")
+	if cert == nil {
+		cert = D{"id": str(n), "tenant_n": n, "slug": t["slug"], "issued_at": time.Now().Unix()}
+	}
+	cert["fullchain_path"], cert["private_key_path"] = crt, key
+	e.Put("certificates", str(n), n, cert)
+	return D{"state": "ready"}
+}
+
+// issueCertificate runs certbot's DNS-01 issuance for one name and returns the
+// immutable archive pair it produced.
+func (e *Execution) issueCertificate(name, domain string) (string, string) {
 	base := e.CertificateDir()
 	must(os.MkdirAll(base, 0700))
 	credentials := filepath.Join(base, "cloudflare.ini")
@@ -109,16 +135,13 @@ func (e *Execution) EnsureCertificate(t D) D {
 	must(os.Chmod(credentials, 0600))
 	ctx, cancel := context.WithTimeout(e.Ctx, 300*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, textAt(e.P.Config, "certbot", "/opt/carrel/venv/bin/certbot"), "certonly", "--non-interactive", "--agree-tos", "--email", textAt(e.P.Config, "acme_email", "yongxiang.zhan@outlook.com"), "--dns-cloudflare", "--dns-cloudflare-credentials", credentials, "--dns-cloudflare-propagation-seconds", "30", "--cert-name", str(t["slug"]), "--config-dir", filepath.Join(base, "config"), "--work-dir", filepath.Join(base, "work"), "--logs-dir", filepath.Join(base, "logs"), "--keep-until-expiring", "-d", "*."+str(t["slug"])+".winlab.tw")
+	cmd := exec.CommandContext(ctx, textAt(e.P.Config, "certbot", "/opt/carrel/venv/bin/certbot"), "certonly", "--non-interactive", "--agree-tos", "--email", textAt(e.P.Config, "acme_email", "yongxiang.zhan@outlook.com"), "--dns-cloudflare", "--dns-cloudflare-credentials", credentials, "--dns-cloudflare-propagation-seconds", "30", "--cert-name", name, "--config-dir", filepath.Join(base, "config"), "--work-dir", filepath.Join(base, "work"), "--logs-dir", filepath.Join(base, "logs"), "--keep-until-expiring", "-d", domain)
 	if err := cmd.Run(); err != nil {
 		fail("backend_unavailable", "Certificate issuance failed; inspect control-plane ACME logs", D{"component": "certbot", "backend_code": "certificate_issuance_failed", "recovery": "retry_infrastructure"})
 	}
-	if cert == nil {
-		cert = D{"id": str(n), "tenant_n": n, "slug": t["slug"], "issued_at": time.Now().Unix()}
-	}
 	// Pin the matching immutable certbot archive pair. Reconciliation can keep
 	// using the old generation while renewal rotates the live symlinks.
-	path := filepath.Join(base, "config", "live", str(t["slug"]))
+	path := filepath.Join(base, "config", "live", name)
 	crt, err := filepath.EvalSymlinks(filepath.Join(path, "fullchain.pem"))
 	must(err)
 	key, err := filepath.EvalSymlinks(filepath.Join(path, "privkey.pem"))
@@ -126,9 +149,7 @@ func (e *Execution) EnsureCertificate(t D) D {
 	if _, err := tls.LoadX509KeyPair(crt, key); err != nil {
 		fail("backend_unavailable", "Certificate files do not form a valid pair", D{"component": "certbot", "backend_code": "certificate_pair_invalid", "recovery": "retry_infrastructure"})
 	}
-	cert["fullchain_path"], cert["private_key_path"] = crt, key
-	e.Put("certificates", str(n), n, cert)
-	return D{"state": "ready"}
+	return crt, key
 }
 func (e *Execution) CertificateBundles(domains []D) []D {
 	wanted := map[int]bool{}
