@@ -19,6 +19,11 @@ var nodeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 // ValidateNodes rejects a node list that could route a machine to the wrong
 // adapter; the control plane refuses to start with it.
 func ValidateNodes(c D) error {
+	if v, ok := c["nodes"]; ok && v != nil {
+		if _, list := v.([]any); !list {
+			return errors.New("nodes must be a list")
+		}
+	}
 	names, targets := map[string]bool{}, map[string]bool{}
 	for _, v := range arr(c["nodes"]) {
 		n, ok := v.(map[string]any)
@@ -48,18 +53,25 @@ func (p *Platform) Nodes() []nodeRef {
 // nodeOf returns the node that holds a machine. Records without a node belong
 // to the first node, where every machine lived before placement existed.
 func (p *Platform) nodeOf(m D) nodeRef {
+	n, ok := p.lookupNode(m)
+	if !ok {
+		fail("backend_unavailable", "The machine's node is not configured", D{"recovery": "retry_infrastructure"})
+	}
+	return n
+}
+
+func (p *Platform) lookupNode(m D) (nodeRef, bool) {
 	nodes := p.Nodes()
 	name := str(m["node"])
 	if name == "" {
-		return nodes[0]
+		return nodes[0], true
 	}
 	for _, n := range nodes {
 		if n.Name == name {
-			return n
+			return n, true
 		}
 	}
-	fail("backend_unavailable", "The machine's node is not configured", D{"recovery": "retry_infrastructure"})
-	return nodeRef{}
+	return nodeRef{}, false
 }
 
 func (p *Platform) inventoryCache(target string) *ObservationCache {
@@ -99,7 +111,9 @@ func (e *Execution) nodeCapacity(node nodeRef, proposed D, cached bool) D {
 // nodeLoad lists what admission counts against a node: its machines, with
 // proposed in place of its stored record, and the snapshots of its machines.
 func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []D) {
-	on := func(m D) bool { return e.P.nodeOf(m).Name == node.Name }
+	// A record on a node missing from the config counts nowhere; requests for
+	// that machine still fail, but every other machine keeps its capacity view.
+	on := func(m D) bool { n, ok := e.P.lookupNode(m); return ok && n.Name == node.Name }
 	reservations := filter(e.S.Objects("machines"), on)
 	if proposed != nil {
 		reservations = filter(reservations, func(m D) bool { return integer(m["vmid"]) != integer(proposed["vmid"]) })
@@ -116,10 +130,10 @@ func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []D) {
 
 // nodeCapacities summarizes every node. Store reads stay on this goroutine;
 // only the node adapters are asked in parallel.
-func (e *Execution) nodeCapacities(proposed D, cached bool) []D {
+func (e *Execution) nodeCapacities(proposed D, cached bool) ([]D, int) {
 	nodes := e.P.Nodes()
 	if len(nodes) == 1 {
-		return []D{e.nodeCapacity(nodes[0], proposed, cached)}
+		return []D{e.nodeCapacity(nodes[0], proposed, cached)}, 0
 	}
 	inventories := make([]any, len(nodes))
 	times := make([]time.Time, len(nodes))
@@ -143,15 +157,21 @@ func (e *Execution) nodeCapacities(proposed D, cached bool) []D {
 		}()
 	}
 	wg.Wait()
-	out := make([]D, len(nodes))
+	out := []D{}
+	var failure any
 	for i, n := range nodes {
 		if failures[i] != nil {
-			panic(failures[i])
+			failure = failures[i]
+			continue
 		}
 		reservations, snapshots := e.nodeLoad(n, proposed)
-		out[i] = summarize(obj(inventories[i]), reservations, snapshots, times[i])
+		out = append(out, summarize(obj(inventories[i]), reservations, snapshots, times[i]))
 	}
-	return out
+	// Observations skip an unreachable node; fresh reads fail closed.
+	if failure != nil && (!cached || len(out) == 0) {
+		panic(failure)
+	}
+	return out, len(nodes) - len(out)
 }
 
 // combine sums node summaries for members and the public status page. Each

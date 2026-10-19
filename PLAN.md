@@ -1587,6 +1587,8 @@ it is empty:
 4. Tell the owners, then move the tenant VMs with `qm remote-migrate`, one tenant at a time. The
    target storage is `local-zfs`, and the VNets keep their names. On 2026-10-19 the R640 node held
    9 tenant VMs of 5 tenants: 12 vCPU, 15 GiB RAM, 130 GiB allocated. Staging VM 190 does not move.
+   Set each moved machine's `node` to the node it lands on. A record without a node belongs to the
+   first entry of `nodes`, so a restored database or a reordered list would move it silently.
 5. Switch the records to `.184` and check from outside the campus (section 10.7).
 6. Keep the sources stopped on the R640 node for 14 days, then retire it. Its name `carrel01` is
    also on the tailnet, in admin SSH aliases and in sensorium. Rename those before the new
