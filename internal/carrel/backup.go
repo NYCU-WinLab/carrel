@@ -106,17 +106,22 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	// does not answer is reported; the backup of everything else still lands.
 	missing := []any{}
 	for _, n := range p.Nodes() {
-		reply, err := p.Backend.Call(ctx, D{"op": "node_files"}, n.Target)
+		// A hung node costs at most a minute of the nightly backup.
+		nodeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		reply, err := p.Backend.Call(nodeCtx, D{"op": "node_files"}, n.Target)
+		cancel()
 		name := str(obj(reply)["node"])
-		if err != nil || !nodeName.MatchString(name) {
+		// The reply must come from the node it was asked, so two nodes never
+		// share a directory; the legacy single node has no configured name.
+		if err != nil || !nodeName.MatchString(name) || (n.Name != "" && name != n.Name) {
 			missing = append(missing, n.Target)
 			continue
 		}
 		for file, content := range obj(obj(reply)["files"]) {
-			if !contains(nodeFiles, file) {
+			data := []byte(str(content))
+			if !contains(nodeFiles, file) || len(data) > 1<<20 {
 				continue
 			}
-			data := []byte(str(content))
 			header := &tar.Header{Name: "nodes/" + name + "/" + file, Mode: 0600, Size: int64(len(data)), ModTime: time.Now(), Typeflag: tar.TypeReg}
 			if e = archive.WriteHeader(header); e != nil {
 				return nil, e
