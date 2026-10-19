@@ -29,7 +29,7 @@ def main():
     parser.add_argument("--host", default="carrel01",
                         help="SSH target of the node that holds CT 100 (the first exit node)")
     args = parser.parse_args()
-    if not re.fullmatch(r"[A-Za-z0-9_.@-]+", args.host):
+    if not re.fullmatch(r"[A-Za-z0-9_.@][A-Za-z0-9_.@-]*", args.host):
         parser.error("invalid host")
     # The health check expects the version this checkout builds.
     version = re.search(r'const Version = "([^"]+)"', (ROOT / "internal/carrel/value.go").read_text())[1]
@@ -130,6 +130,7 @@ ct('systemctl','stop','carrel-backup.timer')
 ct('systemctl','stop','carrel-backup.service')
 ct('systemctl','stop','carrel')
 activated=False
+configured=False
 try:
  ct('python3','-c',{preflight!r})
  ct('python3','-c',{backup!r})
@@ -157,6 +158,8 @@ try:
  os.replace(str(target)+'.next',target)
  if Path('/etc/carrel/site.json').exists():
   # Same programs on every site node; CT 100 must reach each adapter.
+  # It rewrites CT 100's node list and SSH files, which a rollback restores.
+  configured=True
   subprocess.run(['python3',str(stage/'configure-nodes.py')],check=True)
  config=Path('/etc/carrel/node.json'); value=json.loads(config.read_text());value['go_pve_reader']=True
  config.write_text(json.dumps(value,indent=2)+'\\n')
@@ -181,9 +184,11 @@ try:
  print(json.dumps({{'health':health,'volumes':len(new['volumes']),'node_backup':str(stage),'control_backup':'/opt/carrel/rollback/go-{stamp}.tar.gz'}}))
 except BaseException:
  ct('systemctl','stop','carrel')
- if activated:
-  restore="from pathlib import Path; import tarfile; a=tarfile.open('/opt/carrel/rollback/go-{stamp}.tar.gz'); names=['etc/systemd/system/carrel.service','etc/systemd/system/carrel-backup.service','etc/carrel/config.json','usr/local/bin/carrel']; [a.extract(n,'/',filter='data') for n in names if n in a.getnames()]"
-  ct('python3','-c',restore)
+ if activated or configured:
+  names=['etc/carrel/config.json','etc/carrel/ssh_config','etc/carrel/known_hosts']
+  if activated: names+=['etc/systemd/system/carrel.service','etc/systemd/system/carrel-backup.service','usr/local/bin/carrel']
+  restore="import json,sys,tarfile; a=tarfile.open('/opt/carrel/rollback/go-{stamp}.tar.gz'); names=json.loads(sys.argv[1]); [a.extract(n,'/',filter='data') for n in names if n in a.getnames()]"
+  ct('python3','-c',restore,json.dumps(names))
  for name,path in [('node-agent.py','/usr/local/lib/carrel/node-agent.py'),('node.json','/etc/carrel/node.json')]:
   if (stage/('before-'+name)).exists(): shutil.copyfile(stage/('before-'+name),path)
  if (stage/'before-carrel-pve-read').exists(): shutil.copy2(stage/'before-carrel-pve-read','/usr/local/lib/carrel/carrel-pve-read')
