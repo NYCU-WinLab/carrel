@@ -266,8 +266,9 @@ func (e *Execution) Reconcile() D {
 		first = D{"op": "reconcile", "state": gateway}
 	}
 	result := D{"node": e.Call(first, nodes[0].Target)}
-	if origin != "" {
-		// MaintainOrigin moves carrel's record only after the gateway took it.
+	if origin != "" && obj(result["node"])["origin_certificate"] == fingerprint(obj(obj(first["state"])["origin_certificate"])["fullchain"]) {
+		// The gateway confirmed it holds this pair: MaintainOrigin may move
+		// carrel's record now.
 		e.P.originDelivered.Store(origin)
 	}
 	if len(nodes) > 1 {

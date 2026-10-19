@@ -1,7 +1,9 @@
 package carrel
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -103,4 +105,10 @@ func originPair(crt, key string) D {
 	k, err := os.ReadFile(key)
 	must(err)
 	return D{"fullchain": string(c), "privkey": string(k)}
+}
+
+// fingerprint matches node-agent's confirmation of the pair the gateway holds.
+func fingerprint(fullchain any) string {
+	sum := sha256.Sum256([]byte(str(fullchain)))
+	return hex.EncodeToString(sum[:])
 }

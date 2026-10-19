@@ -89,9 +89,13 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	p, b, dns := originFixture(t)
 	dns.records["carrel.test"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": edgeOriginOwner}}
 	sent := D{}
+	confirm := true
 	b.call = func(r D, target string) (any, error) {
 		if r["op"] == "reconcile" && target == "carrel-node" {
 			sent = obj(r["state"])
+			if pair := obj(sent["origin_certificate"]); confirm && pair["fullchain"] != nil {
+				return D{"origin_certificate": fingerprint(pair["fullchain"])}, nil
+			}
 		}
 		return D{}, nil
 	}
@@ -110,6 +114,14 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	if len(dns.writes) != 0 {
 		t.Fatal("moved the record before the gateway received the certificate")
 	}
+	// A node without the gateway reconciles fine but confirms nothing.
+	confirm = false
+	e.Reconcile()
+	e.MaintainOrigin()
+	if len(dns.writes) != 0 {
+		t.Fatal("moved the record although the gateway did not confirm the pair")
+	}
+	confirm = true
 	e.Reconcile()
 	if obj(sent["origin_certificate"])["privkey"] == nil {
 		t.Fatal("the gateway did not receive the origin pair")
