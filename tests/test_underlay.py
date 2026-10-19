@@ -81,3 +81,47 @@ def test_private_dhcp_runs_on_the_first_exit_node_only(monkeypatch, tmp_path, no
     assert module.serves_private_dhcp() is True
     (tmp_path / "site.json").write_text(json.dumps(SITE))
     assert module.serves_private_dhcp() is serves
+
+
+def test_infra_sources_are_trusted_only_from_the_infra_bridge():
+    nft = load("install-network.py").TENANT_HOST_NFT
+    assert 'iifname "vmbr98" ip saddr { 10.200.0.2, 10.200.0.3 } accept' in nft
+    assert "\n  ip saddr { 10.200.0.2, 10.200.0.3 } accept" not in nft
+
+
+def test_vxlan_ports_share_the_guest_conntrack_zone(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    written = {}
+    monkeypatch.setattr(
+        module, "write", lambda path, data, mode=0o640: written.__setitem__(str(path), data) or True
+    )
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "clsact")
+    monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "pve_read",
+        lambda mode: {"vnets": [{"vnet": "t003", "zone": "tenants"}], "subnets": {"t003": [{}]}},
+    )
+    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    (tmp_path / "node.json").write_text('{"protected_addresses": []}')
+    real = Path
+
+    def local(path):
+        text = str(path)
+        if text.startswith("/sys/class/net/t003"):
+            return tmp_path
+        return real(path) if text.startswith(str(tmp_path)) else tmp_path / "absent" / text.lstrip("/")
+
+    monkeypatch.setattr(module, "Path", local)
+    state = {
+        "tenants": [{"n": 3, "slug": "zyx1121"}],
+        "networks": [],
+        "machines": [],
+        "domains": [],
+        "ports": [],
+        "peers": [],
+    }
+    module.reconcile(state)
+    assert 'iifname { "vxlan_t003" } ct zone set 1' in written["/etc/carrel/conntrack.nft"]

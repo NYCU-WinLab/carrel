@@ -482,6 +482,10 @@ def reconcile(state):
             "drop/ok",
         )
     interfaces = [f"{'tap' if m['kind'] == 'vm' else 'veth'}{machine(m)}i0" for m in state["machines"]]
+    # Same-tenant traffic between nodes enters through the VNet's VXLAN port;
+    # it must share the guests' zone, or the reply of a cross-node connection
+    # finds no entry and is dropped as invalid.
+    interfaces += [f"vxlan_{tenant_config(t)[1]}" for t in state["tenants"]]
     interface_rule = (
         "iifname { " + ", ".join('"' + i + '"' for i in interfaces) + " } ct zone set 1" if interfaces else ""
     )

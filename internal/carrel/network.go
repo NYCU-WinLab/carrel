@@ -254,11 +254,21 @@ func (e *Execution) Reconcile() D {
 	nodes := e.P.Nodes()
 	result := D{"node": e.Call(request, nodes[0].Target)}
 	if len(nodes) > 1 {
-		each := D{nodes[0].Name: result["node"]}
+		// The other nodes catch up on the next reconcile: one node down for an
+		// upgrade (PLAN 8.3) must not stop every change on the site.
+		each, unreachable := D{nodes[0].Name: result["node"]}, []any{}
 		for _, n := range nodes[1:] {
-			each[n.Name] = e.Call(request, n.Target)
+			if f := attempt(func() { each[n.Name] = e.Call(request, n.Target) }); f != nil {
+				if _, ok := f.(Failure); !ok {
+					panic(f)
+				}
+				unreachable = append(unreachable, n.Name)
+			}
 		}
 		result["nodes"] = each
+		if len(unreachable) > 0 {
+			result["unreachable_nodes"] = unreachable
+		}
 	}
 	result["edge"] = e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
 	return result

@@ -244,3 +244,38 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	calls := []string{}
+	var mu sync.Mutex
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" {
+			mu.Lock()
+			calls = append(calls, target)
+			mu.Unlock()
+			if target == "node-02" {
+				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
+			}
+			return D{}, nil
+		}
+		return inner(r, target)
+	}
+	r := p.execution(context.Background()).Reconcile()
+	if !equalStrings(calls, []string{"node-01", "node-02", "node-03", "carrel-edge"}) {
+		t.Fatalf("calls %v", calls)
+	}
+	if !equal(r["unreachable_nodes"], []any{"carrel02"}) {
+		t.Fatal(encoded(r))
+	}
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" && target == "node-01" {
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
+		}
+		return inner(r, target)
+	}
+	if err := attempt(func() { p.execution(context.Background()).Reconcile() }); err == nil {
+		t.Fatal("the gateway node may not be skipped")
+	}
+}

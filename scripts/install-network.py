@@ -39,7 +39,7 @@ table inet carrel_tenant_host {{
   type filter hook input priority -25; policy accept;
   iifname {{ {TENANT_IFACES}, "vrf_tenants" }} udp sport 68 udp dport 67 accept
   ip saddr 10.200.0.0/16 udp sport 68 udp dport 67 accept
-  ip saddr {{ 10.200.0.2, 10.200.0.3 }} accept
+  iifname "vmbr98" ip saddr {{ 10.200.0.2, 10.200.0.3 }} accept
   ip saddr 10.200.0.0/16 counter drop
   iifname {{ {TENANT_IFACES} }} counter drop
   iifname "vrf_tenants" counter drop
