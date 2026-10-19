@@ -134,7 +134,10 @@ def guest_firewall(m, state, config):
             proto = grant["proto"]
             if proto not in ("tcp", "udp"):
                 raise ValueError("invalid protocol")
-            rules.append(f"IN ACCEPT -source 10.254.200.1 -p {proto} -dport {port}")
+            # The external edge SNATs to its tunnel address; a site with its own
+            # public address DNATs only, so the client's address arrives.
+            source = "" if site().get("public") else "-source 10.254.200.1 "
+            rules.append(f"IN ACCEPT {source}-p {proto} -dport {port}")
     for domain in state.get("domains", []):
         if domain["vmid"] == m["vmid"]:
             port = integer(domain["target_port"], 1, 65535)
@@ -245,6 +248,46 @@ def ensure(path, key, value, *, existing=None, **params):
     existing.append({key: value, **params})
     return True
 
+
+
+def site():
+    return json.loads(SITE.read_text()) if SITE.exists() else {}
+
+
+def public_ingress():
+    # The first exit node of a site with a public address terminates ingress
+    # itself (PLAN 15.15); other sites publish through the external edge.
+    s = site()
+    if not s.get("public") or s["exit_nodes"][0] != NODE:
+        return None
+    return str(ipaddress.IPv4Interface(s["public"]["address"]).ip)
+
+
+def ports_nft(state, address):
+    """DNAT the public address: HTTP(S) to the infra gateway, granted ports to machines."""
+    rules = [f"ip daddr {address} tcp dport {{ 80, 443 }} dnat to 10.200.0.2"]
+    seen = set()
+    for g in state["ports"]:
+        n = integer(g["tenant_n"], 1, 254)
+        public = integer(g["public_port"], 20000 + n * 10, 20009 + n * 10)
+        port = integer(g["port"], 1, 65535)
+        if g["proto"] not in ("tcp", "udp") or (g["proto"], public) in seen:
+            raise ValueError("invalid port grant")
+        ip = ipaddress.IPv4Address(g["ip"])
+        if ip not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 10 <= int(str(ip).rsplit(".", 1)[1]) <= 109:
+            raise ValueError("port grant outside tenant network")
+        seen.add((g["proto"], public))
+        rules.append(f"ip daddr {address} {g['proto']} dport {public} dnat to {ip}:{port}")
+    body = "\n".join("  " + r for r in rules)
+    return f"""add table ip carrel_ports
+flush table ip carrel_ports
+table ip carrel_ports {{
+ chain prerouting {{
+  type nat hook prerouting priority dstnat - 5; policy accept;
+{body}
+ }}
+}}
+"""
 
 
 def serves_private_dhcp():
@@ -558,6 +601,24 @@ table inet carrel_conntrack {{
             Path("/usr/local/lib/carrel/gateway-sync.py").read_text(),
             input=json.dumps({"hosts": hosts, "caddy": caddy}))
     private_dhcp(state, serve=serves_private_dhcp())
+    address = public_ingress()
+    if address:
+        if write("/etc/carrel/ports.nft", ports_nft(state, address)):
+            run("nft", "-c", "-f", "/etc/carrel/ports.nft")
+        run("nft", "-f", "/etc/carrel/ports.nft")
+        unit = """[Unit]
+Description=Carrel public port forwarding
+After=carrel-public.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/carrel/ports.nft
+[Install]
+WantedBy=multi-user.target
+"""
+        if write("/etc/systemd/system/carrel-ports.service", unit):
+            run("systemctl", "daemon-reload")
+            run("systemctl", "enable", "carrel-ports")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     return {"changed": changed}
 

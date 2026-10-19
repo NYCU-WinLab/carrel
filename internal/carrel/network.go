@@ -270,7 +270,11 @@ func (e *Execution) Reconcile() D {
 			result["unreachable_nodes"] = unreachable
 		}
 	}
-	result["edge"] = e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
+	// A site with its own public address publishes on its first exit node;
+	// the external edge then only keeps the backups.
+	if str(e.P.Config["ingress"]) != "exit" {
+		result["edge"] = e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
+	}
 	return result
 }
 
