@@ -308,3 +308,27 @@ func TestExitIngressSkipsTheExternalEdge(t *testing.T) {
 		t.Fatal("accepted an unknown ingress mode")
 	}
 }
+
+func TestExitIngressSendsCertificatesOnlyToTheGatewayNode(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	p.Config["ingress"] = "exit"
+	sent := map[string]D{}
+	var mu sync.Mutex
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" {
+			mu.Lock()
+			sent[target] = obj(r["state"])
+			mu.Unlock()
+			return D{}, nil
+		}
+		return inner(r, target)
+	}
+	p.execution(context.Background()).Reconcile()
+	if _, ok := sent["node-01"]["certificates"]; !ok || sent["node-01"]["origin"] != "carrel.test" {
+		t.Fatal(encoded(sent["node-01"]))
+	}
+	if _, ok := sent["node-02"]["certificates"]; ok {
+		t.Fatal("a node without the gateway received certificates")
+	}
+}
