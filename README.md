@@ -457,9 +457,12 @@ each day and stores 14 daily archives under `/var/lib/carrel-edge/backups` on th
 These are sensitive archives. They do not contain tenant disks and are not a replacement for PBS.
 For restoration, stop the control service, restore `carrel.db` (remove stale `-wal`/`-shm` files),
 `etc/carrel/`, and `certificates/` to their original locations, set the documented ownership,
-then start the service and run `reconcile_run`. On a site with several nodes the archive also holds
-`nodes/<name>/{node.json,templates.json,site.json}`; put them back under `/etc/carrel` on each node
-before the first reconcile. A node that did not answer is listed in the result as `missing_nodes`. `/var/lib/carrel` is owned by `carrel:carrel`;
+then start the service and run `reconcile_run`. The archive also holds
+`nodes/<name>/{node.json,templates.json,site.json}` for each node; put them back under `/etc/carrel`
+on each node, mode 0644 root, before the control service starts (it reconciles at once, and a node
+without its `site.json` would serve private DHCP itself). The result lists the SSH target of a node
+that did not answer, or whose files exceeded 256 KiB, as `missing_nodes`, and the service logs a
+warning. `/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
 

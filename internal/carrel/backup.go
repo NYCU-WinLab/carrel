@@ -117,9 +117,19 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 			missing = append(missing, n.Target)
 			continue
 		}
-		for file, content := range obj(obj(reply)["files"]) {
+		// Real node files are a few KiB; a node over its budget is reported
+		// instead of pushing the whole archive past the edge's 10 MB limit.
+		files, total := obj(obj(reply)["files"]), 0
+		for _, content := range files {
+			total += len(str(content))
+		}
+		if total > 256<<10 {
+			missing = append(missing, n.Target)
+			continue
+		}
+		for file, content := range files {
 			data := []byte(str(content))
-			if !contains(nodeFiles, file) || len(data) > 1<<20 {
+			if !contains(nodeFiles, file) {
 				continue
 			}
 			header := &tar.Header{Name: "nodes/" + name + "/" + file, Mode: 0600, Size: int64(len(data)), ModTime: time.Now(), Typeflag: tar.TypeReg}

@@ -1593,8 +1593,11 @@ it is empty:
   node, authorizes CT 100's node key once in the cluster-wide `authorized_keys`
   (`from="10.200.0.3,<exit node address>"`), and writes CT 100's SSH targets, pinned host keys
   and `config.json` `nodes`. `infra.nft` lets CT 100 reach the other nodes' SSH.
-- Open: gap 7 (installer hostname checks and deploy aliases), gap 8 (backups of node files).
-  Follow-ups: #45, #48, #51.
+- Gap 7 (#54): the site role and deploys run on the first exit node of the site file
+  (`deploy-go.py --host`), and a deploy runs `configure-nodes.py`, rolling back CT 100's node
+  files if it fails.
+- Gap 8: the control backup keeps `nodes/<name>/{node.json,templates.json,site.json}`.
+- Every gap is closed. Follow-ups: #45, #48, #51.
 - `ingress: exit` and `public_address` stay unset until the move: the new control plane then moves
   the records itself, after its gateway confirms each certificate.
 
