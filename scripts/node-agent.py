@@ -83,9 +83,18 @@ def pve_get(resource, **params):
         _reader = connection, json.loads(READER.read_text())["authorization"]
     connection, authorization = _reader
     query = "?" + urllib.parse.urlencode(params) if params else ""
-    connection.request("GET", "/api2/json" + resource + query, headers={"Authorization": authorization})
-    response = connection.getresponse()
-    body = response.read(16 << 20)
+    for retry in (False, True):
+        try:
+            connection.request("GET", "/api2/json" + resource + query, headers={"Authorization": authorization})
+            response = connection.getresponse()
+            body = response.read(16 << 20)
+            break
+        except ConnectionError:
+            # pveproxy closes a connection idle for 5 s, as it is after a slow
+            # write. A GET is safe to send again; close() makes the next one reconnect.
+            connection.close()
+            if retry:
+                raise
     if response.status != 200:
         raise CommandFailure(f"PVE GET returned HTTP {response.status}")
     data = json.loads(body).get("data")

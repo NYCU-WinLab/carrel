@@ -1,3 +1,4 @@
+import http.client
 import importlib.util
 import io
 import json
@@ -213,12 +214,19 @@ class FakeConnection:
     def __init__(self, host, port, context, timeout):
         self.host, self.port, self.context = host, port, context
         self.status, self.body = 200, b'{"data": {"ok": 1}}'
+        self.drops, self.closed = 0, 0
 
     def request(self, method, url, headers):
         REQUESTS.append((method, url, headers, self))
 
     def getresponse(self):
+        if self.drops:
+            self.drops -= 1
+            raise http.client.RemoteDisconnected("idle connection closed")
         return SimpleNamespace(status=self.status, read=lambda limit: self.body)
+
+    def close(self):
+        self.closed += 1
 
 
 def test_pve_reads_use_one_verified_connection_and_the_token(tmp_path, monkeypatch):
@@ -248,6 +256,12 @@ def test_pve_reads_use_one_verified_connection_and_the_token(tmp_path, monkeypat
     # The node's own name, so TLS checks the certificate PVE issued for it.
     assert connection is again and (connection.host, connection.port) == ("carrel02", 8006)
     assert not connection.context.verify_flags & module.ssl.VERIFY_X509_STRICT
+    # pveproxy drops a keep-alive connection idle for 5 s, as after a slow write.
+    connection.drops = 1
+    assert module.pve_get("/nodes/carrel02/status") == {"ok": 1} and connection.closed == 1
+    connection.drops = 2
+    with pytest.raises(ConnectionError):
+        module.pve_get("/nodes/carrel02/status")
     connection.status = 403
     with pytest.raises(module.CommandFailure, match="HTTP 403"):
         module.pve_get("/cluster/resources")
