@@ -205,9 +205,3 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 		t.Fatalf("%v %v", err, encoded(result))
 	}
 }
-
-func TestPythonReceiptEscaping(t *testing.T) {
-	if got := pythonJSON(D{"html": "<tag>&", "text": "中文🦞\n\x7f"}); got != `{"html": "<tag>&", "text": "\u4e2d\u6587\ud83e\udd9e\n\u007f"}` {
-		t.Fatal(got)
-	}
-}

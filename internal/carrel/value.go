@@ -9,11 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf16"
 )
 
 const Version = "0.9.0"
@@ -186,64 +183,5 @@ func sleep(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-t.C:
 		return true
-	}
-}
-
-// Match existing Python receipt hashes so an interrupted migration does not replay an action.
-func pythonJSON(v any) string {
-	switch x := v.(type) {
-	case map[string]any:
-		ks := []string{}
-		for k := range x {
-			ks = append(ks, k)
-		}
-		sort.Strings(ks)
-		s := []string{}
-		for _, k := range ks {
-			s = append(s, pythonJSON(k)+": "+pythonJSON(x[k]))
-		}
-		return "{" + strings.Join(s, ", ") + "}"
-	case []any:
-		s := []string{}
-		for _, a := range x {
-			s = append(s, pythonJSON(a))
-		}
-		return "[" + strings.Join(s, ", ") + "]"
-	case []D:
-		return pythonJSON(arr(x))
-	case []string:
-		return pythonJSON(arr(x))
-	case string:
-		var b strings.Builder
-		b.WriteByte('"')
-		for _, r := range x {
-			switch r {
-			case '"', '\\':
-				b.WriteByte('\\')
-				b.WriteRune(r)
-			case '\b':
-				b.WriteString(`\b`)
-			case '\f':
-				b.WriteString(`\f`)
-			case '\n':
-				b.WriteString(`\n`)
-			case '\r':
-				b.WriteString(`\r`)
-			case '\t':
-				b.WriteString(`\t`)
-			default:
-				if r < 32 || r > 126 {
-					for _, u := range utf16.Encode([]rune{r}) {
-						fmt.Fprintf(&b, `\u%04x`, u)
-					}
-				} else {
-					b.WriteRune(r)
-				}
-			}
-		}
-		b.WriteByte('"')
-		return b.String()
-	default:
-		return string(encoded(v))
 	}
 }

@@ -61,7 +61,7 @@ func (o *Operations) CheckQueue(t D, tool string) {
 }
 func (o *Operations) Submit(tool string, a, w, t D) D {
 	args := without(a, "dry_run", "idempotency_key", "wait_seconds", "detail")
-	fingerprint := digest(pythonJSON([]any{tool, args}))
+	fingerprint := digest(string(encoded([]any{tool, args})))
 	key := str(a["idempotency_key"])
 	for _, old := range o.p.Store.Objects("operations", integer(t["n"])) {
 		if key != "" && old["idempotency_key"] == key {

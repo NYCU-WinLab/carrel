@@ -3,7 +3,6 @@ package carrel
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"testing"
 )
 
@@ -86,56 +85,4 @@ func TestEightMachinesFitButTotalsAndPortsStillApply(t *testing.T) {
 		e.NetworkAction("port_open", D{"machine": "tiny-0", "port": port, "proto": "tcp"}, tenant)
 	}
 	assertCode(t, app.Call(ctx, "port_open", D{"machine": "tiny-0", "port": 8002, "proto": "tcp", "dry_run": true}, who), "quota_exceeded")
-}
-
-func TestCountQuotaMigrationPreservesOverridesAndRunsOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
-	s, err := OpenStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, name := range []string{"default", "high", "low", "explicit", "temporary"} {
-		tenant := s.Register("user:"+name, name)
-		quota := merge(DefaultQuota, D{"machines": 4, "ips": 4})
-		if name == "high" {
-			quota["machines"], quota["ips"] = 16, 16
-		}
-		if name == "low" {
-			quota["machines"], quota["ips"] = 2, 2
-		}
-		s.Exec("UPDATE tenants SET quota=? WHERE n=?", string(encoded(quota)), tenant["n"])
-		if name == "explicit" {
-			s.Log("admin", tenant["n"], "quota_set", D{"dimension": "machines", "amount": 4}, "ok")
-		}
-		if name == "temporary" {
-			s.Put("requests", "grant", i+1, D{"kind": "quota", "dimension": "machines", "status": "approved", "amount": 4, "previous_limit": 2})
-		}
-	}
-	s.Exec("DELETE FROM migrations")
-	s.DB.Close()
-	s, err = OpenStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, want := range map[string]D{"default": {"machines": 8, "ips": 8}, "high": {"machines": 16, "ips": 16}, "low": {"machines": 2, "ips": 2}, "explicit": {"machines": 4, "ips": 8}, "temporary": {"machines": 4, "ips": 8}} {
-		if !equal(pick(obj(s.Tenant("user:" + name)["quota"]), "machines", "ips"), want) {
-			t.Fatalf("changed custom quota for %s", name)
-		}
-	}
-	if len(s.Rows("SELECT id FROM audit WHERE tool='quota_defaults_migrate'")) != 3 {
-		t.Fatal("missing migration audit")
-	}
-	s.Exec("UPDATE tenants SET quota=? WHERE subject='user:default'", string(encoded(merge(DefaultQuota, D{"machines": 4}))))
-	s.DB.Close()
-	s, err = OpenStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.DB.Close()
-	if num(obj(s.Tenant("user:default")["quota"])["machines"]) != 4 {
-		t.Fatal("migration repeated")
-	}
-	if num(obj(s.Register("user:new", "new")["quota"])["machines"]) != 8 {
-		t.Fatal("new tenant has old default")
-	}
 }

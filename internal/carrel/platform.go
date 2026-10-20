@@ -108,7 +108,7 @@ func (e *Execution) Call(r D, target ...string) any {
 	if e.Op != nil && (r["op"] == "create" || r["op"] == "action") {
 		identity := without(r, "machine")
 		identity["vmid"] = obj(r["machine"])["vmid"]
-		r = merge(r, D{"request_id": digest(pythonJSON([]any{e.Op["id"], e.Op["generation"], to, identity}))})
+		r = merge(r, D{"request_id": digest(string(encoded([]any{e.Op["id"], e.Op["generation"], to, identity})))})
 	}
 	ctx := e.Ctx
 	if e.Op != nil {

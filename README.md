@@ -372,18 +372,15 @@ go test -race ./... -count=1
 go vet ./...
 CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
 uv sync --locked
-PYTHONPATH=src uv run pytest -q
-uv run ruff check src tests
+uv run pytest -q
+uv run ruff check tests
 python3 -m compileall -q scripts
 ```
 
 Go owns the MCP server, OAuth, durable jobs, admission, state and backups. The existing bounded
 Python node/edge mutation adapters and guest reporter remain. Go issues certificates itself
-(ACME DNS-01 through Cloudflare). The Python control-plane source is retained as a behavioral reference, with 79 frozen
-cross-language parity cases. The live wire contract is `internal/carrel/contract.json`.
-`scripts/export-go-contract.py` exports the legacy Python contract to `internal/carrel/testdata/python-contract.json`,
-never over the current Go contract. `scripts/export-go-parity.py` regenerates the frozen reference
-fixtures; neither script is a runtime dependency.
+(ACME DNS-01 through Cloudflare). The Python tests cover these scripts; the Go tests cover the
+service. The live wire contract is `internal/carrel/contract.json`.
 
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
@@ -428,13 +425,6 @@ New VM disks are linked clones on the guest storage (LVM-thin or ZFS); guest wri
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.
 
-On the first 0.9.0 startup, a transactional migration raises untouched legacy machine/IP limits
-from 4 to 8 and records `quota_defaults_migrate` audit events. Other resource limits, custom lower
-or higher limits, successful explicit admin changes and approved quota grants are preserved.
-The migration runs once; later admin choices survive restarts. Existing guest allocations and
-software are unchanged. The frozen Python reference and historical acceptance reports retain
-their original defaults; current defaults are tested separately against the live Go MCP contract.
-
 The scripts are site-specific administrator operations, not the planned general `install.sh`.
 The deployment order is documented in [PLAN 15.4](PLAN.md#154-member-platform-deployment): prepare
 owned infrastructure, install networking/templates, connect the edge, upgrade the new proxies,
@@ -444,8 +434,7 @@ then deploy and publish. For an existing deployment with SSH aliases `carrel01` 
 python3 scripts/deploy-go.py --artifacts /path/to/sandbox-built/dist
 ```
 
-The Go upgrade requires the existing site bootstrap and a configured control CT. The original `deploy-control.py` is the legacy Python bootstrap driver;
-use `deploy-go.py` for current releases. The upgrade checks idle jobs and full PVE volume visibility,
+The Go upgrade requires the existing site bootstrap and a configured control CT. The upgrade checks idle jobs and full PVE volume visibility,
 keeps database/configuration/OAuth/certificates, and saves private service/node rollback files.
 It installs prebuilt static binaries without compiling on the workstation or hypervisor.
 Existing route/NAT state remains in place. See [PLAN 15.9](PLAN.md#159-go-control-plane-06-2026-10-02)
