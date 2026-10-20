@@ -14,7 +14,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -93,6 +95,9 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 	m := obj(req["machine"])
 	switch req["op"] {
 	case "create":
+		if m["name"] == "boom" {
+			return nil, errors.New("create failed")
+		}
 		return D{"state": "running", "vmid": m["vmid"]}, nil
 	case "action":
 		switch req["action"] {
@@ -213,7 +218,13 @@ func (g *goldenRun) dump() {
 	}
 }
 
-func TestGolden(t *testing.T) {
+func TestGolden(t *testing.T) { runGolden(t, "scenario.txt", goldenScenario, true) }
+
+// TestGoldenEdges covers the grant paths the main scenario does not reach:
+// reuse, dry runs, legacy rows, deleting conflicts, rollback and cleanup.
+func TestGoldenEdges(t *testing.T) { runGolden(t, "edges.txt", edgeScenario, false) }
+
+func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool bool) {
 	saved := randomSource
 	randomSource = &seededReader{}
 	t.Cleanup(func() { randomSource = saved })
@@ -233,15 +244,15 @@ func TestGolden(t *testing.T) {
 	go rec.guests(ctx)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
-	goldenScenario(g)
+	scenario(g)
 	g.dump()
 	for _, tool := range dicts(Contract["tools"]) {
-		if !g.tools[str(tool["name"])] {
+		if everyTool && !g.tools[str(tool["name"])] {
 			t.Errorf("tool %s has no golden step", tool["name"])
 		}
 	}
 	got := strings.Join(g.lines, "\n") + "\n"
-	path := filepath.Join("testdata", "golden", "scenario.txt")
+	path := filepath.Join("testdata", "golden", file)
 	if *update {
 		must(os.MkdirAll(filepath.Dir(path), 0o755))
 		must(os.WriteFile(path, []byte(got), 0o644))
@@ -381,4 +392,105 @@ func goldenScenario(g *goldenRun) {
 	call("delete", "machine_delete", D{"machine": "box", "confirm": "box", "dry_run": true}, alice)
 	call("delete", "machine_delete", D{"machine": "box", "confirm": "box"}, alice)
 	call("admin", "tenant_suspend", D{"tenant": "bob"}, admin)
+}
+
+func machineRow(g *goldenRun, n int, name string) D {
+	return find(g.p.Store.Objects("machines", n), func(m D) bool { return m["name"] == name })
+}
+
+// edgeScenario was written for the review of #82.
+func edgeScenario(g *goldenRun) {
+	alice, bob := person("alice", false), person("bob", false)
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoldenGoldenGoldenGoldenGoldenGoldenGold golden"
+	call := g.call
+	call("s", "whoami", D{}, alice)
+	call("s", "whoami", D{}, bob)
+	call("s", "ssh_key_add", D{"key": key}, alice)
+	call("s", "ssh_key_add", D{"key": key}, bob)
+	call("m", "machine_create", D{"name": "web"}, alice)
+	call("m", "machine_create", D{"name": "db", "network_access": "restricted"}, alice)
+	call("m", "machine_create", D{"name": "client"}, bob)
+	web, db := machineRow(g, 1, "web"), machineRow(g, 1, "db")
+
+	// Ports: new, existing, existing dry, SSH grant reuse, UDP dry and real.
+	call("p", "port_open", D{"machine": "web", "port": 8080, "proto": "tcp"}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 8080, "proto": "tcp"}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 8080, "proto": "tcp", "dry_run": true}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 8080, "proto": "tcp", "detail": "full"}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 22, "proto": "tcp"}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 9000, "proto": "udp", "dry_run": true}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 9000, "proto": "udp", "detail": "full"}, alice)
+	call("p", "port_list", D{}, alice)
+	var udp any
+	for _, x := range g.p.Store.Objects("ports", 1) {
+		if x["proto"] == "udp" {
+			udp = x["id"]
+		}
+	}
+	call("p", "port_close", D{"id": udp, "dry_run": true}, alice)
+	call("p", "port_close", D{"id": udp, "detail": "full"}, alice)
+	call("p", "port_close", D{"id": "missing"}, alice)
+
+	// Peers: new, existing, dry existing, dry new, from a machine, revoke.
+	call("q", "peer_allow", D{"machine": "db", "port": 5432, "from_tenant": "bob"}, alice)
+	call("q", "peer_allow", D{"machine": "db", "port": 5432, "from_tenant": "bob", "detail": "full"}, alice)
+	call("q", "peer_allow", D{"machine": "db", "port": 5432, "from_tenant": "bob", "dry_run": true}, alice)
+	call("q", "peer_allow", D{"machine": "db", "port": 6000, "from_tenant": "bob", "dry_run": true}, alice)
+	call("q", "peer_allow", D{"machine": "db", "port": 5432, "from_tenant": "bob", "from_machine": "client", "detail": "full"}, alice)
+	call("q", "peer_allow", D{"machine": "db", "port": 5433, "from_tenant": "alice", "from_machine": "web"}, alice)
+	call("q", "machine_get", D{"machine": "db", "detail": "full"}, alice)
+	call("q", "machine_get", D{"machine": "db"}, alice)
+	call("q", "machine_list", D{"detail": "full"}, alice)
+	call("q", "peer_list", D{}, alice)
+	first := g.p.Store.Objects("peers", 1)[0]["id"]
+	call("q", "peer_revoke", D{"id": first, "dry_run": true}, alice)
+	call("q", "peer_revoke", D{"id": first, "detail": "full"}, alice)
+	call("q", "peer_revoke", D{"id": "missing"}, alice)
+
+	// Older rows: a peer without proto or operation ID, a port without an
+	// operation ID.
+	g.p.Store.Put("peers", "legacy0000000001", 1, D{"id": "legacy0000000001", "tenant_n": 1, "source": str(web["ip"]) + "/32", "target": db["ip"], "port": 7000})
+	g.p.Store.Put("ports", "1-20018-tcp", 1, D{"id": "1-20018-tcp", "tenant_n": 1, "vmid": web["vmid"], "ip": web["ip"], "public_port": 20018, "port": 7070, "proto": "tcp"})
+	call("l", "machine_get", D{"machine": "db", "detail": "full"}, alice)
+	call("l", "peer_allow", D{"machine": "db", "port": 7000, "from_tenant": "alice", "from_machine": "web", "detail": "full"}, alice)
+	call("l", "port_open", D{"machine": "web", "port": 7070, "proto": "tcp", "detail": "full"}, alice)
+
+	spec := D{
+		"connections":  []any{D{"from": "web", "to": "db", "port": 7000, "protocol": "tcp"}, D{"from": "web", "to": "db", "port": 7001}},
+		"publications": []any{D{"machine": "web", "protocol": "tcp", "port": 7070}, D{"machine": "web", "protocol": "udp", "port": 7071}, D{"machine": "db", "protocol": "tcp", "port": 22}},
+	}
+	call("d", "deployment_plan", obj(copyValue(spec)), alice)
+	applied := call("d", "deployment_apply", obj(copyValue(spec)), alice)
+	call("d", "operation_get", D{"id": obj(applied["operation"])["id"], "detail": "full"}, alice)
+	call("d", "machine_get", D{"machine": "db", "detail": "full"}, alice)
+	call("d", "deployment_plan", obj(copyValue(spec)), alice)
+	call("d", "deployment_apply", obj(copyValue(spec)), alice)
+
+	// Rollback: a machine that fails to create, with a connection and a
+	// publication.
+	boom := D{
+		"machines":     []any{D{"name": "boom"}},
+		"connections":  []any{D{"from": "boom", "to": "db", "port": 8000}},
+		"publications": []any{D{"machine": "boom", "protocol": "tcp", "port": 8001}},
+	}
+	failed := call("r", "deployment_apply", obj(copyValue(boom)), alice)
+	call("r", "operation_get", D{"id": obj(failed["operation"])["id"], "detail": "full"}, alice)
+
+	// Grants still being removed refuse reuse.
+	g.p.Store.Put("ports", "1-20017-tcp", 1, D{"id": "1-20017-tcp", "tenant_n": 1, "vmid": web["vmid"], "ip": web["ip"], "public_port": 20017, "port": 7272, "proto": "tcp", "state": "deleting"})
+	g.p.Store.Put("peers", "deleting00000001", 1, D{"id": "deleting00000001", "tenant_n": 1, "source": str(web["ip"]) + "/32", "target": db["ip"], "port": 7300, "proto": "tcp", "state": "deleting"})
+	call("c", "port_open", D{"machine": "web", "port": 7272, "proto": "tcp"}, alice)
+	call("c", "deployment_plan", D{"publications": []any{D{"machine": "web", "protocol": "tcp", "port": 7272}}}, alice)
+	call("c", "peer_allow", D{"machine": "db", "port": 7300, "from_tenant": "alice", "from_machine": "web"}, alice)
+	call("c", "deployment_apply", D{"connections": []any{D{"from": "web", "to": "db", "port": 7300}}}, alice)
+	call("c", "machine_get", D{"machine": "db", "detail": "full"}, alice)
+	g.p.Store.Remove("ports", "1-20017-tcp")
+	g.p.Store.Remove("peers", "deleting00000001")
+
+	// Deleting a machine removes the peers on both ends.
+	call("x", "machine_delete", D{"machine": "client", "confirm": "client"}, bob)
+	call("x", "machine_delete", D{"machine": "db", "confirm": "db"}, alice)
+	call("x", "peer_list", D{}, alice)
+	call("x", "port_list", D{}, alice)
+	g.lines = append(g.lines, fmt.Sprintf("end machines=%d", len(g.p.Store.Objects("machines"))))
 }
