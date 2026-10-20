@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Upgrade an existing B09 control plane with sandbox-built Linux Go binaries.
 
-Configuration, OAuth records, certificates and the certbot environment stay in place.
+Configuration, OAuth records and certificates stay in place.
 The existing site bootstrap scripts are prerequisites. No build runs on the workstation
 or hypervisor. Private rollback archives remain on their original hosts.
 """

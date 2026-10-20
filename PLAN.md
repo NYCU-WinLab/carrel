@@ -483,12 +483,17 @@ by guessing its VNI. VNIs are not secrets; this filter is the protection.
   (DNS only) pointing at the exit node, and one wildcard certificate for it. Caddy on the infra
   gateway routes only names that exist in the database; any other name under the wildcard gets 404.
 - **Who issues certificates**: the control plane, through the DNS-01 challenge with the Cloudflare
-  token it already holds for records, and it pushes the certificates to the gateway. The
+  token it already holds for records, and it pushes the certificates to the gateway. It runs the
+  ACME client in-process (`golang.org/x/crypto/acme`, since 2026-10-20; certbot before): it writes
+  the challenge TXT record, polls the resolver until it serves the value, and keeps each issued pair
+  in its own directory behind a `live/<name>` symlink that one rename replaces. It renews when a
+  third of the lifetime is left. The
   internet-facing gateway never holds a DNS token, because a zone token can
   rewrite every record in the zone, `auth.winlab.tw` included.
 - **Certificate budget**: Let's Encrypt allows 50 new certificates per registered domain per 7 days,
-  shared with every other `winlab.tw` site, the ones on Vercel included. Only renewals made through
-  ARI are exempt (rate limit page, checked 2026-09-27), so carrel renews through ARI. Issuing on
+  shared with every other `winlab.tw` site, the ones on Vercel included. A renewal with the same
+  names is exempt from that limit, with or without ARI (rate limit page, checked 2026-10-20), so
+  carrel does not use ARI. Issuing on
   first use keeps new certificates near the number of tenants that publish something, and carrel
   keeps a rolling 7-day count per registered domain that stops at 30 for `winlab.tw`, leaving the
   rest to the lab's other sites. Past that budget `domain_add` returns `queued` with `ready_at`.
@@ -1343,7 +1348,7 @@ HTTP reader must preserve all-volume visibility. No production transport change 
 The Go service owns Streamable HTTP MCP, Keycloak OAuth/PKCE, SQLite state, intent planning,
 admission, a durable FIFO mutation queue, readiness and backups. Existing SQLite tables and
 OAuth bindings remain compatible; migration does not require member login. Python remains for
-the bounded root mutation adapters, guest reporter, deployment tooling and certbot. The former
+the bounded root mutation adapters, guest reporter and deployment tooling. The former
 Python control plane is a test reference, not the service launched by systemd.
 
 Admission and shared PVE/network mutations use one writer. A persisted `prepared_result` releases
@@ -1375,7 +1380,7 @@ token without a copy step. It never reaches CT 100, guests or clients, and backu
 Build static binaries in the development sandbox. `scripts/deploy-go.py --artifacts <directory>`
 checks no active jobs and runs `configure-reader.py`. It saves a consistent database/config/certificate/service
 archive under CT 100's `/opt/carrel/rollback/` and node files in the printed node stage directory.
-Existing OAuth, certificates, guest templates and the certbot environment are preserved. The
+Existing OAuth, certificates and guest templates are preserved. The
 backup timer runs `carrel -backup`, retaining the existing private archive destination and format.
 A failed initial health check restores service/node files without overwriting newly written data.
 
@@ -1480,7 +1485,7 @@ still owns it on the same allocation. Results include affected existing machines
 
 Resize separates allocated block capacity from unverified guest filesystem growth, with owner SSH
 follow-up and no implicit reboot or guest execution API. HTTPS preparation persists reserved domains
-before DNS/ACME work outside the writer; issuers serialize separately for certbot's shared directories.
+before DNS/ACME work outside the writer; issuers serialize separately from it.
 Finalization checks allocation/domain identities and tenant status again. Renewal also runs outside
 the writer. Same-machine mutations stay ordered, unrelated jobs proceed during propagation.
 

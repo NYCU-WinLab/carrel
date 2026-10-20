@@ -2,8 +2,7 @@ package carrel
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,34 +11,41 @@ import (
 	"time"
 )
 
-func TestReconcileUsesImmutableCertificatePairDuringRenewal(t *testing.T) {
+func TestEnsureCertificateIssuesAndBundlesTheLivePair(t *testing.T) {
 	p, _ := fixture(t)
 	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"success":true,"result":[]}`)) }))
 	defer cf.Close()
-	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	defer tlsServer.Close()
-	pair := tlsServer.TLS.Certificates[0]
-	crt := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]})
-	keyDER, err := x509.MarshalPKCS8PrivateKey(pair.PrivateKey)
-	must(err)
-	key := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	base := t.TempDir()
-	live := filepath.Join(base, "config", "live", "alice")
-	archive := filepath.Join(base, "config", "archive", "alice")
-	must(os.MkdirAll(live, 0700))
-	must(os.MkdirAll(archive, 0700))
-	must(os.WriteFile(filepath.Join(archive, "fullchain1.pem"), crt, 0600))
-	must(os.WriteFile(filepath.Join(archive, "privkey1.pem"), key, 0600))
-	must(os.Symlink(filepath.Join(archive, "fullchain1.pem"), filepath.Join(live, "fullchain.pem")))
-	must(os.Symlink(filepath.Join(archive, "privkey1.pem"), filepath.Join(live, "privkey.pem")))
-	p.Config["cloudflare_api"], p.Config["cloudflare_zone"], p.Config["certificate_dir"], p.Config["certbot"] = cf.URL, "test", base, "/bin/true"
+	p.Config["cloudflare_api"], p.Config["cloudflare_zone"], p.Config["certificate_dir"] = cf.URL, "test", t.TempDir()
+	crt, key := testPair(t)
+	domains := []string{}
+	p.issue = func(_ context.Context, domain string) ([]byte, []byte, error) {
+		domains = append(domains, domain)
+		return crt, key, nil
+	}
 	e := p.execution(context.Background())
-	e.EnsureCertificate(p.Store.TenantN(1))
-	must(os.Remove(filepath.Join(live, "privkey.pem")))
-	must(os.WriteFile(filepath.Join(live, "privkey.pem"), []byte("incomplete rotation"), 0600))
+	tenant := p.Store.TenantN(1)
+	if e.EnsureCertificate(tenant)["state"] != "ready" || len(domains) != 1 || domains[0] != "*."+str(tenant["slug"])+".winlab.tw" {
+		t.Fatal("did not issue the tenant wildcard", domains)
+	}
+	if e.EnsureCertificate(tenant)["state"] != "ready" || len(domains) != 1 {
+		t.Fatal("a current certificate was ordered again", domains)
+	}
+	record := p.Store.Objects("certificates", 1)[0]
+	if record["fullchain_path"] != nil || record["issued_at"] == nil {
+		t.Fatal("the record must not pin files", record)
+	}
 	bundle := e.CertificateBundles([]D{{"tenant_n": 1, "state": "ready"}})[0]
 	if bundle["fullchain"] != string(crt) || bundle["privkey"] != string(key) {
-		t.Fatal("reconcile mixed certificate generations")
+		t.Fatal("bundle is not the live pair")
+	}
+	p.issue = func(context.Context, string) ([]byte, []byte, error) { return nil, nil, errors.New("rate limited") }
+	// A renewal that fails keeps the pair it would have replaced.
+	must(os.Remove(filepath.Join(str(p.Config["certificate_dir"]), "live", str(tenant["slug"]))))
+	if f := attempt(func() { e.EnsureCertificate(tenant) }); f == nil || obj(failureResult(f)["error"])["backend_code"] != "certificate_issuance_failed" {
+		t.Fatal("an ACME failure must fail the issuance", f)
+	}
+	if _, _, ok := e.livePair(str(tenant["slug"])); ok {
+		t.Fatal("a failed issuance created a live pair")
 	}
 }
 

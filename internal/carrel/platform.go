@@ -49,7 +49,6 @@ type Platform struct {
 	writer             sync.Mutex
 	certificates       sync.Mutex
 	registration       sync.Mutex
-	originPair         atomic.Value
 	delivered          atomic.Value
 	inventoryMu        sync.Mutex
 	inventories        map[string]*ObservationCache
@@ -63,6 +62,9 @@ type Platform struct {
 	uploads            map[string]int64
 	sshProbe           func(context.Context, D) bool
 	certificatePrepare func(D) D
+	// issue and lookupTXT replace Let's Encrypt and DNS in tests.
+	issue     func(context.Context, string) ([]byte, []byte, error)
+	lookupTXT func(context.Context, string) ([]string, error)
 }
 type Execution struct {
 	P                   *Platform
