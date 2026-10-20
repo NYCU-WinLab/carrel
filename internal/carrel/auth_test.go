@@ -264,3 +264,47 @@ func TestOAuthStatePersistenceAcrossDatabaseReopen(t *testing.T) {
 		t.Fatal(data)
 	}
 }
+
+func TestOAuthLimitsEachClientAddressSeparately(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("alice", false)})
+	from := func(ip string) map[string]string { return map[string]string{"X-Forwarded-For": ip} }
+	for range oauthRequestsPerMinute {
+		requestApp(app, "GET", "/oauth/authorize", "", from("203.0.113.7"))
+	}
+	if w := requestApp(app, "GET", "/oauth/authorize", "", from("203.0.113.7")); w.Code != 429 {
+		t.Fatalf("the noisy address was not limited: %d", w.Code)
+	}
+	if w := requestApp(app, "GET", "/oauth/authorize", "", from("198.51.100.9")); w.Code == 429 {
+		t.Fatal("another address was locked out")
+	}
+	// Only the gateway's header counts: a direct caller cannot pick its address.
+	direct := httptest.NewRequest("GET", "https://carrel.test/oauth/authorize", nil)
+	direct.RemoteAddr = "10.200.3.10:4000"
+	direct.Header.Set("X-Forwarded-For", "198.51.100.9")
+	if got := clientIP(direct); got != "10.200.3.10" {
+		t.Fatalf("trusted a header from %s", got)
+	}
+}
+
+func TestOAuthRegistrationsAreBoundedPerAddressAndExpireUnused(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("alice", false)})
+	body := `{"redirect_uris": ["http://localhost:33418/callback"]}`
+	headers := map[string]string{"Content-Type": "application/json", "X-Forwarded-For": "203.0.113.7"}
+	var last *httptest.ResponseRecorder
+	for range registrationsPerHour {
+		if last = requestApp(app, "POST", "/oauth/register", body, headers); last.Code != 201 {
+			t.Fatalf("registration refused: %d %s", last.Code, last.Body.String())
+		}
+	}
+	if w := requestApp(app, "POST", "/oauth/register", body, headers); w.Code != 429 {
+		t.Fatalf("registrations from one address are unbounded: %d", w.Code)
+	}
+	var client D
+	must(json.Unmarshal(last.Body.Bytes(), &client))
+	row := p.Store.Rows("SELECT expires FROM oauth WHERE kind='client' AND id=?", client["client_id"])[0]
+	if left := num(row["expires"]) - float64(time.Now().Unix()); left > registrationTTL || left < registrationTTL-60 {
+		t.Fatalf("an unused registration lives %v s", left)
+	}
+}

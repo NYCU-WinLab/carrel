@@ -149,6 +149,11 @@ Streamable HTTP at `https://carrel.winlab.tw/mcp`, OAuth through Keycloak. Every
 result with `ok`; a failure sets `isError` and carries `error.code`, never a protocol error. Tools
 declare no output schema: one identical envelope on every tool cost 24 KB of each tool listing.
 
+OAuth endpoints are limited per client address (the address the gateway saw): 60 requests per
+minute and 20 client registrations per hour. A registration expires after a day unless it reaches
+a token exchange, which extends it to 90 days, so unused registrations cannot fill the cap of
+10,000 clients.
+
 ### 4.2 Conventions for every tool that changes state
 
 - `dry_run: true` validates, prices the change against quota and returns what would happen.
