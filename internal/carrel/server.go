@@ -232,6 +232,7 @@ func (p *Platform) Start() {
 					e.Reconcile()
 				}
 				e.S.PurgeOAuth()
+				e.S.PruneOperations()
 			})
 			p.writer.Unlock()
 			if err != nil {
@@ -266,8 +267,8 @@ func (e *Execution) MaintainDomains() {
 					continue
 				}
 				active := func() bool {
-					return find(e.S.Objects("operations", n), func(o D) bool {
-						return !contains(terminal, o["state"]) && (o["id"] == original["operation_id"] || (o["tool"] == "domain_add" && len(arr(o["domain_target"])) > 0 && arr(o["domain_target"])[0] == original["id"]))
+					return find(e.S.ActiveOperations(n), func(o D) bool {
+						return (o["id"] == original["operation_id"] || (o["tool"] == "domain_add" && len(arr(o["domain_target"])) > 0 && arr(o["domain_target"])[0] == original["id"]))
 					}) != nil
 				}
 				if active() || t["status"] != "active" {

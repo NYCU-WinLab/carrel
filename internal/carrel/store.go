@@ -121,6 +121,54 @@ func (s *Store) Objects(kind string, tenant ...int) []D {
 	}
 	return r
 }
+
+// operationRetention keeps finished operations for idempotent resubmission
+// and operation_get; the audit table keeps the history after that.
+const operationRetention = 30 * 86400
+
+// terminalStates is the terminal list as an SQL value list.
+const terminalStates = "'succeeded','failed','rolled_back','cleanup_failed'"
+
+// ActiveOperations lists unfinished operations without decoding finished ones.
+func (s *Store) ActiveOperations(tenant ...int) []D {
+	q := "SELECT data FROM objects WHERE kind='operations' AND json_extract(data,'$.state') NOT IN (" + terminalStates + ")"
+	a := []any{}
+	if len(tenant) > 0 {
+		q += " AND tenant=?"
+		a = append(a, tenant[0])
+	}
+	r := []D{}
+	for _, v := range s.Rows(q+" ORDER BY id", a...) {
+		r = append(r, decode(str(v["data"])))
+	}
+	return r
+}
+
+// OperationByKey finds a tenant's operation by its idempotency key.
+func (s *Store) OperationByKey(tenant int, key string) D {
+	r := s.Rows("SELECT data FROM objects WHERE kind='operations' AND tenant=? AND json_extract(data,'$.idempotency_key')=? ORDER BY id LIMIT 1", tenant, key)
+	if len(r) == 0 {
+		return nil
+	}
+	return decode(str(r[0]["data"]))
+}
+
+// RecentOperations returns a tenant's newest operations first.
+func (s *Store) RecentOperations(tenant, limit int) []D {
+	r := []D{}
+	for _, v := range s.Rows("SELECT data FROM objects WHERE kind='operations' AND tenant=? ORDER BY json_extract(data,'$.created_at') DESC LIMIT ?", tenant, limit) {
+		r = append(r, decode(str(v["data"])))
+	}
+	return r
+}
+
+// PruneOperations deletes finished operations older than the retention. A
+// cleanup_failed operation still holds resources that only its retry
+// releases, so it stays.
+func (s *Store) PruneOperations() {
+	s.Exec("DELETE FROM objects WHERE kind='operations' AND json_extract(data,'$.state') IN ('succeeded','failed','rolled_back') AND json_extract(data,'$.updated_at') < ?", now()-operationRetention)
+}
+
 func (s *Store) Get(kind, id string) D {
 	r := s.Rows("SELECT data FROM objects WHERE kind=? AND id=?", kind, id)
 	if len(r) == 0 {

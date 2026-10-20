@@ -157,6 +157,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 ### 4.2 Conventions for every tool that changes state
 
 - `dry_run: true` validates, prices the change against quota and returns what would happen.
+  `deployment_apply` has none: `deployment_plan` is its read-only preview.
 - Completed mutations return `quota_after`. Infrastructure changes first return a durable operation;
   `queued` means accepted, not reserved or complete. Poll `operation_get` and follow `next_action`.
 - Failure returns one of a closed set of codes: `quota_exceeded` (with the dimension),
@@ -166,6 +167,9 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
   and resumes automatically. A domain is `ready` only after certificate, DNS and route application.
   `operation_retry` resumes failed work against its original allocations. Deployment rollback removes
   only its own new resources; incomplete cleanup stays charged until cleanup succeeds.
+- Finished operations stay 30 days for `operation_get`, `operation_retry` and idempotent
+  resubmission, then the maintenance loop deletes them; the audit log keeps the history.
+  `cleanup_failed` operations stay until their retry releases what they hold.
 - Every call is written to the audit log with arguments, and values named like secrets are masked
   before the write.
 - `tenant` is optional. It defaults to the member and may name a project the member belongs to.
