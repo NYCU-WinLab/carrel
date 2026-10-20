@@ -216,7 +216,7 @@ func (o *OAuth) allowedRedirect(s string) bool {
 func jsonResponse(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	_, _ = w.Write(append(encoded(value), '\n'))
 }
 func oauthError(w http.ResponseWriter, code string, status int) {
 	w.Header().Set("Cache-Control", "no-store")
