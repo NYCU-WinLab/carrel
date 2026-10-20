@@ -523,7 +523,7 @@ def test_partial_clone_cleanup_requires_matching_allocation_marker(monkeypatch, 
         )
     )
     config = {"description": "other" if mismatch == "description" else marker}
-    monkeypatch.setattr(module, "api", lambda *args: config)
+    monkeypatch.setattr(module, "pve_get", lambda *args: config)
     with pytest.raises(ValueError, match="unowned"):
         module.owned(machine)
     if mismatch:
@@ -664,7 +664,7 @@ async def test_linked_clone_requires_immutable_thin_template(platform, monkeypat
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
     monkeypatch.setattr(
-        module, "api", lambda *args: {"template": int(immutable), "scsi0": "local-lvm:base-9010-disk-0"}
+        module, "pve_get", lambda *args: {"template": int(immutable), "scsi0": "local-lvm:base-9010-disk-0"}
     )
     monkeypatch.setattr(
         module, "cloud_init", lambda m, **kwargs: "prepared-snippet" if kwargs["prepared"] else "legacy"
@@ -699,7 +699,7 @@ async def test_linked_clone_template_must_live_on_the_configured_storage(
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
-    monkeypatch.setattr(module, "api", lambda *args: {"template": 1, "scsi0": disk})
+    monkeypatch.setattr(module, "pve_get", lambda *args: {"template": 1, "scsi0": disk})
     monkeypatch.setattr(module, "cloud_init", lambda m, **kwargs: "prepared-snippet")
     calls = []
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "stopped")

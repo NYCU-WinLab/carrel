@@ -15,7 +15,6 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./... -count=1
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
-      - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-pve-read ./cmd/carrel-pve-read
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-deployd ./cmd/carrel-deployd
       - uses: actions/upload-artifact@v4
         with:
@@ -35,5 +34,5 @@ jobs:
       - run: uv run pytest -q
         env:
           PYTHONPATH: src
-      - run: uv run ruff check scripts/configure-go-reader.py scripts/export-go-contract.py scripts/export-go-parity.py scripts/deploy-go.py
+      - run: uv run ruff check scripts/configure-reader.py scripts/export-go-contract.py scripts/export-go-parity.py scripts/deploy-go.py
       - run: python -m compileall -q scripts

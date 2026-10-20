@@ -1,9 +1,9 @@
 import importlib.util
 import io
 import json
-import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -93,17 +93,29 @@ def test_gateway_validates_before_replacing_working_routes(gateway, monkeypatch)
         module.apply({**state, "path": "/etc/passwd"})
 
 
+def pve_api(responses, reads):
+    """A fake local PVE API: fixed GET responses by path, every read recorded."""
+
+    def get(resource, **params):
+        reads.append((resource, params))
+        return responses[resource]
+
+    return get
+
+
 def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, capsys):
     module = script("node-agent.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    monkeypatch.setattr(module, "NODE", "fixture")
     (tmp_path / "storage.cfg").write_text("lvmthin: local-lvm\n\tthinpool data\n\tvgname pve\n")
     monkeypatch.setattr(module, "STORAGE_CONFIG", tmp_path / "storage.cfg")
-    observed = {
-        "resources": [],
-        "storage": {"total": 1000 * GIB, "used": 100 * GIB},
-        "status": {"cpuinfo": {"cpus": 8}, "memory": {"total": 64 * GIB}},
-        "volumes": [
+    responses = {
+        "/access/permissions": {"/storage/local-lvm": {"Datastore.Audit": 1, "Datastore.Allocate": 1}},
+        "/cluster/resources": [],
+        "/nodes/fixture/storage/local-lvm/status": {"total": 1000 * GIB, "used": 100 * GIB},
+        "/nodes/fixture/status": {"cpuinfo": {"cpus": 8}, "memory": {"total": 64 * GIB}},
+        "/nodes/fixture/storage/local-lvm/content": [
             {"content": "images", "size": 10 * GIB},  # Immutable template.
             {"content": "images", "size": 20 * GIB},  # Guest primary disk.
             {"content": "images", "size": 30 * GIB},  # Secondary or unused disk.
@@ -111,16 +123,15 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
             {"content": "backup", "size": 200 * GIB},
         ],
     }
-    calls = []
-
-    def run(*args, **kwargs):
-        calls.append(args)
-        if args[0].endswith("pve-read.pl"):
-            return json.dumps(observed)
-        assert args[0] == "lvs"
-        return json.dumps({"report": [{"lv": [{"data_percent": "10", "metadata_percent": "2"}]}]})
-
-    monkeypatch.setattr(module, "run", run)
+    reads = []
+    monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
+    monkeypatch.setattr(
+        module,
+        "run",
+        lambda *args, **kwargs: json.dumps(
+            {"report": [{"lv": [{"data_percent": "10", "metadata_percent": "2"}]}]}
+        ),
+    )
 
     def inventory():
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{"op":"inventory"}')))
@@ -130,12 +141,13 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     first = inventory()
     assert first["disk_committed_bytes"] == 100 * GIB
     assert not summarize(first)["policy"]["storage_admission_blocked"]
-    observed["storage"]["used"] = 900 * GIB
+    responses["/nodes/fixture/storage/local-lvm/status"]["used"] = 900 * GIB
     assert summarize(inventory())["policy"]["storage_admission_blocked"]
-    assert sum(args[-1] == "inventory" for args in calls) == 2
-    monkeypatch.setattr(module, "run", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("read failed")))
-    with pytest.raises(RuntimeError, match="read failed"):
-        inventory()
+    assert reads.count(("/access/permissions", {"path": "/storage/local-lvm"})) == 2
+    # PVEAuditor alone hides volumes: an incomplete grant never reaches admission.
+    responses["/access/permissions"] = {"/storage/local-lvm": {"Datastore.Audit": 1}}
+    with pytest.raises(RuntimeError, match="authority is incomplete"):
+        module.inventory_read("local-lvm")
 
 
 def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, monkeypatch):
@@ -156,79 +168,92 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
     helper = local("/usr/local/lib/carrel/gateway-sync.py")
     helper.parent.mkdir(parents=True)
     helper.write_text("fixed gateway helper")
-    topology = {"vnets": [{"vnet": "t001", "zone": "tenants"}], "subnets": {"t001": [{}]}}
+    responses = {
+        # Only tenant VNets are read for subnets; private networks are not.
+        "/cluster/sdn/vnets": [{"vnet": "t001", "zone": "tenants"}, {"vnet": "p00101", "zone": "private"}],
+        "/cluster/sdn/vnets/t001/subnets": [{}],
+    }
     reads, entries, mutations = [], [], []
 
     def run(*args, **kwargs):
-        if args[0].endswith("pve-read.pl"):
-            reads.append(args)
-            return json.dumps(topology)
         if args[0] == "pct":
             entries.append((args, kwargs))
         return "clsact"
 
     monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
     monkeypatch.setattr(module, "api", lambda *a, **kw: mutations.append((a, kw)))
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
     state = {"tenants": [{"n": 1, "slug": "alice"}], "networks": [], "machines": [], "domains": []}
     assert module.reconcile(state)["changed"] == []
-    assert len(entries) == 1 and len(reads) == 1 and not mutations
+    assert len(entries) == 1 and [r[0] for r in reads] == [
+        "/cluster/sdn/vnets",
+        "/cluster/sdn/vnets/t001/subnets",
+    ]
+    assert not mutations
     assert entries[0][0][:6] == ("pct", "exec", "101", "--", "python3", "-c")
     payload = json.loads(entries[0][1]["input"])
     assert payload["hosts"] == "" and "respond 404" in payload["caddy"]
     local("/etc/pve/lxc/101.conf").unlink()
     module.reconcile(state)
     assert len(entries) == 1, "a node without CT 101 synced the gateway"
-    topology["subnets"]["t001"] = []
+    responses["/cluster/sdn/vnets/t001/subnets"] = []
     assert module.reconcile(state)["changed"] == ["subnet-1"]
-    assert len(reads) == 3
+    assert len(reads) == 6
     assert mutations[0][0] == ("create", "/cluster/sdn/vnets/t001/subnets")
     assert mutations[1][0] == ("set", "/cluster/sdn")
 
 
-def test_pve_reader_allows_only_fixed_get_operations(tmp_path):
-    pve = tmp_path / "PVE"
-    pve.mkdir()
-    (pve / "API2.pm").write_text("""package PVE::API2;
-sub find_handler {
-    my ($class, $method, $path, $params) = @_;
-    die "not GET" unless $method eq 'GET';
-    $params->{path} = $path;
-    return (__PACKAGE__, {});
-}
-sub handle {
-    my ($class, $info, $params) = @_;
-    my $path = $params->{path};
-    return [{vnet => 't001'}, {vnet => 'p00101'}] if $path eq '/cluster/sdn/vnets';
-    return [{subnet => 'fixture'}] if $path eq '/cluster/sdn/vnets/t001/subnets';
-    return $path;
-}
-1;
-""")
-    (pve / "INotify.pm").write_text("package PVE::INotify; sub nodename { 'fixture' }; 1;\n")
-    (pve / "RPCEnvironment.pm").write_text("package PVE::RPCEnvironment; sub setup_default_cli_env {} 1;\n")
-    # JSON::PP is part of Perl core on the CI runner and sandbox.
-    (tmp_path / "JSON.pm").write_text("""package JSON;
-use JSON::PP ();
-use Exporter 'import';
-our @EXPORT_OK = qw(decode_json encode_json);
-sub decode_json { JSON::PP::decode_json($_[0]) }
-sub encode_json { JSON::PP::encode_json($_[0]) }
-1;
-""")
-    command = ["perl", "-I", str(tmp_path), str(Path(__file__).parents[1] / "scripts/pve-read.pl")]
-    topology = json.loads(subprocess.check_output([*command, "topology"]))
-    assert topology["subnets"] == {"t001": [{"subnet": "fixture"}]}
-    inventory = json.loads(subprocess.check_output([*command, "inventory"]))
-    assert inventory == {
-        "volumes": "/nodes/fixture/storage/local-lvm/content",
-        "resources": "/cluster/resources",
-        "storage": "/nodes/fixture/storage/local-lvm/status",
-        "status": "/nodes/fixture/status",
-    }
-    for arguments in [["delete"], ["inventory", "/nodes/other/status"]]:
-        result = subprocess.run([*command, *arguments], capture_output=True, check=False)
-        assert result.returncode and not result.stdout
+REQUESTS = []
+
+
+class FakeConnection:
+    """Stands in for the HTTPS connection to the local PVE API."""
+
+    def __init__(self, host, port, context, timeout):
+        self.host, self.port, self.context = host, port, context
+        self.status, self.body = 200, b'{"data": {"ok": 1}}'
+
+    def request(self, method, url, headers):
+        REQUESTS.append((method, url, headers, self))
+
+    def getresponse(self):
+        return SimpleNamespace(status=self.status, read=lambda limit: self.body)
+
+
+def test_pve_reads_use_one_verified_connection_and_the_token(tmp_path, monkeypatch):
+    module = script("node-agent.py")
+    reader = tmp_path / "carrel-reader.json"
+    reader.write_text(json.dumps({"authorization": "PVEAPIToken=root@pam!carrel-reader=secret"}))
+    monkeypatch.setattr(module, "READER", reader)
+    monkeypatch.setattr(module, "NODE", "carrel02")
+    contexts = []
+
+    def context(cafile):
+        contexts.append(cafile)
+        return SimpleNamespace(
+            verify_flags=module.ssl.VERIFY_X509_STRICT | module.ssl.VERIFY_X509_TRUSTED_FIRST
+        )
+
+    monkeypatch.setattr(module.ssl, "create_default_context", context)
+    monkeypatch.setattr(module.http.client, "HTTPSConnection", FakeConnection)
+    REQUESTS.clear()
+    assert module.pve_get("/nodes/carrel02/status") == {"ok": 1}
+    assert module.pve_get("/nodes/carrel02/qemu/10100/rrddata", timeframe="hour") == {"ok": 1}
+    assert contexts == ["/etc/pve/pve-root-ca.pem"]
+    (method, url, headers, connection), (_, second, _, again) = REQUESTS
+    assert method == "GET" and url == "/api2/json/nodes/carrel02/status"
+    assert second == "/api2/json/nodes/carrel02/qemu/10100/rrddata?timeframe=hour"
+    assert headers == {"Authorization": "PVEAPIToken=root@pam!carrel-reader=secret"}
+    # The node's own name, so TLS checks the certificate PVE issued for it.
+    assert connection is again and (connection.host, connection.port) == ("carrel02", 8006)
+    assert not connection.context.verify_flags & module.ssl.VERIFY_X509_STRICT
+    connection.status = 403
+    with pytest.raises(module.CommandFailure, match="HTTP 403"):
+        module.pve_get("/cluster/resources")
+    connection.status, connection.body = 200, b'{"data": null}'
+    with pytest.raises(module.CommandFailure, match="missing"):
+        module.pve_get("/cluster/resources")
 
 
 @pytest.mark.parametrize(
@@ -328,7 +353,7 @@ def test_power_timeout_does_not_turn_into_force_stop_or_success(monkeypatch):
 
 def test_qemu_paused_status_is_not_running(monkeypatch):
     module = script("node-agent.py")
-    monkeypatch.setattr(module, "api", lambda *a, **kw: {"status": "running", "qmpstatus": "paused"})
+    monkeypatch.setattr(module, "pve_get", lambda *a, **kw: {"status": "running", "qmpstatus": "paused"})
     assert module.power_status({"kind": "vm", "vmid": 10100}) == "paused"
 
 

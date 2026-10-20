@@ -1358,19 +1358,22 @@ admission reads fresh inventory and current SQLite reservations. Network-only pl
 inventory. Physical snapshot accounting runs in maintenance and snapshot operations, outside the
 ordinary network/create path. SSH transports reuse authenticated connections for up to 120 seconds.
 
-The fixed `carrel-pve-read` Go helper uses PVE HTTPS with the host CA and hostname verification,
-bounded parallel reads and no arbitrary paths, writes or stale fallback. Its only modes are
-`inventory` and `topology`. Full volume visibility is mandatory: PVEAuditor alone returns filtered
-storage content. The root-only `/etc/carrel/pve-read.json` credential has a privilege-separated
-`root@pam!carrel-go-reader` token, PVEAuditor at `/` and a custom role containing Datastore.Audit
-and Datastore.Allocate at `/storage/local-lvm`. This credential has a storage management privilege,
-even though the helper issues only GET requests. It never reaches CT 100, guests or clients.
-`scripts/configure-go-reader.py` provisions it, preserves it on repeat runs, and verifies removal
-before unlinking its configuration. Permissions are rechecked on each inventory query.
+node-agent reads the local PVE API over HTTPS in-process (changed 2026-10-20): one
+connection per adapter run, the PVE CA and the node's own name verified, no arbitrary paths and
+no stale fallback. Every read uses it, including ownership and power checks; writes stay with
+`pvesh` and `qm`/`pct` as root. A `pvesh` start costs about a second per read. The earlier fixed
+Go helper `carrel-pve-read` and the Perl batch reader were removed: the helper reached only the
+first node, so the other nodes kept the slow reader. Full volume visibility is mandatory:
+PVEAuditor alone returns filtered storage content, so every inventory first checks the token's
+permissions on the guest storage. `scripts/configure-reader.py` provisions the
+privilege-separated `root@pam!carrel-reader` token with PVEAuditor at `/` and a custom role with
+Datastore.Audit and Datastore.Allocate at `/storage/<guest storage>`. This credential has a
+storage management privilege, even though node-agent issues only GET requests with it. Its file
+`/etc/pve/priv/carrel-reader.json` is cluster-wide and root-only, so every node reads the same
+token without a copy step. It never reaches CT 100, guests or clients, and backups leave it out.
 
 Build static binaries in the development sandbox. `scripts/deploy-go.py --artifacts <directory>`
-checks no active jobs and compares all-volume identities with the old reader before enabling
-`go_pve_reader` in `/etc/carrel/node.json`. It saves a consistent database/config/certificate/service
+checks no active jobs and runs `configure-reader.py`. It saves a consistent database/config/certificate/service
 archive under CT 100's `/opt/carrel/rollback/` and node files in the printed node stage directory.
 Existing OAuth, certificates, guest templates and the certbot environment are preserved. The
 backup timer runs `carrel -backup`, retaining the existing private archive destination and format.
@@ -1379,8 +1382,8 @@ A failed initial health check restores service/node files without overwriting ne
 For a manual rollback, stop the control service, restore the saved service units and previous binary
 (if any), restore the saved node adapter and `node.json`, reload systemd and restart. The legacy
 Python environment remains available. Restore an older database only as an explicit disaster-recovery
-operation after reconciling all resource changes since that backup. If the Go reader is retired,
-disable its flag before removing its owned token/ACL/role with `configure-go-reader.py --remove`.
+operation after reconciling all resource changes since that backup. `configure-reader.py --remove`
+removes the reader token, its ACLs, role and file.
 
 Go race tests, 79 Python behavior fixtures and the existing Python reference tests validate the rewrite.
 The [Go evaluation](docs/evaluations/2026-10-02-go-control-plane.md) records live read-path measurements

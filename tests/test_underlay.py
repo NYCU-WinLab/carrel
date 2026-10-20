@@ -98,9 +98,7 @@ def test_vxlan_ports_share_the_guest_conntrack_zone(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: "clsact")
     monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        module,
-        "pve_read",
-        lambda mode: {"vnets": [{"vnet": "t003", "zone": "tenants"}], "subnets": {"t003": [{}]}},
+        module, "topology_read", lambda: ([{"vnet": "t003", "zone": "tenants"}], {"t003": [{}]})
     )
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")

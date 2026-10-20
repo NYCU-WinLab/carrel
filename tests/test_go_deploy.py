@@ -15,7 +15,7 @@ def test_upgrade_payloads_compile_and_keep_existing_database(tmp_path, monkeypat
     spec = importlib.util.spec_from_file_location("deploy_go", path)
     deploy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(deploy)
-    for name in ("carrel", "carrel-pve-read", "carrel-deployd"):
+    for name in ("carrel", "carrel-deployd"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     payloads = []
 
@@ -51,14 +51,14 @@ def test_upgrade_payloads_compile_and_keep_existing_database(tmp_path, monkeypat
         compile(code, "control-upgrade", "exec")
     rollback = nested[-1]
     assert "var/lib/carrel/carrel.db" not in rollback
-    assert "/usr/local/lib/carrel/carrel-pve-read" in program
+    assert "carrel-pve-read" not in program and "go_pve_reader" not in program
     assert "/usr/local/lib/carrel/carrel-deployd" in program
     # node-agent loads these helpers, so they ship, back up and roll back with it.
     shipped = json.loads((tmp_path / "deploy-go.json").read_text())["sha256"]
     assert {
         "node-agent.py",
         "thin-usage.py",
-        "pve-read.pl",
+        "configure-reader.py",
         "guest-report.py",
         "gateway-sync.py",
         "configure-nodes.py",
@@ -81,7 +81,7 @@ def test_upgrade_targets_the_given_host(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("deploy_go_host", path)
     deploy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(deploy)
-    for name in ("carrel", "carrel-pve-read", "carrel-deployd"):
+    for name in ("carrel", "carrel-deployd"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     targets = []
 
@@ -103,7 +103,7 @@ def test_rollback_restores_what_configure_nodes_rewrote(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("deploy_go_rollback", path)
     deploy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(deploy)
-    for name in ("carrel", "carrel-pve-read", "carrel-deployd"):
+    for name in ("carrel", "carrel-deployd"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     payloads = []
     monkeypatch.setattr(

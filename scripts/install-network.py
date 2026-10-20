@@ -218,7 +218,7 @@ def main():
                 sdn_changed = True
     Path("/etc/carrel").mkdir(exist_ok=True)
     Path("/var/lib/carrel").mkdir(exist_ok=True)
-    # Keep keys this installer does not own, such as storage and go_pve_reader.
+    # Keep keys this installer does not own, such as storage.
     node_config = Path("/etc/carrel/node.json")
     config = json.loads(node_config.read_text()) if node_config.exists() else {}
     config.update(

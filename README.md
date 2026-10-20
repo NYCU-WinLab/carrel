@@ -371,7 +371,6 @@ The runtime is Go (1.26 or newer; CI uses 1.27.1). Run builds and tests in a dev
 go test -race ./... -count=1
 go vet ./...
 CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
-CGO_ENABLED=0 go build -trimpath -o dist/carrel-pve-read ./cmd/carrel-pve-read
 uv sync --locked
 PYTHONPATH=src uv run pytest -q
 uv run ruff check src tests
@@ -409,7 +408,9 @@ Each node keeps its own `templates.json` and imports the same prepared image at 
 block of 20 (PLAN 6.1), because a linked clone works only on the node that holds its template.
 `build-templates.py` refuses a VMID that exists on another node. The guest storage id is `storage`
 in `/etc/carrel/node.json` (default `local-lvm`, the R640 node); B09 cluster nodes use `local-zfs`.
-Set it before `configure-go-reader.py` and template import.
+Set it before `configure-reader.py` and template import. `configure-reader.py` creates the read-only
+PVE API token that node-agent uses on every node; it lives in `/etc/pve/priv/carrel-reader.json`,
+which the cluster shares and only root reads.
 Several nodes are listed in `/etc/carrel/config.json` as
 `"nodes": [{"name": "carrel01", "target": "carrel-node-01"}, ...]`, where `target` is a `Host` in
 `/etc/carrel/ssh_config`. A new machine goes to the node that admits it with the most admission
