@@ -181,12 +181,35 @@ func (g *goldenRun) call(step, tool string, args, who D) D {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	g.record(step, tool, r)
+	return r
+}
+
+// submit records a call without waiting for the jobs it leaves queued.
+func (g *goldenRun) submit(step, tool string, args, who D) D {
+	g.t.Helper()
+	r := g.app.Call(context.Background(), tool, args, who)
+	g.record(step, tool, r)
+	return r
+}
+
+func (g *goldenRun) record(step, tool string, r D) {
 	g.tools[tool] = true
 	g.lines = append(g.lines, step+" mcp "+normalize(encoded(r)))
 	for _, sent := range g.rec.take() {
 		g.lines = append(g.lines, step+" adapter "+sent)
 	}
-	return r
+}
+
+// do records the adapter requests of work outside an MCP call.
+func (g *goldenRun) do(step string, f func()) {
+	g.t.Helper()
+	if err := attempt(f); err != nil {
+		g.lines = append(g.lines, step+" failure "+normalize(encoded(failureResult(err))))
+	}
+	for _, sent := range g.rec.take() {
+		g.lines = append(g.lines, step+" adapter "+sent)
+	}
 }
 
 func (g *goldenRun) dump() {
@@ -223,6 +246,10 @@ func TestGolden(t *testing.T) { runGolden(t, "scenario.txt", goldenScenario, tru
 // TestGoldenEdges covers the grant paths the main scenario does not reach:
 // reuse, dry runs, legacy rows, deleting conflicts, rollback and cleanup.
 func TestGoldenEdges(t *testing.T) { runGolden(t, "edges.txt", edgeScenario, false) }
+
+// TestGoldenDomains covers domains: reuse and conflicts, publications,
+// certificate queueing and the maintenance pass that finishes them.
+func TestGoldenDomains(t *testing.T) { runGolden(t, "domains.txt", domainScenario, false) }
 
 func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool bool) {
 	saved := randomSource
@@ -493,4 +520,55 @@ func edgeScenario(g *goldenRun) {
 	call("x", "peer_list", D{}, alice)
 	call("x", "port_list", D{}, alice)
 	g.lines = append(g.lines, fmt.Sprintf("end machines=%d", len(g.p.Store.Objects("machines"))))
+}
+
+func domainScenario(g *goldenRun) {
+	alice := person("alice", false)
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoldenGoldenGoldenGoldenGoldenGoldenGold golden"
+	call := g.call
+	call("s", "ssh_key_add", D{"key": key}, alice)
+	call("s", "machine_create", D{"name": "web"}, alice)
+	call("s", "machine_create", D{"name": "api"}, alice)
+
+	// Direct domains: preview, add, add again, retarget, list, remove.
+	call("a", "domain_add", D{"machine": "web", "sub": "site", "target_port": 8080, "dry_run": true}, alice)
+	call("a", "domain_add", D{"machine": "web", "sub": "site", "target_port": 8080}, alice)
+	call("a", "domain_add", D{"machine": "web", "sub": "site", "target_port": 8080, "detail": "full"}, alice)
+	call("a", "domain_add", D{"machine": "web", "sub": "site", "target_port": 9090}, alice)
+	call("a", "domain_add", D{"machine": "api", "sub": "site", "target_port": 8080}, alice)
+	call("a", "domain_add", D{"machine": "api", "sub": "docs", "target_port": 3000, "detail": "full"}, alice)
+	call("a", "domain_list", D{}, alice)
+	call("a", "machine_get", D{"machine": "web", "detail": "full"}, alice)
+	call("a", "domain_remove", D{"name": "site.alice.winlab.tw", "dry_run": true}, alice)
+	call("a", "domain_remove", D{"name": "missing.alice.winlab.tw"}, alice)
+
+	// Publications: HTTPS through a deployment, reused by a second one.
+	spec := D{"publications": []any{D{"machine": "api", "protocol": "https", "port": 3000, "sub": "docs"}, D{"machine": "web", "protocol": "https", "port": 8080, "sub": "shop"}}}
+	call("p", "deployment_plan", obj(copyValue(spec)), alice)
+	applied := call("p", "deployment_apply", obj(copyValue(spec)), alice)
+	call("p", "operation_get", D{"id": obj(applied["operation"])["id"], "detail": "full"}, alice)
+	call("p", "deployment_apply", obj(copyValue(spec)), alice)
+	call("p", "domain_list", D{}, alice)
+
+	// A publication whose job ended before its certificate was ready: the
+	// maintenance pass routes it.
+	web := machineRow(g, 1, "web")
+	g.p.Store.Put("domains", "orphaned00000001", 1, D{"id": "orphaned00000001", "tenant_n": 1, "vmid": web["vmid"], "sub": "later", "slug": "alice", "name": "later.alice.winlab.tw", "target_port": 8080, "state": "queued", "ready_at": 1, "operation_id": "finished-job"})
+	g.do("m", func() { g.p.execution(context.Background()).MaintainDomains() })
+	call("m", "domain_list", D{}, alice)
+
+	// A domain still being removed refuses reuse.
+	g.p.Store.Put("domains", "deleting00000001", 1, D{"id": "deleting00000001", "tenant_n": 1, "vmid": web["vmid"], "sub": "gone", "slug": "alice", "name": "gone.alice.winlab.tw", "target_port": 8080, "state": "deleting", "ready_at": 1})
+	call("c", "domain_add", D{"machine": "web", "sub": "gone", "target_port": 8080}, alice)
+	call("c", "deployment_plan", D{"publications": []any{D{"machine": "web", "protocol": "https", "port": 8080, "sub": "gone"}}}, alice)
+	g.p.Store.Remove("domains", "deleting00000001")
+
+	// Deleting a machine drops its domains; removing the last one drops the
+	// tenant's DNS record.
+	call("x", "machine_delete", D{"machine": "web", "confirm": "web"}, alice)
+	call("x", "domain_list", D{}, alice)
+	for _, d := range g.p.Store.Objects("domains", 1) {
+		call("x", "domain_remove", D{"name": d["name"]}, alice)
+	}
+	call("x", "domain_list", D{}, alice)
 }
