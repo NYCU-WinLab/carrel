@@ -26,6 +26,11 @@ var scopes = []string{"openid", "profile", "email", "offline_access"}
 
 const clientTTL = 86400 * 90
 
+// A registration lives a day until its first token exchange extends it to
+// clientTTL, so registrations nobody uses cannot fill maxClients.
+const registrationTTL = 86400
+const maxClients = 10000
+
 // refreshGrace keeps a rotated refresh token usable for a short window. Several
 // client processes can share one stored credential; the one that loses a race
 // still holds the previous token and would otherwise be signed out.
@@ -262,7 +267,7 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/oauth/register" && method == "POST":
 		o.locks[0].Lock()
 		defer o.locks[0].Unlock()
-		if integer(o.Store.Rows("SELECT count(*) AS n FROM oauth WHERE kind='client'")[0]["n"]) >= 10000 {
+		if integer(o.Store.Rows("SELECT count(*) AS n FROM oauth WHERE kind='client'")[0]["n"]) >= maxClients {
 			oauthError(w, "temporarily_unavailable", 503)
 			return
 		}
@@ -292,7 +297,7 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			name = name[:100]
 		}
 		c := D{"client_id": "carrel-" + random(24), "redirect_uris": redirects, "client_name": string(name), "token_endpoint_auth_method": "none", "grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"}}
-		o.Store.OAuthPut("client", str(c["client_id"]), c, clientTTL)
+		o.Store.OAuthPut("client", str(c["client_id"]), c, registrationTTL)
 		jsonResponse(w, 201, c)
 	case path == "/oauth/authorize" && method == "GET":
 		q := r.URL.Query()

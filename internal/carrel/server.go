@@ -23,7 +23,9 @@ type App struct {
 	github   OIDCVerifier
 	mu       sync.Mutex
 	minute   int64
-	requests int
+	requests map[string]int
+	hour     int64
+	signUps  map[string]int
 	schemas  map[string]*jsonschema.Schema
 }
 
@@ -152,14 +154,23 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/oauth/") {
+			// Per client address: one noisy client cannot lock everyone out of login.
 			a.mu.Lock()
 			minute := time.Now().Unix() / 60
-			if minute != a.minute {
+			if minute != a.minute || a.requests == nil {
 				a.minute = minute
-				a.requests = 0
+				a.requests = map[string]int{}
 			}
-			a.requests++
-			limited := a.requests > 300
+			ip := clientIP(r)
+			a.requests[ip]++
+			limited := a.requests[ip] > oauthRequestsPerMinute
+			if r.URL.Path == "/oauth/register" {
+				if hour := minute / 60; hour != a.hour || a.signUps == nil {
+					a.hour, a.signUps = hour, map[string]int{}
+				}
+				a.signUps[ip]++
+				limited = limited || a.signUps[ip] > registrationsPerHour
+			}
 			a.mu.Unlock()
 			if limited {
 				jsonResponse(w, 429, D{"error": "rate_limited"})
@@ -174,6 +185,26 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	return a
 }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
+
+// oauthRequestsPerMinute bounds one client address on /oauth/*. A login takes
+// about 4 requests and a refresh 1. registrationsPerHour bounds new clients
+// from one address, so filling maxClients takes many addresses.
+const oauthRequestsPerMinute = 60
+const registrationsPerHour = 20
+
+// clientIP is the address of the client. Requests arrive through the infra
+// gateway, which sets X-Forwarded-For to the address it saw (it trusts no
+// proxy, so a client cannot choose it); from anyone else the header is ignored.
+func clientIP(r *http.Request) string {
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if host == "10.200.0.2" {
+		if f := r.Header.Get("X-Forwarded-For"); f != "" {
+			parts := strings.Split(f, ",")
+			return strings.TrimSpace(parts[len(parts)-1])
+		}
+	}
+	return host
+}
 func (a *App) Call(ctx context.Context, name string, args, who D) D {
 	schema := a.schemas[name]
 	if schema == nil {
