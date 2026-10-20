@@ -18,7 +18,6 @@ import socket
 import ssl
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.parse
 
@@ -171,7 +170,7 @@ def guest_firewall(m, state, config):
     ]
     if m.get("network_access", "tenant") == "tenant":
         rules.append(f"IN ACCEPT -source 10.200.{n}.0/24")
-    # Public entry points on protected hosts (the edge's HTTPS gateway): the internet can
+    # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
         dest = ipaddress.ip_network(entry["address"], strict=False)
@@ -347,102 +346,6 @@ table ip carrel_ports {{
  }}
 }}
 """
-
-
-CONTROL_PATHS = ("/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*")
-CERTS = "/etc/caddy/carrel-certs"
-
-
-def tenant_routes(state, slugs):
-    """Ready domains as (slug, domain, machine, target port), each inside its tenant's subtree."""
-    out = []
-    for domain in state.get("domains", []):
-        if domain.get("state") != "ready":
-            continue
-        m = next(m for m in state["machines"] if m["vmid"] == domain["vmid"])
-        expected = label(domain["sub"]) + "." + slugs[m["tenant_n"]] + ".winlab.tw"
-        if domain["name"] != expected:
-            raise ValueError("invalid tenant domain")
-        out.append((slugs[m["tenant_n"]], domain, m, integer(domain["target_port"], 1, 65535)))
-    return out
-
-
-def checked_certificate(bundle, host):
-    """Return the PEM pair if it covers host, has not expired and matches its key."""
-    pair = {"fullchain": bundle["fullchain"], "privkey": bundle["privkey"]}
-    if any(not isinstance(v, str) or len(v) > 65536 for v in pair.values()):
-        raise ValueError("invalid certificate bundle")
-    with tempfile.TemporaryDirectory() as directory:
-        crt, key = Path(directory) / "fullchain.pem", Path(directory) / "privkey.pem"
-        for path, value in [(crt, pair["fullchain"]), (key, pair["privkey"])]:
-            path.write_text(value)
-            path.chmod(0o600)
-        # OpenSSL 3 exits non-zero on a mismatch; older releases only print it.
-        try:
-            covered = "does match" in run("openssl", "x509", "-in", crt, "-noout", "-checkhost", host)
-        except CommandFailure:
-            covered = False
-        if not covered:
-            raise ValueError("certificate does not cover " + host)
-        run("openssl", "x509", "-in", crt, "-noout", "-checkend", "0")
-        if run("openssl", "x509", "-in", crt, "-pubkey", "-noout") != run("openssl", "pkey", "-in", key, "-pubout"):
-            raise ValueError("certificate key mismatch")
-    return pair
-
-
-def gateway_tls(state, slugs):
-    """The infra gateway terminates TLS itself on a site with a public address.
-
-    Plain HTTP redirects to HTTPS. carrel's own paths go to the control plane
-    and the rest of its origin is the static site; each tenant wildcard routes
-    only names in the database. The internet-facing gateway receives PEM files,
-    never a DNS token (PLAN 6.4).
-    """
-    routes = {}
-    for slug, domain, m, port in tenant_routes(state, slugs):
-        routes.setdefault(slug, []).append((domain, m, port))
-    bundles = {label(b["slug"]): b for b in state.get("certificates", [])}
-    if set(routes) - set(bundles):
-        raise ValueError("missing domain certificate")
-    lines = ["{", " auto_https off", "}", "http:// {", " redir https://{host}{uri} 308", "}"]
-    certificates = {}
-    origin, bundle = state.get("origin"), state.get("origin_certificate")
-    if origin and bundle:
-        if not re.fullmatch(r"([a-z0-9-]+\.)+winlab\.tw", origin):
-            raise ValueError("invalid origin host")
-        # "_origin" is no tenant label, so no slug can take its directory.
-        certificates["_origin"] = checked_certificate(bundle, origin)
-        lines += [
-            f"https://{origin} {{",
-            f" tls {CERTS}/_origin/fullchain.pem {CERTS}/_origin/privkey.pem",
-            " @control path " + " ".join(CONTROL_PATHS),
-            " handle @control {",
-            "  reverse_proxy 10.200.0.3:8080 {",
-            "   flush_interval -1",
-            "   stream_close_delay 5m",
-            "  }",
-            " }",
-            " handle {",
-            "  root * /srv/carrel-site",
-            "  try_files {path} {path}.html {path}/index.html",
-            "  file_server {",
-            "   hide .*",
-            "  }",
-            " }",
-            "}",
-        ]
-    for slug in sorted(routes):
-        certificates[slug] = checked_certificate(bundles[slug], f"probe.{slug}.winlab.tw")
-        lines += [f"https://*.{slug}.winlab.tw {{", f" tls {CERTS}/{slug}/fullchain.pem {CERTS}/{slug}/privkey.pem"]
-        for domain, m, port in routes[slug]:
-            lines += [
-                f" @d{domain['id']} host {domain['name']}",
-                f" handle @d{domain['id']} {{",
-                f"  reverse_proxy {m['ip']}:{port}",
-                " }",
-            ]
-        lines += [" handle {", "  respond 404", " }", "}"]
-    return "\n".join(lines) + "\n", certificates
 
 
 def first_exit_node():
@@ -712,7 +615,6 @@ table inet carrel_conntrack {{
     if first_exit_node():
         for m in state["machines"]:
             write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, state, config))
-    # The infra gateway CT 101 lives on one node; only that node syncs it.
     private_dhcp(state, serve=first_exit_node())
     address = public_ingress()
     if address:
@@ -734,33 +636,8 @@ WantedBy=multi-user.target
         if write("/etc/systemd/system/carrel-ports.service", unit):
             run("systemctl", "daemon-reload")
             run("systemctl", "enable", "carrel-ports")
-    # The gateway goes last: one tenant's bad certificate must not hold up
-    # ports and private DHCP for everyone else.
-    gateway_tls_synced = {}
-    if Path("/etc/pve/lxc/101.conf").exists():
-        slugs = {t["n"]: label(t["slug"]) for t in state["tenants"]}
-        hosts = "".join(f"{m['ip']} {m['name']}.{slugs[m['tenant_n']]}.internal\n" for m in state["machines"])
-        # The control plane sends the origin and the certificates to the
-        # first node, which holds the gateway.
-        if "origin" not in state:
-            raise ValueError("the gateway node needs the origin and its certificates")
-        caddy, certificates = gateway_tls(state, slugs)
-        payload = {"hosts": hosts, "caddy": caddy, "certificates": certificates}
-        run("pct", "exec", "101", "--", "python3", "-c",
-            Path("/usr/local/lib/carrel/gateway-sync.py").read_text(),
-            input=json.dumps(payload))
-        gateway_tls_synced = certificates
-    # Private keys reach the gateway only; the host keeps no copy.
-    kept = {k: v for k, v in state.items() if k not in ("certificates", "origin_certificate")}
-    write(STATE / "desired.json", json.dumps(kept, sort_keys=True))
-    # The control plane moves a record to this site only after the gateway
-    # confirmed it holds that name's certificate.
-    result = {"changed": changed}
-    if gateway_tls_synced:
-        result["certificates"] = {
-            name: hashlib.sha256(pair["fullchain"].encode()).hexdigest() for name, pair in gateway_tls_synced.items()
-        }
-    return result
+    write(STATE / "desired.json", json.dumps(state, sort_keys=True))
+    return {"changed": changed}
 
 
 def keys(values):

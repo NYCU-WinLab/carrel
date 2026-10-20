@@ -291,12 +291,19 @@ func TestValidateNodesNeedsTheSiteAddressAndOrigin(t *testing.T) {
 	}
 }
 
-func TestCertificatesGoOnlyToTheGatewayNode(t *testing.T) {
+func TestCertificatesGoOnlyToTheGateway(t *testing.T) {
 	p, b, _ := nodeFixture(t)
 	sent := map[string]D{}
 	var mu sync.Mutex
 	inner := b.call
+	gateway := 0
 	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "sync" && target == "carrel-gateway" {
+			mu.Lock()
+			gateway++
+			mu.Unlock()
+			return D{}, nil
+		}
 		if r["op"] == "reconcile" {
 			mu.Lock()
 			sent[target] = obj(r["state"])
@@ -306,11 +313,14 @@ func TestCertificatesGoOnlyToTheGatewayNode(t *testing.T) {
 		return inner(r, target)
 	}
 	p.execution(context.Background()).Reconcile()
-	if _, ok := sent["node-01"]["certificates"]; !ok || sent["node-01"]["origin"] != "carrel.test" {
-		t.Fatal(encoded(sent["node-01"]))
+	// Private keys go to the gateway only, never through a node.
+	for node, state := range sent {
+		if _, ok := state["certificates"]; ok || state["origin_certificate"] != nil {
+			t.Fatalf("%s received certificates", node)
+		}
 	}
-	if _, ok := sent["node-02"]["certificates"]; ok {
-		t.Fatal("a node without the gateway received certificates")
+	if len(sent) != 3 || gateway != 1 {
+		t.Fatal(len(sent), gateway)
 	}
 }
 

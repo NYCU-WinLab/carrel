@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Apply only the tenant gateway's DNS hosts, routes and TLS files in one CT entry."""
+"""The infra gateway's forced command: apply its DNS hosts, Caddy routes and TLS files.
+
+Runs in CT 101 for the control plane's key (configure-nodes.py installs it). One JSON
+request on stdin: {"op": "sync", "hosts", "caddy", "certificates"} or {"op": "status"}.
+"""
 
 import hashlib
 import json
@@ -64,6 +68,11 @@ def certificates(bundles):
     return digest.hexdigest(), stale
 
 
+def status():
+    return {name: (STATE / (name + ".sha256")).read_text() if (STATE / (name + ".sha256")).exists() else None
+            for name in ("hosts", "caddy")}
+
+
 def apply(state):
     # No caller-controlled paths, command names, services or validation flags.
     keys = set(state)
@@ -106,8 +115,22 @@ def apply(state):
     return {"changed": changes}
 
 
-if __name__ == "__main__":
+def main():
     raw = sys.stdin.buffer.read(2_000_001)
     if len(raw) > 2_000_000:
         raise ValueError("gateway configuration too large")
-    print(json.dumps(apply(json.loads(raw))))
+    request = json.loads(raw)
+    op = request.pop("op", None) if isinstance(request, dict) else None
+    if op == "status" and not request:
+        return status()
+    if op != "sync":
+        raise ValueError("unknown operation")
+    return apply(request)
+
+
+if __name__ == "__main__":
+    try:
+        print(json.dumps({"ok": True, "result": main()}))
+    except Exception as e:  # noqa: BLE001 (the forced command answers every failure in JSON)
+        print(json.dumps({"ok": False, "error": str(e)[-400:]}))
+        sys.exit(1)

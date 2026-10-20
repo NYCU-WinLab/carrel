@@ -6,11 +6,28 @@ Never touches tenant disks.
 """
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
+import tempfile
+import urllib.request
+
+# The gateway's Caddy: Debian's package gives the unit and the user; the
+# official release (older ones reject stream_close_delay) is the binary.
+CADDY_VERSION = "2.11.4"
+CADDY_SHA512 = "8220d1f013b6f27510247b2360c9e0ca9f018feebd82515f07635318b34ff9777ccc8fd0b6e6f2486ce3a33fe389fbb7db12d05baa474f4587509fb4f5ebf1c9"
+CADDY_UNIT = """[Service]
+ExecStart=
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=on-failure
+RestartSec=3
+"""
 
 
 def run(*args, capture=False):
@@ -104,13 +121,32 @@ def peer_ssh(config, node):
     return [f'iifname "vmbr98" ip saddr 10.200.0.3 ip daddr {{ {", ".join(peers)} }} tcp dport 22 accept'] if peers else []
 
 
+def caddy(vmid):
+    """Install the pinned official Caddy in the gateway CT."""
+    with tempfile.TemporaryDirectory() as temp:
+        url = f"https://github.com/caddyserver/caddy/releases/download/v{CADDY_VERSION}/caddy_{CADDY_VERSION}_linux_amd64.tar.gz"
+        archive = Path(temp) / "caddy.tar.gz"
+        archive.write_bytes(urllib.request.urlopen(url, timeout=60).read())
+        if hashlib.sha512(archive.read_bytes()).hexdigest() != CADDY_SHA512:
+            raise SystemExit("Caddy checksum mismatch")
+        binary, unit = Path(temp) / "caddy", Path(temp) / "carrel.conf"
+        with tarfile.open(archive) as tar:
+            binary.write_bytes(tar.extractfile("caddy").read())
+        unit.write_text(CADDY_UNIT)
+        run("pct", "push", str(vmid), str(binary), "/usr/local/bin/caddy", "--perms", "755")
+        run("pct", "exec", str(vmid), "--", "mkdir", "-p", "/etc/systemd/system/caddy.service.d")
+        run("pct", "push", str(vmid), str(unit), "/etc/systemd/system/caddy.service.d/carrel.conf", "--perms", "644")
+    run("pct", "exec", str(vmid), "--", "systemctl", "daemon-reload")
+    run("pct", "exec", str(vmid), "--", "/usr/local/bin/caddy", "version")
+
+
 def packages(vmid, role):
     run("pct", "exec", str(vmid), "--", "apt-get", "update", "-qq")
     wanted = ["ca-certificates", "curl"]
     if role == "control":
         wanted += ["openssh-client"]
     else:
-        wanted += ["caddy", "dnsmasq-base"]
+        wanted += ["caddy", "dnsmasq-base", "python3"]
     run("pct", "exec", str(vmid), "--", "apt-get", "install", "-y", *wanted)
 
 
@@ -195,6 +231,7 @@ WantedBy=multi-user.target
     ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage)
     packages(100, "control")
     packages(101, "gateway")
+    caddy(101)
     print(json.dumps({"node": host, "infra_cts": [100, 101]}))
 
 

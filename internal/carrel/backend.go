@@ -63,6 +63,8 @@ func adapterTimeout(op string) time.Duration {
 		return 60 * time.Second
 	case "reconcile":
 		return 300 * time.Second
+	case "sync":
+		return 120 * time.Second
 	}
 	return 900 * time.Second
 }

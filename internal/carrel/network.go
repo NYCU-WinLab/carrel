@@ -256,16 +256,17 @@ func (e *Execution) Reconcile() D {
 	// node goes first; it holds the infra gateway and creates new VNets.
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
-	// The first node holds the infra gateway, which terminates TLS.
-	gateway := merge(state, D{"origin": originHost(e.P.Config)})
-	if crt, key, ok := e.originFiles(); ok {
-		gateway["origin_certificate"] = originPair(crt, key)
-	}
-	result := D{"node": e.Call(D{"op": "reconcile", "state": gateway}, nodes[0].Target)}
-	// Fingerprints of the pairs the gateway confirmed it holds: records
-	// point here only for those (MaintainOrigin, DomainRecord).
-	held, _ := obj(result["node"])["certificates"].(map[string]any)
-	e.P.delivered.Store(held)
+	result := D{"node": e.Call(request, nodes[0].Target)}
+	// The gateway goes after the first node, whose guest firewalls admit it,
+	// and together with the other nodes.
+	var held map[string]any
+	var gatewayFailure any
+	var gatewayDone sync.WaitGroup
+	gatewayDone.Add(1)
+	go func() {
+		defer gatewayDone.Done()
+		gatewayFailure = attempt(func() { held = e.SyncGateway(state) })
+	}()
 	if len(nodes) > 1 {
 		// The other nodes reconcile at once and catch up on the next pass: one
 		// node down for an upgrade (PLAN 8.3) must not stop every change.
@@ -295,6 +296,13 @@ func (e *Execution) Reconcile() D {
 			result["unreachable_nodes"] = unreachable
 		}
 	}
+	gatewayDone.Wait()
+	if gatewayFailure != nil {
+		panic(gatewayFailure)
+	}
+	// Fingerprints of the pairs the gateway holds: records point here only
+	// for those (MaintainOrigin, DomainRecord).
+	e.P.delivered.Store(held)
 	return result
 }
 

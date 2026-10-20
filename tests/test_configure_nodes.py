@@ -139,3 +139,30 @@ def test_infra_containers_match_the_infra_bridge_mtu(monkeypatch):
     module.ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, "k", "local-zfs")
     net = next(a[a.index("--net0") + 1] for a in calls if "--net0" in a)
     assert net.endswith(",mtu=1450")
+
+
+def test_the_gateway_takes_only_the_control_planes_key_as_a_forced_command(monkeypatch):
+    module = load("configure-nodes.py")
+    calls = []
+
+    def run(*args, input=None):
+        calls.append((args, input))
+        if args[-1] == "cat /root/.ssh/authorized_keys 2>/dev/null || true":
+            return 'ssh-ed25519 ADMIN admin\nfrom="10.200.0.3",restrict,command="/usr/local/lib/carrel/gateway-sync.py" ssh-ed25519 OLD\n'
+        if args[-1] == "/etc/ssh/ssh_host_ed25519_key.pub":
+            return "ssh-ed25519 HOSTKEY root@carrel-gateway\n"
+        return ""
+
+    monkeypatch.setattr(module, "run", run)
+    assert module.gateway("ssh-ed25519 NEW") == "ssh-ed25519 HOSTKEY"
+    written = next(i for a, i in calls if i and "authorized_keys.carrel-next" in a[-1])
+    lines = written.splitlines()
+    assert lines[0] == "ssh-ed25519 ADMIN admin"
+    assert lines[1:] == [
+        'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/gateway-sync.py" ssh-ed25519 NEW'
+    ]
+    assert ("pct", "push", "101", module.GATEWAY_SYNC, module.GATEWAY_SYNC, "--perms", "755") in [
+        a for a, _ in calls
+    ]
+    config = module.ssh_config("", [*module.targets(SITE, "carrel01"), module.GATEWAY])
+    assert "Host carrel-gateway\n  HostName 10.200.0.2" in config
