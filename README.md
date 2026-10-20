@@ -201,8 +201,9 @@ public endpoints. `verification: routing_configured` means routing and TLS setup
 the agent must still test the actual application from its intended client.
 
 `network_access=restricted` accepts declared connections, public port/domain grants and platform
-access. Internet egress remains available. It does not allow extra experiment NICs, which would
-bypass ingress filtering. The compatible default, `tenant`, allows traffic within the tenant.
+access. Internet egress remains available. It filters the primary NIC only: private experiment
+NICs stay unfiltered, so any machine the member attaches to the same private network reaches it
+there. The compatible default, `tenant`, allows traffic within the tenant.
 Choose `restricted` explicitly when only designated callers should reach a service.
 
 For an existing database, submit the authorized ingress change together with its allowed caller:
@@ -217,7 +218,7 @@ For an existing database, submit the authorized ingress change together with its
 Use `deployment_plan` for a requested preview, or `deployment_apply` for an authorized change.
 The preview explains lost or added same-tenant connectivity. Machine identity and disks remain;
 SSH routes, publications and existing explicit peer grants are preserved and visible in the result.
-Remove unwanted old grants explicitly. Detach experiment NICs before restricting ingress.
+Remove unwanted old grants explicitly.
 Changing back to `tenant` grants same-tenant ingress again. Rollback restores only a policy still
 owned by that operation, never a newer edit or a replacement machine.
 

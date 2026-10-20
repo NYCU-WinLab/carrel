@@ -285,8 +285,9 @@ def test_firewall_enforces_only_the_declared_source_protocol_and_port():
     sender = module.guest_firewall(app, state, {"protected_addresses": []}).splitlines()
     assert "OUT ACCEPT -dest 10.200.1.11 -p tcp -dport 5432" in sender
     assert "IN ACCEPT -source 10.200.1.0/24" in sender
-    with pytest.raises(ValueError, match="experiment NICs"):
-        module.guest_firewall(dict(db, nics=[{"index": 1}]), state, {"protected_addresses": []})
+    # Private NICs run with firewall=0: the rules for net0 do not change (issue #75).
+    with_nic = module.guest_firewall(dict(db, nics=[{"index": 1}]), state, {"protected_addresses": []})
+    assert with_nic.splitlines() == rules
 
 
 @pytest.mark.parametrize(

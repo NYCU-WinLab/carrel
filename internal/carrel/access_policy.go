@@ -19,9 +19,6 @@ func (e *Execution) PlanPolicy(a D, machines map[string]D) ([]D, []D) {
 		if mode != "tenant" && mode != "restricted" {
 			fail("invalid", "Unknown network access mode")
 		}
-		if mode == "restricted" && len(arr(m["nics"])) > 0 {
-			fail("invalid", "Detach experiment NICs before restricting primary ingress", D{"machine": name, "recovery": "revise_request"})
-		}
 		before := textAt(m, "network_access", "tenant")
 		changed := before != mode
 		if changed && request["confirm"] != name {

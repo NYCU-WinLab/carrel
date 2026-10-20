@@ -453,8 +453,9 @@ Every tenant machine gets the security group of its tenant:
 
 1. Default `network_access=tenant` accepts same-tenant traffic. Explicit `restricted` ingress accepts
    only declared source/protocol/port connections, public grants and platform access. Connections
-   in deployment intent require a restricted destination. Restricted machines cannot attach
-   unfiltered experiment NICs. Egress policy remains the same.
+   in deployment intent require a restricted destination. The mode filters the primary NIC
+   only: private experiment NICs stay unfiltered and reach only the tenant's own machines on that
+   segment (issue #75, 2026-10-20). Egress policy remains the same.
 2. Accept DNS to the infra resolver.
 3. Accept the peer rules granted to it (section 4.3), inserted above the drops.
 4. Drop every private and internal range: the rest of `10.200.0.0/16`, all of `10.0.0.0/8`,

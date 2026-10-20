@@ -124,9 +124,9 @@ def topology_read():
 
 
 def guest_firewall(m, state, config):
+    # These rules cover net0 only: experiment NICs run with firewall=0, so a
+    # restricted machine's private NICs stay unfiltered (issue #75).
     machine(m)
-    if m.get("network_access") == "restricted" and m.get("nics"):
-        raise ValueError("restricted machines cannot have experiment NICs")
     n = m["tenant_n"]
     rules = [
         "[OPTIONS]",

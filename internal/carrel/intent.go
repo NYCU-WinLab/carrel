@@ -138,9 +138,6 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 		if m == nil || network == nil {
 			fail("not_found", "Attachment must reference this tenant's existing or planned resources")
 		}
-		if m["network_access"] == "restricted" {
-			fail("invalid", "Restricted machines use declared connections; experiment NICs require network_access=tenant", D{"machine": m["name"]})
-		}
 		ref := fallback(network, "id", network["name"])
 		nics := dicts(m["nics"])
 		if find(nics, func(n D) bool { return n["network"] == ref }) != nil {
