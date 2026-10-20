@@ -178,7 +178,7 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
     monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
     monkeypatch.setattr(module, "api", lambda *a, **kw: mutations.append((a, kw)))
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
-    monkeypatch.setattr(module, "serves_private_dhcp", lambda: True)
+    monkeypatch.setattr(module, "first_exit_node", lambda: True)
     monkeypatch.setattr(module, "public_ingress", lambda: None)
     state = {
         "tenants": [{"n": 1, "slug": "alice"}],

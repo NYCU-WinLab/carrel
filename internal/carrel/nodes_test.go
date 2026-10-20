@@ -209,12 +209,27 @@ func TestReconcileRunsOnEveryNodeFirstNodeFirst(t *testing.T) {
 		return inner(r, target)
 	}
 	r := p.execution(context.Background()).Reconcile()
-	if !equalStrings(order, []string{"node-01", "node-02", "node-03"}) {
+	// The first node goes first; the others reconcile at once after it.
+	if len(order) != 3 || order[0] != "node-01" || !sameStrings(order[1:], []string{"node-02", "node-03"}) {
 		t.Fatalf("order %v", order)
 	}
 	if len(obj(r["nodes"])) != 3 || r["node"] == nil {
 		t.Fatal(encoded(r))
 	}
+}
+
+// sameStrings compares two lists as sets of distinct strings.
+func sameStrings(a, b []string) bool {
+	seen := map[string]bool{}
+	for _, v := range a {
+		seen[v] = true
+	}
+	for _, v := range b {
+		if !seen[v] {
+			return false
+		}
+	}
+	return len(a) == len(b)
 }
 
 func equalStrings(a, b []string) bool {
@@ -247,7 +262,7 @@ func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
 		return inner(r, target)
 	}
 	r := p.execution(context.Background()).Reconcile()
-	if !equalStrings(calls, []string{"node-01", "node-02", "node-03"}) {
+	if len(calls) != 3 || calls[0] != "node-01" || !sameStrings(calls[1:], []string{"node-02", "node-03"}) {
 		t.Fatalf("calls %v", calls)
 	}
 	if !equal(r["unreachable_nodes"], []any{"carrel02"}) {
@@ -306,5 +321,38 @@ func TestUnplacedMachinesAreNamed(t *testing.T) {
 	p.Store.Put("machines", 10102, 1, D{"vmid": 10102, "tenant_n": 1, "name": "gone", "node": "carrel09"})
 	if got := UnplacedMachines(p.Store, p.Config); !equalStrings(got, []string{"nameless", "gone"}) {
 		t.Fatal(got)
+	}
+}
+
+func TestPlacementReadsEveryNodeAtOnceAndSkipsADownNode(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	var mu sync.Mutex
+	inFlight, most := 0, 0
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "inventory" {
+			mu.Lock()
+			inFlight++
+			most = max(most, inFlight)
+			mu.Unlock()
+			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+			if target == "node-02" {
+				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
+			}
+		}
+		return inner(r, target)
+	}
+	node, admission := p.execution(context.Background()).Place(1, 1024, 10)
+	if most < 2 || node.Name == "carrel02" || !boolean(admission["accepted"]) {
+		t.Fatalf("most in flight %d, placed on %s", most, node.Name)
+	}
+}
+
+func TestAdapterTimeoutsFollowTheOperation(t *testing.T) {
+	if adapterTimeout("inventory") != time.Minute || adapterTimeout("reconcile") != 5*time.Minute || adapterTimeout("create") != 15*time.Minute {
+		t.Fatal("adapter timeouts")
 	}
 }

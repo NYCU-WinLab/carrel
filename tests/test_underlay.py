@@ -70,7 +70,7 @@ def test_private_dhcp_runs_on_the_first_exit_node_only(monkeypatch, tmp_path, no
     monkeypatch.setattr(module, "NODE", node)
     monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
     (tmp_path / "site.json").write_text(json.dumps(SITE))
-    assert module.serves_private_dhcp() is serves
+    assert module.first_exit_node() is serves
 
 
 def test_infra_sources_are_trusted_only_from_the_infra_bridge():
@@ -79,7 +79,20 @@ def test_infra_sources_are_trusted_only_from_the_infra_bridge():
     assert "\n  ip saddr { 10.200.0.2, 10.200.0.3 } accept" not in nft
 
 
+@pytest.mark.parametrize("first", [True, False])
+def test_only_the_first_exit_node_writes_the_cluster_wide_guest_firewall(monkeypatch, tmp_path, first):
+    written = reconcile_writes(monkeypatch, tmp_path, first)
+    assert ("/etc/pve/firewall/10300.fw" in written) is first
+
+
 def test_vxlan_ports_share_the_guest_conntrack_zone(monkeypatch, tmp_path):
+    written = reconcile_writes(monkeypatch, tmp_path, True)
+    conntrack = written["/etc/carrel/conntrack.nft"]
+    assert 'iifname { "tap10300i0", "vxlan_t003", "vrfvx_tenants" } ct zone set 1' in conntrack
+    assert 'iifname { "xvrfp_tenants", "vrf_tenants", "vrfbr_tenants" } ct zone set 1' in conntrack
+
+
+def reconcile_writes(monkeypatch, tmp_path, first):
     module = load("node-agent.py")
     written = {}
     monkeypatch.setattr(
@@ -91,7 +104,7 @@ def test_vxlan_ports_share_the_guest_conntrack_zone(monkeypatch, tmp_path):
         module, "topology_read", lambda: ([{"vnet": "t003", "zone": "tenants"}], {"t003": [{}]})
     )
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
-    monkeypatch.setattr(module, "serves_private_dhcp", lambda: True)
+    monkeypatch.setattr(module, "first_exit_node", lambda: first)
     monkeypatch.setattr(module, "public_ingress", lambda: None)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "STATE", tmp_path)
@@ -105,15 +118,23 @@ def test_vxlan_ports_share_the_guest_conntrack_zone(monkeypatch, tmp_path):
         return real(path) if text.startswith(str(tmp_path)) else tmp_path / "absent" / text.lstrip("/")
 
     monkeypatch.setattr(module, "Path", local)
+    machine = {
+        "tenant_n": 3,
+        "vmid": 10300,
+        "host": 10,
+        "name": "web",
+        "kind": "vm",
+        "ip": "10.200.3.10",
+        "mac": "02:ca:03:00:00:01",
+        "nics": [],
+    }
     state = {
         "tenants": [{"n": 3, "slug": "zyx1121"}],
         "networks": [],
-        "machines": [],
+        "machines": [machine],
         "domains": [],
         "ports": [],
         "peers": [],
     }
     module.reconcile(state)
-    conntrack = written["/etc/carrel/conntrack.nft"]
-    assert 'iifname { "vxlan_t003", "vrfvx_tenants" } ct zone set 1' in conntrack
-    assert 'iifname { "xvrfp_tenants", "vrf_tenants", "vrfbr_tenants" } ct zone set 1' in conntrack
+    return written
