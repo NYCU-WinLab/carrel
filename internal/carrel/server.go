@@ -173,6 +173,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			}
 			a.mu.Unlock()
 			if limited {
+				slog.Warn("oauth_rate_limited", "client", ip, "path", r.URL.Path)
 				jsonResponse(w, 429, D{"error": "rate_limited"})
 				return
 			}
