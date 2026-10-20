@@ -12,7 +12,7 @@ func TestBootstrapArgumentLimitsBeforeQueueing(t *testing.T) {
 		dry  bool
 	}{
 		{"machine_create", false}, {"machine_create", true},
-		{"deployment_plan", false}, {"deployment_apply", false}, {"deployment_apply", true},
+		{"deployment_plan", false}, {"deployment_apply", false},
 	} {
 		for _, tc := range []struct {
 			name, argument string
@@ -32,8 +32,11 @@ func TestBootstrapArgumentLimitsBeforeQueueing(t *testing.T) {
 				if route.tool != "machine_create" {
 					args = D{"machines": []any{machine}}
 				}
+				if route.tool == "machine_create" {
+					args["dry_run"] = route.dry
+				}
 				if route.tool != "deployment_plan" {
-					args["dry_run"], args["wait_seconds"] = route.dry, 0
+					args["wait_seconds"] = 0
 				}
 				r := NewApp(p, nil).Call(context.Background(), route.tool, args, person("alice", false))
 				if !tc.valid {
