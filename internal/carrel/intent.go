@@ -174,7 +174,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 			requirements = append(requirements, D{"machine": pm["name"], "requirement": r})
 		}
 	}
-	next, detail := "deployment_apply", "When execution is authorized, submit the same specification once with deployment_apply. This is already the complete preview; do not repeat with dry_run."
+	next, detail := "deployment_apply", "When execution is authorized, submit the same specification once with deployment_apply. This is already the complete preview."
 	if len(requirements) > 0 {
 		next = "provide_requirements"
 		detail = "Supply the listed requirements, then preview the updated specification."

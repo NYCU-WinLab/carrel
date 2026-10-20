@@ -3,7 +3,6 @@ package carrel
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 )
@@ -126,15 +125,12 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	switch tool {
 	case "operation_get":
-		ops := e.S.Objects("operations", n)
+		var ops []D
 		if a["id"] != nil {
 			e.P.Operations.Wait(e.Ctx, t, str(a["id"]), intAt(a, "wait_seconds", 55))
 			ops = []D{e.P.Operations.Find(t, str(a["id"]))}
 		} else {
-			sort.Slice(ops, func(i, j int) bool { return num(ops[i]["created_at"]) > num(ops[j]["created_at"]) })
-			if len(ops) > 50 {
-				ops = ops[:50]
-			}
+			ops = e.S.RecentOperations(n, 50)
 		}
 		out := []D{}
 		for _, o := range ops {

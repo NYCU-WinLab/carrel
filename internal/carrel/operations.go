@@ -53,7 +53,7 @@ func (o *Operations) Find(t D, id string) D {
 	return op
 }
 func (o *Operations) CheckQueue(t D, tool string) {
-	pending := filter(o.p.Store.Objects("operations"), func(v D) bool { return !contains(terminal, v["state"]) })
+	pending := o.p.Store.ActiveOperations()
 	mine := filter(pending, func(v D) bool { return integer(v["tenant_n"]) == integer(t["n"]) })
 	if tool != "tenant_suspend" && (len(pending) >= intAt(o.p.Config, "max_pending_operations", 256) || len(mine) >= intAt(o.p.Config, "max_tenant_pending_operations", 16)) {
 		fail("conflict", "Operation queue is full; wait for an existing operation", D{"retryable": true})
@@ -63,14 +63,14 @@ func (o *Operations) Submit(tool string, a, w, t D) D {
 	args := without(a, "dry_run", "idempotency_key", "wait_seconds", "detail")
 	fingerprint := digest(string(encoded([]any{tool, args})))
 	key := str(a["idempotency_key"])
-	for _, old := range o.p.Store.Objects("operations", integer(t["n"])) {
-		if key != "" && old["idempotency_key"] == key {
-			if old["fingerprint"] != fingerprint {
-				fail("conflict", "Idempotency key was already used for different arguments")
-			}
-			return publicOperation(old)
+	if old := o.p.Store.OperationByKey(integer(t["n"]), key); key != "" && old != nil {
+		if old["fingerprint"] != fingerprint {
+			fail("conflict", "Idempotency key was already used for different arguments")
 		}
-		if tool == "tenant_suspend" && old["tool"] == tool && !contains(terminal, old["state"]) {
+		return publicOperation(old)
+	}
+	if tool == "tenant_suspend" {
+		if old := find(o.p.Store.ActiveOperations(integer(t["n"])), func(v D) bool { return v["tool"] == tool }); old != nil {
 			return publicOperation(old)
 		}
 	}
@@ -98,14 +98,12 @@ func (o *Operations) start(id string) {
 	}
 }
 func (o *Operations) Recover() {
-	ops := o.p.Store.Objects("operations")
+	ops := o.p.Store.ActiveOperations()
 	sort.Slice(ops, func(i, j int) bool {
 		return num(fallback(ops[i], "queued_at", ops[i]["created_at"])) < num(fallback(ops[j], "queued_at", ops[j]["created_at"]))
 	})
 	for _, op := range ops {
-		if !contains(terminal, op["state"]) {
-			o.start(str(op["id"]))
-		}
+		o.start(str(op["id"]))
 	}
 }
 func (o *Operations) Loop() {
@@ -202,7 +200,7 @@ func (o *Operations) apply(id string) {
 	var result D
 	complete := false
 	err := attempt(func() {
-		if op["tool"] != "tenant_suspend" && find(e.S.Objects("operations"), func(v D) bool { return v["tool"] == "tenant_suspend" && !contains(terminal, v["state"]) }) != nil {
+		if op["tool"] != "tenant_suspend" && find(e.S.ActiveOperations(), func(v D) bool { return v["tool"] == "tenant_suspend" }) != nil {
 			panic(Waiting{"waiting_for_priority_operation", now() + 0.05})
 		}
 		t := e.S.TenantN(integer(op["tenant_n"]))
@@ -501,8 +499,8 @@ func (e *Execution) CheckBusy(t D) {
 			}
 		}
 	}
-	for _, other := range e.S.Objects("operations") {
-		if other["id"] == e.Op["id"] || contains(terminal, other["state"]) || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing"}, other["phase"]) {
+	for _, other := range e.S.ActiveOperations() {
+		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing"}, other["phase"]) {
 			continue
 		}
 		ids := arr(obj(other["deployment"])["machines"])
