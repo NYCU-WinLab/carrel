@@ -4,8 +4,10 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -252,7 +254,9 @@ func (e *Execution) Quota(t D, delta ...D) D {
 	remaining := D{}
 	over := []string{}
 	violations := []D{}
-	for k, v := range used {
+	// Sorted: the first violation is the error's headline.
+	for _, k := range slices.Sorted(maps.Keys(used)) {
+		v := used[k]
 		remaining[k] = num(limit[k]) - num(v)
 		if num(v) > num(limit[k]) {
 			over = append(over, k)

@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -198,5 +199,17 @@ func TestSummaryPreservesFullDurableResultAndIdempotency(t *testing.T) {
 	two := app.Call(context.Background(), "machine_create", merge(a, D{"detail": "full"}), person("alice", false))
 	if obj(one["operation"])["id"] != obj(two["operation"])["id"] {
 		t.Fatal("presentation changed request identity")
+	}
+}
+
+func TestAQuotaRefusalNamesTheSameDimensionEveryTime(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	for range 20 {
+		f, _ := attempt(func() { e.Quota(p.Store.TenantN(1), D{"vcpu": 100, "memory_mb": 1 << 30, "disk_gb": 1 << 20}) }).(Failure)
+		err := obj(f.Result["error"])
+		if err["dimension"] != "disk_gb" || len(arr(err["violations"])) != 3 || fmt.Sprint(obj(err["quota_after"])["over_limit"]) != "[disk_gb memory_mb vcpu]" {
+			t.Fatal(err)
+		}
 	}
 }

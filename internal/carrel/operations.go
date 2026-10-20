@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -308,7 +310,9 @@ func (o *Operations) apply(id string) {
 					}
 					result["machines"] = machines
 					updated := []D{}
-					for id := range obj(obj(op["deployment"])["bindings"]) {
+					bindings := slices.Collect(maps.Keys(obj(obj(op["deployment"])["bindings"])))
+					sort.Slice(bindings, func(i, j int) bool { return integer(bindings[i]) < integer(bindings[j]) })
+					for _, id := range bindings {
 						if find(machines, func(m D) bool { return integer(m["vmid"]) == integer(id) }) == nil {
 							updated = append(updated, e.PublicMachine(e.Machine(t, id), e.S.Objects("ports", integer(t["n"]))))
 						}
