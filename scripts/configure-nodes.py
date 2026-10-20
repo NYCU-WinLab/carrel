@@ -24,7 +24,7 @@ import socket
 import subprocess
 
 SITE = Path("/etc/carrel/site.json")
-PROGRAMS = ["node-agent.py", "pve-read.pl", "thin-usage.py", "guest-report.py", "gateway-sync.py"]
+PROGRAMS = ["node-agent.py", "thin-usage.py", "guest-report.py", "gateway-sync.py"]
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'
 BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
@@ -127,7 +127,7 @@ def main():
         run("ssh", *peer(n), "root@" + n["address"], "install -d -m 755 /usr/local/lib/carrel /var/lib/carrel")
         for program in PROGRAMS:
             run("scp", "-q", *peer(n), f"/usr/local/lib/carrel/{program}", f"root@{n['address']}:/usr/local/lib/carrel/{program}")
-        run("ssh", *peer(n), "root@" + n["address"], "chmod 755 /usr/local/lib/carrel/node-agent.py /usr/local/lib/carrel/pve-read.pl")
+        run("ssh", *peer(n), "root@" + n["address"], "chmod 755 /usr/local/lib/carrel/node-agent.py")
     # 2. One forced-command line in the cluster-wide authorized_keys.
     ct("sh", "-c", 'mkdir -p /etc/carrel && { test -f /etc/carrel/node_key || ssh-keygen -q -t ed25519 -N "" -f /etc/carrel/node_key; }')
     ct("sh", "-c", "id carrel >/dev/null 2>&1 && chown carrel:carrel /etc/carrel/node_key || true; chmod 600 /etc/carrel/node_key")

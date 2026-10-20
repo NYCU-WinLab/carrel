@@ -37,6 +37,7 @@ def test_create_refuses_a_vmid_held_by_another_node(monkeypatch, tmp_path, kind)
     calls = []
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
     monkeypatch.setattr(module, "api", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(module, "pve_get", lambda *args, **kwargs: calls.append(args))
     with pytest.raises(ValueError, match="another node"):
         module.create(dict(MACHINE))
     assert not calls
@@ -54,7 +55,7 @@ def test_node_files_carry_no_secret(monkeypatch, tmp_path, capsys):
     for name, text in {
         "node.json": "{}",
         "templates.json": "{}",
-        "pve-read.json": "SECRET",
+        "carrel-reader.json": "SECRET",
         "site.json": "{}",
     }.items():
         (etc / name).write_text(text)

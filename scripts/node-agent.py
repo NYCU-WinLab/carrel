@@ -8,6 +8,7 @@ control plane owns authorization and quotas; this boundary owns host integrity.
 
 import fcntl
 import hashlib
+import http.client
 import importlib.util
 import ipaddress
 import json
@@ -15,10 +16,12 @@ import os
 from pathlib import Path
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 
 STATE = Path("/var/lib/carrel")
 NODE = socket.gethostname().split(".")[0]
@@ -26,6 +29,9 @@ CONFIG = Path("/etc/carrel/node.json")
 STORAGE_CONFIG = Path("/etc/pve/storage.cfg")
 PVE_NODES = Path("/etc/pve/nodes")
 SITE = Path("/etc/carrel/site.json")
+# Cluster-wide and root-only: every node reads the same token (configure-reader.py).
+READER = Path("/etc/pve/priv/carrel-reader.json")
+PVE_CA = "/etc/pve/pve-root-ca.pem"
 
 
 def storage_id():
@@ -57,12 +63,69 @@ def storage_definition(storage, text=None):
     return found
 
 
-def pve_read(mode):
-    # The fixed Go reader is opt-in at deployment. Never fall back after a read
-    # failure: stale or ACL-filtered inventories must not authorize allocations.
-    config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-    reader = "/usr/local/lib/carrel/carrel-pve-read" if config.get("go_pve_reader") else "/usr/local/lib/carrel/pve-read.pl"
-    return json.loads(run(reader, mode))
+_reader = None
+
+
+def pve_get(resource, **params):
+    """Read the local PVE API over HTTPS with the read-only token.
+
+    One connection per adapter run; a pvesh start costs about a second per read.
+    Writes stay with pvesh as root. Never fall back after a read failure: stale
+    or ACL-filtered inventories must not authorize allocations.
+    """
+    global _reader
+    if _reader is None:
+        context = ssl.create_default_context(cafile=PVE_CA)
+        # The PVE root CA has no keyUsage extension, which strict X.509 rejects.
+        # The chain and the node name are still verified.
+        context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        connection = http.client.HTTPSConnection(NODE, 8006, context=context, timeout=60)
+        _reader = connection, json.loads(READER.read_text())["authorization"]
+    connection, authorization = _reader
+    query = "?" + urllib.parse.urlencode(params) if params else ""
+    for retry in (False, True):
+        try:
+            connection.request("GET", "/api2/json" + resource + query, headers={"Authorization": authorization})
+            response = connection.getresponse()
+            body = response.read(16 << 20)
+            break
+        except ConnectionError:
+            # pveproxy closes a connection idle for 5 s, as it is after a slow
+            # write. A GET is safe to send again; close() makes the next one reconnect.
+            connection.close()
+            if retry:
+                raise
+    if response.status != 200:
+        raise CommandFailure(f"PVE GET returned HTTP {response.status}")
+    data = json.loads(body).get("data")
+    if data is None:
+        raise CommandFailure("missing PVE observation")
+    return data
+
+
+def inventory_read(storage):
+    # The token sees every volume only with Datastore.Allocate on the storage;
+    # PVEAuditor alone silently omits volumes. Refuse incomplete authority.
+    path = "/storage/" + storage
+    authority = pve_get("/access/permissions", path=path).get(path, {})
+    if authority.get("Datastore.Audit") != 1 or authority.get("Datastore.Allocate") != 1:
+        raise RuntimeError("storage inventory authority is incomplete")
+    return {
+        "volumes": pve_get(f"/nodes/{NODE}{path}/content"),
+        "resources": pve_get("/cluster/resources"),
+        "storage": pve_get(f"/nodes/{NODE}{path}/status"),
+        "status": pve_get(f"/nodes/{NODE}/status"),
+    }
+
+
+def topology_read():
+    vnets = pve_get("/cluster/sdn/vnets")
+    subnets = {
+        v["vnet"]: pve_get(f"/cluster/sdn/vnets/{v['vnet']}/subnets")
+        for v in vnets
+        if re.fullmatch(r"t[0-9]{3}", v["vnet"])
+    }
+    return vnets, subnets
 
 
 def guest_firewall(m, state, config):
@@ -160,6 +223,7 @@ def run(*args, timeout=180, input=None):
 
 
 def api(method, path, **kwargs):
+    # Writes only; reads use pve_get.
     args = ["pvesh", method, path, "--output-format", "json"]
     for key, value in kwargs.items():
         args += ["--" + key.replace("_", "-"), str(value)]
@@ -221,7 +285,7 @@ def provision_marker(m):
 def owned(m, allow_provisioning=False):
     vmid = machine(m)
     kind = "qemu" if m["kind"] == "vm" else "lxc"
-    cfg = api("get", f"/nodes/{NODE}/{kind}/{vmid}/config")
+    cfg = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config")
     tags = cfg.get("tags", "").split(";")
     if "carrel" not in tags or f"tenant-{m['tenant_n']}" not in tags:
         manifest = STATE / f"create-{vmid}.json"
@@ -240,9 +304,7 @@ def tenant_config(t):
     return n, f"t{n:03d}"
 
 
-def ensure(path, key, value, *, existing=None, **params):
-    if existing is None:
-        existing = api("get", path)
+def ensure(path, key, value, *, existing, **params):
     if any(x[key] == value for x in existing):
         return False
     api("create", path, **{key: value}, **params)
@@ -515,10 +577,9 @@ def nic_value(m, nic):
 def reconcile(state):
     config = json.loads(CONFIG.read_text())
     changed = []
-    # One fresh observation per reconciliation, without repeated pvesh startup.
-    # Mutations remain serialized by the node adapter's infrastructure lock.
-    topology = pve_read("topology")
-    vnets, subnets_by_vnet = topology["vnets"], topology["subnets"]
+    # One fresh observation per reconciliation. Mutations remain serialized
+    # by the node adapter's infrastructure lock.
+    vnets, subnets_by_vnet = topology_read()
     for t in state["tenants"]:
         n, vnet = tenant_config(t)
         if ensure(
@@ -562,7 +623,7 @@ def reconcile(state):
         task = api("set", "/cluster/sdn")
         if isinstance(task, str) and task.startswith("UPID:"):
             for _ in range(60):
-                status = api("get", f"/nodes/{NODE}/tasks/{task}/status")
+                status = pve_get(f"/nodes/{NODE}/tasks/{urllib.parse.quote(task, safe='')}/status")
                 if status["status"] == "stopped":
                     if status.get("exitstatus") != "OK":
                         raise RuntimeError("SDN reload failed")
@@ -888,7 +949,7 @@ def create(m):
         try:
             owned(m)
         except ValueError:
-            cfg = api("get", f"/nodes/{NODE}/qemu/{vmid}/config")
+            cfg = pve_get(f"/nodes/{NODE}/qemu/{vmid}/config")
             if saved.get("marker") != marker or cfg.get("description") != marker:
                 raise
         if saved.get("complete") and saved.get("marker") == marker:
@@ -912,7 +973,7 @@ def create(m):
     if m["kind"] == "vm":
         template = saved.get("template", {"prepared": False})
         if not exists:
-            cfg = api("get", f"/nodes/{NODE}/qemu/{template['vmid']}/config")
+            cfg = pve_get(f"/nodes/{NODE}/qemu/{template['vmid']}/config")
             if not cfg.get("template") or not cfg.get("scsi0", "").startswith(storage_id() + ":base-"):
                 raise ValueError("expected an immutable template on this node's guest storage")
             run("qm", "clone", template["vmid"], vmid, "--full", "0", "--name", m["name"], "--description", marker, timeout=600)
@@ -1011,7 +1072,7 @@ def create(m):
 
 def power_status(m):
     kind = "qemu" if m["kind"] == "vm" else "lxc"
-    status = api("get", f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+    status = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
     if status.get("qmpstatus") in ("paused", "suspended", "prelaunch"):
         return "paused"
     return status.get("status", "unknown")
@@ -1103,7 +1164,7 @@ def action(req):
         name = label(req["name"])
         if op in ("snapshot", "delsnapshot"):
             kind = "qemu" if cmd == "qm" else "lxc"
-            snapshots = api("get", f"/nodes/{NODE}/{kind}/{vmid}/snapshot")
+            snapshots = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/snapshot")
             exists = any(s["name"] == name for s in snapshots)
             if (op == "delsnapshot" and not exists) or (op == "snapshot" and exists):
                 return {"state": "exists" if exists else "absent"}
@@ -1156,9 +1217,9 @@ def main():
         elif op == "inventory":
             # Guest maxdisk omits secondary disks. Count all thin volumes,
             # including templates and unused disks, for conservative admission.
-            observed = pve_read("inventory")
-            volumes = observed.pop("volumes")
             storage = storage_id()
+            observed = inventory_read(storage)
+            volumes = observed.pop("volumes")
             out = {
                 "thin_pool": pool_usage(storage_definition(storage), observed["storage"]),
                 "node": NODE,
@@ -1181,10 +1242,10 @@ def main():
             m = req["machine"]
             owned(m)
             kind = "qemu" if m["kind"] == "vm" else "lxc"
-            out = api("get", f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+            out = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
         elif op == "node_files":
             # For the control plane's backup: only files without secrets
-            # (pve-read.json holds a token and is rebuilt by its installer).
+            # (the reader token is rebuilt by configure-reader.py).
             files = {}
             for name in ("node.json", "templates.json", "site.json"):
                 path = Path("/etc/carrel") / name
@@ -1195,7 +1256,7 @@ def main():
             m = req["machine"]
             owned(m)
             kind = "qemu" if m["kind"] == "vm" else "lxc"
-            out = api("get", f"/nodes/{NODE}/{kind}/{m['vmid']}/rrddata", timeframe="hour")
+            out = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/rrddata", timeframe="hour")
         else:
             raise ValueError("unknown operation")
         response = json.dumps({"ok": True, "result": out})

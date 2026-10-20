@@ -33,7 +33,7 @@ def main():
         parser.error("invalid host")
     # The health check expects the version this checkout builds.
     version = re.search(r'const Version = "([^"]+)"', (ROOT / "internal/carrel/value.go").read_text())[1]
-    names = ("carrel", "carrel-pve-read", "carrel-deployd")
+    names = ("carrel", "carrel-deployd")
     artifacts = args.artifacts.resolve()
     for name in names:
         if not (artifacts / name).is_file():
@@ -44,10 +44,9 @@ def main():
     sources = [
         *(artifacts / name for name in names),
         ROOT / "scripts/node-agent.py",
-        ROOT / "scripts/configure-go-reader.py",
+        ROOT / "scripts/configure-reader.py",
         # Helpers node-agent loads or calls; they change together with it.
         ROOT / "scripts/thin-usage.py",
-        ROOT / "scripts/pve-read.pl",
         ROOT / "scripts/guest-report.py",
         ROOT / "scripts/gateway-sync.py",
         # Copies the programs to the other site nodes and checks CT 100 reaches them.
@@ -103,7 +102,7 @@ node=socket.gethostname().split('.')[0]
 node_config=Path('/etc/carrel/node.json')
 storage=json.loads(node_config.read_text()).get('storage','local-lvm') if node_config.exists() else 'local-lvm'
 assert isinstance(storage,str) and re.fullmatch(r'[a-z][a-z0-9_.-]{{0,62}}',storage), 'Invalid storage id in node.json'
-helpers={{'thin-usage.py':'644','pve-read.pl':'755','guest-report.py':'644','gateway-sync.py':'644'}}
+helpers={{'thin-usage.py':'644','guest-report.py':'644','gateway-sync.py':'644'}}
 def ct(*args): subprocess.run(['pct','exec','100','--',*args],check=True)
 def capture(*args): return subprocess.check_output(args,text=True)
 for name,expected in {hashes!r}.items():
@@ -119,12 +118,7 @@ for image,entry in templates.items():
  assert isinstance(vmid,int) and 9000<=vmid<=9999, 'Invalid template VMID'
  cfg=json.loads(capture('pvesh','get',f'/nodes/{{node}}/qemu/{{vmid}}/config','--output-format','json'))
  assert cfg.get('template')==1 and cfg.get('scsi0','').startswith(storage+':base-'), 'Expected an immutable template on the guest storage of this node'
-subprocess.run(['python3',str(stage/'configure-go-reader.py')],check=True)
-# PVEAuditor alone silently hides volumes. Compare complete stable volume identities before enabling.
-old=json.loads(capture('/usr/local/lib/carrel/pve-read.pl','inventory'))
-new=json.loads(capture(str(stage/'carrel-pve-read'),'inventory'))
-def volumes(value): return sorted((v['volid'],v['size']) for v in value['volumes'])
-assert volumes(old)==volumes(new) and len(new['volumes'])>0, 'Incomplete HTTPS volume inventory'
+subprocess.run(['python3',str(stage/'configure-reader.py')],check=True)
 ct('python3','-c',{preflight!r})
 ct('systemctl','stop','carrel-backup.timer')
 ct('systemctl','stop','carrel-backup.service')
@@ -145,10 +139,6 @@ try:
  subprocess.run(['install','-m','600',str(template_next),str(template_path)+'.next'],check=True)
  os.replace(str(template_path)+'.next',template_path)
  subprocess.run(['pct','push','100',str(template_next),'/etc/carrel/templates.next.json','--perms','600'],check=True)
- target=Path('/usr/local/lib/carrel/carrel-pve-read')
- if target.exists(): shutil.copy2(target,stage/'before-carrel-pve-read')
- subprocess.run(['install','-m','755',str(stage/'carrel-pve-read'),str(target)+'.next'],check=True)
- os.replace(str(target)+'.next',target)
  for name,mode in helpers.items():
   target=Path('/usr/local/lib/carrel/'+name)
   subprocess.run(['install','-m',mode,str(stage/name),str(target)+'.next'],check=True)
@@ -161,8 +151,6 @@ try:
   # It rewrites CT 100's node list and SSH files, which a rollback restores.
   configured=True
   subprocess.run(['python3',str(stage/'configure-nodes.py')],check=True)
- config=Path('/etc/carrel/node.json'); value=json.loads(config.read_text());value['go_pve_reader']=True
- config.write_text(json.dumps(value,indent=2)+'\\n')
  subprocess.run(['pct','push','100',str(stage/'carrel'),'/usr/local/bin/carrel.next','--perms','755'],check=True)
  # Served to tenant machines at /apps/v1/carrel-deployd (PLAN 7.9).
  ct('install','-d','-m','755','/usr/local/lib/carrel')
@@ -181,7 +169,7 @@ try:
   time.sleep(1)
  assert health and health.get('version')=={version!r}, 'Go health check failed'
  ct('systemctl','is-active','carrel')
- print(json.dumps({{'health':health,'volumes':len(new['volumes']),'node_backup':str(stage),'control_backup':'/opt/carrel/rollback/go-{stamp}.tar.gz'}}))
+ print(json.dumps({{'health':health,'node_backup':str(stage),'control_backup':'/opt/carrel/rollback/go-{stamp}.tar.gz'}}))
 except BaseException:
  ct('systemctl','stop','carrel')
  if activated or configured:
@@ -191,7 +179,6 @@ except BaseException:
   ct('python3','-c',restore,json.dumps(names))
  for name,path in [('node-agent.py','/usr/local/lib/carrel/node-agent.py'),('node.json','/etc/carrel/node.json')]:
   if (stage/('before-'+name)).exists(): shutil.copyfile(stage/('before-'+name),path)
- if (stage/'before-carrel-pve-read').exists(): shutil.copy2(stage/'before-carrel-pve-read','/usr/local/lib/carrel/carrel-pve-read')
  for name in helpers:
   if (stage/('before-'+name)).exists(): shutil.copy2(stage/('before-'+name),'/usr/local/lib/carrel/'+name)
  if (stage/'before-templates.json').exists(): shutil.copy2(stage/'before-templates.json',template_path)
