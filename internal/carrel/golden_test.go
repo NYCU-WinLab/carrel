@@ -278,7 +278,13 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 			t.Errorf("tool %s has no golden step", tool["name"])
 		}
 	}
-	got := strings.Join(g.lines, "\n") + "\n"
+	checkGolden(t, file, strings.Join(g.lines, "\n")+"\n")
+}
+
+// checkGolden compares got with testdata/golden/<file>, or rewrites it
+// with -update.
+func checkGolden(t *testing.T, file, got string) {
+	t.Helper()
 	path := filepath.Join("testdata", "golden", file)
 	if *update {
 		must(os.MkdirAll(filepath.Dir(path), 0o755))
