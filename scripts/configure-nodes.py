@@ -99,9 +99,10 @@ def gateway(key):
         "umask 077 && mkdir -p /root/.ssh && cat > /root/.ssh/authorized_keys.carrel-next"
         " && mv /root/.ssh/authorized_keys.carrel-next /root/.ssh/authorized_keys",
         input="\n".join([*kept, line]) + "\n")
-    # Keys only: CT 101 holds every tenant's private keys.
+    # Keys only: CT 101 holds every tenant's private keys. Restart, not
+    # reload: ssh.socket holds port 22, and a reloaded sshd binds it itself.
     run("pct", "exec", "101", "--", "sh", "-c",
-        "umask 022 && cat > /etc/ssh/sshd_config.d/carrel.conf && systemctl try-reload-or-restart ssh",
+        "umask 022 && cat > /etc/ssh/sshd_config.d/carrel.conf && systemctl try-restart ssh.service",
         input="PasswordAuthentication no\nKbdInteractiveAuthentication no\n")
     return " ".join(run("pct", "exec", "101", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
 
