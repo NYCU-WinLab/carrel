@@ -53,6 +53,13 @@ def test_public_interface_routes_replies_back_out_the_public_gateway():
     assert "post-up ip route replace default via 140.113.60.190 dev vmbr0.60 table 160" in stanza
     assert "ip rule add fwmark 0x60 lookup 160 priority 1600" in stanza
     assert "ip rule add from 140.113.60.184 lookup 160 priority 1601" in stanza
+    # Tenant egress: local addresses, then carrel's own networks, then the public address.
+    order = [
+        "iif xvrf_tenants lookup local priority 1602",
+        "iif xvrf_tenants to 10.200.0.0/16 lookup main priority 1603",
+        "iif xvrf_tenants lookup 160 priority 1604",
+    ]
+    assert [stanza.index(rule) for rule in order] == sorted(stanza.index(rule) for rule in order)
     assert "disable_ipv6" in stanza
     assert "post-up ip route replace 140.113.60.160/27 dev vmbr0.60 table 160" in stanza
     assert stanza.index("pre-up nft list table inet carrel_public") < stanza.index("post-up")
