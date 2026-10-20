@@ -178,6 +178,32 @@ func find(xs []D, f func(D) bool) D {
 	}
 	return nil
 }
+
+// or gives s, or fallback when s is empty.
+func or(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+// optional gives the value of p, or a plain nil for a missing one: a nil
+// pointer inside a D would not compare equal to nil.
+func optional[T any](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// orEmpty gives an empty list for a missing one, as JSON [] rather than null.
+func orEmpty(xs []D) []D {
+	if xs == nil {
+		return []D{}
+	}
+	return xs
+}
+
 func filter(xs []D, f func(D) bool) []D {
 	r := []D{}
 	for _, x := range xs {

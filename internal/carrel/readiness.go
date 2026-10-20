@@ -3,12 +3,12 @@ package carrel
 // Readiness observations expire independently of power state and allocations.
 func fresh(at any) bool { return num(at) > now()-120 && num(at) <= now()+5 }
 
-func presentReadiness(m, report D) {
+func presentReadiness(m D, report guestReport) {
 	r := obj(m["readiness"])
 	r["freshness"] = "unknown"
-	if report["reported_at"] != nil {
+	if report.ReportedAt != nil {
 		r["freshness"] = "stale"
-		if fresh(report["reported_at"]) {
+		if fresh(*report.ReportedAt) {
 			r["freshness"] = "fresh"
 		}
 	}

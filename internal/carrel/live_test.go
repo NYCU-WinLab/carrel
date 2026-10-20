@@ -10,6 +10,7 @@ package carrel
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -19,11 +20,23 @@ import (
 
 // liveTyped holds the typed round trip of each kind that has one. A kind
 // without an entry uses the D path, which is the reference.
-var liveTyped = map[string]func(data string) string{}
+var liveTyped = map[string]func(data string) string{
+	"keys":          roundTrip[sshKey],
+	"certificates":  roundTrip[certificateRecord],
+	"storage_usage": roundTrip[storageUsage],
+	"guest_reports": roundTrip[guestReport],
+}
+
+func roundTrip[T any](data string) string {
+	var v T
+	must(json.Unmarshal([]byte(data), &v))
+	return string(encoded(v))
+}
 
 // label hides keys that are data rather than field names: IDs, VMIDs.
+// Field names are lower case words joined by underscores.
 func label(k string) string {
-	if len(k) >= 16 || matches(`^[0-9]+(:[a-z]+)?$`, k) {
+	if !matches(`^[a-z]+(_[a-z]+)*$`, k) {
 		return "<key>"
 	}
 	return k

@@ -272,9 +272,8 @@ func (e *Execution) Quota(t D, delta ...D) D {
 	return result
 }
 func (e *Execution) SnapshotUsage(t D) D {
-	ss := e.S.Objects("storage_usage", integer(t["n"]))
-	if len(ss) > 0 {
-		return without(ss[0], "tenant_n", "operation_id")
+	if u, ok := rowOf[storageUsage](e.S, "storage_usage", str(t["n"])); ok {
+		return D{"accounting": u.Accounting, "available": u.Available, "retained_snapshot_bytes": u.RetainedSnapshotBytes, "sampled_at": u.SampledAt, "unique_total_bytes": u.UniqueTotalBytes}
 	}
 	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample; snapshot_gb reserves worst-case size"}
 }
@@ -316,8 +315,8 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", textAt(installed, "default_size", "tiny"))]), pick(a, "cpu", "memory_mb", "disk_gb"))
 	keys := arr(a["ssh_keys"])
 	if len(keys) == 0 {
-		for _, k := range e.S.Objects("keys", integer(t["n"])) {
-			keys = append(keys, k["key"])
+		for _, k := range rowsOf[sshKey](e.S, "keys", integer(t["n"])) {
+			keys = append(keys, k.Key)
 		}
 	}
 	if len(keys) > 0 || !dry {
@@ -386,11 +385,11 @@ func (e *Execution) AllocatePort(t D) int {
 }
 func (e *Execution) PublicMachine(m D, ports []D) D {
 	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node")
-	report := obj(e.S.Get("guest_reports", str(m["vmid"])))
+	report := e.S.guestReport(m["vmid"])
 	if m["kind"] == "ct" && m["state"] == "ready" {
-		report = merge(report, D{"initialization_status": "complete", "application_status": "not_checked"})
+		report.InitializationStatus, report.ApplicationStatus = "complete", "not_checked"
 	}
-	safe["readiness"] = D{"ssh_ready": boolean(m["ssh_ready"]), "initialization_status": textAt(report, "initialization_status", "unknown"), "application_status": textAt(report, "application_status", "not_checked"), "checks": arr(report["checks"]), "reported_at": report["reported_at"], "private_interfaces": arr(report["interfaces"]), "failed_step": report["failed_step"]}
+	safe["readiness"] = D{"ssh_ready": boolean(m["ssh_ready"]), "initialization_status": or(report.InitializationStatus, "unknown"), "application_status": or(report.ApplicationStatus, "not_checked"), "checks": orEmpty(report.Checks), "reported_at": optional(report.ReportedAt), "private_interfaces": orEmpty(report.Interfaces), "failed_step": optional(report.FailedStep)}
 	presentReadiness(safe, report)
 	allowed := []D{}
 	for _, p := range e.S.Objects("peers", integer(m["tenant_n"])) {
