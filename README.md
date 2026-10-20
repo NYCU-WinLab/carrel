@@ -305,9 +305,9 @@ cleanup and reductions remain available. Administrator suspension is a separate 
 Snapshots use separate `snapshot_gb` (default 100 GiB) and `snapshots` (default 4) limits. A 40 GiB
 VM with two snapshots consumes 40 GiB `disk_gb` and 80 GiB `snapshot_gb`. The latter is a worst-case
 reservation, **not a claim about current physical usage**. Snapshot admission also checks safe
-physical headroom; data or metadata pressure blocks new storage allocations. `quota_get` and
-`snapshot_list` expose timestamped actual snapshot-retained bytes, sampled from a held thin metadata
-snapshot as the union of snapshot mappings minus live mappings. Shared blocks are counted once.
+physical headroom; storage pressure blocks new storage allocations. `quota_get` and
+`snapshot_list` expose timestamped actual snapshot-retained bytes, sampled from ZFS
+`usedbysnapshots`. Shared blocks are counted once.
 Accounting sample failure does not release reservations. Rollback can briefly stop a VM, restores
 its previous power state, and waits for readiness if it was running. It is still a disk-only rollback.
 
@@ -349,18 +349,14 @@ GPU allocation is unsupported; hardware GPU inventory is unknown.
 Implemented: VM/CT lifecycle, stable image templates, public SSH/port grants, tenant HTTPS domains,
 private L2 networks and NICs, explicit cross-tenant TCP grants, snapshots, quota requests/approval,
 audit records, and reconciliation. [PLAN.md](PLAN.md#154-member-platform-deployment) records the
-implementation and remaining milestones. This is an initial single-node deployment, not completion
-of the entire product plan: custom images/imports, console/access recovery, special names, skills,
-PBS/observability, alumni scheduling and multiple nodes remain to be implemented or accepted.
+implementation and remaining milestones. Custom images/imports, console/access recovery, special
+names, skills, PBS/observability and alumni scheduling remain to be implemented.
 
-`carrel01` is `192.168.13.159`, with ext4 + hardware RAID + LVM-thin. The old PVE remains outside
-its cluster. Public traffic uses its existing TLS gateway → new CT 207 proxy → WireGuard → B09.
-CT 100 hosts the control plane; CT 101 provides tenant HTTP routing and DNS. Tenant SSH does not use
-the management jump account. The new proxy holds no Keycloak or Cloudflare credentials.
-
-[sites/b09/ssh-config.example](sites/b09/ssh-config.example) contains administrator aliases.
-[sites/b09/platform-verification.json](sites/b09/platform-verification.json) records actual acceptance
-checks. Hypervisor administrators can technically read disks; Carrel exposes no general guest
+The B09 site is the four-node PVE cluster `carrel` ([sites/b09/cluster.json](sites/b09/cluster.json)),
+on ZFS `local-zfs`. Its first exit node, `carrel01`, holds the public address `140.113.60.184`,
+CT 100 (the control plane) and CT 101 (the TLS gateway and tenant DNS). Tenant SSH does not use the
+management jump account. [sites/b09/ssh-config.example](sites/b09/ssh-config.example) contains
+administrator aliases. Hypervisor administrators can technically read disks; Carrel exposes no general guest
 execution or file-reading API. Verification uses disposable guests and their owner's SSH key.
 
 ## Development and deployment
@@ -378,7 +374,7 @@ python3 -m compileall -q scripts
 ```
 
 Go owns the MCP server, OAuth, durable jobs, admission, state and backups. The existing bounded
-Python node/edge mutation adapters and guest reporter remain. Go issues certificates itself
+Python node adapter, gateway sync, backup target and guest reporter remain. Go issues certificates itself
 (ACME DNS-01 through Cloudflare). The Python tests cover these scripts; the Go tests cover the
 service. The live wire contract is `internal/carrel/contract.json`.
 
@@ -404,45 +400,39 @@ Keep previous generations for rollback. Existing template IDs are never overwrit
 Each node keeps its own `templates.json` and imports the same prepared image at VMIDs from its own
 block of 20 (PLAN 6.1), because a linked clone works only on the node that holds its template.
 `build-templates.py` refuses a VMID that exists on another node. The guest storage id is `storage`
-in `/etc/carrel/node.json` (default `local-lvm`, the R640 node); B09 cluster nodes use `local-zfs`.
-Set it before `configure-reader.py` and template import. `configure-reader.py` creates the read-only
+in `/etc/carrel/node.json`, a ZFS pool (`local-zfs` at B09). Set it before `configure-reader.py` and template import. `configure-reader.py` creates the read-only
 PVE API token that node-agent uses on every node; it lives in `/etc/pve/priv/carrel-reader.json`,
 which the cluster shares and only root reads.
 Several nodes are listed in `/etc/carrel/config.json` as
 `"nodes": [{"name": "carrel01", "target": "carrel-node-01"}, ...]`, where `target` is a `Host` in
 `/etc/carrel/ssh_config`. A new machine goes to the node that admits it with the most admission
 memory left, and the new machines of one deployment share a node. Each machine record keeps its
-node, and every machine request goes to that node. Without `nodes`, carrel uses `carrel-node`
-alone and records no node. The first node must reconcile; the others catch up on the next pass.
-A site with its own public address (PLAN 15.15) sets `"ingress": "exit"` and
-`"public_address": "<IPv4>"`. Its first exit node then terminates TLS and publishes ports, and the
-external edge only keeps the backups. The control plane issues carrel's own certificate (live pair
-`_origin` under `certificate_dir`) through DNS-01. The gateway receives it on the next reconcile, and only then do
-carrel's records (the origin and every `*.<slug>.winlab.tw`) move to that address. A control plane
-without `public_address` never rewrites records, so an old site cannot move them back. Stop the old
-control plane before the new one starts.
-New VM disks are linked clones on the guest storage (LVM-thin or ZFS); guest writes remain isolated. Requested extra packages still
+node, and every machine request goes to that node. The first node must reconcile; the others catch
+up on the next pass. The configuration also needs `"public_address": "<IPv4>"` and `origin`. The
+first node terminates TLS and publishes ports on that address. The control plane issues carrel's
+own certificate (live pair `_origin` under `certificate_dir`) through DNS-01. A DNS record points at
+the public address only after the gateway confirmed it holds the matching certificate.
+New VM disks are linked clones on the guest storage; guest writes remain isolated. Requested extra packages still
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.
 
 The scripts are site-specific administrator operations, not the planned general `install.sh`.
-The deployment order is documented in [PLAN 15.4](PLAN.md#154-member-platform-deployment): prepare
-owned infrastructure, install networking/templates, connect the edge, upgrade the new proxies,
-then deploy and publish. For an existing deployment with SSH aliases `carrel01` and `pve`:
+For an existing deployment, from a workstation that reaches the first exit node:
 
 ```sh
-python3 scripts/deploy-go.py --artifacts /path/to/sandbox-built/dist
+python3 scripts/deploy-go.py --host root@192.168.19.101 --artifacts /path/to/sandbox-built/dist
 ```
 
 The Go upgrade requires the existing site bootstrap and a configured control CT. The upgrade checks idle jobs and full PVE volume visibility,
 keeps database/configuration/OAuth/certificates, and saves private service/node rollback files.
 It installs prebuilt static binaries without compiling on the workstation or hypervisor.
 Existing route/NAT state remains in place. See [PLAN 15.9](PLAN.md#159-go-control-plane-06-2026-10-02)
-for the reader credential and rollback details. Secrets travel through SSH stdin and protected files. Never save a complete iptables ruleset
-on the old host: its existing services and tailnet routes are independent of Carrel.
+for the reader credential and rollback details. Secrets travel through SSH stdin and protected files.
 
 The `carrel-backup.timer` makes a consistent SQLite backup with config, service key and certificates
-each day and stores 14 daily archives under `/var/lib/carrel-edge/backups` on the old PVE, mode 0600.
+each day and sends it off the cluster to the SSH target `carrel-backup`: `scripts/backup-target.py`,
+a forced command on spawner (the old PVE), keeps 14 daily archives under `/var/lib/carrel-backups`,
+mode 0600.
 These are sensitive archives. They do not contain tenant disks and are not a replacement for PBS.
 For restoration, stop the control service, restore `carrel.db` (remove stale `-wal`/`-shm` files),
 `etc/carrel/`, and `certificates/` to their original locations, set the documented ownership,
@@ -454,48 +444,6 @@ that did not answer, or whose files exceeded 256 KiB, as `missing_nodes`, and th
 warning. `/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
-
-## Private staging bootstrap
-
-The following scripts prepare admin-only nested staging and preserve its existing disks. They do
-not establish the CI installation acceptance for M0.
-
-```sh
-python3 scripts/host-preflight.py --config sites/b09/carrel01.json
-python3 scripts/bootstrap-staging.py --admin-key /path/to/admin.pub  # check only
-python3 scripts/bootstrap-staging.py --admin-key /path/to/admin.pub --apply
-```
-
-After the guest boots, copy the public `/usr/share/keyrings/proxmox-archive-keyring.gpg`
-from the existing PVE host, plus your administrator public key, into it and run:
-
-```sh
-python3 scripts/install-staging-pve.py --archive-keyring /path/to/proxmox-archive-keyring.gpg --admin-key /path/to/admin.pub
-python3 scripts/install-staging-pve.py --archive-keyring /path/to/proxmox-archive-keyring.gpg --admin-key /path/to/admin.pub --apply
-```
-
-Reboot the guest when the report says `reboot_required`, then run it again to verify convergence.
-The installer refuses physical machines, unexpected guest names / addresses, and disks without
-the staging data serial. It only initializes that dedicated disk when it has no signatures.
-The public archive keyring is not a login credential; APT verifies repository signatures and
-package hashes with it. The administrator public key is kept outside pmxcfs so PVE
-initialization cannot remove staging SSH access. After successful provisioning, cloud-init
-is disabled in this infrastructure guest; PVE owns its persistent hostname and network configuration.
-
-The staging VM uses ID `190`, 8 vCPU, 24 GiB RAM, a 32 GiB boot disk and a 160 GiB data disk.
-It is reached by administrators through `carrel01`, on `172.31.255.2`. The host's staging
-firewall permits internet egress but blocks connections initiated towards the host and private
-networks. It owns only its own nftables table, bridge and service. Repeated bootstrap runs
-preserve the guest and its disks; this is not a reset command.
-
-From your workstation, with the `carrel01` and `carrel-stg01` SSH aliases configured, run
-`python3 scripts/verify-staging.py` to check HTTPS certificates, LVM-thin, services, management
-isolation, outbound HTTPS and nested KVM startup. The recorded result is in
-[sites/b09/bootstrap-verification.json](sites/b09/bootstrap-verification.json).
-
-The optional `rename-empty-node.py` refuses nodes with guests or a cluster configuration and
-backs up the PVE database and configuration before preparing a rename. It needs a reboot and
-post-reboot verification; do not use it on an active cluster.
 
 ## License
 

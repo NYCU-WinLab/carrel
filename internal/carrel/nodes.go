@@ -11,30 +11,24 @@ import (
 )
 
 // Nodes come from config "nodes" (PLAN 15.15): each entry names a PVE node and
-// the SSH alias of its node adapter. A configuration without nodes is the
-// single R640 node behind carrel-node, and its machine records carry no node.
+// the SSH alias of its node adapter. Every machine record names its node.
 type nodeRef struct{ Name, Target string }
 
 var nodeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-// ValidateNodes rejects a node list that could route a machine to the wrong
-// adapter; the control plane refuses to start with it.
+// ValidateNodes rejects a site configuration that could route a machine to
+// the wrong adapter or publish on a wrong address; the control plane refuses
+// to start with it. The first node is the exit node: it holds the infra
+// gateway and the public address.
 func ValidateNodes(c D) error {
-	if v := c["ingress"]; v != nil && v != "edge" && v != "exit" {
-		return errors.New("ingress must be edge or exit")
+	if ip, err := netip.ParseAddr(str(c["public_address"])); err != nil || !ip.Is4() {
+		return errors.New("public_address must be an IPv4 address")
 	}
-	if a, ok := c["public_address"]; ok && a != nil {
-		if ip, err := netip.ParseAddr(str(a)); err != nil || !ip.Is4() {
-			return errors.New("public_address must be an IPv4 address")
-		}
+	if originHost(c) == "" {
+		return errors.New("origin is required")
 	}
-	if c["ingress"] == "exit" && (str(c["public_address"]) == "" || originHost(c) == "") {
-		return errors.New("ingress exit needs public_address and origin")
-	}
-	if v, ok := c["nodes"]; ok && v != nil {
-		if _, list := v.([]any); !list {
-			return errors.New("nodes must be a list")
-		}
+	if list, ok := c["nodes"].([]any); !ok || len(list) == 0 {
+		return errors.New("nodes must list at least one node")
 	}
 	names, targets := map[string]bool{}, map[string]bool{}
 	for _, v := range arr(c["nodes"]) {
@@ -56,14 +50,10 @@ func (p *Platform) Nodes() []nodeRef {
 	for _, v := range dicts(p.Config["nodes"]) {
 		out = append(out, nodeRef{str(v["name"]), str(v["target"])})
 	}
-	if len(out) == 0 {
-		out = append(out, nodeRef{"", "carrel-node"})
-	}
 	return out
 }
 
-// nodeOf returns the node that holds a machine. Records without a node belong
-// to the first node, where every machine lived before placement existed.
+// nodeOf returns the node that holds a machine.
 func (p *Platform) nodeOf(m D) nodeRef {
 	n, ok := p.lookupNode(m)
 	if !ok {
@@ -73,12 +63,8 @@ func (p *Platform) nodeOf(m D) nodeRef {
 }
 
 func (p *Platform) lookupNode(m D) (nodeRef, bool) {
-	nodes := p.Nodes()
 	name := str(m["node"])
-	if name == "" {
-		return nodes[0], true
-	}
-	for _, n := range nodes {
+	for _, n := range p.Nodes() {
 		if n.Name == name {
 			return n, true
 		}
@@ -228,11 +214,6 @@ func combine(nodes []D) D {
 	for _, k := range []string{"total", "used", "free", "snapshot_reserved_gib"} {
 		disk[k] = sum("physical", "disk", k)
 	}
-	metadata := 0.0
-	for _, c := range nodes {
-		metadata = max(metadata, num(at(c, "physical", "disk")["metadata_fraction"]))
-	}
-	disk["metadata_fraction"] = metadata
 	for _, dim := range []string{"vcpu", "memory_gib", "disk_gib"} {
 		a := at(out, "allocatable", dim)
 		largest := 0.0
@@ -312,10 +293,5 @@ func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
 	return best, admission
 }
 
-// record stores the node on a machine; the unnamed legacy node stores none.
-func (n nodeRef) record(spec D) D {
-	if n.Name == "" {
-		return spec
-	}
-	return merge(spec, D{"node": n.Name})
-}
+// record stores the node on a machine.
+func (n nodeRef) record(spec D) D { return merge(spec, D{"node": n.Name}) }

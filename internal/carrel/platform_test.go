@@ -49,7 +49,7 @@ func (b *fakeBackend) count(op string) int {
 	return n
 }
 func baseInventory() D {
-	return D{"status": D{"cpuinfo": D{"cpus": 32, "cores": 16, "sockets": 2}, "memory": D{"total": 192 * GiB, "used": 20 * GiB}}, "storage": D{"total": 1500 * GiB, "used": 10 * GiB}, "resources": []D{}, "disk_committed_bytes": 20 * GiB, "thin_pool": D{"metadata_fraction": 0.01}}
+	return D{"status": D{"cpuinfo": D{"cpus": 32, "cores": 16, "sockets": 2}, "memory": D{"total": 192 * GiB, "used": 20 * GiB}}, "storage": D{"total": 1500 * GiB, "used": 10 * GiB}, "resources": []D{}, "disk_committed_bytes": 20 * GiB, "node": "carrel01", "storage_id": "local-zfs"}
 }
 func person(name string, admin bool) D {
 	return D{"sub": name, "username": name, "admin": admin, "projects": []string{}}
@@ -64,7 +64,8 @@ func fixture(t *testing.T) (*Platform, *fakeBackend) {
 	s.Register("user:bob", "bob")
 	s.Register("winlab-projects/shared", "shared")
 	b := &fakeBackend{inventory: baseInventory()}
-	p := NewPlatform(s, b, D{"origin": "https://carrel.test", "issuer": "https://issuer.test", "guest_poll_interval": 1, "guest_ready_timeout": 3})
+	p := NewPlatform(s, b, D{"origin": "https://carrel.test", "issuer": "https://issuer.test", "guest_poll_interval": 1, "guest_ready_timeout": 3,
+		"public_address": "140.113.60.184", "nodes": []any{D{"name": "carrel01", "target": "carrel-node"}}})
 	p.sshProbe = func(context.Context, D) bool { return false }
 	t.Cleanup(func() { p.Close(); s.DB.Close() })
 	return p, b
@@ -167,7 +168,7 @@ func TestCacheCoalescingAndInvalidation(t *testing.T) {
 func TestCapacityAccountsStoppedUnmanagedAndAllVolumes(t *testing.T) {
 	inventory := baseInventory()
 	inventory["disk_committed_bytes"] = 125 * GiB
-	inventory["resources"] = []D{{"type": "qemu", "vmid": 1, "status": "running", "maxcpu": 4, "maxmem": 4 * GiB, "maxdisk": 20 * GiB}, {"type": "qemu", "vmid": 10100, "status": "stopped", "maxcpu": 2, "maxmem": 2 * GiB, "maxdisk": 20 * GiB}}
+	inventory["resources"] = []D{{"type": "qemu", "vmid": 1, "node": "carrel01", "status": "running", "maxcpu": 4, "maxmem": 4 * GiB, "maxdisk": 20 * GiB}, {"type": "qemu", "vmid": 10100, "node": "carrel01", "status": "stopped", "maxcpu": 2, "maxmem": 2 * GiB, "maxdisk": 20 * GiB}}
 	c := summarize(inventory, []D{{"vmid": 10100, "cpu": 2, "memory_mb": 2048, "disk_gb": 20}, {"vmid": 10101, "cpu": 2, "memory_mb": 2048, "disk_gb": 20}}, []D{{"disk_gb": 20}}, time.Now())
 	a := obj(c["allocatable"])
 	if num(obj(a["vcpu"])["committed"]) != 8 || num(obj(a["disk_gib"])["committed"]) != 165 {
@@ -187,14 +188,14 @@ func TestNetworkOnlyPlanSkipsInventory(t *testing.T) {
 	}
 }
 func seedMachine(p *Platform, name string, vmid int) D {
-	m := D{"name": name, "vmid": vmid, "tenant_n": 1, "allocation_id": "allocation-" + name, "operation_id": "original-" + name, "created_at": 1, "kind": "vm", "image": "debian-13", "cpu": 2, "memory_mb": 2048, "disk_gb": 20, "state": "ready", "ip": "10.200.1.10", "host": 10, "mac": "02:ca:01:00:00:01", "nics": []D{}, "readiness_token": "test-token", "guest_management": 1, "network_access": "tenant"}
+	m := D{"name": name, "vmid": vmid, "tenant_n": 1, "allocation_id": "allocation-" + name, "operation_id": "original-" + name, "created_at": 1, "kind": "vm", "image": "debian-13", "cpu": 2, "memory_mb": 2048, "disk_gb": 20, "state": "ready", "ip": "10.200.1.10", "host": 10, "mac": "02:ca:01:00:00:01", "nics": []D{}, "readiness_token": "test-token", "guest_management": 1, "network_access": "tenant", "node": "carrel01"}
 	p.Store.Put("machines", vmid, 1, m)
 	return m
 }
 func TestReconcileOmitsStorageAccounting(t *testing.T) {
 	p, b := fixture(t)
 	p.execution(context.Background()).Reconcile()
-	if b.count("reconcile") != 2 || b.count("storage_usage") != 0 {
+	if b.count("reconcile") != 1 || b.count("storage_usage") != 0 {
 		t.Fatal("accounting remains on the mutation path")
 	}
 }
@@ -375,9 +376,6 @@ func TestReadinessProbeUpdatesOnlyOriginalAllocation(t *testing.T) {
 	}
 }
 func TestCapacityNamesTheNodeStorage(t *testing.T) {
-	if got := storageID(D{}); got != "local-lvm" {
-		t.Fatalf("default storage %q", got)
-	}
 	if got := storageID(D{"storage_id": "local-zfs"}); got != "local-zfs" {
 		t.Fatalf("configured storage %q", got)
 	}

@@ -63,7 +63,7 @@ func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
 	dns := &fakeDNS{records: map[string][]D{}}
 	cf := dns.server(t)
 	for k, v := range map[string]any{"cloudflare_api": cf.URL, "cloudflare_zone": "test", "certificate_dir": t.TempDir(),
-		"ingress": "exit", "public_address": "140.113.60.184", "origin": "https://carrel.test"} {
+		"origin": "https://carrel.test"} {
 		p.Config[k] = v
 	}
 	crt, key := testPair(t)
@@ -81,23 +81,11 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": tenant["slug"]})
 	e := p.execution(context.Background())
 	e.storeCertificate(str(tenant["slug"]), chain, key)
-	delete(p.Config, "public_address")
-	e.DomainRecord(tenant, false)
-	if len(dns.writes) != 0 {
-		t.Fatalf("a control plane without public_address rewrote a record: %v", dns.writes)
-	}
-	p.Config["public_address"] = "140.113.60.184"
 	e.DomainRecord(tenant, false)
 	if len(dns.writes) != 0 {
 		t.Fatal("moved a tenant record before the gateway confirmed its certificate")
 	}
 	p.delivered.Store(map[string]any{str(tenant["slug"]): fingerprint(string(chain))})
-	p.Config["ingress"] = "edge"
-	e.DomainRecord(tenant, false)
-	if len(dns.writes) != 0 {
-		t.Fatal("moved a tenant record without ingress exit")
-	}
-	p.Config["ingress"] = "exit"
 	e.DomainRecord(tenant, false)
 	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
 		t.Fatal(encoded(dns.writes))
@@ -111,7 +99,7 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 
 func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	p, b, dns := originFixture(t)
-	dns.records["carrel.test"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": edgeOriginOwner}}
+	dns.records["carrel.test"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": originOwner}}
 	sent := D{}
 	confirm := true
 	b.call = func(r D, target string) (any, error) {
@@ -148,21 +136,12 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 		t.Fatal("the gateway did not receive the origin pair")
 	}
 	e.MaintainOrigin()
-	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" || obj(dns.writes[0]["body"])["comment"] != originOwner {
+	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
 		t.Fatal(encoded(dns.writes))
 	}
 	dns.records["carrel.test"] = []D{{"id": "o1", "content": "1.2.3.4", "comment": "someone else"}}
 	if err := attempt(func() { e.MaintainOrigin() }); err == nil {
 		t.Fatal("rewrote a record owned outside carrel")
-	}
-}
-
-func TestOriginIsLeftAloneOnEdgeSites(t *testing.T) {
-	p, _, dns := originFixture(t)
-	p.Config["ingress"] = "edge"
-	p.execution(context.Background()).MaintainOrigin()
-	if len(dns.writes) != 0 {
-		t.Fatal("an edge site touched the origin")
 	}
 }
 

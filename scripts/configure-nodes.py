@@ -24,7 +24,7 @@ import socket
 import subprocess
 
 SITE = Path("/etc/carrel/site.json")
-PROGRAMS = ["node-agent.py", "thin-usage.py", "guest-report.py", "gateway-sync.py"]
+PROGRAMS = ["node-agent.py", "guest-report.py", "gateway-sync.py"]
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'
 BEGIN, END = "# carrel nodes begin", "# carrel nodes end"

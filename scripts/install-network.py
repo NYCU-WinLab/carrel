@@ -123,19 +123,8 @@ def public_interface(interface, cidr, gateway, address):
     ]) + "\n"
 
 
-# The single-node table: no peers, so VXLAN and BGP are dropped everywhere.
-TENANT_HOST_NFT = tenant_host_nft(underlay_rules("vmbr0", "", []))
-
-
 def site_layout(node, site):
     """Return this node's address, the other nodes' addresses and the exit nodes."""
-    if site is None:
-        # The R640 node and its nested staging predate site files.
-        assert node in ("carrel01", "carrel-stg01")
-        address = "192.168.13.159" if node == "carrel01" else "172.31.255.2"
-        return {"address": address, "peers": [], "exit_nodes": [node], "interface": "vmbr0",
-                "protected": [address + "/32", "140.113.194.229/32", "140.113.60.189/32"],
-                "entries": [{"address": "140.113.194.229/32", "port": 443}]}
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in site["nodes"]}
     if node not in addresses:
         raise SystemExit(f"{node} is not in the site file")
@@ -167,7 +156,7 @@ def main():
                         help="Site file shared by every node (sites/<site>/cluster.json)")
     args = parser.parse_args()
     node = socket.gethostname().split(".")[0]
-    layout = site_layout(node, json.loads(args.site.read_text()) if args.site.exists() else None)
+    layout = site_layout(node, json.loads(args.site.read_text()))
     address = layout["address"]
     peers = ",".join(layout.get("all", [address]))
     exits = ",".join(layout["exit_nodes"])

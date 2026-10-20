@@ -49,14 +49,14 @@ def test_one_authorized_line_serves_every_node_and_replaces_older_ones():
     assert module.merge_authorized("\n".join(merged), line, KEY).splitlines() == merged
 
 
-def test_ssh_config_replaces_the_hand_written_node_block_and_keeps_the_edge():
+def test_ssh_config_replaces_the_hand_written_node_block_and_keeps_other_hosts():
     module = load("configure-nodes.py")
     nodes = module.targets(SITE, "carrel01")
-    legacy = "Host *\n  User root\nHost carrel-node\n  HostName 10.200.0.1\nHost carrel-edge\n  HostName 140.113.194.229\n  Port 1121\n"
+    legacy = "Host *\n  User root\nHost carrel-node\n  HostName 10.200.0.1\nHost carrel-backup\n  HostName 140.113.194.229\n  Port 1121\n"
     first = module.ssh_config(legacy, nodes)
     assert (
         first.count("Host carrel-node\n") == 1
-        and "Host carrel-edge\n  HostName 140.113.194.229\n  Port 1121" in first
+        and "Host carrel-backup\n  HostName 140.113.194.229\n  Port 1121" in first
     )
     assert "Host carrel04\n  HostName 192.168.19.104" in first
     assert module.ssh_config(first, nodes) == first
@@ -66,26 +66,20 @@ def test_ssh_config_replaces_the_hand_written_node_block_and_keeps_the_edge():
 
 def test_known_hosts_pins_each_node_and_keeps_other_hosts():
     module = load("configure-nodes.py")
-    existing = "10.200.0.1 ssh-ed25519 OLD\n[140.113.194.229]:1121 ssh-ed25519 EDGE\n"
+    existing = "10.200.0.1 ssh-ed25519 OLD\n[140.113.194.229]:1121 ssh-ed25519 BACKUP\n"
     merged = module.known_hosts(
         existing, [("10.200.0.1", "ssh-ed25519 NEW"), ("192.168.19.102", "ssh-ed25519 TWO")]
     )
     assert merged.splitlines() == [
-        "[140.113.194.229]:1121 ssh-ed25519 EDGE",
+        "[140.113.194.229]:1121 ssh-ed25519 BACKUP",
         "10.200.0.1 ssh-ed25519 NEW",
         "192.168.19.102 ssh-ed25519 TWO",
     ]
 
 
-def test_infra_firewall_lets_the_control_plane_reach_peer_ssh(monkeypatch, tmp_path):
+def test_infra_firewall_lets_the_control_plane_reach_peer_ssh():
     module = load("bootstrap-platform.py")
-    (tmp_path / "site.json").write_text(json.dumps(SITE))
-    real = Path
-    monkeypatch.setattr(
-        module, "Path", lambda p: tmp_path / "site.json" if str(p) == "/etc/carrel/site.json" else real(p)
-    )
-    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "carrel01")
-    assert module.peer_ssh() == [
+    assert module.peer_ssh(SITE, "carrel01") == [
         'iifname "vmbr98" ip saddr 10.200.0.3 ip daddr { 192.168.19.102, 192.168.19.103, 192.168.19.104 } tcp dport 22 accept'
     ]
 
@@ -115,13 +109,10 @@ def test_a_node_name_cannot_inject_ssh_options():
 def test_bootstrap_runs_only_on_the_first_exit_node_of_the_site(monkeypatch, tmp_path):
     module = load("bootstrap-platform.py")
     (tmp_path / "site.json").write_text(json.dumps(SITE))
-    real = Path
-    monkeypatch.setattr(
-        module, "Path", lambda p: tmp_path / "site.json" if str(p) == "/etc/carrel/site.json" else real(p)
-    )
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
     monkeypatch.setattr(module.os, "geteuid", lambda: 0)
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: "carrel02")
-    monkeypatch.setattr(sys, "argv", ["bootstrap-platform.py", "--role", "site", "--admin-key", "k"])
+    monkeypatch.setattr(sys, "argv", ["bootstrap-platform.py", "--admin-key", "k"])
     try:
         module.main()
     except AssertionError as e:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Bootstrap owned infrastructure only. Run locally on a PVE 9 node as root.
 
-Never touches tenant disks or the old PVE's existing network/firewall configuration.
-WireGuard secrets are generated on each host and never written to git.
+Run on the first exit node of the site file, which holds CT 100 and CT 101.
+Never touches tenant disks.
 """
 
 import argparse
@@ -81,31 +81,25 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage):
     run("pct", "exec", str(vmid), "--", "systemctl", "restart", "systemd-journald")
 
 
-def underlay():
+SITE = Path("/etc/carrel/site.json")
+
+
+def underlay(config, node):
     # Same rule as install-network.py (PLAN 6.3): VXLAN and BGP from the other
     # site nodes on the underlay interface only; dropped everywhere else.
-    site = Path("/etc/carrel/site.json")
     rules = []
-    if site.exists():
-        config = json.loads(site.read_text())
-        node = run("hostname", "-s", capture=True)
-        addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"]}
-        peers = [a for n, a in addresses.items() if n != node]
-        if peers and node in addresses:
-            for match in ("udp dport 4789", "tcp dport 179"):
-                rules.append(f'iifname "{config["underlay_interface"]}" ip saddr {{ {", ".join(peers)} }} '
-                             f"ip daddr {addresses[node]} {match} accept")
+    addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"]}
+    peers = [a for n, a in addresses.items() if n != node]
+    if peers and node in addresses:
+        for match in ("udp dport 4789", "tcp dport 179"):
+            rules.append(f'iifname "{config["underlay_interface"]}" ip saddr {{ {", ".join(peers)} }} '
+                         f"ip daddr {addresses[node]} {match} accept")
     return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
 
 
-def peer_ssh():
+def peer_ssh(config, node):
     # PLAN 15.15 gap 5: the control plane reaches the other nodes' adapters
     # over SSH on their management addresses (masqueraded as this node).
-    site = Path("/etc/carrel/site.json")
-    if not site.exists():
-        return []
-    config = json.loads(site.read_text())
-    node = run("hostname", "-s", capture=True)
     peers = [str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"] if n["name"] != node]
     return [f'iifname "vmbr98" ip saddr 10.200.0.3 ip daddr {{ {", ".join(peers)} }} tcp dport 22 accept'] if peers else []
 
@@ -114,7 +108,7 @@ def packages(vmid, role):
     run("pct", "exec", str(vmid), "--", "apt-get", "update", "-qq")
     wanted = ["ca-certificates", "curl"]
     if role == "control":
-        wanted += ["python3-venv", "openssh-client"]
+        wanted += ["openssh-client"]
     else:
         wanted += ["caddy", "dnsmasq-base"]
     run("pct", "exec", str(vmid), "--", "apt-get", "install", "-y", *wanted)
@@ -122,29 +116,16 @@ def packages(vmid, role):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--role", choices=["site", "edge"], required=True)
     p.add_argument("--admin-key", required=True)
-    p.add_argument("--storage", default="local-lvm", help="Guest storage id for the infra CTs (PLAN 8.2)")
     a = p.parse_args()
     assert os.geteuid() == 0
     host = run("hostname", "-s", capture=True)
-    site = Path("/etc/carrel/site.json")
-    if a.role == "site" and site.exists():
-        # The site file names the first exit node, which holds CT 100 and 101.
-        assert host == json.loads(site.read_text())["exit_nodes"][0], "run on the first exit node of the site file"
-    else:
-        assert host == ("carrel01" if a.role == "site" else "pve")
+    config = json.loads(SITE.read_text())
+    assert host == config["exit_nodes"][0], "run on the first exit node of the site file"
+    storage = config["storage"]
     run("apt-get", "update", "-qq")
-    run("apt-get", "install", "-y", "wireguard-tools", "dnsmasq-base")
-    secret = Path("/etc/wireguard/carrel.key")
-    if not secret.exists():
-        write(str(secret), run("wg", "genkey", capture=True) + "\n", 0o600)
-    pub = subprocess.run(
-        ["wg", "pubkey"], input=secret.read_text(), text=True, capture_output=True, check=True
-    )
-    write("/etc/wireguard/carrel.pub", pub.stdout)
-    if a.role == "site":
-        bridge = """# Managed by carrel infrastructure bootstrap
+    run("apt-get", "install", "-y", "dnsmasq-base")
+    bridge = """# Managed by carrel infrastructure bootstrap
 auto vmbr98
 iface vmbr98 inet static
     address 10.200.0.1/24
@@ -153,9 +134,9 @@ iface vmbr98 inet static
     bridge-fd 0
     mtu 1450
 """
-        if write("/etc/network/interfaces.d/carrel-infra", bridge):
-            run("ifup", "vmbr98")
-        rules = """add table inet carrel_infra
+    if write("/etc/network/interfaces.d/carrel-infra", bridge):
+        run("ifup", "vmbr98")
+    rules = """add table inet carrel_infra
 flush table inet carrel_infra
 table inet carrel_infra {
  chain input {
@@ -175,8 +156,6 @@ PEER_SSH
   iifname "vmbr98" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } drop
   iifname "vmbr98" tcp dport 25 drop
   oifname "vmbr98" ct state established,related accept
-  iifname "wg-carrel" ip saddr 10.10.10.207 ip daddr 10.200.0.3 tcp dport 8080 accept
-  iifname "wg-carrel" ip saddr 10.10.10.207 ip daddr 10.200.0.2 tcp dport { 80,443 } accept
   oifname "vmbr98" udp dport 53 ip daddr 10.200.0.2 accept
   oifname "vmbr98" tcp dport 53 ip daddr 10.200.0.2 accept
   oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.3 tcp dport 8080 accept
@@ -190,14 +169,14 @@ PEER_SSH
  }
 }
 """
-        rules = rules.replace("UNDERLAY", "\n".join("  " + rule for rule in underlay()))
-        rules = rules.replace("PEER_SSH\n", "".join("  " + rule + "\n" for rule in peer_ssh()))
-        write("/etc/carrel/infra.nft", rules)
-        run("nft", "-c", "-f", "/etc/carrel/infra.nft")
-        run("nft", "-f", "/etc/carrel/infra.nft")
-        write(
-            "/etc/systemd/system/carrel-infra-firewall.service",
-            """[Unit]
+    rules = rules.replace("UNDERLAY", "\n".join("  " + rule for rule in underlay(config, host)))
+    rules = rules.replace("PEER_SSH\n", "".join("  " + rule + "\n" for rule in peer_ssh(config, host)))
+    write("/etc/carrel/infra.nft", rules)
+    run("nft", "-c", "-f", "/etc/carrel/infra.nft")
+    run("nft", "-f", "/etc/carrel/infra.nft")
+    write(
+        "/etc/systemd/system/carrel-infra-firewall.service",
+        """[Unit]
 Description=Carrel infrastructure isolation
 After=network.target
 Before=pve-guests.service
@@ -209,17 +188,14 @@ ExecReload=/usr/sbin/nft -f /etc/carrel/infra.nft
 [Install]
 WantedBy=multi-user.target
 """,
-        )
-        run("systemctl", "daemon-reload")
-        run("systemctl", "enable", "--now", "carrel-infra-firewall")
-        ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, a.storage)
-        ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, a.storage)
-        packages(100, "control")
-        packages(101, "gateway")
-    else:
-        ct(207, "carrel-proxy", "10.10.10.207", "vnet10", "10.10.10.1", 512, a.admin_key, a.storage)
-        packages(207, "proxy")
-    print(json.dumps({"role": a.role, "wireguard_public_key": pub.stdout.strip()}))
+    )
+    run("systemctl", "daemon-reload")
+    run("systemctl", "enable", "--now", "carrel-infra-firewall")
+    ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, storage)
+    ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage)
+    packages(100, "control")
+    packages(101, "gateway")
+    print(json.dumps({"node": host, "infra_cts": [100, 101]}))
 
 
 if __name__ == "__main__":

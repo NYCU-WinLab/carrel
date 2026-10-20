@@ -148,7 +148,7 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 			}
 			return D{"node": "carrel01", "files": D{"node.json": `{"storage": "local-zfs"}`, "templates.json": "{}", "pve-read.json": "SECRET"}}, nil
 		}
-		if r["op"] != "backup" || target != "carrel-edge" {
+		if r["op"] != "backup" || target != "carrel-backup" {
 			t.Fatal("wrong backup destination")
 		}
 		raw, err := base64.StdEncoding.DecodeString(str(r["archive"]))

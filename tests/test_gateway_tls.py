@@ -175,6 +175,7 @@ def test_reconcile_keeps_no_private_key_on_the_host(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "topology_read", lambda: ([], {}))
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
+    monkeypatch.setattr(module, "serves_private_dhcp", lambda: True)
     monkeypatch.setattr(module, "public_ingress", lambda: None)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "STATE", tmp_path)
@@ -215,6 +216,7 @@ def test_reconcile_confirms_the_origin_pair_only_after_the_gateway_took_it(tmp_p
     monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "topology_read", lambda: ([], {}))
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
+    monkeypatch.setattr(module, "serves_private_dhcp", lambda: True)
     monkeypatch.setattr(module, "public_ingress", lambda: None)
     monkeypatch.setattr(module, "write", lambda path, data, mode=0o640: True)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
@@ -250,33 +252,3 @@ def test_reconcile_confirms_the_origin_pair_only_after_the_gateway_took_it(tmp_p
     result = module.reconcile(dict(state))
     assert result["certificates"] == {"_origin": __import__("hashlib").sha256(b"CHAIN").hexdigest()}
     assert any(c[:3] == ("pct", "exec", "101") for c in calls)
-
-
-def test_a_public_site_file_alone_keeps_the_plain_gateway(tmp_path, monkeypatch):
-    # During a move the control plane can still run with the edge while the
-    # site file already names a public address: no origin, no TLS gateway.
-    module = load("node-agent.py")
-    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "clsact")
-    monkeypatch.setattr(module, "api", lambda *args, **kwargs: None)
-    monkeypatch.setattr(module, "topology_read", lambda: ([], {}))
-    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
-    monkeypatch.setattr(module, "public_ingress", lambda: None)
-    monkeypatch.setattr(module, "write", lambda path, data, mode=0o640: True)
-    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
-    monkeypatch.setattr(module, "STATE", tmp_path)
-    monkeypatch.setattr(module, "site", lambda: {"public": {"address": "140.113.60.184/27"}})
-    (tmp_path / "node.json").write_text('{"protected_addresses": []}')
-    real = Path
-    redirects = {
-        "/etc/pve/lxc/101.conf": tmp_path / "gw",
-        "/usr/local/lib/carrel/gateway-sync.py": tmp_path / "sync.py",
-    }
-    (tmp_path / "gw").write_text("")
-    (tmp_path / "sync.py").write_text("")
-    monkeypatch.setattr(module, "Path", lambda p: redirects.get(str(p), real(p)))
-    sent = []
-    monkeypatch.setattr(module, "run", lambda *args, **kwargs: sent.append(kwargs.get("input")) or "clsact")
-    state = {"tenants": [], "networks": [], "machines": [], "domains": [], "ports": [], "peers": []}
-    module.reconcile(state)
-    payload = json.loads(next(p for p in sent if p and '"caddy"' in p))
-    assert ":80 {" in payload["caddy"] and "certificates" not in payload

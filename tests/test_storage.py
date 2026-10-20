@@ -1,4 +1,4 @@
-"""Guest storage follows node.json (PLAN 8.2): LVM-thin on the R640 node, ZFS on B09 nodes."""
+"""Guest storage follows node.json (PLAN 8.2): a ZFS pool."""
 
 import importlib.util
 import json
@@ -38,37 +38,22 @@ def test_storage_definition_reads_each_pool_and_refuses_directories():
         "sparse": "",
         "content": "images,rootdir",
     }
-    assert module.storage_definition("local-lvm", STORAGE_CFG)["vgname"] == "pve"
-    for storage in ("local", "missing"):
-        with pytest.raises(ValueError, match="LVM-thin or ZFS"):
+    for storage in ("local", "local-lvm", "missing"):
+        with pytest.raises(ValueError, match="ZFS pool"):
             module.storage_definition(storage, STORAGE_CFG)
 
 
-def test_storage_id_defaults_to_local_lvm_and_validates(monkeypatch, tmp_path):
+def test_storage_id_is_required_and_validated(monkeypatch, tmp_path):
     module = load_script("node-agent.py")
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
-    assert module.storage_id() == "local-lvm"
+    (tmp_path / "node.json").write_text("{}")
+    with pytest.raises(ValueError, match="storage id"):
+        module.storage_id()
     (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs"}))
     assert module.storage_id() == "local-zfs"
     (tmp_path / "node.json").write_text(json.dumps({"storage": "../etc"}))
     with pytest.raises(ValueError, match="storage id"):
         module.storage_id()
-
-
-def test_zfs_pool_usage_comes_from_storage_status_without_metadata():
-    module = load_script("node-agent.py")
-    usage = module.pool_usage({"type": "zfspool", "pool": "rpool/data"}, {"total": 400, "used": 100})
-    assert usage == {"data_fraction": 0.25, "metadata_fraction": 0}
-
-
-def test_lvm_pool_usage_reads_the_configured_thin_pool(monkeypatch):
-    module = load_script("node-agent.py")
-    calls = []
-    report = {"report": [{"lv": [{"lv_name": "data", "data_percent": "50.0", "metadata_percent": "2.0"}]}]}
-    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or json.dumps(report))
-    usage = module.pool_usage({"type": "lvmthin", "vgname": "vg-b", "thinpool": "tp"}, {})
-    assert usage == {"data_fraction": 0.5, "metadata_fraction": 0.02}
-    assert calls[0][-1] == "vg-b/tp"
 
 
 def test_zfs_usage_counts_only_owned_volumes_per_tenant(monkeypatch):
@@ -95,18 +80,3 @@ def test_zfs_usage_counts_only_owned_volumes_per_tenant(monkeypatch):
     assert (result[1]["unique_total_bytes"], result[1]["retained_snapshot_bytes"]) == (554, 50)
     assert (result[2]["unique_total_bytes"], result[2]["retained_snapshot_bytes"]) == (770, 70)
     assert (result[3]["unique_total_bytes"], result[3]["retained_snapshot_bytes"]) == (0, 0)
-
-
-def test_thin_usage_escapes_device_mapper_names(monkeypatch):
-    module = load_script("thin-usage.py")
-    calls = []
-
-    def run(*args):
-        calls.append(args)
-        return json.dumps({"report": [{"lv": []}]}) if args[0] == "lvs" else ""
-
-    monkeypatch.setattr(module, "run", run)
-    monkeypatch.setattr(module, "account", lambda xml, volumes, machines: [])
-    assert module.collect([], "vg-b", "thin-pool") == []
-    assert ("dmsetup", "message", "/dev/mapper/vg--b-thin--pool-tpool", "0", "reserve_metadata_snap") in calls
-    assert calls[-1][2] == "/dev/mapper/vg--b-thin--pool-tpool"

@@ -9,7 +9,6 @@ control plane owns authorization and quotas; this boundary owns host integrity.
 import fcntl
 import hashlib
 import http.client
-import importlib.util
 import ipaddress
 import json
 import os
@@ -35,18 +34,15 @@ PVE_CA = "/etc/pve/pve-root-ca.pem"
 
 
 def storage_id():
-    # One guest storage id per site (PLAN 8.2). Nodes installed before the
-    # setting existed keep their LVM-thin pool.
-    config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-    value = config.get("storage", "local-lvm")
+    # One guest storage id per site (PLAN 8.2), a ZFS pool.
+    value = json.loads(CONFIG.read_text()).get("storage")
     if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", value):
         raise ValueError("invalid storage id")
     return value
 
 
 def storage_definition(storage, text=None):
-    # Parse storage.cfg directly: pvesh would load every PVE module on the
-    # inventory path that admission calls for each allocation.
+    # Parse storage.cfg directly: pvesh would load every PVE module.
     found = None
     for line in (STORAGE_CONFIG.read_text() if text is None else text).splitlines():
         if line and not line[0].isspace():
@@ -58,8 +54,8 @@ def storage_definition(storage, text=None):
         elif found is not None and line.strip():
             key, _, value = line.strip().partition(" ")
             found[key] = value.strip()
-    if found is None or found["type"] not in ("lvmthin", "zfspool"):
-        raise ValueError("guest storage must be an LVM-thin or ZFS pool")
+    if found is None or found["type"] != "zfspool":
+        raise ValueError("guest storage must be a ZFS pool")
     return found
 
 
@@ -198,10 +194,8 @@ def guest_firewall(m, state, config):
             proto = grant["proto"]
             if proto not in ("tcp", "udp"):
                 raise ValueError("invalid protocol")
-            # The external edge SNATs to its tunnel address; a site with its own
-            # public address DNATs only, so the client's address arrives.
-            source = "" if site().get("public") else "-source 10.254.200.1 "
-            rules.append(f"IN ACCEPT {source}-p {proto} -dport {port}")
+            # The exit node DNATs only, so the client's address arrives.
+            rules.append(f"IN ACCEPT -p {proto} -dport {port}")
     for domain in state.get("domains", []):
         if domain["vmid"] == m["vmid"]:
             port = integer(domain["target_port"], 1, 65535)
@@ -314,14 +308,13 @@ def ensure(path, key, value, *, existing, **params):
 
 
 def site():
-    return json.loads(SITE.read_text()) if SITE.exists() else {}
+    return json.loads(SITE.read_text())
 
 
 def public_ingress():
-    # The first exit node of a site with a public address terminates ingress
-    # itself (PLAN 15.15); other sites publish through the external edge.
+    # The first exit node holds the public address and terminates ingress (PLAN 15.15).
     s = site()
-    if not s.get("public") or s["exit_nodes"][0] != NODE:
+    if s["exit_nodes"][0] != NODE:
         return None
     return str(ipaddress.IPv4Interface(s["public"]["address"]).ip)
 
@@ -451,11 +444,8 @@ def gateway_tls(state, slugs):
 
 def serves_private_dhcp():
     # A private network is one layer 2 segment across the site's nodes: one
-    # DHCP server and one .1, on the first exit node. Nodes without a site file
-    # are single-node sites and serve their own.
-    if not SITE.exists():
-        return True
-    return json.loads(SITE.read_text())["exit_nodes"][0] == NODE
+    # DHCP server and one .1, on the first exit node.
+    return site()["exit_nodes"][0] == NODE
 
 
 def private_dhcp(state, serve=True):
@@ -765,26 +755,16 @@ WantedBy=multi-user.target
     if Path("/etc/pve/lxc/101.conf").exists():
         slugs = {t["n"]: label(t["slug"]) for t in state["tenants"]}
         hosts = "".join(f"{m['ip']} {m['name']}.{slugs[m['tenant_n']]}.internal\n" for m in state["machines"])
-        # The control plane sends the origin only with ingress: exit, together
-        # with the certificates; a public site file alone does not switch modes.
-        if "origin" in state:
-            caddy, certificates = gateway_tls(state, slugs)
-            payload = {"hosts": hosts, "caddy": caddy, "certificates": certificates}
-        else:
-            routes = ["{", " auto_https off", "}", ":80 {"]
-            for _, domain, m, port in tenant_routes(state, slugs):
-                routes += [
-                    f" @d{domain['id']} host {domain['name']}",
-                    f" handle @d{domain['id']} {{",
-                    f"  reverse_proxy {m['ip']}:{port}",
-                    " }",
-                ]
-            routes += [" handle {", "  respond 404", " }", "}"]
-            payload = {"hosts": hosts, "caddy": "\n".join(routes) + "\n"}
+        # The control plane sends the origin and the certificates to the
+        # first node, which holds the gateway.
+        if "origin" not in state:
+            raise ValueError("the gateway node needs the origin and its certificates")
+        caddy, certificates = gateway_tls(state, slugs)
+        payload = {"hosts": hosts, "caddy": caddy, "certificates": certificates}
         run("pct", "exec", "101", "--", "python3", "-c",
             Path("/usr/local/lib/carrel/gateway-sync.py").read_text(),
             input=json.dumps(payload))
-        gateway_tls_synced = payload.get("certificates", {})
+        gateway_tls_synced = certificates
     # Private keys reach the gateway only; the host keeps no copy.
     kept = {k: v for k, v in state.items() if k not in ("certificates", "origin_certificate")}
     write(STATE / "desired.json", json.dumps(kept, sort_keys=True))
@@ -887,18 +867,6 @@ def cloud_init(m, *, prepared=False, environment="development"):
     }}}
     write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
     return "user=local:snippets/" + name + ",network=local:snippets/" + network_name
-
-
-def pool_usage(definition, status):
-    if definition["type"] == "zfspool":
-        # ZFS has no separate metadata area to run out of.
-        total = status.get("total") or 0
-        return {"data_fraction": (status.get("used") or 0) / total if total else 0, "metadata_fraction": 0}
-    pool = json.loads(run("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o",
-                          "lv_name,data_percent,metadata_percent",
-                          f"{definition['vgname']}/{definition['thinpool']}"))["report"][0]["lv"][0]
-    return {"data_fraction": float(pool["data_percent"] or 0) / 100,
-            "metadata_fraction": float(pool["metadata_percent"] or 0) / 100}
 
 
 def zfs_usage(machines, pool):
@@ -1215,13 +1183,12 @@ def main():
         elif op == "action":
             out = action(req)
         elif op == "inventory":
-            # Guest maxdisk omits secondary disks. Count all thin volumes,
-            # including templates and unused disks, for conservative admission.
+            # Guest maxdisk omits secondary disks. Count all volumes, including
+            # templates and unused disks, for conservative admission.
             storage = storage_id()
             observed = inventory_read(storage)
             volumes = observed.pop("volumes")
             out = {
-                "thin_pool": pool_usage(storage_definition(storage), observed["storage"]),
                 "node": NODE,
                 "storage_id": storage,
                 **observed,
@@ -1230,14 +1197,7 @@ def main():
         elif op == "storage_usage":
             for m in req["machines"]:
                 machine(m)
-            definition = storage_definition(storage_id())
-            if definition["type"] == "zfspool":
-                out = zfs_usage(req["machines"], definition["pool"])
-            else:
-                spec = importlib.util.spec_from_file_location("thin_usage", "/usr/local/lib/carrel/thin-usage.py")
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                out = module.collect(req["machines"], definition["vgname"], definition["thinpool"])
+            out = zfs_usage(req["machines"], storage_definition(storage_id())["pool"])
         elif op == "status":
             m = req["machine"]
             owned(m)

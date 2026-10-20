@@ -17,9 +17,6 @@ import (
 
 const originOwner = "carrel:origin"
 
-// The record the external edge created before the cluster had its own address.
-const edgeOriginOwner = "Owned by carrel B09 external edge"
-
 const originLineage = "_origin"
 
 // originFiles returns the current origin pair.
@@ -61,9 +58,6 @@ func (e *Execution) EnsureOriginCertificate() D {
 // MaintainOrigin keeps the origin certificate fresh and moves carrel's record
 // to the site's address once the gateway holds a valid certificate for it.
 func (e *Execution) MaintainOrigin() {
-	if str(e.P.Config["ingress"]) != "exit" {
-		return
-	}
 	crt, _, ok := e.originFiles()
 	if !ok || renewalDue(crt) {
 		e.EnsureOriginCertificate()
@@ -73,14 +67,14 @@ func (e *Execution) MaintainOrigin() {
 		return
 	}
 	host := originHost(e.P.Config)
-	address, _ := publicAddress(e.P.Config)
+	address := str(e.P.Config["public_address"])
 	records := dicts(e.CF("GET", "?name="+host, nil)["result"])
 	switch {
 	case len(records) == 0:
 		e.CF("POST", "", D{"type": "A", "name": host, "content": address, "ttl": 120, "proxied": false, "comment": originOwner})
-	case len(records) == 1 && (records[0]["comment"] == originOwner || records[0]["comment"] == edgeOriginOwner):
-		if records[0]["content"] != address || records[0]["comment"] != originOwner {
-			e.CF("PATCH", "/"+str(records[0]["id"]), D{"content": address, "comment": originOwner})
+	case len(records) == 1 && records[0]["comment"] == originOwner:
+		if records[0]["content"] != address {
+			e.CF("PATCH", "/"+str(records[0]["id"]), D{"content": address})
 		}
 	default:
 		fail("conflict", "Refusing DNS record owned outside carrel")

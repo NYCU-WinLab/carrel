@@ -109,14 +109,13 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "NODE", "fixture")
-    (tmp_path / "storage.cfg").write_text("lvmthin: local-lvm\n\tthinpool data\n\tvgname pve\n")
-    monkeypatch.setattr(module, "STORAGE_CONFIG", tmp_path / "storage.cfg")
+    (tmp_path / "node.json").write_text('{"storage": "local-zfs"}')
     responses = {
-        "/access/permissions": {"/storage/local-lvm": {"Datastore.Audit": 1, "Datastore.Allocate": 1}},
+        "/access/permissions": {"/storage/local-zfs": {"Datastore.Audit": 1, "Datastore.Allocate": 1}},
         "/cluster/resources": [],
-        "/nodes/fixture/storage/local-lvm/status": {"total": 1000 * GIB, "used": 100 * GIB},
+        "/nodes/fixture/storage/local-zfs/status": {"total": 1000 * GIB, "used": 100 * GIB},
         "/nodes/fixture/status": {"cpuinfo": {"cpus": 8}, "memory": {"total": 64 * GIB}},
-        "/nodes/fixture/storage/local-lvm/content": [
+        "/nodes/fixture/storage/local-zfs/content": [
             {"content": "images", "size": 10 * GIB},  # Immutable template.
             {"content": "images", "size": 20 * GIB},  # Guest primary disk.
             {"content": "images", "size": 30 * GIB},  # Secondary or unused disk.
@@ -126,13 +125,6 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     }
     reads = []
     monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
-    monkeypatch.setattr(
-        module,
-        "run",
-        lambda *args, **kwargs: json.dumps(
-            {"report": [{"lv": [{"data_percent": "10", "metadata_percent": "2"}]}]}
-        ),
-    )
 
     def inventory():
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{"op":"inventory"}')))
@@ -141,15 +133,15 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
 
     first = inventory()
     assert first["disk_committed_bytes"] == 100 * GIB
-    assert first["storage"]["used"] == 100 * GIB and first["thin_pool"]["metadata_fraction"] == 0.02
+    assert first["storage"]["used"] == 100 * GIB and first["storage_id"] == "local-zfs"
     # No cache: the next inventory sees the new usage.
-    responses["/nodes/fixture/storage/local-lvm/status"]["used"] = 900 * GIB
+    responses["/nodes/fixture/storage/local-zfs/status"]["used"] = 900 * GIB
     assert inventory()["storage"]["used"] == 900 * GIB
-    assert reads.count(("/access/permissions", {"path": "/storage/local-lvm"})) == 2
+    assert reads.count(("/access/permissions", {"path": "/storage/local-zfs"})) == 2
     # PVEAuditor alone hides volumes: an incomplete grant never reaches admission.
-    responses["/access/permissions"] = {"/storage/local-lvm": {"Datastore.Audit": 1}}
+    responses["/access/permissions"] = {"/storage/local-zfs": {"Datastore.Audit": 1}}
     with pytest.raises(RuntimeError, match="authority is incomplete"):
-        module.inventory_read("local-lvm")
+        module.inventory_read("local-zfs")
 
 
 def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, monkeypatch):
@@ -186,7 +178,15 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
     monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
     monkeypatch.setattr(module, "api", lambda *a, **kw: mutations.append((a, kw)))
     monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
-    state = {"tenants": [{"n": 1, "slug": "alice"}], "networks": [], "machines": [], "domains": []}
+    monkeypatch.setattr(module, "serves_private_dhcp", lambda: True)
+    monkeypatch.setattr(module, "public_ingress", lambda: None)
+    state = {
+        "tenants": [{"n": 1, "slug": "alice"}],
+        "networks": [],
+        "machines": [],
+        "domains": [],
+        "origin": "carrel.winlab.tw",
+    }
     assert module.reconcile(state)["changed"] == []
     assert len(entries) == 1 and [r[0] for r in reads] == [
         "/cluster/sdn/vnets",
@@ -195,7 +195,7 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
     assert not mutations
     assert entries[0][0][:6] == ("pct", "exec", "101", "--", "python3", "-c")
     payload = json.loads(entries[0][1]["input"])
-    assert payload["hosts"] == "" and "respond 404" in payload["caddy"]
+    assert payload["hosts"] == "" and "auto_https off" in payload["caddy"]
     local("/etc/pve/lxc/101.conf").unlink()
     module.reconcile(state)
     assert len(entries) == 1, "a node without CT 101 synced the gateway"

@@ -65,15 +65,14 @@ func (e *Execution) DomainRecord(t D, remove bool) {
 	if len(records) > 0 && (len(records) != 1 || records[0]["comment"] != owner) {
 		fail("conflict", "Refusing DNS record owned outside carrel")
 	}
-	address, own := publicAddress(e.P.Config)
+	address := str(e.P.Config["public_address"])
 	if remove && len(records) > 0 {
 		e.CF("DELETE", "/"+str(records[0]["id"]), nil)
 	} else if !remove && len(records) == 0 {
 		e.CF("POST", "", D{"type": "A", "name": name, "content": address, "ttl": 120, "proxied": false, "comment": owner})
-	} else if !remove && own && str(e.P.Config["ingress"]) == "exit" && records[0]["content"] != address && e.tenantCertificateHeld(t) {
-		// A site with its own address takes over the records carrel owns once
-		// its gateway confirmed the tenant's certificate. A control plane
-		// without public_address never rewrites them back.
+	} else if !remove && records[0]["content"] != address && e.tenantCertificateHeld(t) {
+		// A record that points elsewhere moves here only once the gateway
+		// confirmed the tenant's certificate.
 		e.CF("PATCH", "/"+str(records[0]["id"]), D{"content": address})
 	}
 }
@@ -83,14 +82,6 @@ func (e *Execution) tenantCertificateHeld(t D) bool {
 	return ok && e.gatewayHolds(str(t["slug"]), crt)
 }
 
-// publicAddress is where carrel's records point: the site's own public
-// address, or the external edge on sites that predate one.
-func publicAddress(c D) (string, bool) {
-	if a := str(c["public_address"]); a != "" {
-		return a, true
-	}
-	return "140.113.194.229", false
-}
 func (e *Execution) CertificateDir() string {
 	return textAt(e.P.Config, "certificate_dir", "/var/lib/carrel/certificates")
 }
