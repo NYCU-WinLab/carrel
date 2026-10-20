@@ -1601,7 +1601,19 @@ it is empty:
 - `ingress: exit` and `public_address` stay unset until the move: the new control plane then moves
   the records itself, after its gateway confirms each certificate.
 
-**The move**, after the gaps close:
+**The move, done on 2026-10-20**: the R640 and the cluster share the lab router's public address
+(`140.113.60.189`) but not a route between their management networks, so a temporary WireGuard
+tunnel from the R640 to `140.113.60.184` carried the data (about 100 MB/s; removed afterwards).
+The templates were restored once on carrel01 and streamed to each node at its own VMIDs. CT 100
+moved whole, the current main was deployed with `deploy-go.py --host`, and the nine tenant VMs
+moved one at a time (35 to 112 seconds of downtime each) to carrel01. With `ingress: exit` the
+control plane moved the tenant records once the gateway held their certificates, then issued the
+origin certificate and moved `carrel.winlab.tw`. Two findings: the infra CTs need MTU 1450 on
+`vmbr98` (large replies to direct clients were dropped), and node-agent now takes the TLS gateway
+mode from the control plane's `origin` instead of the site file. The R640 guests stay stopped
+(onboot off) for 14 days.
+
+**The move** (the steps as planned):
 
 1. Install carrel on the cluster. Restore the CT 100 database and configuration from the latest
    `carrel -backup`, and recreate CT 101. Then run `configure-nodes.py` again: the restored
