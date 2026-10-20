@@ -134,7 +134,8 @@ def guest_firewall(m, state, config):
         "enable: 1",
         "ipfilter: 1",
         "macfilter: 1",
-        "dhcp: 1",
+        # Guests use static addresses from cloud-init or pct; no DHCP server answers.
+        "dhcp: 0",
         "ndp: 0",
         "radv: 0",
         "policy_in: DROP",
@@ -711,27 +712,6 @@ table inet carrel_conntrack {{
     if first_exit_node():
         for m in state["machines"]:
             write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, state, config))
-    dhcp = [
-        "port=0",
-        "bind-dynamic",
-        "log-dhcp",
-        "dhcp-authoritative",
-        "dhcp-leasefile=/var/lib/carrel/dhcp.leases",
-    ]
-    for t in state["tenants"]:
-        n, vnet = tenant_config(t)
-        dhcp += [
-            f"interface={vnet}",
-            f"dhcp-range=set:{vnet},10.200.{n}.0,static,255.255.255.0,12h",
-            f"dhcp-option=tag:{vnet},option:router,10.200.{n}.1",
-            f"dhcp-option=tag:{vnet},option:dns-server,10.200.0.2",
-            f"dhcp-option=tag:{vnet},option:mtu,1450",
-        ]
-    for m in state["machines"]:
-        dhcp.append(f"dhcp-host={m['mac']},{m['ip']},{m['name']},12h")
-    if write("/etc/carrel/dhcp.conf", "\n".join(dhcp) + "\n"):
-        run("dnsmasq", "--test", "--conf-file=/etc/carrel/dhcp.conf")
-        run("systemctl", "restart", "carrel-dhcp")
     # The infra gateway CT 101 lives on one node; only that node syncs it.
     private_dhcp(state, serve=first_exit_node())
     address = public_ingress()

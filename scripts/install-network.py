@@ -36,8 +36,6 @@ flush table inet carrel_tenant_host
 table inet carrel_tenant_host {{
  chain input {{
   type filter hook input priority -25; policy accept;
-  iifname {{ {TENANT_IFACES}, "vrf_tenants" }} udp sport 68 udp dport 67 accept
-  ip saddr 10.200.0.0/16 udp sport 68 udp dport 67 accept
   iifname "vmbr98" ip saddr {{ 10.200.0.2, 10.200.0.3 }} accept
   ip saddr 10.200.0.0/16 counter drop
   iifname {{ {TENANT_IFACES} }} counter drop
@@ -159,8 +157,8 @@ def main():
     address = layout["address"]
     peers = ",".join(layout.get("all", [address]))
     exits = ",".join(layout["exit_nodes"])
-    # PVE's SDN regeneration hook requires dnsmasq@.service even though carrel
-    # runs its own reservations-only DHCP instance for EVPN.
+    # PVE's SDN regeneration hook requires dnsmasq@.service; carrel's private
+    # network DHCP also runs dnsmasq, in its own namespace.
     run("systemctl", "mask", "dnsmasq.service")
     run("apt-get", "install", "-y", "dnsmasq")
     run("systemctl", "enable", "--now", "frr")
@@ -258,21 +256,6 @@ ExecReload=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
 [Install]
 WantedBy=multi-user.target
 """)
-    Path("/etc/carrel/dhcp.conf").touch(exist_ok=True)
-    if not Path("/etc/carrel/dhcp.conf").read_text():
-        Path("/etc/carrel/dhcp.conf").write_text(
-            "port=0\nbind-dynamic\nexcept-interface=lo\nno-dhcp-interface=vmbr0\n"
-        )
-    Path("/etc/systemd/system/carrel-dhcp.service").write_text("""[Unit]
-Description=Carrel reserved-address DHCP
-After=network.target frr.service
-[Service]
-ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/carrel/dhcp.conf --user=root
-Restart=on-failure
-RestartSec=3
-[Install]
-WantedBy=multi-user.target
-""")
     Path("/etc/sysctl.d/91-carrel-tenants.conf").write_text(
         "net.ipv4.ip_forward=1\nnet.ipv4.udp_l3mdev_accept=1\nnet.ipv4.conf.all.rp_filter=0\nnet.ipv4.conf.default.rp_filter=0\n"
     )
@@ -307,7 +290,6 @@ WantedBy=multi-user.target
         "--now",
         "proxmox-firewall",
         "carrel-tenant-host",
-        "carrel-dhcp",
         "carrel-conntrack",
     )
     # enable --now leaves an already active oneshot unit with its old rules.

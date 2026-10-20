@@ -266,6 +266,7 @@ def test_firewall_enforces_only_the_declared_source_protocol_and_port():
     assert "IN ACCEPT -source 10.200.1.10/32 -p tcp -dport 5432" in rules
     assert "policy_in: DROP" in rules
     assert "IN ACCEPT -source 10.200.1.0/24" not in rules
+    assert "dhcp: 0" in rules
     assert not any("-p udp -dport 5432" in r for r in rules)
     # The source side may send to the granted port; a tenant machine accepts its tenant.
     sender = module.guest_firewall(app, state, {"protected_addresses": []}).splitlines()

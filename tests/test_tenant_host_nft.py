@@ -46,7 +46,5 @@ def test_host_interfaces_starting_with_t_are_not_dropped(name):
     assert not any(matches(p, name) for p in patterns)
 
 
-def test_dhcp_accept_covers_the_same_interfaces():
-    nft = single_node_table()
-    dhcp = next(x for x in nft.splitlines() if "dport 67 accept" in x and x.strip().startswith("iifname"))
-    assert set(dropped_ifaces(nft)) | {"vrf_tenants"} == set(re.findall(r'"([^"]+)"', dhcp))
+def test_tenants_get_no_dhcp_from_the_host():
+    assert "dport 67" not in single_node_table()
