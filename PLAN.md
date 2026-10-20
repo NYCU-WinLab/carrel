@@ -462,7 +462,7 @@ Every tenant machine gets the security group of its tenant:
    wherever they are addressed. Exit nodes forward between the real network and the EVPN network,
    so without this rule a tenant could reach hosts such as Proxmox Backup Server, the QDevice or
    the old host's guests.
-5. Drop traffic addressed to any node itself, except DHCP (section 6.9). Routing through the
+5. Drop traffic addressed to any node itself. Routing through the
    anycast gateway still works. Public entry points listed in `node.json` `public_entries` are
    accepted above this drop: today only TCP 443 on the public address (`140.113.60.184`), the
    HTTPS gateway the internet already reaches, so tenants can use carrel and lab sites by their
@@ -559,13 +559,15 @@ routing, SDN and other network experiments.
 
 ### 6.9 DHCP
 
-carrel runs dnsmasq on every node for the primary networks, as DHCP only (`port=0`, no DNS on the
-nodes) and with reservations only: each machine's MAC maps to its assigned address, and there is no
-dynamic range. Proxmox's built-in SDN DHCP works
-only in simple zones, and three kinds of machine need DHCP: ISO installs (section 7.8), imported
-guests configured for DHCP (section 10.6), and images without cloud-init. Cloud-init machines keep
-their static configuration, which matches the reservation. `ipfilter` still enforces the address,
-so a guest that ignores DHCP cannot take another one.
+Primary networks have no DHCP server (removed 2026-10-20: dnsmasq ran on every node and answered
+nobody). Every machine gets a static address: cloud-init network configuration for VMs, `pct`
+`ip=` for CTs. `ipfilter` enforces the address. Managed private networks (section 6.8) keep their
+DHCP, one server in its own namespace on the first exit node.
+
+The machines that would need DHCP on a primary network are ISO installs (section 7.8), imported
+guests configured for DHCP (section 10.6) and images without cloud-init. When one of those ships,
+it brings back a reservations-only server (each MAC to its address, no dynamic range); Proxmox's
+built-in SDN DHCP works only in simple zones.
 
 ### 6.10 Special domains and ports
 

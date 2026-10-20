@@ -252,7 +252,7 @@ func (e *Execution) Reconcile() D {
 	}
 	state["machines"] = machines
 	// Every node reconciles: SDN and guest firewalls are cluster-wide, while
-	// DHCP, rate limits and connection tracking live on each node. The first
+	// rate limits and connection tracking live on each node. The first
 	// node goes first; it holds the infra gateway and creates new VNets.
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
