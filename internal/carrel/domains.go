@@ -94,13 +94,12 @@ func (e *Execution) EnsureCertificate(t D) D {
 		return e.P.certificatePrepare(t)
 	}
 	n := integer(t["n"])
-	cert := find(e.S.Objects("certificates", n), func(c D) bool { return c["slug"] == t["slug"] })
-	if cert == nil {
-		issued := filter(e.S.Objects("certificates"), func(c D) bool { return num(c["issued_at"]) > now()-7*86400 })
-		if len(issued) >= 30 {
+	_, has := certificateOf(e.S, n, str(t["slug"]))
+	if !has {
+		if issued := recentIssuance(e.S); len(issued) >= 30 {
 			earliest := now()
 			for _, c := range issued {
-				earliest = min(earliest, num(c["issued_at"]))
+				earliest = min(earliest, float64(c.IssuedAt))
 			}
 			return D{"state": "queued", "ready_at": earliest + 7*86400}
 		}
@@ -108,11 +107,11 @@ func (e *Execution) EnsureCertificate(t D) D {
 	e.DomainRecord(t, false)
 	// A current pair is kept: each issuance of the same name counts against
 	// Let's Encrypt's 5 per 7 days, and domain_add calls this every time.
-	if crt, _, ok := e.livePair(str(t["slug"])); cert != nil && ok && !renewalDue(crt) {
+	if crt, _, ok := e.livePair(str(t["slug"])); has && ok && !renewalDue(crt) {
 		return D{"state": "ready"}
 	}
 	e.issueCertificate(str(t["slug"]), "*."+str(t["slug"])+".winlab.tw")
-	if cert == nil {
+	if !has {
 		e.Put("certificates", str(n), n, D{"id": str(n), "tenant_n": n, "slug": t["slug"], "issued_at": time.Now().Unix()})
 	}
 	return D{"state": "ready"}
@@ -126,15 +125,15 @@ func (e *Execution) CertificateBundles(domains []D) []D {
 		}
 	}
 	out := []D{}
-	for _, c := range e.S.Objects("certificates") {
-		if !wanted[integer(c["tenant_n"])] {
+	for _, c := range rowsOf[certificateRecord](e.S, "certificates") {
+		if !wanted[c.TenantN] {
 			continue
 		}
-		crt, key, ok := e.livePair(str(c["slug"]))
+		crt, key, ok := e.livePair(c.Slug)
 		if !ok {
 			fail("backend_unavailable", "A tenant certificate is missing", D{"component": "acme", "backend_code": "certificate_missing", "recovery": "retry_infrastructure"})
 		}
-		out = append(out, merge(D{"slug": c["slug"]}, originPair(crt, key)))
+		out = append(out, merge(D{"slug": c.Slug}, originPair(crt, key)))
 	}
 	return out
 }

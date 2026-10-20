@@ -44,7 +44,7 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	if e.Op != nil && e.Op["power_restore"] == nil {
 		previous := ""
 		if action == "start" || action == "reboot" {
-			previous = str(obj(e.S.Get("guest_reports", str(m["vmid"])))["boot_id"])
+			previous = e.S.guestReport(m["vmid"]).BootID
 		}
 		e.Op["power_restore"] = D{"boot_id": previous}
 		e.P.Operations.Save(e.Op)

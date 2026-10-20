@@ -153,7 +153,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "audit_log":
 		return D{"entries": e.S.Rows("SELECT * FROM audit WHERE tenant=? OR (tenant IS NULL AND actor=?) ORDER BY id DESC LIMIT 100", n, w["sub"])}
 	case "ssh_key_list":
-		return D{"keys": e.S.Objects("keys", n)}
+		return D{"keys": rowsOf[sshKey](e.S, "keys", n)}
 	case "ssh_key_add":
 		validateKeys([]any{a["key"]})
 		id := digest(strings.Fields(str(a["key"]))[1])[:16]

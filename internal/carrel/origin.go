@@ -46,8 +46,7 @@ func (e *Execution) EnsureOriginCertificate() D {
 		return D{"state": "ready"}
 	}
 	if !ok {
-		issued := filter(e.S.Objects("certificates"), func(c D) bool { return num(c["issued_at"]) > now()-7*86400 })
-		if len(issued) >= 30 {
+		if len(recentIssuance(e.S)) >= 30 {
 			return D{"state": "queued"}
 		}
 	}

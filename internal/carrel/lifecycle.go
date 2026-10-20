@@ -180,14 +180,18 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 			probe = e.P.sshProbe
 		}
 		ssh := probe(e.Ctx, m)
-		r := obj(e.S.Get("guest_reports", id))
-		current := fresh(r["reported_at"]) && (previousBoot == "" || str(r["boot_id"]) != previousBoot)
+		r := e.S.guestReport(id)
+		var reportedAt float64
+		if r.ReportedAt != nil {
+			reportedAt = *r.ReportedAt
+		}
+		current := r.ReportedAt != nil && fresh(reportedAt) && (previousBoot == "" || r.BootID != previousBoot)
 		if e.Op != nil && e.Op["tool"] == "machine_power" {
-			current = current && num(r["reported_at"]) >= num(obj(e.Op["power_restore"])["reported_after"])
+			current = current && reportedAt >= num(obj(e.Op["power_restore"])["reported_after"])
 		}
 		init, app := "", ""
 		if current {
-			init, app = str(r["initialization_status"]), str(r["application_status"])
+			init, app = r.InitializationStatus, r.ApplicationStatus
 		}
 		if m["kind"] == "ct" {
 			init, app = "complete", "not_checked"
@@ -197,7 +201,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 			if nic["ip"] == nil || m["kind"] == "ct" {
 				continue
 			}
-			if !current || num(r["reported_at"]) < num(m["network_configured_at"]) || find(dicts(r["interfaces"]), func(i D) bool { return i["mac"] == nic["mac"] && i["ip"] == nic["ip"] && integer(i["mtu"]) == 1450 }) == nil {
+			if !current || reportedAt < num(m["network_configured_at"]) || find(r.Interfaces, func(i D) bool { return i["mac"] == nic["mac"] && i["ip"] == nic["ip"] && integer(i["mtu"]) == 1450 }) == nil {
 				network = false
 			}
 		}
@@ -236,7 +240,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 			panic(problem)
 		}
 		if m["state"] == "needs_owner_fix" {
-			fail("guest_not_ready", str(m["reason"]), D{"machine": m["name"], "initialization_status": init, "application_status": app, "checks": arr(r["checks"]), "failed_step": r["failed_step"]})
+			fail("guest_not_ready", str(m["reason"]), D{"machine": m["name"], "initialization_status": init, "application_status": app, "checks": orEmpty(r.Checks), "failed_step": optional(r.FailedStep)})
 		}
 		if m["state"] == "ready" {
 			return
@@ -259,7 +263,12 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		m["reason"] = "Timed out waiting for guest initialization and health checks"
 		e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	}
-	fail("guest_not_ready", "Timed out waiting for guest initialization and health checks", D{"machine": original["name"], "checks": obj(e.S.Get("guest_reports", id))["checks"], "failed_step": obj(e.S.Get("guest_reports", id))["failed_step"]})
+	last := e.S.guestReport(id)
+	var checks any
+	if last.Checks != nil {
+		checks = last.Checks
+	}
+	fail("guest_not_ready", "Timed out waiting for guest initialization and health checks", D{"machine": original["name"], "checks": checks, "failed_step": optional(last.FailedStep)})
 }
 
 func probeSSH(ctx context.Context, m D) bool {

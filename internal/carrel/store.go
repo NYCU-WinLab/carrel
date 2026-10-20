@@ -108,6 +108,13 @@ func (s *Store) Register(subject, slug string) D {
 	return s.Tenant(subject)
 }
 func (s *Store) Objects(kind string, tenant ...int) []D {
+	r := []D{}
+	for _, data := range s.objectData(kind, tenant...) {
+		r = append(r, decode(data))
+	}
+	return r
+}
+func (s *Store) objectData(kind string, tenant ...int) []string {
 	q := "SELECT data FROM objects WHERE kind=?"
 	a := []any{kind}
 	if len(tenant) > 0 {
@@ -115,9 +122,9 @@ func (s *Store) Objects(kind string, tenant ...int) []D {
 		a = append(a, tenant[0])
 	}
 	q += " ORDER BY id"
-	r := []D{}
+	r := []string{}
 	for _, v := range s.Rows(q, a...) {
-		r = append(r, decode(str(v["data"])))
+		r = append(r, str(v["data"]))
 	}
 	return r
 }
