@@ -889,6 +889,32 @@ def vm_template(image):
             "environment": environment}
 
 
+def first_firewall(m):
+    """Write the guest firewall before the guest first starts.
+
+    qm clone drops an existing <vmid>.fw (PVE copies the template's, which has
+    none), so the file the reconcile before creation wrote is gone. The grants
+    come from the state that reconcile saved here.
+    """
+    saved = STATE / "desired.json"
+    state = json.loads(saved.read_text()) if saved.exists() else {}
+    grants = {k: state.get(k, []) for k in ("peers", "ports", "domains")}
+    write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, grants, json.loads(CONFIG.read_text())))
+
+
+def tenant_route():
+    """Whether this node routes tenant traffic out: the VRF needs a default
+    route through a gateway (one, or several with ECMP), not only PVE's
+    unreachable placeholder. None before the first tenant creates the VRF."""
+    if not Path("/sys/class/net/vrf_tenants").exists():
+        return None
+    try:
+        routes = json.loads(run("ip", "-j", "route", "show", "vrf", "vrf_tenants", "default") or "[]")
+    except CommandFailure:
+        return False
+    return any(r.get("gateway") or any(h.get("gateway") for h in r.get("nexthops", [])) for r in routes)
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -964,6 +990,7 @@ def create(m):
         run("qm", "resize", vmid, "scsi0", f"{m['disk_gb']}G")
         for nic in m["nics"]:
             run("qm", "set", vmid, f"--net{integer(nic['index'], 1, 7)}", nic_value(m, nic))
+        first_firewall(m)
         if "running" not in run("qm", "status", vmid):
             run("qm", "start", vmid)
     else:
@@ -1009,6 +1036,7 @@ def create(m):
         # Bootstrap hardening before handover, never a general guest execution API.
         for nic in m["nics"]:
             run("pct", "set", vmid, f"--net{integer(nic['index'], 1, 7)}", nic_value(m, nic))
+        first_firewall(m)
         if "running" not in run("pct", "status", vmid):
             run("pct", "start", vmid)
         run("pct", "exec", vmid, "--", "mkdir", "-p", "/etc/systemd/system/systemd-journald.service.d")
@@ -1175,6 +1203,7 @@ def main():
             volumes = observed.pop("volumes")
             out = {
                 "node": NODE,
+                "tenant_route": tenant_route(),
                 "storage_id": storage,
                 **observed,
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),

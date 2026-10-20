@@ -356,3 +356,24 @@ func TestAdapterTimeoutsFollowTheOperation(t *testing.T) {
 		t.Fatal("adapter timeouts")
 	}
 }
+
+func TestPlacementSkipsANodeThatCannotRouteTenantTraffic(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	route := map[string]bool{"node-01": true, "node-02": false, "node-03": true}
+	b.call = func(r D, target string) (any, error) {
+		v, err := inner(r, target)
+		if r["op"] == "inventory" && err == nil {
+			v = merge(obj(v), D{"tenant_route": route[target]})
+		}
+		return v, err
+	}
+	// node-02 has the most memory left, but its guests could not get out.
+	if node, _ := p.execution(context.Background()).Place(1, 1024, 10); node.Name == "carrel02" {
+		t.Fatal("placed a machine on a node without a tenant route")
+	}
+	route["node-01"], route["node-03"] = false, false
+	if attempt(func() { p.execution(context.Background()).Place(1, 1024, 10) }) == nil {
+		t.Fatal("placed a machine although no node routes tenant traffic")
+	}
+}

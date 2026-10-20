@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"regexp"
 	"sync"
@@ -317,6 +318,16 @@ func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
 				panic(failures[i])
 			}
 			refusal = failures[i]
+			continue
+		}
+		if obj(inventories[i])["tenant_route"] == false {
+			// Its guests could not reach the gateway, the control plane or the
+			// internet: the VRF lost its default route (an FRR fault, 2026-10-20).
+			slog.Warn("node_without_tenant_route", "node", n.Name)
+			// A capacity refusal from another node says more.
+			if refusal == nil {
+				refusal = Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "No node can route tenant traffic", "recovery": "retry_infrastructure"}}}
+			}
 			continue
 		}
 		if f := attempt(func() {

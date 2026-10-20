@@ -188,7 +188,7 @@ def test_template_preparation_preserves_requested_package_install(monkeypatch, p
 def test_linked_clone_requires_immutable_template(monkeypatch, tmp_path, immutable):
     machine = dict(MACHINE)
     module = load("node-agent.py")
-    (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs"}))
+    (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs", "protected_addresses": []}))
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
@@ -200,16 +200,28 @@ def test_linked_clone_requires_immutable_template(monkeypatch, tmp_path, immutab
     )
     calls = []
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "stopped")
+    real_write = module.write
+    monkeypatch.setattr(
+        module,
+        "write",
+        lambda path, data, mode=0o640: (
+            calls.append(("write", str(path)))
+            or (None if str(path).startswith("/etc/pve/") else real_write(path, data, mode))
+        ),
+    )
     if immutable:
         assert module.create(machine)["state"] == "running"
         clone = next(c for c in calls if c[:2] == ("qm", "clone"))
         assert clone[2] == 9010 and clone[clone.index("--full") + 1] == "0"
+        # qm clone dropped the reconcile's firewall file: it is back before the first start.
+        firewall = calls.index(("write", "/etc/pve/firewall/10100.fw"))
+        assert calls.index(clone) < firewall < calls.index(("qm", "start", 10100))
         manifest = json.loads((tmp_path / f"create-{machine['vmid']}.json").read_text())
         assert manifest["template"] == {"vmid": 9010, "prepared": True}
     else:
         with pytest.raises(ValueError, match="immutable"):
             module.create(machine)
-        assert not calls
+        assert not [c for c in calls if c[0] != "write"]
 
 
 @pytest.mark.parametrize("disk", ["local-zfs:base-9010-disk-0", "local-lvm:base-9010-disk-0"])
@@ -220,13 +232,14 @@ def test_linked_clone_template_must_live_on_the_configured_storage(monkeypatch, 
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs"}))
+    (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs", "protected_addresses": []}))
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
     monkeypatch.setattr(module, "pve_get", lambda *args: {"template": 1, "scsi0": disk})
     monkeypatch.setattr(module, "cloud_init", lambda m, **kwargs: "prepared-snippet")
     calls = []
+    monkeypatch.setattr(module, "first_firewall", lambda m: None)
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "stopped")
     if disk.startswith("local-zfs:"):
         assert module.create(machine)["state"] == "running"
@@ -274,3 +287,27 @@ def test_firewall_enforces_only_the_declared_source_protocol_and_port():
     assert "IN ACCEPT -source 10.200.1.0/24" in sender
     with pytest.raises(ValueError, match="experiment NICs"):
         module.guest_firewall(dict(db, nics=[{"index": 1}]), state, {"protected_addresses": []})
+
+
+@pytest.mark.parametrize(
+    "routes,ready",
+    [
+        ('[{"type":"unreachable","dst":"default","metric":4278198272}]', False),
+        ("[]", False),
+        (
+            '[{"dst":"default","gateway":"192.168.19.101","dev":"vrfbr_tenants"},{"type":"unreachable","dst":"default"}]',
+            True,
+        ),
+        ('[{"dst":"default","nexthops":[{"gateway":"192.168.19.101"},{"gateway":"192.168.19.102"}]}]', True),
+    ],
+)
+def test_inventory_says_whether_the_node_routes_tenant_traffic(monkeypatch, tmp_path, routes, ready):
+    module = load("node-agent.py")
+    vrf = tmp_path / "vrf_tenants"
+    vrf.mkdir()
+    monkeypatch.setattr(module, "Path", lambda p: vrf if str(p) == "/sys/class/net/vrf_tenants" else Path(p))
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: routes)
+    assert module.tenant_route() is ready
+    # Before the first tenant there is no VRF yet: unknown, not a fault.
+    vrf.rmdir()
+    assert module.tenant_route() is None
