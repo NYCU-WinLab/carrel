@@ -151,6 +151,10 @@ func (e *Execution) inventories(nodes []nodeRef, cached bool) ([]any, []time.Tim
 	inventories := make([]any, len(nodes))
 	times := make([]time.Time, len(nodes))
 	failures := make([]any, len(nodes))
+	ctx := e.Ctx
+	if e.Op != nil {
+		ctx = context.WithValue(ctx, operationLogKey{}, e.Op["id"])
+	}
 	var wg sync.WaitGroup
 	for i, n := range nodes {
 		wg.Add(1)
@@ -160,9 +164,9 @@ func (e *Execution) inventories(nodes []nodeRef, cached bool) ([]any, []time.Tim
 				fetch := func(ctx context.Context) (any, error) { return e.P.Backend.Call(ctx, D{"op": "inventory"}, n.Target) }
 				var err error
 				if cached {
-					inventories[i], times[i], err = e.P.inventoryCache(n.Target).Get(e.Ctx, 2*time.Second, fetch)
+					inventories[i], times[i], err = e.P.inventoryCache(n.Target).Get(ctx, 2*time.Second, fetch)
 				} else {
-					inventories[i], err = fetch(e.Ctx)
+					inventories[i], err = fetch(ctx)
 					times[i] = time.Now()
 				}
 				must(err)
@@ -309,6 +313,9 @@ func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
 	for i, n := range nodes {
 		var accepted, c D
 		if failures[i] != nil {
+			if _, ok := failures[i].(Failure); !ok {
+				panic(failures[i])
+			}
 			refusal = failures[i]
 			continue
 		}

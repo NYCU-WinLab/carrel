@@ -221,7 +221,9 @@ def api(method, path, **kwargs):
     args = ["pvesh", method, path, "--output-format", "json"]
     for key, value in kwargs.items():
         args += ["--" + key.replace("_", "-"), str(value)]
-    text = run(*args, timeout=600)
+    # Below the control plane's 300 s bound on a reconcile, so the node never
+    # outlives the request that holds its lock.
+    text = run(*args, timeout=240)
     if not text:
         return None
     try:
