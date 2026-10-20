@@ -63,7 +63,9 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage):
         "--tags",
         "carrel-infra",
         "--net0",
-        f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth",
+        # The infra bridge runs at the tenant MTU; a 1500-byte CT NIC there
+        # drops large replies to clients that reach it directly (PLAN 15.15).
+        f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth" + (",mtu=1450" if bridge == "vmbr98" else ""),
         "--nameserver",
         "1.1.1.1",
         "--ssh-public-keys",

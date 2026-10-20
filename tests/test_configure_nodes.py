@@ -128,3 +128,23 @@ def test_bootstrap_runs_only_on_the_first_exit_node_of_the_site(monkeypatch, tmp
         assert "first exit node" in str(e)
     else:
         raise AssertionError("bootstrap ran on a node that is not the first exit node")
+
+
+def test_infra_containers_match_the_infra_bridge_mtu(monkeypatch):
+    module = load("bootstrap-platform.py")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
+    real = Path
+    # No existing CT config and no cached template; everything else is real.
+    monkeypatch.setattr(
+        module,
+        "Path",
+        lambda p: (
+            real("/nonexistent") / str(p).lstrip("/")
+            if str(p).startswith(("/etc/pve", "/var/lib/vz"))
+            else real(p)
+        ),
+    )
+    module.ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, "k", "local-zfs")
+    net = next(a[a.index("--net0") + 1] for a in calls if "--net0" in a)
+    assert net.endswith(",mtu=1450")

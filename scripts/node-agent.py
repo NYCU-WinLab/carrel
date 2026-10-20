@@ -704,7 +704,9 @@ WantedBy=multi-user.target
     if Path("/etc/pve/lxc/101.conf").exists():
         slugs = {t["n"]: label(t["slug"]) for t in state["tenants"]}
         hosts = "".join(f"{m['ip']} {m['name']}.{slugs[m['tenant_n']]}.internal\n" for m in state["machines"])
-        if site().get("public"):
+        # The control plane sends the origin only with ingress: exit, together
+        # with the certificates; a public site file alone does not switch modes.
+        if "origin" in state:
             caddy, certificates = gateway_tls(state, slugs)
             payload = {"hosts": hosts, "caddy": caddy, "certificates": certificates}
         else:
