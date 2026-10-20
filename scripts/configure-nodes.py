@@ -9,8 +9,11 @@ and bootstrap-platform.py and after the node programs are installed there. It:
    cluster /root/.ssh/authorized_keys is one shared file, so one line serves
    every node: CT 100 reaches this node from 10.200.0.3 and the others through
    this node's masquerade, from its management address;
-3. writes CT 100's SSH targets, pinned host keys and config.json "nodes";
-4. asks every node's adapter for its inventory through CT 100.
+3. installs the gateway's forced command in CT 101 for the same key, from
+   10.200.0.3 only;
+4. writes CT 100's SSH targets, pinned host keys and config.json "nodes";
+5. asks every node's adapter for its inventory, and the gateway for its
+   status, through CT 100.
 
 It never prints a key or a secret, and keeps every config.json key it does not own.
 """
@@ -24,7 +27,9 @@ import socket
 import subprocess
 
 SITE = Path("/etc/carrel/site.json")
-PROGRAMS = ["node-agent.py", "guest-report.py", "gateway-sync.py"]
+PROGRAMS = ["node-agent.py", "guest-report.py"]
+GATEWAY = {"name": "carrel-gateway", "target": "carrel-gateway", "host": "10.200.0.2"}
+GATEWAY_SYNC = "/usr/local/lib/carrel/gateway-sync.py"
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'
 BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
@@ -83,6 +88,24 @@ def replace_file(path, text, mode):
     os.replace(pending, target)
 
 
+def gateway(key):
+    """Install gateway-sync.py in CT 101 as the forced command for CT 100's key."""
+    run("pct", "exec", "101", "--", "install", "-d", "-m", "755", "/usr/local/lib/carrel")
+    run("pct", "push", "101", GATEWAY_SYNC, GATEWAY_SYNC, "--perms", "755")
+    current = run("pct", "exec", "101", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
+    kept = [x for x in current.splitlines() if GATEWAY_SYNC not in x]
+    line = f'from="10.200.0.3",restrict,command="{GATEWAY_SYNC}" {key}'
+    run("pct", "exec", "101", "--", "sh", "-c",
+        "umask 077 && mkdir -p /root/.ssh && cat > /root/.ssh/authorized_keys.carrel-next"
+        " && mv /root/.ssh/authorized_keys.carrel-next /root/.ssh/authorized_keys",
+        input="\n".join([*kept, line]) + "\n")
+    # Keys only: CT 101 holds every tenant's private keys.
+    run("pct", "exec", "101", "--", "sh", "-c",
+        "umask 022 && cat > /etc/ssh/sshd_config.d/carrel.conf && systemctl try-reload-or-restart ssh",
+        input="PasswordAuthentication no\nKbdInteractiveAuthentication no\n")
+    return " ".join(run("pct", "exec", "101", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
+
+
 def ssh_config(existing, nodes):
     block = [BEGIN]
     for n in nodes:
@@ -119,7 +142,7 @@ def main():
         raise SystemExit("run on the first exit node, which holds CT 100")
     nodes = targets(site, node)
     me = nodes[0]
-    for program in PROGRAMS:
+    for program in [*PROGRAMS, "gateway-sync.py"]:
         if not Path("/usr/local/lib/carrel", program).exists():
             raise SystemExit(f"install the node programs here first ({program} missing)")
     # 1. Node programs on the other nodes, the same version as here.
@@ -133,7 +156,9 @@ def main():
     ct("sh", "-c", "id carrel >/dev/null 2>&1 && chown carrel:carrel /etc/carrel/node_key || true; chmod 600 /etc/carrel/node_key")
     key = " ".join(ct("cat", "/etc/carrel/node_key.pub").split()[:2])
     replace_file(AUTHORIZED, merge_authorized(AUTHORIZED.read_text() if AUTHORIZED.exists() else "", authorized_line(key, me["address"]), key), 0o600)
-    # 3. CT 100: targets, pinned host keys, the node list.
+    # 3. The gateway's forced command in CT 101.
+    gateway_key = gateway(key)
+    # 4. CT 100: targets, pinned host keys, the node list.
     entries = []
     for n in nodes:
         if n is me:
@@ -141,8 +166,9 @@ def main():
         else:
             host_key = run("ssh", *peer(n), "root@" + n["address"], "cat /etc/ssh/ssh_host_ed25519_key.pub")
         entries.append((n["host"], " ".join(host_key.split()[:2])))
+    entries.append((GATEWAY["host"], gateway_key))
     current = ct("sh", "-c", "cat /etc/carrel/ssh_config 2>/dev/null || true")
-    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, nodes))
+    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, [*nodes, GATEWAY]))
     current = ct("sh", "-c", "cat /etc/carrel/known_hosts 2>/dev/null || true")
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
     listed = json.dumps([{"name": n["name"], "target": n["target"]} for n in nodes])
@@ -154,7 +180,7 @@ def main():
         "s=p.stat() if p.exists() else None;"
         "s and os.chown(n,s.st_uid,s.st_gid);os.chmod(n,s.st_mode&0o777 if s else 0o640);os.replace(n,p)"
     ), input=listed)
-    # 4. Every adapter answers CT 100 with its own name.
+    # 5. Every adapter answers CT 100 with its own name; the gateway answers too.
     report = {}
     for n in nodes:
         out = ct("ssh", "-F", "/etc/carrel/ssh_config", n["target"], input='{"op":"inventory"}')
@@ -162,7 +188,10 @@ def main():
         if not result.get("ok") or result["result"].get("node") != n["name"]:
             raise SystemExit(f"{n['name']} did not answer through {n['target']}")
         report[n["name"]] = n["target"]
-    print(json.dumps({"nodes": report}))
+    status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", GATEWAY["target"], input='{"op":"status"}'))
+    if not status.get("ok"):
+        raise SystemExit("the gateway did not answer through carrel-gateway")
+    print(json.dumps({"nodes": report, "gateway": GATEWAY["target"]}))
 
 
 if __name__ == "__main__":

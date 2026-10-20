@@ -58,7 +58,11 @@ func TestCertificatePreparationDoesNotBlockUnrelatedPower(t *testing.T) {
 		w.Write([]byte(`{"success":true,"result":[]}`))
 	}))
 	defer cf.Close()
-	p.Config["cloudflare_api"], p.Config["cloudflare_zone"] = cf.URL, "test"
+	p.Config["cloudflare_api"], p.Config["cloudflare_zone"], p.Config["certificate_dir"] = cf.URL, "test", t.TempDir()
+	// The stub below stands in for issuance; the gateway still needs the pair.
+	crt, key := testPair(t, "*.alice.winlab.tw")
+	p.execution(context.Background()).storeCertificate("alice", crt, key)
+	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})
 	entered, release := make(chan struct{}), make(chan struct{})
 	p.certificatePrepare = func(D) D {
 		close(entered)

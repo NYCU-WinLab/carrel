@@ -48,14 +48,22 @@ func (f *fakeDNS) server(t *testing.T) *httptest.Server {
 	return s
 }
 
-// testPair returns a certificate and its key as PEM.
-func testPair(t *testing.T) ([]byte, []byte) {
-	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	t.Cleanup(tlsServer.Close)
-	pair := tlsServer.TLS.Certificates[0]
-	keyDER, err := x509.MarshalPKCS8PrivateKey(pair.PrivateKey)
+// testPair returns a self-signed certificate for names (carrel.winlab.tw by
+// default) and its key, as PEM.
+func testPair(t *testing.T, names ...string) ([]byte, []byte) {
+	t.Helper()
+	if len(names) == 0 {
+		names = []string{"carrel.winlab.tw"}
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	must(err)
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	template := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), DNSNames: names,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(90 * 24 * time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	must(err)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	must(err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 }
 
 func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
@@ -63,7 +71,7 @@ func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
 	dns := &fakeDNS{records: map[string][]D{}}
 	cf := dns.server(t)
 	for k, v := range map[string]any{"cloudflare_api": cf.URL, "cloudflare_zone": "test", "certificate_dir": t.TempDir(),
-		"origin": "https://carrel.test"} {
+		"origin": "https://carrel.winlab.tw"} {
 		p.Config[k] = v
 	}
 	crt, key := testPair(t)
@@ -99,14 +107,14 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 
 func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	p, b, dns := originFixture(t)
-	dns.records["carrel.test"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": originOwner}}
+	dns.records["carrel.winlab.tw"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": originOwner}}
 	sent := D{}
 	confirm := true
 	b.call = func(r D, target string) (any, error) {
-		if r["op"] == "reconcile" && target == "carrel-node" {
-			sent = obj(r["state"])
-			if pair := obj(sent["origin_certificate"]); confirm && pair["fullchain"] != nil {
-				return D{"certificates": D{"_origin": fingerprint(pair["fullchain"])}}, nil
+		if r["op"] == "sync" && target == "carrel-gateway" {
+			sent = r
+			if !confirm {
+				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
 			}
 		}
 		return D{}, nil
@@ -123,23 +131,25 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	if len(dns.writes) != 0 {
 		t.Fatal("moved the record before the gateway received the certificate")
 	}
-	// A node without the gateway reconciles fine but confirms nothing.
+	// A gateway that refuses the pair holds nothing.
 	confirm = false
-	e.Reconcile()
+	if attempt(func() { e.Reconcile() }) == nil {
+		t.Fatal("a failed gateway sync passed")
+	}
 	e.MaintainOrigin()
 	if len(dns.writes) != 0 {
 		t.Fatal("moved the record although the gateway did not confirm the pair")
 	}
 	confirm = true
 	e.Reconcile()
-	if obj(sent["origin_certificate"])["privkey"] == nil {
+	if obj(obj(sent["certificates"])["_origin"])["privkey"] == nil {
 		t.Fatal("the gateway did not receive the origin pair")
 	}
 	e.MaintainOrigin()
 	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
 		t.Fatal(encoded(dns.writes))
 	}
-	dns.records["carrel.test"] = []D{{"id": "o1", "content": "1.2.3.4", "comment": "someone else"}}
+	dns.records["carrel.winlab.tw"] = []D{{"id": "o1", "content": "1.2.3.4", "comment": "someone else"}}
 	if err := attempt(func() { e.MaintainOrigin() }); err == nil {
 		t.Fatal("rewrote a record owned outside carrel")
 	}
@@ -206,7 +216,7 @@ func TestChallengeWaitsUntilTheResolverServesIt(t *testing.T) {
 	p, _, _ := originFixture(t)
 	answers := [][]string{nil, {"old"}, {"old", "value"}}
 	p.lookupTXT = func(_ context.Context, name string) ([]string, error) {
-		if name != "_acme-challenge.carrel.test." {
+		if name != "_acme-challenge.carrel.winlab.tw." {
 			t.Fatalf("looked up %s", name)
 		}
 		a := answers[0]
@@ -216,12 +226,12 @@ func TestChallengeWaitsUntilTheResolverServesIt(t *testing.T) {
 		return a, nil
 	}
 	e := p.execution(context.Background())
-	if err := e.waitTXT(context.Background(), "_acme-challenge.carrel.test", "value"); err != nil || len(answers) != 1 {
+	if err := e.waitTXT(context.Background(), "_acme-challenge.carrel.winlab.tw", "value"); err != nil || len(answers) != 1 {
 		t.Fatal("did not wait for the value", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := e.waitTXT(ctx, "_acme-challenge.carrel.test", "missing"); err == nil {
+	if err := e.waitTXT(ctx, "_acme-challenge.carrel.winlab.tw", "missing"); err == nil {
 		t.Fatal("accepted a record the resolver never served")
 	}
 }

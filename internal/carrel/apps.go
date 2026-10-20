@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -510,9 +511,14 @@ func (p *Platform) AgentReport(ctx context.Context, token string, body D) D {
 	return D{"ok": true}
 }
 
+// truncate keeps the last n bytes of s, starting at a whole character.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[len(s)-n:]
+	i := len(s) - n
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return s[i:]
 }

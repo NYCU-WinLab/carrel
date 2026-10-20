@@ -144,7 +144,7 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
         module.inventory_read("local-zfs")
 
 
-def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, monkeypatch):
+def test_topology_observes_missing_subnets(tmp_path, monkeypatch):
     module = script("node-agent.py")
 
     def local(path):
@@ -155,13 +155,7 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
     monkeypatch.setattr(module, "STATE", tmp_path / "state")
     monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     module.CONFIG.write_text('{"protected_addresses": []}')
-    # The node that holds the infra gateway CT 101 syncs it, whatever its name.
-    local("/etc/pve/lxc").mkdir(parents=True)
-    local("/etc/pve/lxc/101.conf").write_text("hostname: carrel-gateway\n")
     local("/sys/class/net/t001").mkdir(parents=True)
-    helper = local("/usr/local/lib/carrel/gateway-sync.py")
-    helper.parent.mkdir(parents=True)
-    helper.write_text("fixed gateway helper")
     responses = {
         # Only tenant VNets are read for subnets; private networks are not.
         "/cluster/sdn/vnets": [{"vnet": "t001", "zone": "tenants"}, {"vnet": "p00101", "zone": "private"}],
@@ -185,20 +179,12 @@ def test_topology_observes_missing_subnets_and_uses_one_gateway_entry(tmp_path, 
         "networks": [],
         "machines": [],
         "domains": [],
-        "origin": "carrel.winlab.tw",
     }
     assert module.reconcile(state)["changed"] == []
-    assert len(entries) == 1 and [r[0] for r in reads] == [
-        "/cluster/sdn/vnets",
-        "/cluster/sdn/vnets/t001/subnets",
-    ]
-    assert not mutations
-    assert entries[0][0][:6] == ("pct", "exec", "101", "--", "python3", "-c")
-    payload = json.loads(entries[0][1]["input"])
-    assert payload["hosts"] == "" and "auto_https off" in payload["caddy"]
-    local("/etc/pve/lxc/101.conf").unlink()
+    assert [r[0] for r in reads] == ["/cluster/sdn/vnets", "/cluster/sdn/vnets/t001/subnets"]
+    # The gateway is the control plane's to sync, never a node's.
+    assert not mutations and not entries
     module.reconcile(state)
-    assert len(entries) == 1, "a node without CT 101 synced the gateway"
     responses["/cluster/sdn/vnets/t001/subnets"] = []
     assert module.reconcile(state)["changed"] == ["subnet-1"]
     assert len(reads) == 6

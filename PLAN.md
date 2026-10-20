@@ -491,7 +491,10 @@ by guessing its VNI. VNIs are not secrets; this filter is the protection.
   (DNS only) pointing at the exit node, and one wildcard certificate for it. Caddy on the infra
   gateway routes only names that exist in the database; any other name under the wildcard gets 404.
 - **Who issues certificates**: the control plane, through the DNS-01 challenge with the Cloudflare
-  token it already holds for records, and it pushes the certificates to the gateway. It runs the
+  token it already holds for records. It renders the gateway's Caddyfile and hosts file, checks
+  each pair (name, expiry, key) and sends them over SSH to a forced command in CT 101
+  (`gateway-sync.py`, CT 100's key from `10.200.0.3` only), so private keys never pass through a
+  node (since 2026-10-20; node-agent relayed them with `pct exec` before). It runs the
   ACME client in-process (`golang.org/x/crypto/acme`, since 2026-10-20; certbot before): it writes
   the challenge TXT record, polls the resolver until it serves the value, and keeps each issued pair
   in its own directory behind a `live/<name>` symlink that one rename replaces. It renews when a

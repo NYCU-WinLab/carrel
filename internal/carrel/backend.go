@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -32,11 +33,11 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		"-o", "ControlPath=/var/lib/carrel/ssh-%C",
 		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", target)
 	cmd.Stdin = bytes.NewReader(encoded(request))
-	var out bytes.Buffer
+	out := cappedBuffer{max: maxAdapterReply}
 	cmd.Stdout = &out
 	err := cmd.Run()
 	var result D
-	if json.Unmarshal(out.Bytes(), &result) != nil || err != nil || !boolean(result["ok"]) {
+	if json.Unmarshal(out.buf.Bytes(), &result) != nil || err != nil || !boolean(result["ok"]) {
 		code := "adapter_rejected"
 		if ctx.Err() != nil {
 			code = "adapter_timeout"
@@ -47,12 +48,31 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 			code = str(result["error_code"])
 		}
 		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": target, "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
-		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
+		// The adapter's own error text stays in the operator log.
+		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "detail", truncate(str(result["error"]), 400), "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
 		return nil, Failure{D{"ok": false, "error": details}}
 	}
 	slog.Info("adapter_completed", "event", "adapter_completed", "op", request["op"], "target", target,
 		"operation", ctx.Value(operationLogKey{}), "seconds", time.Since(started).Seconds())
 	return result["result"], nil
+}
+
+// maxAdapterReply bounds what one adapter or the gateway can make the control
+// plane hold; the largest real reply (an inventory) is far smaller.
+const maxAdapterReply = 32 << 20
+
+// A named field, not an embedded one: an embedded bytes.Buffer brings its
+// ReadFrom, and io.Copy from the process pipe would use it past the cap.
+type cappedBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		return 0, errors.New("adapter reply too large")
+	}
+	return b.buf.Write(p)
 }
 
 // adapterTimeout bounds one adapter request. Reads and the backup's node files
@@ -63,6 +83,9 @@ func adapterTimeout(op string) time.Duration {
 		return 60 * time.Second
 	case "reconcile":
 		return 300 * time.Second
+	case "sync":
+		// gateway-sync.py runs up to 3 commands of 60 seconds each.
+		return 240 * time.Second
 	}
 	return 900 * time.Second
 }
