@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -53,15 +54,34 @@ func TestExistingPolicyPreviewApplyAndRollback(t *testing.T) {
 	}
 }
 
-func TestPolicyRejectsBypassesAndForeignMachines(t *testing.T) {
+func TestPolicyRestrictsAMachineWithPrivateNICsButNotForeignMachines(t *testing.T) {
 	p, _ := fixture(t)
 	m := seedMachine(p, "db", 10100)
 	m["nics"] = []D{{"index": 1, "network": "private"}}
 	p.Store.Put("machines", 10100, 1, m)
 	args := D{"access": []D{{"machine": "db", "network_access": "restricted", "confirm": "db"}}}
 	app, ctx := NewApp(p, nil), context.Background()
-	assertCode(t, app.Call(ctx, "deployment_plan", obj(copyValue(args)), person("alice", false)), "invalid")
+	// Restricted filters the primary NIC only; the private NIC stays (issue #75).
+	r := app.Call(ctx, "deployment_plan", obj(copyValue(args)), person("alice", false))
+	assertOK(t, r)
+	if impact := str(dicts(r["access"])[0]["impact"]); !strings.Contains(impact, "private NICs stay unfiltered") {
+		t.Fatal(impact)
+	}
 	assertCode(t, app.Call(ctx, "deployment_plan", obj(copyValue(args)), person("bob", false)), "not_found")
+}
+
+func TestARestrictedMachineTakesAPrivateNIC(t *testing.T) {
+	p, _ := fixture(t)
+	m := seedMachine(p, "db", 10100)
+	m["network_access"] = "restricted"
+	e := p.execution(context.Background())
+	nic := e.NICSpec(m, D{"id": "p00101", "mode": "raw_l2"}, 1)
+	if nic["network"] != "p00101" {
+		t.Fatal(nic)
+	}
+	if access := obj(e.PublicMachine(m, nil)["access"]); access["inbound"] != "restricted" || access["private_nics"] != "unfiltered_experiment_networks" {
+		t.Fatal(access)
+	}
 }
 
 func TestPolicyRollbackDoesNotOverwriteNewerIntent(t *testing.T) {
@@ -82,5 +102,35 @@ func TestPolicyRollbackDoesNotOverwriteNewerIntent(t *testing.T) {
 				t.Fatal("rollback overwrote newer policy/allocation")
 			}
 		})
+	}
+}
+
+func TestOneDeploymentRestrictsAMachineAndAttachesAPrivateNIC(t *testing.T) {
+	p, b := fixture(t)
+	for i, name := range []string{"app", "db"} {
+		m := seedMachine(p, name, 10100+i)
+		m["state"], m["power_state"], m["ssh_ready"] = "stopped", "stopped", false
+		p.Store.Put("machines", 10100+i, 1, m)
+	}
+	net := p.execution(context.Background()).NetworkSpec(p.Store.TenantN(1), D{"name": "lab"}, nil)
+	p.Store.Put("networks", net["id"], 1, net)
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "status" {
+			return D{"power_state": "stopped"}, nil
+		}
+		return D{}, nil
+	}
+	runQueue(p)
+	r := p.Execute(context.Background(), "deployment_apply", D{
+		"attachments": []D{{"machine": "db", "network": "lab"}},
+		"access":      []D{{"machine": "db", "network_access": "restricted", "confirm": "db"}},
+		"connections": []D{{"from": "app", "to": "db", "port": 5432, "protocol": "tcp"}},
+	}, person("alice", false))
+	if op := obj(r["operation"]); op["state"] != "succeeded" {
+		t.Fatal(encoded(r))
+	}
+	db := p.Store.Get("machines", "10101")
+	if db["network_access"] != "restricted" || len(arr(db["nics"])) != 1 || len(p.Store.Objects("peers", 1)) != 1 {
+		t.Fatal(encoded(db))
 	}
 }

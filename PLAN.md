@@ -63,6 +63,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-19 | B09 storage is ZFS `local-zfs` on a stripe of two disks per node, with no disk redundancy. Recovery uses independent backups |
 | 2026-10-19 | Public ingress uses `140.113.60.184/27` on VLAN 60 at the exit node. CT 207 and the WireGuard hop through the old PVE retire for carrel |
 | 2026-10-19 | No QDevice: every place it could run fails together with B09 |
+| 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
 
 ### 1.6 Current core and deferred work
 
@@ -453,8 +454,9 @@ Every tenant machine gets the security group of its tenant:
 
 1. Default `network_access=tenant` accepts same-tenant traffic. Explicit `restricted` ingress accepts
    only declared source/protocol/port connections, public grants and platform access. Connections
-   in deployment intent require a restricted destination. Restricted machines cannot attach
-   unfiltered experiment NICs. Egress policy remains the same.
+   in deployment intent require a restricted destination. The mode filters the primary NIC
+   only: private experiment NICs stay unfiltered and reach only the tenant's own machines on that
+   segment (issue #75, 2026-10-20). Egress policy remains the same.
 2. Accept DNS to the infra resolver.
 3. Accept the peer rules granted to it (section 4.3), inserted above the drops.
 4. Drop every private and internal range: the rest of `10.200.0.0/16`, all of `10.0.0.0/8`,
@@ -1288,7 +1290,8 @@ explicit start action. See the evaluation for public SSH/HTTPS, rollback and cle
 ### 15.6 Intent and reliability acceptance (0.4, 2026-10-01)
 
 The member path is machine, connection and publication intent on `deployment_plan` / `deployment_apply`.
-Explicit restricted ingress enforces exact source/protocol/port rules and prevents unfiltered NIC bypass.
+Explicit restricted ingress enforces exact source/protocol/port rules and prevents unfiltered NIC bypass
+(superseded 2026-10-20, issue #75: restricted filters the primary NIC only).
 The same deployment can publish an existing application. The five reliability fixes in sections 4.2,
 5.3 and 1.6 are deployed: DNS failure isolation, quota expiry without blanket stopping, durable
 certificate waits, independent tenant onboarding and immediate suspension admission blocking.
@@ -1502,7 +1505,8 @@ keys after approval/expiry. Approval and expiry save quota and decision in one t
 `deployment_plan` and `deployment_apply` accept `access` entries for existing machines, with machine,
 network_access and confirm (the machine name for a mode change). Previews explain connectivity lost
 or enabled. The operation reserves policy changes and connections atomically, binds allocations and
-reconciles. Experiment NICs, including attachments in the same plan, prevent restricted ingress.
+reconciles. Experiment NICs no longer prevent restricted ingress (superseded 2026-10-20, issue #75):
+restricted filters the primary NIC only, and private NICs stay unfiltered.
 SSH, publications and old peer grants remain. Rollback restores a prior policy only if the operation
 still owns it on the same allocation. Results include affected existing machines.
 

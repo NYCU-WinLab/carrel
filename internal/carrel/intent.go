@@ -138,9 +138,6 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 		if m == nil || network == nil {
 			fail("not_found", "Attachment must reference this tenant's existing or planned resources")
 		}
-		if m["network_access"] == "restricted" {
-			fail("invalid", "Restricted machines use declared connections; experiment NICs require network_access=tenant", D{"machine": m["name"]})
-		}
 		ref := fallback(network, "id", network["name"])
 		nics := dicts(m["nics"])
 		if find(nics, func(n D) bool { return n["network"] == ref }) != nil {
@@ -179,7 +176,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 		next = "provide_requirements"
 		detail = "Supply the listed requirements, then preview the updated specification."
 	}
-	return mutationResult(before, D{"machines": planned, "access": access, "networks": networks, "attachments": attachments, "connections": connections, "publications": publications, "quota_after": after, "admission": admission, "requirements": requirements, "units": Units, "apply_tool": "deployment_apply", "next_action": next, "next_action_detail": detail, "limitations": []string{"No IDs, addresses or ports are reserved; apply rechecks capacity and quota.", "Guest boot, package commands and SSH connectivity are checked only after creation.", "Managed networks configure private IPs automatically; raw_l2 requires owner configuration.", "network_access=tenant allows all same-tenant primary traffic. Use restricted and connections for service isolation.", "Publication success confirms routing and TLS configuration; end-to-end application responses require an external check."}}, true)
+	return mutationResult(before, D{"machines": planned, "access": access, "networks": networks, "attachments": attachments, "connections": connections, "publications": publications, "quota_after": after, "admission": admission, "requirements": requirements, "units": Units, "apply_tool": "deployment_apply", "next_action": next, "next_action_detail": detail, "limitations": []string{"No IDs, addresses or ports are reserved; apply rechecks capacity and quota.", "Guest boot, package commands and SSH connectivity are checked only after creation.", "Managed networks configure private IPs automatically; raw_l2 requires owner configuration.", "network_access=tenant allows all same-tenant primary traffic. Use restricted and connections for service isolation; restricted filters the primary NIC only, and private NICs stay unfiltered.", "Publication success confirms routing and TLS configuration; end-to-end application responses require an external check."}}, true)
 }
 func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 	created := D{"ports": []any{}, "domains": []any{}, "peers": []any{}}

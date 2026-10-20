@@ -19,9 +19,6 @@ func (e *Execution) PlanPolicy(a D, machines map[string]D) ([]D, []D) {
 		if mode != "tenant" && mode != "restricted" {
 			fail("invalid", "Unknown network access mode")
 		}
-		if mode == "restricted" && len(arr(m["nics"])) > 0 {
-			fail("invalid", "Detach experiment NICs before restricting primary ingress", D{"machine": name, "recovery": "revise_request"})
-		}
 		before := textAt(m, "network_access", "tenant")
 		changed := before != mode
 		if changed && request["confirm"] != name {
@@ -30,6 +27,9 @@ func (e *Execution) PlanPolicy(a D, machines map[string]D) ([]D, []D) {
 		impact := "unchanged"
 		if changed && mode == "restricted" {
 			impact = "Same-tenant primary ingress will require an explicit connection grant"
+			if len(arr(m["nics"])) > 0 {
+				impact += "; its private NICs stay unfiltered"
+			}
 		}
 		if changed && mode == "tenant" {
 			impact = "All same-tenant machines will gain primary ingress"

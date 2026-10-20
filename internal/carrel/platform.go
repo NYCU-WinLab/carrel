@@ -399,11 +399,9 @@ func (e *Execution) PublicMachine(m D, ports []D) D {
 			allowed = append(allowed, D{"id": p["id"], "from": fallback(g, "from_machine", p["source"]), "from_tenant": g["from_tenant"], "port": p["port"], "protocol": textAt(p, "proto", "tcp")})
 		}
 	}
-	private := "unfiltered_experiment_networks"
-	if m["network_access"] == "restricted" {
-		private = "not_allowed"
-	}
-	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": private, "allowed_connections": allowed}
+	// network_access filters the primary NIC only; private NICs are the
+	// member's own unfiltered segments (issue #75).
+	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": "unfiltered_experiment_networks", "allowed_connections": allowed}
 	nics := []D{}
 	for _, nic := range dicts(m["nics"]) {
 		entry := clone(nic)

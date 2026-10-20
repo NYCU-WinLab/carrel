@@ -97,9 +97,6 @@ func (e *Execution) NetworkSpec(t, a D, existing []D) D {
 	return D{"id": fmt.Sprintf("p%03d%02d", n, serial), "tenant_n": n, "serial": serial, "name": a["name"], "mode": mode, "cidr": c, "mtu": 1450, "gateway": nil, "dhcp": mode == "managed"}
 }
 func (e *Execution) NICSpec(m, network D, index int) D {
-	if m["network_access"] == "restricted" {
-		fail("invalid", "Restricted machines cannot attach unfiltered experiment NICs; use declared connections")
-	}
 	managed := network["mode"] == "managed"
 	if managed && m["kind"] == "vm" && num(m["guest_management"]) == 0 {
 		fail("conflict", "This older VM lacks automatic private networking; use raw_l2 or a new VM")

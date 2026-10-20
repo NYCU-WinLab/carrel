@@ -134,7 +134,7 @@
               "restricted"
             ],
             "default": "tenant",
-            "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs."
+            "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. It filters the primary NIC only; private experiment NICs stay unfiltered."
           },
           "swap_mb": {
             "type": "integer",
@@ -2268,7 +2268,7 @@
                     "restricted"
                   ],
                   "default": "tenant",
-                  "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs."
+                  "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. It filters the primary NIC only; private experiment NICs stay unfiltered."
                 },
                 "swap_mb": {
                   "type": "integer",
@@ -2510,7 +2510,7 @@
           "access": {
             "type": "array",
             "maxItems": 100,
-            "description": "Change ingress on existing machines, without rebuilding. Requires confirm equal to the machine name when the mode changes. Existing SSH, publications and explicit peer grants remain. Restricted mode rejects experiment NICs.",
+            "description": "Change ingress on existing machines, without rebuilding. Requires confirm equal to the machine name when the mode changes. Existing SSH, publications and explicit peer grants remain. Restricted mode filters the primary NIC only; experiment NICs stay unfiltered.",
             "items": {
               "type": "object",
               "properties": {
@@ -2620,7 +2620,7 @@
                     "restricted"
                   ],
                   "default": "tenant",
-                  "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. Restricted machines cannot attach unfiltered experiment NICs."
+                  "description": "tenant allows all same-tenant primary traffic. restricted permits SSH/publications and declared connections only; choose restricted for app/database isolation. It filters the primary NIC only; private experiment NICs stay unfiltered."
                 },
                 "swap_mb": {
                   "type": "integer",
@@ -2890,7 +2890,7 @@
           "access": {
             "type": "array",
             "maxItems": 100,
-            "description": "Change ingress on existing machines, without rebuilding. Requires confirm equal to the machine name when the mode changes. Existing SSH, publications and explicit peer grants remain. Restricted mode rejects experiment NICs.",
+            "description": "Change ingress on existing machines, without rebuilding. Requires confirm equal to the machine name when the mode changes. Existing SSH, publications and explicit peer grants remain. Restricted mode filters the primary NIC only; experiment NICs stay unfiltered.",
             "items": {
               "type": "object",
               "properties": {
