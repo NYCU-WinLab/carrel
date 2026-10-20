@@ -133,49 +133,56 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 		}
 		r := D{"nics": nics, "dry_run": dry, "quota_after": e.Quota(t)}
 		if !dry {
-			r["machine"] = e.PublicMachine(m, e.S.Objects("ports", n))
+			r["machine"] = e.PublicMachine(m, e.ports(n))
 		}
 		return r
 	case "port_open", "port_close":
-		ports := e.S.Objects("ports", n)
 		var grant, delta D
 		if tool == "port_open" {
 			m := e.Machine(t, a["machine"])
-			existing := find(ports, func(p D) bool {
-				return integer(p["vmid"]) == integer(m["vmid"]) && num(p["port"]) == num(a["port"]) && p["proto"] == a["proto"]
-			})
-			if existing != nil {
-				if existing["state"] == "deleting" {
-					fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
+			for _, p := range e.ports(n) {
+				if p.VMID == integer(m["vmid"]) && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] {
+					if p.State == "deleting" {
+						fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
+					}
+					if !dry {
+						e.Reconcile()
+					}
+					return D{"port": e.PublicGrant("ports", p.D(), n), "quota_after": e.Quota(t)}
 				}
-				if !dry {
-					e.Reconcile()
-				}
-				return D{"port": e.PublicGrant("ports", existing, n), "quota_after": e.Quota(t)}
 			}
 			delta = D{"public_ports": 1}
 			e.Quota(t, delta)
 			public := e.AllocatePort(t)
-			grant = D{"id": fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), "tenant_n": n, "vmid": m["vmid"], "ip": m["ip"], "public_port": public, "port": a["port"], "proto": a["proto"]}
+			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: integer(m["vmid"]), IP: str(m["ip"]), PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"])}
+			grant = opened.D()
 			if !dry {
-				e.Put("ports", grant["id"], n, grant)
+				e.Put("ports", opened.ID, n, opened)
 				e.Reconcile()
 			} else {
 				grant = D{"machine": m["name"], "port": a["port"], "proto": a["proto"], "state": "planned"}
 			}
 		} else {
-			grant = find(ports, func(p D) bool { return p["id"] == a["id"] })
-			if grant == nil {
+			var closing portGrant
+			ok := false
+			for _, p := range e.ports(n) {
+				if p.ID == a["id"] {
+					closing, ok = p, true
+					break
+				}
+			}
+			if !ok {
 				fail("not_found", "Port grant not found")
 			}
 			delta = D{"public_ports": -1}
 			if !dry {
-				grant["state"] = "deleting"
-				e.Put("ports", grant["id"], n, grant)
+				closing.State = "deleting"
+				e.Put("ports", closing.ID, n, closing)
 				e.Reconcile()
-				e.S.Remove("ports", grant["id"])
-				grant["state"] = "deleted"
+				e.S.Remove("ports", closing.ID)
+				closing.State = "deleted"
 			}
+			grant = closing.D()
 		}
 		q := e.Quota(t)
 		if dry {
@@ -184,6 +191,7 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 		return D{"port": e.PublicGrant("ports", grant, n), "dry_run": dry, "quota_after": q}
 	case "peer_allow", "peer_revoke":
 		var grant D
+		var peer peerGrant
 		if tool == "peer_allow" {
 			m := e.Machine(t, a["machine"])
 			source := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["from_tenant"] })
@@ -194,33 +202,45 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			if a["from_machine"] != nil {
 				src = str(e.Machine(source, a["from_machine"])["ip"]) + "/32"
 			}
-			grant = find(e.S.Objects("peers", n), func(p D) bool {
-				return p["source"] == src && p["target"] == m["ip"] && num(p["port"]) == num(a["port"]) && textAt(p, "proto", "tcp") == "tcp"
-			})
-			if grant == nil {
-				grant = D{"id": randomID()[:16], "tenant_n": n, "source": src, "target": m["ip"], "port": a["port"], "proto": "tcp"}
+			found := false
+			for _, p := range e.peers(n) {
+				if p.Source == src && p.Target == m["ip"] && float64(p.Port) == num(a["port"]) && p.protocol() == "tcp" {
+					peer, found = p, true
+					break
+				}
 			}
-			if grant["state"] == "deleting" {
+			if !found {
+				peer = peerGrant{ID: randomID()[:16], TenantN: n, Source: src, Target: str(m["ip"]), Port: integer(a["port"]), Proto: "tcp"}
+			}
+			if peer.State == "deleting" {
 				fail("conflict", "Finish removing this peer grant before reusing it", D{"recovery": "finish_cleanup"})
 			}
+			grant = peer.D()
 			if !dry {
-				e.Put("peers", grant["id"], n, grant)
+				e.Put("peers", peer.ID, n, peer)
 				e.Reconcile()
 			} else {
 				grant = without(grant, "id", "tenant_n")
 			}
 		} else {
-			grant = find(e.S.Objects("peers", n), func(p D) bool { return p["id"] == a["id"] })
-			if grant == nil {
+			found := false
+			for _, p := range e.peers(n) {
+				if p.ID == a["id"] {
+					peer, found = p, true
+					break
+				}
+			}
+			if !found {
 				fail("not_found", "Peer grant not found")
 			}
 			if !dry {
-				grant["state"] = "deleting"
-				e.Put("peers", grant["id"], n, grant)
+				peer.State = "deleting"
+				e.Put("peers", peer.ID, n, peer)
 				e.Reconcile()
-				e.S.Remove("peers", grant["id"])
-				grant["state"] = "deleted"
+				e.S.Remove("peers", peer.ID)
+				peer.State = "deleted"
 			}
+			grant = peer.D()
 		}
 		return D{"peer": e.PublicGrant("peers", grant, n), "dry_run": dry, "quota_after": e.Quota(t)}
 	}

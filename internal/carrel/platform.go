@@ -86,7 +86,11 @@ func NewPlatform(s *Store, b Backend, c D) *Platform {
 func (p *Platform) execution(ctx context.Context) *Execution {
 	return &Execution{P: p, S: p.Store, Ctx: ctx}
 }
-func (e *Execution) Put(kind string, id any, n int, v D) {
+func (e *Execution) Put(kind string, id any, n int, value any) {
+	v, ok := value.(D)
+	if !ok {
+		v = decode(string(encoded(value)))
+	}
 	if e.Op != nil && kind != "operations" && kind != "guest_reports" && kind != "requests" && kind != "certificates" {
 		old := e.S.Get(kind, str(id))
 		if old == nil {
@@ -372,8 +376,8 @@ func mutationResult(before, result D, dry bool) D {
 func (e *Execution) AllocatePort(t D) int {
 	n := integer(t["n"])
 	used := map[int]bool{}
-	for _, p := range e.S.Objects("ports", n) {
-		used[integer(p["public_port"])] = true
+	for _, p := range e.ports(n) {
+		used[p.PublicPort] = true
 	}
 	for p := 20000 + n*10; p < 20010+n*10; p++ {
 		if !used[p] {
@@ -383,7 +387,7 @@ func (e *Execution) AllocatePort(t D) int {
 	fail("quota_exceeded", "Public port block is full", D{"dimension": "public_ports"})
 	return 0
 }
-func (e *Execution) PublicMachine(m D, ports []D) D {
+func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node")
 	report := e.S.guestReport(m["vmid"])
 	if m["kind"] == "ct" && m["state"] == "ready" {
@@ -392,10 +396,10 @@ func (e *Execution) PublicMachine(m D, ports []D) D {
 	safe["readiness"] = D{"ssh_ready": boolean(m["ssh_ready"]), "initialization_status": or(report.InitializationStatus, "unknown"), "application_status": or(report.ApplicationStatus, "not_checked"), "checks": orEmpty(report.Checks), "reported_at": optional(report.ReportedAt), "private_interfaces": orEmpty(report.Interfaces), "failed_step": optional(report.FailedStep)}
 	presentReadiness(safe, report)
 	allowed := []D{}
-	for _, p := range e.S.Objects("peers", integer(m["tenant_n"])) {
-		if p["target"] == m["ip"] && p["state"] != "deleting" {
-			g := e.PublicGrant("peers", p, integer(m["tenant_n"]))
-			allowed = append(allowed, D{"id": p["id"], "from": fallback(g, "from_machine", p["source"]), "from_tenant": g["from_tenant"], "port": p["port"], "protocol": textAt(p, "proto", "tcp")})
+	for _, p := range e.peers(integer(m["tenant_n"])) {
+		if p.Target == m["ip"] && p.State != "deleting" {
+			g := e.PublicGrant("peers", p.D(), integer(m["tenant_n"]))
+			allowed = append(allowed, D{"id": p.ID, "from": fallback(g, "from_machine", p.Source), "from_tenant": g["from_tenant"], "port": p.Port, "protocol": p.protocol()})
 		}
 	}
 	// network_access filters the primary NIC only; private NICs are the
@@ -410,9 +414,13 @@ func (e *Execution) PublicMachine(m D, ports []D) D {
 		nics = append(nics, entry)
 	}
 	safe["nics"] = nics
-	ssh := find(ports, func(p D) bool {
-		return integer(p["vmid"]) == integer(m["vmid"]) && integer(p["port"]) == 22 && p["proto"] == "tcp"
-	})
+	var ssh *portGrant
+	for i, p := range ports {
+		if p.VMID == integer(m["vmid"]) && p.Port == 22 && p.Proto == "tcp" {
+			ssh = &ports[i]
+			break
+		}
+	}
 	if ssh != nil {
 		user := "user"
 		if m["kind"] == "ct" {
@@ -420,9 +428,9 @@ func (e *Execution) PublicMachine(m D, ports []D) D {
 		}
 		t := e.S.TenantN(integer(m["tenant_n"]))
 		alias := str(m["name"]) + "." + str(t["slug"])
-		safe["ssh"] = fmt.Sprintf("ssh -p %d %s@carrel.winlab.tw", integer(ssh["public_port"]), user)
+		safe["ssh"] = fmt.Sprintf("ssh -p %d %s@carrel.winlab.tw", ssh.PublicPort, user)
 		safe["ssh_short"] = "ssh " + alias
-		safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName carrel.winlab.tw\n  User %s\n  Port %d\n", alias, alias, user, integer(ssh["public_port"]))
+		safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName carrel.winlab.tw\n  User %s\n  Port %d\n", alias, alias, user, ssh.PublicPort)
 		safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
 	}
 	return safe

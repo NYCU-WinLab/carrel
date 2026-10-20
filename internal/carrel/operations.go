@@ -306,7 +306,7 @@ func (o *Operations) apply(id string) {
 					result = merge(result, e.AccessResult(t, obj(op["args"])))
 					machines := []D{}
 					for _, vmid := range arr(obj(op["deployment"])["machines"]) {
-						machines = append(machines, e.PublicMachine(e.Machine(t, vmid), e.S.Objects("ports", integer(t["n"]))))
+						machines = append(machines, e.PublicMachine(e.Machine(t, vmid), e.ports(integer(t["n"]))))
 					}
 					result["machines"] = machines
 					updated := []D{}
@@ -314,13 +314,13 @@ func (o *Operations) apply(id string) {
 					sort.Slice(bindings, func(i, j int) bool { return integer(bindings[i]) < integer(bindings[j]) })
 					for _, id := range bindings {
 						if find(machines, func(m D) bool { return integer(m["vmid"]) == integer(id) }) == nil {
-							updated = append(updated, e.PublicMachine(e.Machine(t, id), e.S.Objects("ports", integer(t["n"]))))
+							updated = append(updated, e.PublicMachine(e.Machine(t, id), e.ports(integer(t["n"]))))
 						}
 					}
 					result["updated_machines"] = updated
 				}
 				if pub := obj(result["machine"]); pub["name"] != nil {
-					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.S.Objects("ports", integer(t["n"])))
+					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.ports(integer(t["n"])))
 				}
 				op["result"] = merge(D{"ok": true}, result)
 				op["state"] = "succeeded"
@@ -380,7 +380,7 @@ func (o *Operations) saveOutcome(e *Execution) {
 		for _, m := range e.S.Objects("machines", integer(op["tenant_n"])) {
 			bound := obj(op["machine_target"])
 			if m["operation_id"] == op["id"] || equal(machineIdentity(m), obj(obj(op["deployment"])["bindings"])[str(m["vmid"])]) || (integer(m["vmid"]) == integer(bound["vmid"]) && equal(machineIdentity(m), bound["identity"])) {
-				machines = append(machines, machineSummary(e.PublicMachine(m, e.S.Objects("ports", integer(op["tenant_n"])))))
+				machines = append(machines, machineSummary(e.PublicMachine(m, e.ports(integer(op["tenant_n"])))))
 			}
 		}
 		op["recovery_machines"] = machines

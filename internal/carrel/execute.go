@@ -173,7 +173,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		}
 		out := []D{}
 		for _, m := range ms {
-			pub := e.PublicMachine(m, e.S.Objects("ports", n))
+			pub := e.PublicMachine(m, e.ports(n))
 			if tool == "machine_get" {
 				status := obj(e.Call(D{"op": "status", "machine": m}))
 				observePower(pub, status)
@@ -186,7 +186,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		// A resumed creation finds the allocation its operation already made.
 		if m := find(e.S.Objects("machines", n), func(m D) bool { return m["name"] == a["name"] && e.Op != nil && m["operation_id"] == e.Op["id"] }); m != nil {
 			e.Provision(m, false)
-			return D{"machine": e.PublicMachine(m, e.S.Objects("ports", n)), "quota_after": e.Quota(t)}
+			return D{"machine": e.PublicMachine(m, e.ports(n)), "quota_after": e.Quota(t)}
 		}
 		m := e.MachineSpec(t, a, dry)
 		after := e.Quota(t, machineDelta(m))
@@ -196,7 +196,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			planned := plannedMachine(m)
 			return D{"machine": planned, "quota_after": after, "admission": admission, "requirements": planned["requirements"], "units": Units, "connection": D{"available_after": "create", "public_ssh": true}}
 		}
-		var grant D
+		var grant portGrant
 		e.Transaction(func(tx *Execution) {
 			m, grant = tx.AllocateMachine(t, m)
 			if e.Op != nil {
@@ -208,7 +208,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		})
 		e.P.invalidateInventory()
 		e.Provision(m, false)
-		return D{"machine": e.PublicMachine(m, []D{grant}), "quota_after": e.Quota(t)}
+		return D{"machine": e.PublicMachine(m, []portGrant{grant}), "quota_after": e.Quota(t)}
 	case "machine_power", "machine_delete", "machine_resize", "machine_metrics":
 		return e.MachineAction(tool, a, t)
 	case "network_create", "network_list", "network_delete", "machine_nic_attach", "machine_nic_detach", "port_open", "port_list", "port_close", "peer_allow", "peer_list", "peer_revoke":
@@ -307,9 +307,9 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 						}
 					}
 				}
-				for _, p := range tx.S.Objects("peers") {
-					if p["target"] == m["ip"] || p["source"] == str(m["ip"])+"/32" {
-						tx.S.Remove("peers", p["id"])
+				for _, p := range tx.peers() {
+					if p.Target == m["ip"] || p.Source == str(m["ip"])+"/32" {
+						tx.S.Remove("peers", p.ID)
 					}
 				}
 				tx.S.Remove("machines", m["vmid"])
@@ -331,7 +331,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		if tool == "machine_delete" {
 			r["deleted"] = D{"name": m["name"], "state": "deleted"}
 		} else if tool == "machine_resize" {
-			r["machine"] = e.PublicMachine(m, e.S.Objects("ports", n))
+			r["machine"] = e.PublicMachine(m, e.ports(n))
 			r["configuration"] = "allocated; see machine.resize for guest verification and required owner actions"
 		}
 	}

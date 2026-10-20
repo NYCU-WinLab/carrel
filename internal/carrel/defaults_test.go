@@ -67,7 +67,7 @@ func TestEightMachinesFitButTotalsAndPortsStillApply(t *testing.T) {
 	ports := map[int]bool{}
 	for _, spec := range machines {
 		m, grant := e.AllocateMachine(tenant, e.MachineSpec(tenant, merge(spec, D{"ssh_keys": []any{"ssh-ed25519 AAAA test"}}), true))
-		port := integer(grant["public_port"])
+		port := grant.PublicPort
 		if ports[port] {
 			t.Fatal("duplicate SSH port")
 		}

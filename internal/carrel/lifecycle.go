@@ -12,7 +12,7 @@ import (
 )
 
 func machineIdentity(m D) []any { return []any{m["allocation_id"], m["created_at"], m["operation_id"]} }
-func (e *Execution) AllocateMachine(t, spec D) (D, D) {
+func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
 	n := integer(t["n"])
 	used := map[int]bool{}
 	for _, m := range e.S.Objects("machines", n) {
@@ -33,9 +33,9 @@ func (e *Execution) AllocateMachine(t, spec D) (D, D) {
 		op = e.Op["id"]
 	}
 	m := merge(spec, D{"vmid": vmid, "tenant_n": n, "ip": fmt.Sprintf("10.200.%d.%d", n, 10+slot), "host": 10 + slot, "mac": fmt.Sprintf("02:ca:%02x:%02x:00:01", n, slot), "state": "provisioning", "created_at": time.Now().Unix(), "allocation_id": randomID(), "nics": []D{}, "operation_id": op})
-	grant := D{"id": fmt.Sprintf("%d-%d-tcp", n, port), "tenant_n": n, "vmid": vmid, "ip": m["ip"], "public_port": port, "port": 22, "proto": "tcp"}
+	grant := portGrant{ID: fmt.Sprintf("%d-%d-tcp", n, port), TenantN: n, VMID: vmid, IP: str(m["ip"]), PublicPort: port, Port: 22, Proto: "tcp"}
 	e.Put("machines", vmid, n, m)
-	e.Put("ports", grant["id"], n, grant)
+	e.Put("ports", grant.ID, n, grant)
 	return m, grant
 }
 func (e *Execution) NetworkSpec(t, a D, existing []D) D {
