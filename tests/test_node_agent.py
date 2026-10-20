@@ -293,13 +293,21 @@ def test_firewall_enforces_only_the_declared_source_protocol_and_port():
     "routes,ready",
     [
         ('[{"type":"unreachable","dst":"default","metric":4278198272}]', False),
+        ("[]", False),
         (
             '[{"dst":"default","gateway":"192.168.19.101","dev":"vrfbr_tenants"},{"type":"unreachable","dst":"default"}]',
             True,
         ),
+        ('[{"dst":"default","nexthops":[{"gateway":"192.168.19.101"},{"gateway":"192.168.19.102"}]}]', True),
     ],
 )
-def test_inventory_says_whether_the_node_routes_tenant_traffic(monkeypatch, routes, ready):
+def test_inventory_says_whether_the_node_routes_tenant_traffic(monkeypatch, tmp_path, routes, ready):
     module = load("node-agent.py")
+    vrf = tmp_path / "vrf_tenants"
+    vrf.mkdir()
+    monkeypatch.setattr(module, "Path", lambda p: vrf if str(p) == "/sys/class/net/vrf_tenants" else Path(p))
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: routes)
     assert module.tenant_route() is ready
+    # Before the first tenant there is no VRF yet: unknown, not a fault.
+    vrf.rmdir()
+    assert module.tenant_route() is None

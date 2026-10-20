@@ -908,7 +908,10 @@ def tenant_route():
     unreachable placeholder. None before the first tenant creates the VRF."""
     if not Path("/sys/class/net/vrf_tenants").exists():
         return None
-    routes = json.loads(run("ip", "-j", "route", "show", "vrf", "vrf_tenants", "default") or "[]")
+    try:
+        routes = json.loads(run("ip", "-j", "route", "show", "vrf", "vrf_tenants", "default") or "[]")
+    except CommandFailure:
+        return False
     return any(r.get("gateway") or any(h.get("gateway") for h in r.get("nexthops", [])) for r in routes)
 
 
