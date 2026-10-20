@@ -834,11 +834,18 @@ design extends to it later. One app per machine port; one machine per app.
 
 ### 8.1 The installer
 
-`install.sh` converges a fresh Proxmox VE host into a carrel node. Running it again is how a node
-is repaired or upgraded: it compares and fixes, never assumes a blank slate.
+The installer is a short ordered list of idempotent scripts, each run where it acts (README,
+"Install a site"); running one again repairs, never assumes a blank slate. Planned: one
+`install.sh` that runs them in order, with `--join <existing node>` to add a node that holds no
+guests.
 
-- `install.sh` on the first host creates the site.
-- `install.sh --join <existing node>` adds a node. The new node must hold no guests.
+- Every node: the site file, `storage` in `node.json`, then `install-network.py`.
+- First exit node: `bootstrap-platform.py` creates CT 100 and CT 101.
+- Every node: `build-templates.py` imports the prepared images at that node's VMIDs.
+- CT 100: `config.json`, written by an administrator from `sites/<site>/config.example.json`.
+- Workstation: `deploy-go.py --host <first exit node>` stages the release and runs
+  `install-control.py`, which installs the reader token, the node programs on every node, the
+  control plane service and its backup timer. The same command upgrades.
 
 ### 8.2 Decided on the first host, because they cannot change later
 
