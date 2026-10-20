@@ -378,8 +378,8 @@ python3 -m compileall -q scripts
 ```
 
 Go owns the MCP server, OAuth, durable jobs, admission, state and backups. The existing bounded
-Python node/edge mutation adapters and guest reporter remain; certificate issuance still uses
-certbot. The Python control-plane source is retained as a behavioral reference, with 79 frozen
+Python node/edge mutation adapters and guest reporter remain. Go issues certificates itself
+(ACME DNS-01 through Cloudflare). The Python control-plane source is retained as a behavioral reference, with 79 frozen
 cross-language parity cases. The live wire contract is `internal/carrel/contract.json`.
 `scripts/export-go-contract.py` exports the legacy Python contract to `internal/carrel/testdata/python-contract.json`,
 never over the current Go contract. `scripts/export-go-parity.py` regenerates the frozen reference
@@ -419,8 +419,8 @@ node, and every machine request goes to that node. Without `nodes`, carrel uses 
 alone and records no node. The first node must reconcile; the others catch up on the next pass.
 A site with its own public address (PLAN 15.15) sets `"ingress": "exit"` and
 `"public_address": "<IPv4>"`. Its first exit node then terminates TLS and publishes ports, and the
-external edge only keeps the backups. The control plane issues carrel's own certificate (certbot
-lineage `origin`) through DNS-01. The gateway receives it on the next reconcile, and only then do
+external edge only keeps the backups. The control plane issues carrel's own certificate (live pair
+`_origin` under `certificate_dir`) through DNS-01. The gateway receives it on the next reconcile, and only then do
 carrel's records (the origin and every `*.<slug>.winlab.tw`) move to that address. A control plane
 without `public_address` never rewrites records, so an old site cannot move them back. Stop the old
 control plane before the new one starts.
@@ -444,8 +444,7 @@ then deploy and publish. For an existing deployment with SSH aliases `carrel01` 
 python3 scripts/deploy-go.py --artifacts /path/to/sandbox-built/dist
 ```
 
-The Go upgrade requires the existing site bootstrap, a configured control CT and its certbot
-virtual environment. The original `deploy-control.py` is the legacy Python bootstrap driver;
+The Go upgrade requires the existing site bootstrap and a configured control CT. The original `deploy-control.py` is the legacy Python bootstrap driver;
 use `deploy-go.py` for current releases. The upgrade checks idle jobs and full PVE volume visibility,
 keeps database/configuration/OAuth/certificates, and saves private service/node rollback files.
 It installs prebuilt static binaries without compiling on the workstation or hypervisor.

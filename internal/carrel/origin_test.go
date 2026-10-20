@@ -2,15 +2,21 @@ package carrel
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeDNS struct {
@@ -41,24 +47,27 @@ func (f *fakeDNS) server(t *testing.T) *httptest.Server {
 	return s
 }
 
-func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
-	p, b := fixture(t)
-	dns := &fakeDNS{records: map[string][]D{}}
-	cf := dns.server(t)
+// testPair returns a certificate and its key as PEM.
+func testPair(t *testing.T) ([]byte, []byte) {
 	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(tlsServer.Close)
 	pair := tlsServer.TLS.Certificates[0]
 	keyDER, err := x509.MarshalPKCS8PrivateKey(pair.PrivateKey)
 	must(err)
-	base := t.TempDir()
-	live := filepath.Join(base, "config", "live", originLineage)
-	must(os.MkdirAll(live, 0700))
-	must(os.WriteFile(filepath.Join(live, "fullchain.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]}), 0600))
-	must(os.WriteFile(filepath.Join(live, "privkey.pem"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600))
-	for k, v := range map[string]any{"cloudflare_api": cf.URL, "cloudflare_zone": "test", "certificate_dir": base, "certbot": "/bin/true",
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+}
+
+func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
+	p, b := fixture(t)
+	dns := &fakeDNS{records: map[string][]D{}}
+	cf := dns.server(t)
+	for k, v := range map[string]any{"cloudflare_api": cf.URL, "cloudflare_zone": "test", "certificate_dir": t.TempDir(),
 		"ingress": "exit", "public_address": "140.113.60.184", "origin": "https://carrel.test"} {
 		p.Config[k] = v
 	}
+	crt, key := testPair(t)
+	p.issue = func(context.Context, string) ([]byte, []byte, error) { return crt, key, nil }
+	p.execution(context.Background()).storeCertificate(originLineage, crt, key)
 	return p, b, dns
 }
 
@@ -67,10 +76,10 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 	tenant := p.Store.TenantN(1)
 	name := "*." + str(tenant["slug"]) + ".winlab.tw"
 	dns.records[name] = []D{{"id": "r1", "content": "140.113.194.229", "comment": "carrel:b09:tenant:1"}}
-	crt := filepath.Join(t.TempDir(), "fullchain.pem")
-	must(os.WriteFile(crt, []byte("TENANT-CHAIN"), 0600))
-	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": tenant["slug"], "fullchain_path": crt})
+	chain, key := testPair(t)
+	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": tenant["slug"]})
 	e := p.execution(context.Background())
+	e.storeCertificate(str(tenant["slug"]), chain, key)
 	delete(p.Config, "public_address")
 	e.DomainRecord(tenant, false)
 	if len(dns.writes) != 0 {
@@ -81,7 +90,7 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 	if len(dns.writes) != 0 {
 		t.Fatal("moved a tenant record before the gateway confirmed its certificate")
 	}
-	p.delivered.Store(map[string]any{str(tenant["slug"]): fingerprint("TENANT-CHAIN")})
+	p.delivered.Store(map[string]any{str(tenant["slug"]): fingerprint(string(chain))})
 	p.Config["ingress"] = "edge"
 	e.DomainRecord(tenant, false)
 	if len(dns.writes) != 0 {
@@ -113,12 +122,9 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 		}
 		return D{}, nil
 	}
-	// Start without a lineage: the first pass issues (certbot is /bin/true here,
-	// so the test puts the files back as certbot would).
-	live := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", originLineage)
-	moved := live + ".issued"
-	must(os.Rename(live, moved))
-	p.Config["certbot"] = writeCertbot(t, moved, live)
+	// Start without a pair: the first pass issues.
+	live := filepath.Join(str(p.Config["certificate_dir"]), "live", originLineage)
+	must(os.Remove(live))
 	e := p.execution(context.Background())
 	e.MaintainOrigin()
 	if _, err := os.Stat(live); err != nil || len(dns.writes) != 0 {
@@ -159,37 +165,91 @@ func TestOriginIsLeftAloneOnEdgeSites(t *testing.T) {
 	}
 }
 
-// writeCertbot returns a stand-in certbot that moves a prepared lineage into place.
-func writeCertbot(t *testing.T, from, to string) string {
-	path := filepath.Join(t.TempDir(), "certbot")
-	must(os.WriteFile(path, []byte("#!/bin/sh\nmv "+from+" "+to+"\n"), 0700))
-	return path
-}
-
 func TestATenantNamedOriginCannotTakeCarrelsLineage(t *testing.T) {
 	p, _, _ := originFixture(t)
-	ours := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", originLineage, "fullchain.pem")
-	tenant := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", "origin")
-	must(os.MkdirAll(tenant, 0700))
-	must(os.WriteFile(filepath.Join(tenant, "fullchain.pem"), []byte("tenant"), 0600))
-	crt, _, ok := p.execution(context.Background()).originFiles()
+	e := p.execution(context.Background())
+	ours, _, _ := e.originFiles()
+	chain, key := testPair(t)
+	e.storeCertificate("origin", chain, key)
+	crt, _, ok := e.originFiles()
 	if !ok || crt != ours {
 		t.Fatalf("origin read %s", crt)
 	}
 }
 
-func TestOriginFilesKeepTheLastMatchingPairDuringRenewal(t *testing.T) {
+func TestARenewedPairReplacesTheLiveOneWhole(t *testing.T) {
 	p, _, _ := originFixture(t)
 	e := p.execution(context.Background())
-	crt, key, ok := e.originFiles()
-	if !ok {
-		t.Fatal("no pair")
+	before, beforeKey, _ := e.originFiles()
+	for range 4 {
+		chain, key := testPair(t)
+		e.storeCertificate(originLineage, chain, key)
 	}
-	live := filepath.Join(str(p.Config["certificate_dir"]), "config", "live", originLineage)
-	must(os.Remove(filepath.Join(live, "privkey.pem")))
-	must(os.WriteFile(filepath.Join(live, "privkey.pem"), []byte("mid-rotation"), 0600))
-	again, againKey, ok := e.originFiles()
-	if !ok || again != crt || againKey != key {
-		t.Fatal("sent a mismatched pair during renewal")
+	crt, key, ok := e.originFiles()
+	if !ok || crt == before {
+		t.Fatal("renewal did not move the live pair")
+	}
+	if _, err := tls.LoadX509KeyPair(crt, key); err != nil {
+		t.Fatal("the live pair does not match")
+	}
+	generations, err := os.ReadDir(filepath.Join(str(p.Config["certificate_dir"]), "archive", originLineage))
+	if err != nil || len(generations) != 3 {
+		t.Fatalf("kept %d generations", len(generations))
+	}
+	if _, err := os.Stat(before); !os.IsNotExist(err) || beforeKey == key {
+		t.Fatal("kept the oldest generation")
+	}
+	link, err := os.Readlink(filepath.Join(str(p.Config["certificate_dir"]), "live", originLineage))
+	if err != nil || filepath.IsAbs(link) {
+		t.Fatalf("live link %q must be relative for restored backups", link)
+	}
+	chain, _ := testPair(t)
+	if f := attempt(func() { e.storeCertificate(originLineage, chain, []byte("other key")) }); f == nil {
+		t.Fatal("stored a mismatched pair")
+	}
+}
+
+func TestChallengeWaitsUntilTheResolverServesIt(t *testing.T) {
+	p, _, _ := originFixture(t)
+	answers := [][]string{nil, {"old"}, {"old", "value"}}
+	p.lookupTXT = func(_ context.Context, name string) ([]string, error) {
+		if name != "_acme-challenge.carrel.test." {
+			t.Fatalf("looked up %s", name)
+		}
+		a := answers[0]
+		if len(answers) > 1 {
+			answers = answers[1:]
+		}
+		return a, nil
+	}
+	e := p.execution(context.Background())
+	if err := e.waitTXT(context.Background(), "_acme-challenge.carrel.test", "value"); err != nil || len(answers) != 1 {
+		t.Fatal("did not wait for the value", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := e.waitTXT(ctx, "_acme-challenge.carrel.test", "missing"); err == nil {
+		t.Fatal("accepted a record the resolver never served")
+	}
+}
+
+func TestRenewalIsDueWithAThirdOfTheLifetimeLeft(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must(err)
+	for _, c := range []struct {
+		left, lifetime time.Duration
+		due            bool
+	}{{50 * 24 * time.Hour, 90 * 24 * time.Hour, false}, {29 * 24 * time.Hour, 90 * 24 * time.Hour, true}, {7 * 24 * time.Hour, 20 * 24 * time.Hour, false}, {6 * 24 * time.Hour, 20 * 24 * time.Hour, true}} {
+		end := time.Now().Add(c.left)
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: end.Add(-c.lifetime), NotAfter: end}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
+		must(err)
+		path := filepath.Join(t.TempDir(), "fullchain.pem")
+		must(os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600))
+		if renewalDue(path) != c.due {
+			t.Fatalf("%v left of %v: due %v", c.left, c.lifetime, !c.due)
+		}
+	}
+	if !renewalDue(filepath.Join(t.TempDir(), "missing.pem")) {
+		t.Fatal("a missing certificate must be renewed")
 	}
 }

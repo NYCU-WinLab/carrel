@@ -2,22 +2,17 @@ package carrel
 
 import (
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"os"
-	"path/filepath"
-	"time"
 )
 
 // carrel's own name on a site with its own public address (PLAN 15.15): the
 // control plane issues the certificate through DNS-01, the gateway receives it
 // on the next reconcile, and only then does the record move to the site.
 //
-// The certbot lineage "_origin" is the state: it belongs to no tenant, so it
-// has no database object, and no tenant slug can take its name. Which pairs
-// the gateway holds is kept in memory; after a restart the first reconcile
+// The live pair "_origin" is the state: it belongs to no tenant, so it has no
+// database object, and no tenant slug can take its name. Which pairs the
+// gateway holds is kept in memory; after a restart the first reconcile
 // delivers them again before any record can move.
 
 const originOwner = "carrel:origin"
@@ -27,23 +22,9 @@ const edgeOriginOwner = "Owned by carrel B09 external edge"
 
 const originLineage = "_origin"
 
-// originFiles returns the pinned archive pair of the origin lineage. While
-// certbot swaps the live links the two may not match; the last pair that did
-// is used instead, since archive files never change.
+// originFiles returns the current origin pair.
 func (e *Execution) originFiles() (string, string, bool) {
-	live := filepath.Join(e.CertificateDir(), "config", "live", originLineage)
-	crt, err1 := filepath.EvalSymlinks(filepath.Join(live, "fullchain.pem"))
-	key, err2 := filepath.EvalSymlinks(filepath.Join(live, "privkey.pem"))
-	if err1 == nil && err2 == nil {
-		if _, err := tls.LoadX509KeyPair(crt, key); err == nil {
-			e.P.originPair.Store([2]string{crt, key})
-			return crt, key, true
-		}
-	}
-	if last, ok := e.P.originPair.Load().([2]string); ok {
-		return last[0], last[1], true
-	}
-	return "", "", false
+	return e.livePair(originLineage)
 }
 
 // gatewayHolds reports whether the gateway confirmed the certificate in path
@@ -80,7 +61,7 @@ func (e *Execution) MaintainOrigin() {
 		return
 	}
 	crt, _, ok := e.originFiles()
-	if !ok || expiresWithin(crt, 30*24*time.Hour) {
+	if !ok || renewalDue(crt) {
 		e.EnsureOriginCertificate()
 		return
 	}
@@ -102,20 +83,7 @@ func (e *Execution) MaintainOrigin() {
 	}
 }
 
-func expiresWithin(path string, d time.Duration) bool {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return true
-	}
-	block, _ := pem.Decode(b)
-	if block == nil {
-		return true
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	return err != nil || time.Until(cert.NotAfter) < d
-}
-
-// originPair reads the pinned origin pair for the gateway.
+// originPair reads a pair for the gateway.
 func originPair(crt, key string) D {
 	c, err := os.ReadFile(crt)
 	must(err)
