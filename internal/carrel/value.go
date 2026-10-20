@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -109,9 +110,58 @@ func without(d D, keys ...string) D {
 	}
 	return r
 }
-func clone(d D) D          { var out D; must(json.Unmarshal(encoded(d), &out)); return out }
-func encoded(v any) []byte { b, e := json.Marshal(v); must(e); return b }
-func equal(a, b any) bool  { return string(encoded(a)) == string(encoded(b)) }
+func clone(d D) D { var out D; must(json.Unmarshal(encoded(d), &out)); return out }
+
+// encoded is the one JSON encoder for stored rows, adapter requests, hashes
+// and responses. A struct encodes its fields in declaration order, so a value
+// that holds one is re-encoded with object keys sorted and numbers as
+// written: a struct gives the bytes its map form gives.
+func encoded(v any) []byte {
+	b, e := json.Marshal(v)
+	must(e)
+	if plain(v) {
+		return b
+	}
+	var tree any
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	must(d.Decode(&tree))
+	b, e = json.Marshal(tree)
+	must(e)
+	return b
+}
+
+// plain reports whether v holds only maps, slices and scalars, whose
+// encoding already sorts keys at every level.
+func plain(v any) bool {
+	switch x := v.(type) {
+	case nil, bool, string, float64, int, int64, json.Number, []string, []int, map[string]string:
+		return true
+	case D:
+		for _, y := range x {
+			if !plain(y) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		for _, y := range x {
+			if !plain(y) {
+				return false
+			}
+		}
+		return true
+	case []D:
+		for _, y := range x {
+			if !plain(y) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+func equal(a, b any) bool { return string(encoded(a)) == string(encoded(b)) }
 func contains(xs any, v any) bool {
 	for _, x := range arr(xs) {
 		if equal(x, v) {
