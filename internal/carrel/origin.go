@@ -17,7 +17,7 @@ import (
 
 const originOwner = "carrel:origin"
 
-// The record publish-entry.py created for the external edge.
+// The record the external edge created before the cluster had its own address.
 const edgeOriginOwner = "Owned by carrel B09 external edge"
 
 const originLineage = "_origin"
