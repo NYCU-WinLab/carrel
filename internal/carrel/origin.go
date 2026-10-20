@@ -44,7 +44,11 @@ func (e *Execution) EnsureOriginCertificate() D {
 	if host == "" {
 		fail("conflict", "The control-plane origin is not configured")
 	}
-	if _, _, ok := e.originFiles(); !ok {
+	crt, _, ok := e.originFiles()
+	if ok && !renewalDue(crt) {
+		return D{"state": "ready"}
+	}
+	if !ok {
 		issued := filter(e.S.Objects("certificates"), func(c D) bool { return num(c["issued_at"]) > now()-7*86400 })
 		if len(issued) >= 30 {
 			return D{"state": "queued"}

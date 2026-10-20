@@ -181,7 +181,11 @@ func (e *Execution) acmeClient(ctx context.Context) (*acme.Client, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600); err != nil {
+		// Written beside and renamed: a crash never leaves half a key.
+		if err := os.WriteFile(path+".next", pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600); err != nil {
+			return nil, err
+		}
+		if err := os.Rename(path+".next", path); err != nil {
 			return nil, err
 		}
 	} else {
@@ -220,8 +224,11 @@ func (e *Execution) storeCertificate(name string, fullchain, key []byte) {
 	entries, err := os.ReadDir(filepath.Join(base, "archive", name))
 	must(err)
 	// Generation names are fixed-width nanosecond times, so they sort by age.
+	// The new one stays even if the clock stepped back.
 	for len(entries) > 3 {
-		must(os.RemoveAll(filepath.Join(base, "archive", name, entries[0].Name())))
+		if entries[0].Name() != generation {
+			must(os.RemoveAll(filepath.Join(base, "archive", name, entries[0].Name())))
+		}
 		entries = entries[1:]
 	}
 }

@@ -115,6 +115,11 @@ func (e *Execution) EnsureCertificate(t D) D {
 		}
 	}
 	e.DomainRecord(t, false)
+	// A current pair is kept: each issuance of the same name counts against
+	// Let's Encrypt's 5 per 7 days, and domain_add calls this every time.
+	if crt, _, ok := e.livePair(str(t["slug"])); cert != nil && ok && !renewalDue(crt) {
+		return D{"state": "ready"}
+	}
 	e.issueCertificate(str(t["slug"]), "*."+str(t["slug"])+".winlab.tw")
 	if cert == nil {
 		e.Put("certificates", str(n), n, D{"id": str(n), "tenant_n": n, "slug": t["slug"], "issued_at": time.Now().Unix()})

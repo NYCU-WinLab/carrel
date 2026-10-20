@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -25,6 +27,9 @@ func TestEnsureCertificateIssuesAndBundlesTheLivePair(t *testing.T) {
 	if e.EnsureCertificate(tenant)["state"] != "ready" || len(domains) != 1 || domains[0] != "*."+str(tenant["slug"])+".winlab.tw" {
 		t.Fatal("did not issue the tenant wildcard", domains)
 	}
+	if e.EnsureCertificate(tenant)["state"] != "ready" || len(domains) != 1 {
+		t.Fatal("a current certificate was ordered again", domains)
+	}
 	record := p.Store.Objects("certificates", 1)[0]
 	if record["fullchain_path"] != nil || record["issued_at"] == nil {
 		t.Fatal("the record must not pin files", record)
@@ -34,11 +39,13 @@ func TestEnsureCertificateIssuesAndBundlesTheLivePair(t *testing.T) {
 		t.Fatal("bundle is not the live pair")
 	}
 	p.issue = func(context.Context, string) ([]byte, []byte, error) { return nil, nil, errors.New("rate limited") }
+	// A renewal that fails keeps the pair it would have replaced.
+	must(os.Remove(filepath.Join(str(p.Config["certificate_dir"]), "live", str(tenant["slug"]))))
 	if f := attempt(func() { e.EnsureCertificate(tenant) }); f == nil || obj(failureResult(f)["error"])["backend_code"] != "certificate_issuance_failed" {
 		t.Fatal("an ACME failure must fail the issuance", f)
 	}
-	if bundle := e.CertificateBundles([]D{{"tenant_n": 1, "state": "ready"}})[0]; bundle["fullchain"] != string(crt) {
-		t.Fatal("a failed renewal replaced the live pair")
+	if _, _, ok := e.livePair(str(tenant["slug"])); ok {
+		t.Fatal("a failed issuance created a live pair")
 	}
 }
 

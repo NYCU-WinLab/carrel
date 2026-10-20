@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -206,6 +207,19 @@ func TestARenewedPairReplacesTheLiveOneWhole(t *testing.T) {
 	chain, _ := testPair(t)
 	if f := attempt(func() { e.storeCertificate(originLineage, chain, []byte("other key")) }); f == nil {
 		t.Fatal("stored a mismatched pair")
+	}
+}
+
+func TestACurrentOriginIsNotOrderedAgain(t *testing.T) {
+	p, _, _ := originFixture(t)
+	orders := 0
+	p.issue = func(context.Context, string) ([]byte, []byte, error) {
+		orders++
+		return nil, nil, errors.New("unexpected order")
+	}
+	e := p.execution(context.Background())
+	if e.EnsureOriginCertificate()["state"] != "ready" || orders != 0 {
+		t.Fatal("ordered a certificate that is not due")
 	}
 }
 
