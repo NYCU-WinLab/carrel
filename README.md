@@ -451,7 +451,7 @@ For restoration, stop the control service, restore `carrel.db` (remove stale `-w
 then start the service and run `reconcile_run`. The archive also holds
 `nodes/<name>/{node.json,templates.json,site.json}` for each node; put them back under `/etc/carrel`
 on each node, mode 0644 root, before the control service starts (it reconciles at once, and a node
-without its `site.json` would serve private DHCP itself). The result lists the SSH target of a node
+without its `site.json` fails every reconcile). The result lists the SSH target of a node
 that did not answer, or whose files exceeded 256 KiB, as `missing_nodes`, and the service logs a
 warning. `/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
