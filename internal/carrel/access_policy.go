@@ -27,6 +27,9 @@ func (e *Execution) PlanPolicy(a D, machines map[string]D) ([]D, []D) {
 		impact := "unchanged"
 		if changed && mode == "restricted" {
 			impact = "Same-tenant primary ingress will require an explicit connection grant"
+			if len(arr(m["nics"])) > 0 {
+				impact += "; its private NICs stay unfiltered"
+			}
 		}
 		if changed && mode == "tenant" {
 			impact = "All same-tenant machines will gain primary ingress"
