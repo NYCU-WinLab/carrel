@@ -416,16 +416,27 @@ New VM disks are linked clones on the guest storage; guest writes remain isolate
 refresh APT and install during initialization. Daily unattended security updates stay enabled.
 Without a prepared manifest, the original templates retain their first-boot package installation.
 
-The scripts are site-specific administrator operations, not the planned general `install.sh`.
-For an existing deployment, from a workstation that reaches the first exit node:
+### Install a site
+
+Each script is idempotent and runs where it acts (PLAN 8.1):
+
+1. Every node: copy `sites/<site>/cluster.json` to `/etc/carrel/site.json`, set `"storage"` in
+   `/etc/carrel/node.json`, then run `scripts/install-network.py`.
+2. First exit node: `scripts/bootstrap-platform.py --admin-key <public key>` creates CT 100 and CT 101.
+3. Every node: `scripts/build-templates.py` imports the prepared images (below).
+4. CT 100: write `/etc/carrel/config.json` from `sites/<site>/config.example.json`, mode 0640.
+5. Workstation, with binaries built on the sandbox:
 
 ```sh
 python3 scripts/deploy-go.py --host root@192.168.19.101 --artifacts /path/to/sandbox-built/dist
 ```
 
-The Go upgrade requires the existing site bootstrap and a configured control CT. The upgrade checks idle jobs and full PVE volume visibility,
-keeps database/configuration/OAuth/certificates, and saves private service/node rollback files.
-It installs prebuilt static binaries without compiling on the workstation or hypervisor.
+`deploy-go.py` copies the release to the first exit node and runs `scripts/install-control.py`
+there. It creates the reader token, installs the node programs on every node, and installs or
+upgrades the control plane service and its backup timer. An upgrade waits for idle jobs, keeps
+database, configuration, OAuth and certificates, and saves a private rollback archive; a failed
+health check puts the previous binary, units and node programs back. Nothing is compiled on the
+workstation or a node.
 Existing route/NAT state remains in place. See [PLAN 15.9](PLAN.md#159-go-control-plane-06-2026-10-02)
 for the reader credential and rollback details. Secrets travel through SSH stdin and protected files.
 

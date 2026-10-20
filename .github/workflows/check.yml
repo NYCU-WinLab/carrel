@@ -32,5 +32,5 @@ jobs:
       - run: uv run ruff check tests
       - run: uv run ruff format --check tests
       - run: uv run pytest -q
-      - run: uv run ruff check scripts/configure-reader.py scripts/deploy-go.py
+      - run: uv run ruff check scripts/configure-reader.py scripts/deploy-go.py scripts/install-control.py scripts/backup-target.py
       - run: python -m compileall -q scripts

@@ -46,6 +46,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 (the forced command answers every failure in JSON)
         print(json.dumps({"ok": False, "error": str(e)}))
         sys.exit(1)
