@@ -169,6 +169,7 @@ def test_the_gateway_takes_only_the_control_planes_key_as_a_forced_command(monke
     ]
     sshd = next(i for a, i in calls if i and "sshd_config.d/carrel.conf" in a[-1])
     assert "PasswordAuthentication no" in sshd.splitlines()
+    assert "reload" not in next(a[-1] for a, i in calls if i == sshd)
     config = module.ssh_config("", [*module.targets(SITE, "carrel01"), module.GATEWAY])
     assert "Host carrel-gateway\n  HostName 10.200.0.2" in config
 
