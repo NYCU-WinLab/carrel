@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"time"
@@ -138,15 +139,19 @@ func filter(xs []D, f func(D) bool) []D {
 }
 func now() float64  { return float64(time.Now().UnixNano()) / 1e9 }
 func stamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// randomSource is a variable so the golden tests can repeat IDs and tokens.
+var randomSource io.Reader = rand.Reader
+
 func random(n int) string {
 	b := make([]byte, n)
-	_, e := rand.Read(b)
+	_, e := io.ReadFull(randomSource, b)
 	must(e)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 func randomID() string {
 	b := make([]byte, 16)
-	_, e := rand.Read(b)
+	_, e := io.ReadFull(randomSource, b)
 	must(e)
 	return hex.EncodeToString(b)
 }
