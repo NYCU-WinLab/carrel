@@ -145,9 +145,9 @@ username (`claude`) collided with an existing record. No `*.winlab.tw` wildcard 
 
 ### 4.1 Transport
 
-Streamable HTTP at `https://carrel.winlab.tw/mcp`, OAuth through Keycloak. The server declares an
-output schema for every tool, including the error shape, so an error is a tool result and never a
-protocol error.
+Streamable HTTP at `https://carrel.winlab.tw/mcp`, OAuth through Keycloak. Every result is a tool
+result with `ok`; a failure sets `isError` and carries `error.code`, never a protocol error. Tools
+declare no output schema: one identical envelope on every tool cost 24 KB of each tool listing.
 
 ### 4.2 Conventions for every tool that changes state
 
@@ -173,8 +173,7 @@ protocol error.
 | | `quota_get` | `tenant` |
 | | `quota_request` | `tenant`, `dimension`, `amount`, `reason`, `until` |
 | | `request_list` | own requests and their state |
-| Catalog | `images_list` | `kind: vm \| ct`; platform images with version, end of support date and default flag, plus the tenant's own images and ISOs |
-| | `sizes_list` | presets `tiny`, `small`, `medium`, `large` |
+| Catalog | `catalog_get` | platform images with version, end of support date and default flag, the size presets `tiny`, `small`, `medium`, `large`, and the installed environments |
 | Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
 | | `machine_get`, `machine_list` | state, primary address, SSH line, image support status |
 | | `machine_resize` | CPU/RAM may shrink while stopped; disk only grows |
@@ -183,7 +182,7 @@ protocol error.
 | | `machine_delete` | `confirm: <name>` |
 | | `machine_media` | `machine`, `iso` or `none`; insert or eject an ISO |
 | | `machine_console_url` | `machine`; a single-use browser console link, bound to the requester's Keycloak login, valid 15 minutes (section 7.8) |
-| Deployments | `deployment_plan`, `deployment_apply` | `machines`, `connections`, `publications`; optional experiment `networks`, `attachments` |
+| Deployments | `deployment_plan`, `deployment_apply` | `machines`, `connections`, `publications`; optional experiment `networks`, `attachments`. The plan is the read-only preview; apply has no dry run |
 | Operations | `operation_get`, `operation_retry` | durable job state, endpoints, failure and next action |
 | Networks | `network_create` | `name`, `mode: managed \| raw_l2`, optional `cidr` |
 | | `network_list`, `network_delete` | `network_delete` needs `confirm: <name>` and no attached NIC |
@@ -613,7 +612,7 @@ newest is the default. Interim releases (Ubuntu 25.04, 25.10) are never offered.
 | Ubuntu | 22.04 (standard support ends 2027-04), 24.04, 26.04 | interim releases |
 | Debian | 12 (LTS until 2028-06), 13 | 11 (support ended 2026-08-31) |
 
-`images_list` returns the end of support date. `machine_get` warns when a machine runs an image
+`catalog_get` returns the end of support date. `machine_get` warns when a machine runs an image
 within 90 days of it.
 
 ### 7.2 Templates

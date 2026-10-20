@@ -176,7 +176,7 @@ their aggregate quota and capacity. Previews return `quota_before`, `delta`, `qu
 audit entry. No follow-up list or quota call is needed to establish that a preview did not create anything.
 Missing SSH keys are reported as a requirement, so resource planning can still finish.
 `next_action` identifies missing requirements or directs the agent to `deployment_apply`.
-`deployment_plan` is already the complete preview; no second `deployment_apply(dry_run=true)` is needed.
+`deployment_plan` is the complete preview; `deployment_apply` has no dry run.
 
 For example, “an app and a database; only the app can connect to database TCP 5432;
 publish the app over HTTPS” becomes this `deployment_plan` specification:
@@ -341,8 +341,8 @@ Guest boot, package execution and connectivity are never verified by a plan. Nev
 arguments. Registration requires current `lab-member` membership or exact `winlab-admin` membership.
 Project membership selects shared project tenants. All administrator tools check the admin group.
 
-The server offers tools and empty MCP resource discovery. `images_list` and `sizes_list` remain
-callable compatibility aliases but are omitted from discovery. Custom image storage is not yet
+The server offers tools and empty MCP resource discovery. `catalog_get` lists images and sizes.
+Custom image storage is not yet
 supported, so `images_gb` is hidden from quota responses and requests; stored limits are preserved.
 GPU allocation is unsupported; hardware GPU inventory is unknown.
 

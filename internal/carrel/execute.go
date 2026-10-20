@@ -69,10 +69,6 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 	switch tool {
 	case "catalog_get":
 		return D{"service": D{"name": "carrel", "version": Version}, "images": Contract["images"], "vm_environment": fallback(e.P.Config, "vm_environment", D{}), "sizes": Contract["sizes"], "units": Units, "capabilities": Contract["capabilities"], "machine_kinds": D{"vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.", "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation."}}, nil
-	case "images_list":
-		return D{"images": filter(dicts(Contract["images"]), func(i D) bool { return a["kind"] == nil || a["kind"] == i["kind"] })}, nil
-	case "sizes_list":
-		return D{"sizes": Contract["sizes"], "units": Units}, nil
 	case "capacity_get":
 		return D{"capacity": e.Capacity(nil, true)}, nil
 	}
@@ -155,9 +151,6 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "deployment_plan":
 		return e.DeploymentPlan(t, a)
 	case "deployment_apply":
-		if dry {
-			return e.DeploymentPlan(t, a)
-		}
 		return e.DeploymentApply(t, a, w)
 	case "quota_get":
 		return D{"quota": e.Quota(t), "snapshot_storage": e.SnapshotUsage(t)}
@@ -193,19 +186,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			out = append(out, pub)
 		}
 		return D{"machines": out}
-	case "machine_create", "machine_retry":
-		existing := find(e.S.Objects("machines", n), func(m D) bool { return m["name"] == a["name"] && e.Op != nil && m["operation_id"] == e.Op["id"] })
-		if tool == "machine_retry" || existing != nil {
-			m := existing
-			if m == nil {
-				m = e.Machine(t, a["machine"])
-			}
-			if !contains([]string{"error", "needs_owner_fix", "provisioning", "initializing"}, m["state"]) && existing == nil {
-				fail("conflict", "Only an incomplete allocation can be retried", D{"recovery": "revise_request"})
-			}
-			if !dry {
-				e.Provision(m, false)
-			}
+	case "machine_create":
+		// A resumed creation finds the allocation its operation already made.
+		if m := find(e.S.Objects("machines", n), func(m D) bool { return m["name"] == a["name"] && e.Op != nil && m["operation_id"] == e.Op["id"] }); m != nil {
+			e.Provision(m, false)
 			return D{"machine": e.PublicMachine(m, e.S.Objects("ports", n)), "quota_after": e.Quota(t)}
 		}
 		m := e.MachineSpec(t, a, dry)

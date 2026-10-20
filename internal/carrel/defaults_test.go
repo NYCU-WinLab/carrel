@@ -17,16 +17,13 @@ func TestDefaultSelectionAcrossCreateAndDeployment(t *testing.T) {
 		{"ct", D{"kind": "ct"}, D{"image": "debian-13", "cpu": 1, "memory_mb": 1024, "disk_gb": 10, "swap_mb": 0}},
 		{"overrides", D{"size": "small", "memory_mb": 3072, "swap_mb": 0}, D{"image": "debian-13-minimal", "cpu": 2, "memory_mb": 3072, "disk_gb": 20, "swap_mb": 0}},
 	} {
-		for _, tool := range []string{"machine_create", "deployment_plan", "deployment_apply"} {
+		for _, tool := range []string{"machine_create", "deployment_plan"} {
 			t.Run(tc.name+"/"+tool, func(t *testing.T) {
 				p, _ := fixture(t)
 				machine := merge(D{"name": "default-check"}, tc.args)
 				args := merge(machine, D{"dry_run": true})
 				if tool != "machine_create" {
 					args = D{"machines": []any{machine}}
-				}
-				if tool == "deployment_apply" {
-					args["dry_run"] = true
 				}
 				r := NewApp(p, nil).Call(context.Background(), tool, args, person("alice", false))
 				assertOK(t, r)
