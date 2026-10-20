@@ -138,7 +138,7 @@ func (e *Execution) CertificateBundles(domains []D) []D {
 	return out
 }
 func (e *Execution) RenewCertificate(t D) {
-	if len(e.S.Objects("domains", integer(t["n"]))) == 0 {
+	if len(e.domains(integer(t["n"]))) == 0 {
 		return
 	}
 	if crt, _, ok := e.livePair(str(t["slug"])); ok && renewalDue(crt) {
@@ -147,7 +147,7 @@ func (e *Execution) RenewCertificate(t D) {
 }
 func (e *Execution) DomainAction(tool string, a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
-	domains := e.S.Objects("domains", n)
+	domains := e.domains(n)
 	if tool == "domain_list" {
 		return D{"domains": e.PublicGrants("domains", n)}
 	}
@@ -155,68 +155,73 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 	if tool == "domain_add" {
 		m := e.Machine(t, a["machine"])
 		name := str(a["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
-		old := find(domains, func(d D) bool { return d["name"] == name })
-		if old != nil && old["state"] == "deleting" {
+		record, found := domainNamed(domains, name)
+		if found && record.State == "deleting" {
 			fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
 		}
-		if old != nil && (integer(old["vmid"]) != integer(m["vmid"]) || num(old["target_port"]) != num(a["target_port"])) {
+		if found && (record.VMID != integer(m["vmid"]) || float64(record.TargetPort) != num(a["target_port"])) {
 			fail("conflict", "Domain already targets a different service; remove it explicitly first", D{"recovery": "revise_request"})
 		}
 		delta = D{"domains": 0}
-		if old == nil {
+		if !found {
 			delta["domains"] = 1
 			e.Quota(t, delta)
-		}
-		domain = old
-		if domain == nil {
-			domain = D{"id": randomID()[:16], "tenant_n": n, "vmid": m["vmid"], "sub": a["sub"], "slug": t["slug"], "name": name, "target_port": a["target_port"], "state": "queued", "ready_at": time.Now().Unix()}
+			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: integer(m["vmid"]), Sub: str(a["sub"]), Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
 		}
 		if dry {
 			domain = D{"name": name, "machine": m["name"], "target_port": a["target_port"], "state": "planned"}
 		} else {
 			if e.Op != nil && e.Op["tool"] == "domain_add" {
 				owner := e.Op["id"]
-				if old != nil {
-					owner = old["operation_id"]
+				if found {
+					owner = orNil(record.OperationID)
 				}
-				identity := []any{domain["id"], owner}
+				identity := []any{record.ID, owner}
 				if e.Op["domain_target"] != nil && !equal(e.Op["domain_target"], identity) {
 					fail("conflict", "Domain was replaced; retry refused", D{"recovery": "revise_request"})
 				}
 				e.Op["domain_target"] = identity
 				e.P.Operations.Save(e.Op)
 			}
-			e.Put("domains", domain["id"], n, domain)
+			e.Put("domains", record.ID, n, record)
 			if e.Op != nil && !e.publicationPrepared {
-				return D{"domain": e.PublicGrant("domains", domain, n), "quota_after": e.Quota(t)}
+				return D{"domain": e.PublicGrant("domains", record.D(), n), "quota_after": e.Quota(t)}
 			}
-			if domain["state"] != "ready" && domain["state"] != "configuring" {
-				if num(domain["ready_at"]) > now() {
-					panic(Waiting{"waiting_for_certificate", num(domain["ready_at"])})
+			if record.State != "ready" && record.State != "configuring" {
+				if record.ReadyAt > now() {
+					panic(Waiting{"waiting_for_certificate", record.ReadyAt})
 				}
 				fail("conflict", "Certificate preparation must complete before publishing")
 			}
 			e.DomainRecord(t, false)
 			e.Reconcile()
-			domain["state"] = "ready"
-			e.Put("domains", domain["id"], n, domain)
+			record.State = "ready"
+			e.Put("domains", record.ID, n, record)
+			domain = record.D()
 		}
 	} else {
-		domain = find(domains, func(d D) bool { return d["name"] == a["name"] })
-		if domain == nil {
+		record, found := domainNamed(domains, str(a["name"]))
+		if !found {
 			fail("not_found", "Domain not found in this tenant")
 		}
 		delta = D{"domains": -1}
 		if !dry {
-			domain["state"] = "deleting"
-			e.Put("domains", domain["id"], n, domain)
+			record.State = "deleting"
+			e.Put("domains", record.ID, n, record)
 			e.Reconcile()
-			if find(domains, func(d D) bool { return d["id"] != domain["id"] && d["state"] != "deleting" }) == nil {
+			last := true
+			for _, d := range domains {
+				if d.ID != record.ID && d.State != "deleting" {
+					last = false
+				}
+			}
+			if last {
 				e.DomainRecord(t, true)
 			}
-			e.S.Remove("domains", domain["id"])
-			domain["state"] = "deleted"
+			e.S.Remove("domains", record.ID)
+			record.State = "deleted"
 		}
+		domain = record.D()
 	}
 	q := e.Quota(t)
 	if dry {

@@ -28,11 +28,11 @@ func (e *Execution) PreparePublication() {
 			e.BindMachine(tenant)
 		}
 		for _, id := range ids {
-			d := e.S.Get("domains", str(id))
-			if d == nil || d["state"] == "deleting" || integer(d["tenant_n"]) != integer(tenant["n"]) {
+			d, ok := rowOf[domainRecord](e.S, "domains", str(id))
+			if !ok || d.State == "deleting" || d.TenantN != integer(tenant["n"]) {
 				fail("conflict", "Publication removed during preparation")
 			}
-			if op["tool"] == "domain_add" && !equal([]any{d["id"], d["operation_id"]}, op["domain_target"]) {
+			if op["tool"] == "domain_add" && !equal([]any{d.ID, orNil(d.OperationID)}, op["domain_target"]) {
 				fail("conflict", "Publication replaced during preparation")
 			}
 		}
@@ -52,13 +52,17 @@ func (e *Execution) PreparePublication() {
 	defer e.P.writer.Unlock()
 	check()
 	for _, id := range ids {
-		d := e.S.Get("domains", str(id))
-		if d["state"] == "ready" {
+		d, _ := rowOf[domainRecord](e.S, "domains", str(id))
+		if d.State == "ready" {
 			continue
 		}
-		d = merge(d, certificate)
-		if d["state"] == "ready" {
-			d["state"] = "configuring"
+		// The certificate's state, and when it is queued, its time.
+		d.State = str(certificate["state"])
+		if at, ok := certificate["ready_at"]; ok {
+			d.ReadyAt = num(at)
+		}
+		if d.State == "ready" {
+			d.State = "configuring"
 		}
 		e.Put("domains", id, integer(tenant["n"]), d)
 	}

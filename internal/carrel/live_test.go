@@ -27,6 +27,7 @@ var liveTyped = map[string]func(data string) string{
 	"guest_reports": roundTrip[guestReport],
 	"ports":         roundTrip[portGrant],
 	"peers":         roundTrip[peerGrant],
+	"domains":       roundTrip[domainRecord],
 }
 
 func roundTrip[T any](data string) string {

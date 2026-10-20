@@ -44,12 +44,12 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			}
 			name := str(r["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
 			key = "https:" + name
-			old := find(e.S.Objects("domains", integer(t["n"])), func(d D) bool { return d["name"] == name })
-			if old != nil && (integer(old["vmid"]) != integer(m["vmid"]) || integer(old["target_port"]) != port || old["state"] != "ready") {
+			old, found := domainNamed(e.domains(integer(t["n"])), name)
+			if found && (old.VMID != integer(m["vmid"]) || old.TargetPort != port || old.State != "ready") {
 				fail("conflict", "Domain already belongs to another or incomplete publication", D{"name": name})
 			}
-			pub = merge(pub, D{"sub": r["sub"], "url": "https://" + name, "reused": old != nil})
-			if old == nil {
+			pub = merge(pub, D{"sub": r["sub"], "url": "https://" + name, "reused": found})
+			if !found {
 				delta["domains"] = num(delta["domains"]) + 1
 			}
 		} else {
@@ -217,19 +217,26 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			kind = "domains"
 		}
 		if boolean(p["reused"]) {
-			old := find(e.S.Objects(kind, n), func(g D) bool {
-				if integer(g["vmid"]) != integer(m["vmid"]) {
-					return false
+			var reference []any
+			if kind == "domains" {
+				for _, g := range e.domains(n) {
+					if g.VMID == integer(m["vmid"]) && g.Name == str(p["sub"])+"."+str(t["slug"])+".winlab.tw" {
+						reference = []any{kind, g.ID, orNil(g.OperationID)}
+						break
+					}
 				}
-				if kind == "domains" {
-					return g["name"] == str(p["sub"])+"."+str(t["slug"])+".winlab.tw"
+			} else {
+				for _, g := range e.ports(n) {
+					if g.VMID == integer(m["vmid"]) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
+						reference = []any{kind, g.ID, orNil(g.OperationID)}
+						break
+					}
 				}
-				return num(g["port"]) == num(p["port"]) && g["proto"] == p["protocol"]
-			})
-			if old == nil {
+			}
+			if reference == nil {
 				fail("conflict", "Reused publication disappeared")
 			}
-			references = append(references, []any{kind, old["id"], old["operation_id"]})
+			references = append(references, reference)
 			continue
 		}
 		if kind == "domains" {
@@ -355,14 +362,14 @@ func (e *Execution) PublishDeployment(t, a, w D) {
 	e.CheckBindings(t, deployment)
 	for _, id := range arr(obj(deployment["grants"])["domains"]) {
 		e.RequireActive(integer(t["n"]))
-		d := e.S.Get("domains", str(id))
-		if d == nil || !e.sameOperation(d) {
+		d, ok := rowOf[domainRecord](e.S, "domains", str(id))
+		if !ok || d.OperationID == "" || d.OperationID != e.Op["id"] {
 			fail("conflict", "Deployment publication was removed or replaced; retry refused", D{"recovery": "revise_request"})
 		}
 		e.Op["phase"] = "publishing"
-		e.Op["current_resource"] = d["name"]
+		e.Op["current_resource"] = d.Name
 		e.P.Operations.Save(e.Op)
-		e.DomainAction("domain_add", D{"machine": str(d["vmid"]), "sub": d["sub"], "target_port": d["target_port"]}, t)
+		e.DomainAction("domain_add", D{"machine": str(d.VMID), "sub": d.Sub, "target_port": d.TargetPort}, t)
 	}
 }
 func (e *Execution) AccessResult(t, a D) D {
@@ -371,8 +378,11 @@ func (e *Execution) AccessResult(t, a D) D {
 		m := e.Machine(t, p["machine"])
 		if p["protocol"] == "https" {
 			name := str(p["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
-			d := find(e.S.Objects("domains", integer(t["n"])), func(d D) bool { return d["name"] == name })
-			endpoints = append(endpoints, D{"machine": m["name"], "url": "https://" + name, "state": d["state"], "verification": "routing_configured"})
+			var state any
+			if d, ok := domainNamed(e.domains(integer(t["n"])), name); ok {
+				state = d.State
+			}
+			endpoints = append(endpoints, D{"machine": m["name"], "url": "https://" + name, "state": state, "verification": "routing_configured"})
 		} else {
 			var public, protocol any
 			for _, g := range e.ports(integer(t["n"])) {

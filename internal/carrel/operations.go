@@ -476,8 +476,8 @@ func (e *Execution) CheckBusy(t D) {
 	}
 	targets := map[int]bool{}
 	if e.Op["tool"] == "domain_remove" {
-		if d := e.S.Get("domains", str(obj(e.Op["object_target"])["id"])); d != nil {
-			targets[integer(d["vmid"])] = true
+		if d, ok := rowOf[domainRecord](e.S, "domains", str(obj(e.Op["object_target"])["id"])); ok {
+			targets[d.VMID] = true
 		}
 	}
 	if id := obj(e.Op["machine_target"])["vmid"]; id != nil {
