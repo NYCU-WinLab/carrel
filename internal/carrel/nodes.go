@@ -45,6 +45,23 @@ func ValidateNodes(c D) error {
 	return nil
 }
 
+// UnplacedMachines names machine records whose node is not configured. The
+// control plane refuses to start with any: a request for such a machine
+// would fail and its capacity would count nowhere.
+func UnplacedMachines(s *Store, c D) []string {
+	names := map[string]bool{}
+	for _, n := range dicts(c["nodes"]) {
+		names[str(n["name"])] = true
+	}
+	out := []string{}
+	for _, m := range s.Objects("machines") {
+		if !names[str(m["node"])] {
+			out = append(out, str(m["name"]))
+		}
+	}
+	return out
+}
+
 func (p *Platform) Nodes() []nodeRef {
 	out := []nodeRef{}
 	for _, v := range dicts(p.Config["nodes"]) {

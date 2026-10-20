@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Configure the SDN baseline on one node.
 
-With a site file (/etc/carrel/site.json, from sites/<site>/cluster.json) the EVPN
-and VXLAN peers, the exit nodes and the underlay filter cover every node. Without
-one, the R640 node and its nested staging keep their single-node layout.
+The site file (/etc/carrel/site.json, from sites/<site>/cluster.json) gives the
+EVPN and VXLAN peers, the exit nodes and the underlay filter for every node.
 """
 
 import argparse

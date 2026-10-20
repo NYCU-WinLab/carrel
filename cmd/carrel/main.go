@@ -46,6 +46,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.DB.Close()
+	if unplaced := carrel.UnplacedMachines(store, cfg); len(unplaced) > 0 {
+		slog.Error("machines without a configured node", "machines", unplaced)
+		os.Exit(1)
+	}
 	backend := &carrel.SSHBackend{Config: "/etc/carrel/ssh_config"}
 	if path, ok := cfg["ssh_config"].(string); ok {
 		backend.Config = path

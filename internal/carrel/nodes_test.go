@@ -298,3 +298,13 @@ func TestCertificatesGoOnlyToTheGatewayNode(t *testing.T) {
 		t.Fatal("a node without the gateway received certificates")
 	}
 }
+
+func TestUnplacedMachinesAreNamed(t *testing.T) {
+	p, _ := fixture(t)
+	seedMachine(p, "placed", 10100)
+	p.Store.Put("machines", 10101, 1, D{"vmid": 10101, "tenant_n": 1, "name": "nameless"})
+	p.Store.Put("machines", 10102, 1, D{"vmid": 10102, "tenant_n": 1, "name": "gone", "node": "carrel09"})
+	if got := UnplacedMachines(p.Store, p.Config); !equalStrings(got, []string{"nameless", "gone"}) {
+		t.Fatal(got)
+	}
+}
