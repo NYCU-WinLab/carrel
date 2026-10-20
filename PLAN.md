@@ -1561,8 +1561,9 @@ it is empty:
 4. **Exit node and ingress.** `vmbr0` becomes VLAN-aware, and the exit node holds
    `140.113.60.184/27` on `vmbr0.60`. That change also decides the exit node's routing: the host
    default moves to `.190`, or policy routing keeps management on `.254`. The public port DNAT
-   uses `.184`; tenant egress stays on the management path through the lab router
-   (`140.113.60.189`, decided 2026-10-19). The infra gateway serves HTTPS on `.184:443`. CT 207 and
+   uses `.184`, and so does tenant egress (corrected 2026-10-20): traffic leaving the VRF goes
+   out `vmbr0.60` and is SNATed to `.184`. The hosts and the infra CTs keep the management path
+   through the lab router (`140.113.60.189`). The infra gateway serves HTTPS on `.184:443`. CT 207 and
    `wg-carrel` retire for carrel. `public_entries` and `protected_addresses` change to the new
    address. The Cloudflare records of `carrel.winlab.tw` and every `*.<slug>.winlab.tw` move from
    `140.113.194.229` to `.184`. This step changes DNS and certificates, so it gets an independent

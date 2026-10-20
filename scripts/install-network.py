@@ -97,6 +97,14 @@ def public_interface(interface, cidr, gateway, address):
     rules = [
         (f"fwmark {PUBLIC_MARK} lookup {PUBLIC_TABLE} priority 1600"),
         (f"from {address} lookup {PUBLIC_TABLE} priority 1601"),
+        # Tenant egress leaves the VRF into main on xvrf_tenants and goes out the
+        # public address (carrel_public SNATs it); carrel's own networks stay on
+        # main. Local addresses come first: ARP from the VRF for 10.255.255.1
+        # is answered only if that lookup finds a local route, and the local
+        # table sits after these rules (l3mdev order).
+        ("iif xvrf_tenants lookup local priority 1602"),
+        ("iif xvrf_tenants to 10.200.0.0/16 lookup main priority 1603"),
+        (f"iif xvrf_tenants lookup {PUBLIC_TABLE} priority 1604"),
     ]
     up = [f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
           f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
