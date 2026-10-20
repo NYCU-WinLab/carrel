@@ -37,7 +37,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	cmd.Stdout = &out
 	err := cmd.Run()
 	var result D
-	if json.Unmarshal(out.Bytes(), &result) != nil || err != nil || !boolean(result["ok"]) {
+	if json.Unmarshal(out.buf.Bytes(), &result) != nil || err != nil || !boolean(result["ok"]) {
 		code := "adapter_rejected"
 		if ctx.Err() != nil {
 			code = "adapter_timeout"
@@ -61,16 +61,18 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 // plane hold; the largest real reply (an inventory) is far smaller.
 const maxAdapterReply = 32 << 20
 
+// A named field, not an embedded one: an embedded bytes.Buffer brings its
+// ReadFrom, and io.Copy from the process pipe would use it past the cap.
 type cappedBuffer struct {
-	bytes.Buffer
+	buf bytes.Buffer
 	max int
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > b.max {
+	if b.buf.Len()+len(p) > b.max {
 		return 0, errors.New("adapter reply too large")
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
 }
 
 // adapterTimeout bounds one adapter request. Reads and the backup's node files

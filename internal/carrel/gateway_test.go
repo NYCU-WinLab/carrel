@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -128,11 +129,17 @@ func TestARejectedGatewayPairNamesNoTenantToTheCaller(t *testing.T) {
 }
 
 func TestAnAdapterReplyIsCapped(t *testing.T) {
+	// Through a real process pipe, as SSHBackend reads it.
 	b := cappedBuffer{max: 4}
-	if _, err := b.Write([]byte("1234")); err != nil {
-		t.Fatal(err)
+	cmd := exec.Command("head", "-c", "1000000", "/dev/zero")
+	cmd.Stdout = &b
+	if err := cmd.Run(); err == nil || b.buf.Len() > 4 {
+		t.Fatal("over the cap", b.buf.Len(), err)
 	}
-	if _, err := b.Write([]byte("5")); err == nil || b.String() != "1234" {
-		t.Fatal("over the cap", b.String())
+}
+
+func TestTruncateKeepsWholeCharacters(t *testing.T) {
+	if got := truncate("ab閘道", 4); got != "道" {
+		t.Fatalf("%q", got)
 	}
 }

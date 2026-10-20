@@ -137,5 +137,9 @@ if __name__ == "__main__":
     try:
         print(json.dumps({"ok": True, "result": main()}))
     except Exception as e:  # noqa: BLE001 (the forced command answers every failure in JSON)
-        print(json.dumps({"ok": False, "error": str(e)[-400:]}))
+        detail = str(e)
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            # Why caddy validate or a reload failed; never configuration text.
+            detail += ": " + e.stderr.strip()
+        print(json.dumps({"ok": False, "error": detail[-400:]}))
         sys.exit(1)
