@@ -78,7 +78,7 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	}
 	e.Put("machines", m["vmid"], integer(t["n"]), m)
 	e.P.invalidateInventory()
-	r := D{"action": action, "changed": boolean(result["changed"]), "resource_changes": boolean(result["changed"]), "machine": e.PublicMachine(m, e.S.Objects("ports", integer(t["n"]))), "quota_after": e.Quota(t)}
+	r := D{"action": action, "changed": boolean(result["changed"]), "resource_changes": boolean(result["changed"]), "machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "quota_after": e.Quota(t)}
 	if state == "paused" {
 		r["pause"] = D{"mode": "memory", "survives_host_restart": false}
 	}

@@ -64,6 +64,54 @@ func recentIssuance(s *Store) []certificateRecord {
 	return out
 }
 
+// portGrant forwards a public port on the exit node to a machine.
+type portGrant struct {
+	ID          string `json:"id"`
+	IP          string `json:"ip"`
+	OperationID string `json:"operation_id,omitempty"`
+	Port        int    `json:"port"`
+	Proto       string `json:"proto"`
+	PublicPort  int    `json:"public_port"`
+	State       string `json:"state,omitempty"`
+	TenantN     int    `json:"tenant_n"`
+	VMID        int    `json:"vmid"`
+}
+
+// D gives the grant as the map the presentation code takes.
+func (g portGrant) D() D { return decode(string(encoded(g))) }
+
+func (e *Execution) ports(n int) []portGrant { return rowsOf[portGrant](e.S, "ports", n) }
+
+// peerGrant lets a source address reach one port of a machine. A deployment
+// connection also records both machine names.
+type peerGrant struct {
+	FromMachine string `json:"from_machine,omitempty"`
+	ID          string `json:"id"`
+	Machine     string `json:"machine,omitempty"`
+	OperationID string `json:"operation_id,omitempty"`
+	Port        int    `json:"port"`
+	Proto       string `json:"proto,omitempty"`
+	Source      string `json:"source"`
+	State       string `json:"state,omitempty"`
+	Target      string `json:"target"`
+	TenantN     int    `json:"tenant_n"`
+}
+
+func (g peerGrant) D() D { return decode(string(encoded(g))) }
+
+func (e *Execution) peers(n ...int) []peerGrant { return rowsOf[peerGrant](e.S, "peers", n...) }
+
+// protocol reads grants written before proto was recorded as TCP.
+func (g peerGrant) protocol() string { return or(g.Proto, "tcp") }
+
+// orNil gives nil for an empty text, as a missing field reads.
+func orNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func (s *Store) guestReport(vmid any) guestReport {
 	r, _ := rowOf[guestReport](s, "guest_reports", str(vmid))
 	return r

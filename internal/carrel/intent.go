@@ -57,13 +57,17 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 				fail("invalid", "sub is only valid for HTTPS")
 			}
 			key = string(encoded([]any{m["name"], proto, port}))
-			old := find(e.S.Objects("ports", integer(t["n"])), func(p D) bool {
-				return integer(p["vmid"]) == integer(m["vmid"]) && integer(p["port"]) == port && p["proto"] == proto
-			})
-			if old != nil && old["state"] == "deleting" {
-				fail("conflict", "Finish removing this port before reusing it", D{"recovery": "finish_cleanup"})
+			found := false
+			for _, p := range e.ports(integer(t["n"])) {
+				if p.VMID == integer(m["vmid"]) && p.Port == port && p.Proto == proto {
+					found = true
+					if p.State == "deleting" {
+						fail("conflict", "Finish removing this port before reusing it", D{"recovery": "finish_cleanup"})
+					}
+					break
+				}
 			}
-			reused := old != nil || (m["vmid"] == nil && proto == "tcp" && port == 22)
+			reused := found || (m["vmid"] == nil && proto == "tcp" && port == 22)
 			pub["reused"] = reused
 			if !reused {
 				delta["public_ports"] = num(delta["public_ports"]) + 1
@@ -130,7 +134,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	if len(existingM)+len(machines) > 100 || len(existingN)+len(networks) > 99 {
 		fail("quota_exceeded", "Plan exceeds tenant address slots")
 	}
-	if len(e.S.Objects("ports", integer(t["n"])))+len(machines) > 10 {
+	if len(e.ports(integer(t["n"])))+len(machines) > 10 {
 		fail("quota_exceeded", "Public port block is full", D{"dimension": "public_ports"})
 	}
 	for _, r := range dicts(a["attachments"]) {
@@ -154,7 +158,7 @@ func (e *Execution) DeploymentPlan(t, a D) D {
 	for k, v := range accessDelta {
 		delta[k] = num(delta[k]) + num(v)
 	}
-	if len(e.S.Objects("ports", integer(t["n"])))+integer(delta["public_ports"]) > 10 {
+	if len(e.ports(integer(t["n"])))+integer(delta["public_ports"]) > 10 {
 		fail("quota_exceeded", "Public port block is full", D{"dimension": "public_ports"})
 	}
 	before, after := e.Quota(t), e.Quota(t, delta)
@@ -190,14 +194,18 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 	}
 	for _, c := range dicts(plan["connections"]) {
 		source, target := machine(c["from"]), machine(c["to"])
-		old := find(e.S.Objects("peers", n), func(p D) bool {
-			return p["source"] == str(source["ip"])+"/32" && p["target"] == target["ip"] && num(p["port"]) == num(c["port"]) && textAt(p, "proto", "tcp") == str(c["protocol"])
-		})
-		if old != nil {
-			if old["state"] == "deleting" {
-				fail("conflict", "Finish removing this connection before reusing it", D{"recovery": "finish_cleanup"})
+		reused := false
+		for _, old := range e.peers(n) {
+			if old.Source == str(source["ip"])+"/32" && old.Target == target["ip"] && float64(old.Port) == num(c["port"]) && old.protocol() == str(c["protocol"]) {
+				if old.State == "deleting" {
+					fail("conflict", "Finish removing this connection before reusing it", D{"recovery": "finish_cleanup"})
+				}
+				references = append(references, []any{"peers", old.ID, orNil(old.OperationID)})
+				reused = true
+				break
 			}
-			references = append(references, []any{"peers", old["id"], old["operation_id"]})
+		}
+		if reused {
 			continue
 		}
 		add("peers", D{"id": randomID()[:16], "tenant_n": n, "source": str(source["ip"]) + "/32", "target": target["ip"], "port": c["port"], "proto": c["protocol"], "from_machine": source["name"], "machine": target["name"]})
@@ -366,10 +374,14 @@ func (e *Execution) AccessResult(t, a D) D {
 			d := find(e.S.Objects("domains", integer(t["n"])), func(d D) bool { return d["name"] == name })
 			endpoints = append(endpoints, D{"machine": m["name"], "url": "https://" + name, "state": d["state"], "verification": "routing_configured"})
 		} else {
-			g := find(e.S.Objects("ports", integer(t["n"])), func(g D) bool {
-				return integer(g["vmid"]) == integer(m["vmid"]) && num(g["port"]) == num(p["port"]) && g["proto"] == p["protocol"]
-			})
-			endpoints = append(endpoints, D{"machine": m["name"], "host": "carrel.winlab.tw", "port": g["public_port"], "protocol": g["proto"], "verification": "routing_configured"})
+			var public, protocol any
+			for _, g := range e.ports(integer(t["n"])) {
+				if g.VMID == integer(m["vmid"]) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
+					public, protocol = g.PublicPort, g.Proto
+					break
+				}
+			}
+			endpoints = append(endpoints, D{"machine": m["name"], "host": "carrel.winlab.tw", "port": public, "protocol": protocol, "verification": "routing_configured"})
 		}
 	}
 	return D{"connections": arr(a["connections"]), "endpoints": endpoints}
