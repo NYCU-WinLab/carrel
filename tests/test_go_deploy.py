@@ -154,8 +154,8 @@ def test_a_failed_upgrade_puts_the_previous_release_back(tmp_path, monkeypatch, 
     node = Node(module, monkeypatch, tmp_path, fail_on=lambda args: args[-1].endswith(step))
     with pytest.raises(RuntimeError):
         module.host(staged(tmp_path), "1.0.0")
-    restore = next(c for c in node.ct() if c[1] == "restore")
-    names = json.loads(restore[3])
+    restore = next(c for c in node.calls if c[6:8] == ("ct", "restore"))
+    names = json.loads(restore[9])
     assert set(module.CONFIGURED) <= set(names)
     assert (set(module.ACTIVATED) <= set(names)) is (restored == "ACTIVATED")
     assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"

@@ -435,7 +435,7 @@ python3 scripts/deploy-go.py --host root@192.168.19.101 --artifacts /path/to/san
 there. It creates the reader token, installs the node programs on every node, and installs or
 upgrades the control plane service and its backup timer. An upgrade waits for idle jobs, keeps
 database, configuration, OAuth and certificates, and saves a private rollback archive; a failed
-health check puts the previous binary, units and node programs back. Nothing is compiled on the
+health check puts the previous binary, units and the first exit node's programs back. Nothing is compiled on the
 workstation or a node.
 Existing route/NAT state remains in place. See [PLAN 15.9](PLAN.md#159-go-control-plane-06-2026-10-02)
 for the reader credential and rollback details. Secrets travel through SSH stdin and protected files.

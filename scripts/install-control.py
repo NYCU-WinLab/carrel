@@ -149,8 +149,9 @@ def ct_backup(stamp):
             archive.add(copy, arcname="var/lib/carrel/carrel.db")
             copy.unlink()
     os.chmod(archive_path, 0o600)
-    # The last 5 deploys stay; the nightly off-site backup keeps the history.
-    for old in sorted(root.glob("go-*.tar.gz"))[:-KEEP]:
+    # This archive and the 4 newest others stay; the nightly off-site backup
+    # keeps the history.
+    for old in sorted(p for p in root.glob("go-*.tar.gz") if p != archive_path)[: -(KEEP - 1)]:
         old.unlink()
     print(json.dumps({"control_backup": str(archive_path)}))
 
@@ -168,7 +169,10 @@ def ct_activate():
     for image, entry in json.loads(manifest.read_text()).items():
         environment[image] = {k: entry[k] for k in keys if k in entry}
     pending = path.with_name("config.json.next")
-    pending.write_text(json.dumps(config, indent=2) + "\n")
+    pending.unlink(missing_ok=True)
+    # Created 0600: the configuration holds secrets.
+    with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+        stream.write(json.dumps(config, indent=2) + "\n")
     stat = path.stat()
     os.chown(pending, stat.st_uid, stat.st_gid)
     os.chmod(pending, stat.st_mode & 0o777)
@@ -285,22 +289,25 @@ def host(stage, version):
         ct("systemctl", "is-active", "carrel")
         print(json.dumps({"health": health, "node_backup": str(stage),
                           "control_backup": f"/opt/carrel/rollback/go-{stamp}.tar.gz"}))
-        for old in sorted(stage.parent.glob("go-upgrade-*"))[:-KEEP]:
-            shutil.rmtree(old)
     except BaseException:
+        # Every step runs even if one fails: the service must come back.
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", "carrel"], check=False)
         if configured or activated:
-            ct_command("restore", stamp, json.dumps(CONFIGURED + (ACTIVATED if activated else [])))
+            names = json.dumps(CONFIGURED + (ACTIVATED if activated else []))
+            subprocess.run(["pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py", "ct",
+                            "restore", stamp, names], check=False)
         for name, path in before.items():
             saved = stage / ("before-" + name)
             if saved.exists():
                 shutil.copy2(saved, path)
-        ct("systemctl", "daemon-reload")
+        subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
         raise
     finally:
         # Absent only when a first install failed before its units existed.
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
+    for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
+        shutil.rmtree(old)
 
 
 def main():
