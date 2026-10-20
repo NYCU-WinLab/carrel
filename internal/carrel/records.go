@@ -134,6 +134,27 @@ func domainNamed(domains []domainRecord, name string) (domainRecord, bool) {
 	return domainRecord{}, false
 }
 
+// snapshotRecord is a disk snapshot and the machine configuration it was
+// taken with; a rollback needs that configuration unchanged.
+type snapshotRecord struct {
+	Configuration D      `json:"configuration,omitempty"`
+	DiskGB        int    `json:"disk_gb"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	OperationID   string `json:"operation_id,omitempty"`
+	State         string `json:"state,omitempty"`
+	VMID          int    `json:"vmid"`
+}
+
+func (e *Execution) snapshots(n ...int) []snapshotRecord {
+	return rowsOf[snapshotRecord](e.S, "snapshots", n...)
+}
+
+// ownedBy reports whether a record's operation ID is the running job's.
+func (e *Execution) ownedBy(operationID string) bool {
+	return e.Op != nil && operationID != "" && operationID == e.Op["id"]
+}
+
 // orNil gives nil for an empty text, as a missing field reads.
 func orNil(s string) any {
 	if s == "" {

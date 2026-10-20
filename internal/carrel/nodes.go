@@ -126,7 +126,7 @@ func (e *Execution) nodeCapacity(node nodeRef, proposed D, cached bool) D {
 
 // nodeLoad lists what admission counts against a node: its machines, with
 // proposed in place of its stored record, and the snapshots of its machines.
-func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []D) {
+func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []snapshotRecord) {
 	// A record on a node missing from the config counts nowhere; requests for
 	// that machine still fail, but every other machine keeps its capacity view.
 	on := func(m D) bool { n, ok := e.P.lookupNode(m); return ok && n.Name == node.Name }
@@ -137,10 +137,13 @@ func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []D) {
 			reservations = append(reservations, proposed)
 		}
 	}
-	snapshots := filter(e.S.Objects("snapshots"), func(s D) bool {
-		m := e.S.Get("machines", str(s["vmid"]))
-		return m == nil && node == e.P.Nodes()[0] || m != nil && on(m)
-	})
+	snapshots := []snapshotRecord{}
+	for _, s := range e.snapshots() {
+		m := e.S.Get("machines", str(s.VMID))
+		if m == nil && node == e.P.Nodes()[0] || m != nil && on(m) {
+			snapshots = append(snapshots, s)
+		}
+	}
 	return reservations, snapshots
 }
 

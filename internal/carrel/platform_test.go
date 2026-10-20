@@ -169,7 +169,7 @@ func TestCapacityAccountsStoppedUnmanagedAndAllVolumes(t *testing.T) {
 	inventory := baseInventory()
 	inventory["disk_committed_bytes"] = 125 * GiB
 	inventory["resources"] = []D{{"type": "qemu", "vmid": 1, "node": "carrel01", "status": "running", "maxcpu": 4, "maxmem": 4 * GiB, "maxdisk": 20 * GiB}, {"type": "qemu", "vmid": 10100, "node": "carrel01", "status": "stopped", "maxcpu": 2, "maxmem": 2 * GiB, "maxdisk": 20 * GiB}}
-	c := summarize(inventory, []D{{"vmid": 10100, "cpu": 2, "memory_mb": 2048, "disk_gb": 20}, {"vmid": 10101, "cpu": 2, "memory_mb": 2048, "disk_gb": 20}}, []D{{"disk_gb": 20}}, time.Now())
+	c := summarize(inventory, []D{{"vmid": 10100, "cpu": 2, "memory_mb": 2048, "disk_gb": 20}, {"vmid": 10101, "cpu": 2, "memory_mb": 2048, "disk_gb": 20}}, []snapshotRecord{{DiskGB: 20}}, time.Now())
 	a := obj(c["allocatable"])
 	if num(obj(a["vcpu"])["committed"]) != 8 || num(obj(a["disk_gib"])["committed"]) != 165 {
 		t.Fatal(c)

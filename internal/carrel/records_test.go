@@ -10,7 +10,7 @@ import (
 // A record's fields in alphabetical order encode like its map even where
 // encoded() is bypassed, such as the MCP SDK's structured content.
 func TestRecordFieldsAreSorted(t *testing.T) {
-	for _, record := range []any{sshKey{}, certificateRecord{}, storageUsage{}, guestReport{}, portGrant{}, peerGrant{}, domainRecord{}} {
+	for _, record := range []any{sshKey{}, certificateRecord{}, storageUsage{}, guestReport{}, portGrant{}, peerGrant{}, domainRecord{}, snapshotRecord{}} {
 		typ := reflect.TypeOf(record)
 		names := []string{}
 		for i := range typ.NumField() {
