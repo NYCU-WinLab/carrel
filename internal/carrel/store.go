@@ -146,7 +146,7 @@ func (s *Store) ActiveOperations(tenant ...int) []D {
 
 // OperationByKey finds a tenant's operation by its idempotency key.
 func (s *Store) OperationByKey(tenant int, key string) D {
-	r := s.Rows("SELECT data FROM objects WHERE kind='operations' AND tenant=? AND json_extract(data,'$.idempotency_key')=?", tenant, key)
+	r := s.Rows("SELECT data FROM objects WHERE kind='operations' AND tenant=? AND json_extract(data,'$.idempotency_key')=? ORDER BY id LIMIT 1", tenant, key)
 	if len(r) == 0 {
 		return nil
 	}
@@ -162,9 +162,11 @@ func (s *Store) RecentOperations(tenant, limit int) []D {
 	return r
 }
 
-// PruneOperations deletes finished operations older than the retention.
+// PruneOperations deletes finished operations older than the retention. A
+// cleanup_failed operation still holds resources that only its retry
+// releases, so it stays.
 func (s *Store) PruneOperations() {
-	s.Exec("DELETE FROM objects WHERE kind='operations' AND json_extract(data,'$.state') IN ("+terminalStates+") AND json_extract(data,'$.updated_at') < ?", now()-operationRetention)
+	s.Exec("DELETE FROM objects WHERE kind='operations' AND json_extract(data,'$.state') IN ('succeeded','failed','rolled_back') AND json_extract(data,'$.updated_at') < ?", now()-operationRetention)
 }
 
 func (s *Store) Get(kind, id string) D {

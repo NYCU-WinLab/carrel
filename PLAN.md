@@ -164,6 +164,7 @@ declare no output schema: one identical envelope on every tool cost 24 KB of eac
   only its own new resources; incomplete cleanup stays charged until cleanup succeeds.
 - Finished operations stay 30 days for `operation_get`, `operation_retry` and idempotent
   resubmission, then the maintenance loop deletes them; the audit log keeps the history.
+  `cleanup_failed` operations stay until their retry releases what they hold.
 - Every call is written to the audit log with arguments, and values named like secrets are masked
   before the write.
 - `tenant` is optional. It defaults to the member and may name a project the member belongs to.

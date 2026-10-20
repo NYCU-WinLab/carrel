@@ -7,11 +7,12 @@ func TestOperationQueriesReadOnlyWhatTheyNeed(t *testing.T) {
 	s := p.Store
 	old := now() - operationRetention - 60
 	for id, op := range map[string]D{
-		"running":   {"state": "running", "created_at": now(), "updated_at": now(), "idempotency_key": "k1"},
-		"done":      {"state": "succeeded", "created_at": now() - 10, "updated_at": now() - 10},
-		"stale":     {"state": "failed", "created_at": old, "updated_at": old, "idempotency_key": "k2"},
-		"stuck":     {"state": "queued", "created_at": old, "updated_at": old},
-		"elsewhere": {"state": "running", "created_at": now(), "updated_at": now()},
+		"running":    {"state": "running", "created_at": now(), "updated_at": now(), "idempotency_key": "k1"},
+		"done":       {"state": "succeeded", "created_at": now() - 10, "updated_at": now() - 10},
+		"stale":      {"state": "failed", "created_at": old, "updated_at": old, "idempotency_key": "k2"},
+		"stuck":      {"state": "queued", "created_at": old, "updated_at": old},
+		"elsewhere":  {"state": "running", "created_at": now(), "updated_at": now()},
+		"unreleased": {"state": "cleanup_failed", "created_at": old, "updated_at": old},
 	} {
 		tenant := 1
 		if id == "elsewhere" {
@@ -39,8 +40,9 @@ func TestOperationQueriesReadOnlyWhatTheyNeed(t *testing.T) {
 		t.Fatalf("recent %v", got)
 	}
 	s.PruneOperations()
-	// Only a finished operation past the retention goes; unfinished work stays.
-	if s.Get("operations", "stale") != nil || s.Get("operations", "stuck") == nil || s.Get("operations", "done") == nil {
+	// Only a finished operation past the retention goes; unfinished work and
+	// a failed cleanup that still holds resources stay.
+	if s.Get("operations", "stale") != nil || s.Get("operations", "stuck") == nil || s.Get("operations", "done") == nil || s.Get("operations", "unreleased") == nil {
 		t.Fatal("pruned the wrong operations")
 	}
 }
