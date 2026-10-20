@@ -270,7 +270,8 @@ A bare SSH connection does not provision machines; creation remains authenticate
 
 Read-only tools do not wait for the infrastructure writer. The Go scheduler serializes admission and
 shared network changes, then releases the writer while guests boot. Independent creations can overlap
-that wait; edits to the same machine remain ordered. This is a single-node scheduler.
+that wait; edits to the same machine remain ordered. One writer serves every node: placement reads
+all nodes at once, and after the first node the other nodes reconcile at the same time.
 `capacity_get` coalesces concurrent reads and caches physical observations for two seconds, with an
 observation timestamp. Allocation always reads fresh capacity and includes pending reservations.
 Jobs and node-side request receipts survive service restarts. Cancellation of a client connection
