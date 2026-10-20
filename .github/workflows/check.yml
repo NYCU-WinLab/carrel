@@ -29,10 +29,8 @@ jobs:
           version: "0.11.28"
           python-version: "3.13"
       - run: uv sync --locked
-      - run: uv run ruff check src tests
-      - run: uv run ruff format --check src tests
+      - run: uv run ruff check tests
+      - run: uv run ruff format --check tests
       - run: uv run pytest -q
-        env:
-          PYTHONPATH: src
-      - run: uv run ruff check scripts/configure-reader.py scripts/export-go-contract.py scripts/export-go-parity.py scripts/deploy-go.py
+      - run: uv run ruff check scripts/configure-reader.py scripts/deploy-go.py
       - run: python -m compileall -q scripts

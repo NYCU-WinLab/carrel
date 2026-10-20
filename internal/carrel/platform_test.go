@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -373,13 +372,6 @@ func TestReadinessProbeUpdatesOnlyOriginalAllocation(t *testing.T) {
 	errValue := attempt(func() { p.execution(context.Background()).WaitReady(original, "") })
 	if errValue == nil {
 		t.Fatal("accepted replaced allocation")
-	}
-}
-func TestPythonCompatibleRequestHash(t *testing.T) {
-	v := []any{"operation", 0, "carrel-node", D{"op": "action", "action": "resize", "cpu": 4, "vmid": 10100}}
-	want := `["operation", 0, "carrel-node", {"action": "resize", "cpu": 4, "op": "action", "vmid": 10100}]`
-	if got := pythonJSON(v); got != want {
-		t.Fatal(fmt.Sprintf("%s != %s", got, want))
 	}
 }
 func TestCapacityNamesTheNodeStorage(t *testing.T) {

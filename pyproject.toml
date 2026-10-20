@@ -1,34 +1,12 @@
 [project]
-name = "carrel"
-version = "0.5.1"
-description = "WinLab self-service Proxmox machines over MCP"
+name = "carrel-scripts"
+version = "0.0.0"
+description = "Tests for the node and site scripts of carrel; the service itself is Go"
 requires-python = ">=3.13"
-dependencies = [
-  "mcp>=1.26,<2",
-  "httpx>=0.28,<1",
-  "PyJWT[crypto]>=2.10,<3",
-  "pydantic>=2.11,<3",
-  "PyYAML>=6,<7",
-  "uvicorn>=0.35,<1",
-  "certbot>=4,<6",
-  "certbot-dns-cloudflare>=4,<6",
-]
+dependencies = []
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.12"]
-
-[project.scripts]
-carrel = "carrel.server:main"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
+dev = ["pytest>=8,<10", "ruff>=0.12"]
 
 [tool.ruff]
 line-length = 110
-
-[tool.hatch.build.targets.sdist]
-include = ["src", "scripts", "tests", "README.md", "PLAN.md", "pyproject.toml", "uv.lock"]

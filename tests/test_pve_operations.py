@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from carrel.capacity import GIB, summarize
+GIB = 1024**3
 
 
 def script(name):
@@ -141,9 +141,10 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
 
     first = inventory()
     assert first["disk_committed_bytes"] == 100 * GIB
-    assert not summarize(first)["policy"]["storage_admission_blocked"]
+    assert first["storage"]["used"] == 100 * GIB and first["thin_pool"]["metadata_fraction"] == 0.02
+    # No cache: the next inventory sees the new usage.
     responses["/nodes/fixture/storage/local-lvm/status"]["used"] = 900 * GIB
-    assert summarize(inventory())["policy"]["storage_admission_blocked"]
+    assert inventory()["storage"]["used"] == 900 * GIB
     assert reads.count(("/access/permissions", {"path": "/storage/local-lvm"})) == 2
     # PVEAuditor alone hides volumes: an incomplete grant never reaches admission.
     responses["/access/permissions"] = {"/storage/local-lvm": {"Datastore.Audit": 1}}

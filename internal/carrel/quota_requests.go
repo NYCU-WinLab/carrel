@@ -23,7 +23,7 @@ func validateGrantExpiry(value any) {
 func (e *Execution) QuotaRequest(a, w, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	key := str(a["idempotency_key"])
-	fingerprint := digest(pythonJSON(pick(a, "dimension", "amount", "reason", "until")))
+	fingerprint := digest(string(encoded(pick(a, "dimension", "amount", "reason", "until"))))
 	if key != "" && !dry {
 		for _, old := range e.S.Objects("requests", n) {
 			if old["idempotency_key"] == key {

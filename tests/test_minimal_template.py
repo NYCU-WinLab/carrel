@@ -1,4 +1,4 @@
-"""Current node/template behavior; the Python control plane is a frozen reference."""
+"""Current node/template behavior."""
 
 import hashlib
 import importlib.util

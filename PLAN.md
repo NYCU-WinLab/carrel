@@ -1349,13 +1349,14 @@ The Go service owns Streamable HTTP MCP, Keycloak OAuth/PKCE, SQLite state, inte
 admission, a durable FIFO mutation queue, readiness and backups. Existing SQLite tables and
 OAuth bindings remain compatible; migration does not require member login. Python remains for
 the bounded root mutation adapters, guest reporter and deployment tooling. The former
-Python control plane is a test reference, not the service launched by systemd.
+Python control plane served as a test reference until it was removed on 2026-10-20.
 
 Admission and shared PVE/network mutations use one writer. A persisted `prepared_result` releases
 that writer during SSH/guest-report readiness. Other allocations can begin, while edits to the
 same allocation wait. Deployment groups start all new guests before waiting. Report arrival wakes
 readiness immediately; a periodic SSH probe remains. Cancellation does not cancel accepted work.
-Recovery resumes the checkpoint, and adapter receipts retain Python-compatible request hashes.
+Recovery resumes the checkpoint; adapter receipts are keyed by a hash of the request (plain JSON
+since 2026-10-20; deploys wait for idle jobs, so no receipt spans the change).
 This does not introduce multi-node scheduling or independent parallel network writers.
 
 Display capacity observations have a two-second cache and coalesce simultaneous reads. Every
@@ -1385,8 +1386,7 @@ backup timer runs `carrel -backup`, retaining the existing private archive desti
 A failed initial health check restores service/node files without overwriting newly written data.
 
 For a manual rollback, stop the control service, restore the saved service units and previous binary
-(if any), restore the saved node adapter and `node.json`, reload systemd and restart. The legacy
-Python environment remains available. Restore an older database only as an explicit disaster-recovery
+(if any), restore the saved node adapter and `node.json`, reload systemd and restart. Restore an older database only as an explicit disaster-recovery
 operation after reconciling all resource changes since that backup. `configure-reader.py --remove`
 removes the reader token, its ACLs, role and file.
 
@@ -1427,9 +1427,8 @@ in section 4.5 remains planned. The 40-tool member discovery surface is unchange
   operations, failures, cleanup evidence and recovery instructions remain complete. Presentation
   options do not affect idempotency identity. Machine list is explicitly recorded state; machine
   get performs one live observation and cannot label a paused process SSH-ready.
-- The current Go contract is maintained directly. The Python exporter writes a separate reference
-  contract, preserving the frozen Python behavior baseline. No new scheduler, cache or warm pool
-  is introduced by this release.
+- The current Go contract is maintained directly. No new scheduler, cache or warm pool is
+  introduced by this release.
 
 Validation: Go race tests/vet and static builds, 177 Python tests, Ruff and script compilation run
 on sandbox VM104. Live acceptance passed on disposable VM/CT guests, including paused restart/shutdown,
