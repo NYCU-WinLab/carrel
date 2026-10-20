@@ -274,7 +274,11 @@ func (e *Execution) admitOn(node nodeRef, cpu, memory, disk float64, proposed D,
 
 // admits checks a request against one node's fresh capacity summary.
 func (e *Execution) admits(c D, cpu, memory, disk float64, proposed D, snapshot bool) D {
-	for k, amount := range map[string]float64{"vcpu": cpu, "memory_gib": memory / 1024, "disk_gib": disk} {
+	for _, r := range []struct {
+		k      string
+		amount float64
+	}{{"vcpu", cpu}, {"memory_gib", memory / 1024}, {"disk_gib", disk}} {
+		k, amount := r.k, r.amount
 		allocation := obj(obj(c["allocatable"])[k])
 		if amount+num(allocation["committed"]) > num(allocation["limit"]) {
 			fail("capacity_exhausted", "Node admission limit", D{"dimension": k, "requested": amount, "remaining": allocation["remaining"]})
