@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -150,7 +151,24 @@ func (e *Execution) SyncGateway(state D) map[string]any {
 	if crt, key, ok := e.originFiles(); ok {
 		origin = originPair(crt, key)
 	}
-	caddy, hosts, certificates := gatewayConfig(state, originHost(e.P.Config), origin, dicts(state["certificates"]))
+	var caddy, hosts string
+	var certificates map[string]D
+	func() {
+		// A bad pair or route belongs to one tenant. Operators get the
+		// details; whoever's operation ran the reconcile gets no other
+		// tenant's names.
+		defer func() {
+			if r := recover(); r != nil {
+				f, ok := r.(Failure)
+				if !ok {
+					panic(r)
+				}
+				slog.Error("gateway_config_rejected", "event", "gateway_config_rejected", "error", f.Result["error"])
+				fail("backend_unavailable", "Gateway configuration rejected; use the operation ID for operator diagnostics", D{"component": "carrel-gateway", "recovery": "retry_infrastructure"})
+			}
+		}()
+		caddy, hosts, certificates = gatewayConfig(state, originHost(e.P.Config), origin, dicts(state["certificates"]))
+	}()
 	pairs, held := D{}, map[string]any{}
 	for name, pair := range certificates {
 		pairs[name] = pair

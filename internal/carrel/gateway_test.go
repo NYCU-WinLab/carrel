@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -110,5 +111,28 @@ func TestSyncGatewayReturnsTheFingerprintsItSent(t *testing.T) {
 	pair := obj(obj(sent["certificates"])["_origin"])
 	if sent["op"] != "sync" || held["_origin"] != fingerprint(pair["fullchain"]) || held["zyx1121"] == nil {
 		t.Fatal(held)
+	}
+}
+
+func TestARejectedGatewayPairNamesNoTenantToTheCaller(t *testing.T) {
+	p, b, _ := originFixture(t)
+	b.call = func(r D, target string) (any, error) { return D{}, nil }
+	state, _ := gatewayState(t)
+	other, _ := testPair(t, "*.other.winlab.tw")
+	obj(dicts(state["certificates"])[0])["fullchain"] = string(other)
+	f, ok := attempt(func() { p.execution(context.Background()).SyncGateway(state) }).(Failure)
+	e := obj(f.Result["error"])
+	if !ok || e["code"] != "backend_unavailable" || strings.Contains(fmt.Sprint(f.Result), "zyx1121") {
+		t.Fatal(f.Result)
+	}
+}
+
+func TestAnAdapterReplyIsCapped(t *testing.T) {
+	b := cappedBuffer{max: 4}
+	if _, err := b.Write([]byte("1234")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Write([]byte("5")); err == nil || b.String() != "1234" {
+		t.Fatal("over the cap", b.String())
 	}
 }

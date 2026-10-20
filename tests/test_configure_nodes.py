@@ -1,8 +1,11 @@
 """CT 100 reaches the node adapter on every site node (PLAN 15.15 gap 5)."""
 
+import hashlib
 import importlib.util
+import io
 import json
 import sys
+import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,5 +167,24 @@ def test_the_gateway_takes_only_the_control_planes_key_as_a_forced_command(monke
     assert ("pct", "push", "101", module.GATEWAY_SYNC, module.GATEWAY_SYNC, "--perms", "755") in [
         a for a, _ in calls
     ]
+    sshd = next(i for a, i in calls if i and "sshd_config.d/carrel.conf" in a[-1])
+    assert "PasswordAuthentication no" in sshd.splitlines()
     config = module.ssh_config("", [*module.targets(SITE, "carrel01"), module.GATEWAY])
     assert "Host carrel-gateway\n  HostName 10.200.0.2" in config
+
+
+def test_the_pinned_caddy_replaces_the_running_package_caddy(monkeypatch, tmp_path):
+    module = load("bootstrap-platform.py")
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+        info = tarfile.TarInfo("caddy")
+        info.size = 4
+        tar.addfile(info, io.BytesIO(b"\x7fELF"))
+    data = archive.getvalue()
+    monkeypatch.setattr(module, "CADDY_SHA512", hashlib.sha512(data).hexdigest())
+    monkeypatch.setattr(module.urllib.request, "urlopen", lambda url, timeout: io.BytesIO(data))
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
+    module.caddy(101)
+    steps = [a[4:] for a in calls if a[:2] == ("pct", "exec")]
+    assert steps.index(("systemctl", "daemon-reload")) < steps.index(("systemctl", "restart", "caddy"))

@@ -5,6 +5,7 @@ Runs in CT 101 for the control plane's key (configure-nodes.py installs it). One
 request on stdin: {"op": "sync", "hosts", "caddy", "certificates"} or {"op": "status"}.
 """
 
+import fcntl
 import hashlib
 import json
 import os
@@ -125,7 +126,11 @@ def main():
         return status()
     if op != "sync":
         raise ValueError("unknown operation")
-    return apply(request)
+    # A sync whose caller timed out keeps running here; the next one waits.
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return apply(request)
 
 
 if __name__ == "__main__":

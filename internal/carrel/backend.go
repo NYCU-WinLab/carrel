@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -32,7 +33,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		"-o", "ControlPath=/var/lib/carrel/ssh-%C",
 		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", target)
 	cmd.Stdin = bytes.NewReader(encoded(request))
-	var out bytes.Buffer
+	out := cappedBuffer{max: maxAdapterReply}
 	cmd.Stdout = &out
 	err := cmd.Run()
 	var result D
@@ -47,12 +48,29 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 			code = str(result["error_code"])
 		}
 		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": target, "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
-		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
+		// The adapter's own error text stays in the operator log.
+		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "detail", truncate(str(result["error"]), 400), "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
 		return nil, Failure{D{"ok": false, "error": details}}
 	}
 	slog.Info("adapter_completed", "event", "adapter_completed", "op", request["op"], "target", target,
 		"operation", ctx.Value(operationLogKey{}), "seconds", time.Since(started).Seconds())
 	return result["result"], nil
+}
+
+// maxAdapterReply bounds what one adapter or the gateway can make the control
+// plane hold; the largest real reply (an inventory) is far smaller.
+const maxAdapterReply = 32 << 20
+
+type cappedBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.Len()+len(p) > b.max {
+		return 0, errors.New("adapter reply too large")
+	}
+	return b.Buffer.Write(p)
 }
 
 // adapterTimeout bounds one adapter request. Reads and the backup's node files
@@ -64,7 +82,8 @@ func adapterTimeout(op string) time.Duration {
 	case "reconcile":
 		return 300 * time.Second
 	case "sync":
-		return 120 * time.Second
+		// gateway-sync.py runs up to 3 commands of 60 seconds each.
+		return 240 * time.Second
 	}
 	return 900 * time.Second
 }

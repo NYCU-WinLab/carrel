@@ -137,6 +137,9 @@ def caddy(vmid):
         run("pct", "exec", str(vmid), "--", "mkdir", "-p", "/etc/systemd/system/caddy.service.d")
         run("pct", "push", str(vmid), str(unit), "/etc/systemd/system/caddy.service.d/carrel.conf", "--perms", "644")
     run("pct", "exec", str(vmid), "--", "systemctl", "daemon-reload")
+    # The Debian package already started its older Caddy, which rejects a
+    # reload from the pinned binary's config: start the pinned one now.
+    run("pct", "exec", str(vmid), "--", "systemctl", "restart", "caddy")
     run("pct", "exec", str(vmid), "--", "/usr/local/bin/caddy", "version")
 
 
