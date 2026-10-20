@@ -8,35 +8,47 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 	if m["resize_from"] != nil && (tool == "snapshot_create" || tool == "snapshot_rollback") {
 		fail("conflict", "Finish the pending machine_resize before snapshot operations", D{"recovery": "resolve_prerequisite"})
 	}
-	snaps := filter(e.S.Objects("snapshots", n), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) })
+	snaps := []snapshotRecord{}
+	for _, s := range e.snapshots(n) {
+		if s.VMID == integer(m["vmid"]) {
+			snaps = append(snaps, s)
+		}
+	}
 	if tool == "snapshot_list" {
 		return D{"snapshots": snaps, "snapshot_storage": e.SnapshotUsage(t)}
 	}
 	id := fmt.Sprintf("%d-%s", integer(m["vmid"]), str(a["name"]))
-	snap := find(snaps, func(s D) bool { return s["name"] == a["name"] })
+	var snap snapshotRecord
+	found := false
+	for _, s := range snaps {
+		if s.Name == a["name"] {
+			snap, found = s, true
+			break
+		}
+	}
 	var delta D
 	configuration := pick(m, "cpu", "memory_mb", "disk_gb", "nics")
 	if tool == "snapshot_create" {
-		if snap != nil && !e.sameOperation(snap) {
+		if found && !e.ownedBy(snap.OperationID) {
 			fail("conflict", "Snapshot exists", D{"recovery": "revise_request"})
 		}
 		delta = D{}
-		if snap == nil {
+		if !found {
 			delta = D{"snapshots": 1, "snapshot_gb": m["disk_gb"]}
 		}
 		e.Quota(t, delta)
-		if snap == nil {
+		if !found {
 			e.Admission(e.P.nodeOf(m), 0, 0, num(m["disk_gb"]), nil, true)
-			snap = D{"id": id, "vmid": m["vmid"], "name": a["name"], "disk_gb": m["disk_gb"], "configuration": configuration}
+			snap = snapshotRecord{ID: id, VMID: integer(m["vmid"]), Name: str(a["name"]), DiskGB: integer(m["disk_gb"]), Configuration: configuration}
 		}
-	} else if snap == nil {
+	} else if !found {
 		fail("not_found", "Snapshot not found")
 	} else if tool == "snapshot_delete" {
-		delta = D{"snapshots": -1, "snapshot_gb": -num(snap["disk_gb"])}
+		delta = D{"snapshots": -1, "snapshot_gb": -float64(snap.DiskGB)}
 	}
 	effects := D{}
 	if tool == "snapshot_rollback" {
-		if !equal(snap["configuration"], configuration) {
+		if !equal(snap.Configuration, configuration) {
 			fail("conflict", "Resources or NICs changed since this snapshot; administrator review required")
 		}
 		if a["confirm"] != a["name"] {
@@ -59,17 +71,17 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			}
 		}
 		if tool == "snapshot_create" {
-			snap["state"] = "creating"
+			snap.State = "creating"
 			e.Put("snapshots", id, n, snap)
 		}
 		action := map[string]string{"snapshot_create": "snapshot", "snapshot_delete": "delsnapshot", "snapshot_rollback": "rollback"}[tool]
 		e.Call(D{"op": "action", "machine": m, "name": a["name"], "action": action})
 		if tool == "snapshot_create" {
-			snap["state"] = "ready"
+			snap.State = "ready"
 			e.Put("snapshots", id, n, snap)
 		} else if tool == "snapshot_delete" {
 			e.S.Remove("snapshots", id)
-			snap["state"] = "deleted"
+			snap.State = "deleted"
 		} else {
 			state := "stopped"
 			m["ssh_ready"] = false
@@ -87,14 +99,15 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 		e.P.invalidateInventory()
 		e.RefreshStorage()
 	}
+	var shown any = snap
 	if dry && tool == "snapshot_create" {
-		snap = D{"name": snap["name"], "machine": m["name"], "disk_gb": m["disk_gb"], "state": "planned"}
+		shown = D{"name": snap.Name, "machine": m["name"], "disk_gb": m["disk_gb"], "state": "planned"}
 	}
 	q := e.Quota(t)
 	if dry {
 		q = e.Quota(t, delta)
 	}
-	r := merge(D{"snapshot": snap, "snapshot_storage": e.SnapshotUsage(t), "dry_run": dry, "quota_after": q}, effects)
+	r := merge(D{"snapshot": shown, "snapshot_storage": e.SnapshotUsage(t), "dry_run": dry, "quota_after": q}, effects)
 	if !dry && tool == "snapshot_rollback" {
 		r["machine"] = e.PublicMachine(m, e.ports(n))
 	}

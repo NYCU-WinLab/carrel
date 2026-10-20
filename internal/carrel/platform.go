@@ -240,8 +240,8 @@ func (e *Execution) Usage(t D) D {
 	for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "networks": "networks", "snapshots": "snapshots"} {
 		used[dim] = len(e.S.Objects(kind, n))
 	}
-	for _, s := range e.S.Objects("snapshots", n) {
-		used["snapshot_gb"] = num(used["snapshot_gb"]) + num(s["disk_gb"])
+	for _, s := range e.snapshots(n) {
+		used["snapshot_gb"] = num(used["snapshot_gb"]) + float64(s.DiskGB)
 	}
 	return used
 }

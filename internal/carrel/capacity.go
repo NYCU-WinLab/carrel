@@ -7,7 +7,7 @@ import (
 const GiB = 1024 * 1024 * 1024
 const MiB = 1024 * 1024
 
-func summarize(inventory D, reservations, snapshots []D, at time.Time) D {
+func summarize(inventory D, reservations []D, snapshots []snapshotRecord, at time.Time) D {
 	status, storage := obj(inventory["status"]), obj(inventory["storage"])
 	byID := map[int]D{}
 	cpu, memory := 0.0, 0.0
@@ -37,7 +37,7 @@ func summarize(inventory D, reservations, snapshots []D, at time.Time) D {
 	}
 	reserved := 0.0
 	for _, s := range snapshots {
-		reserved += num(s["disk_gb"]) * GiB
+		reserved += float64(s.DiskGB) * GiB
 	}
 	disk += reserved
 	info := obj(status["cpuinfo"])
