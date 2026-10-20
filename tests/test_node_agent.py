@@ -25,6 +25,15 @@ MACHINE = {
 }
 
 
+def load(name):
+    spec = importlib.util.spec_from_file_location(
+        name.replace("-", "_"), Path(__file__).parents[1] / "scripts" / name
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_thin_snapshot_accounting_counts_shared_blocks_once():
     spec = importlib.util.spec_from_file_location(
         "thin_usage", Path(__file__).parents[1] / "scripts/thin-usage.py"
@@ -263,3 +272,25 @@ def test_topology_snapshot_tracks_new_vnets_without_duplicate_creates(monkeypatc
     assert not module.ensure("/cluster/sdn/vnets", "vnet", "t002", existing=existing, zone="tenants")
     assert len(calls) == 1 and calls[0][0][0] == "create"
     assert existing[-1] == {"vnet": "t002", "zone": "tenants"}
+
+
+def test_firewall_enforces_only_the_declared_source_protocol_and_port():
+    module = load("node-agent.py")
+    app = dict(MACHINE, name="app", vmid=10100, host=10, ip="10.200.1.10")
+    db = dict(MACHINE, name="db", vmid=10101, host=11, ip="10.200.1.11", network_access="restricted")
+    state = {
+        "peers": [{"source": "10.200.1.10/32", "target": "10.200.1.11", "port": 5432, "proto": "tcp"}],
+        "ports": [],
+        "domains": [],
+    }
+    rules = module.guest_firewall(db, state, {"protected_addresses": []}).splitlines()
+    assert "IN ACCEPT -source 10.200.1.10/32 -p tcp -dport 5432" in rules
+    assert "policy_in: DROP" in rules
+    assert "IN ACCEPT -source 10.200.1.0/24" not in rules
+    assert not any("-p udp -dport 5432" in r for r in rules)
+    # The source side may send to the granted port; a tenant machine accepts its tenant.
+    sender = module.guest_firewall(app, state, {"protected_addresses": []}).splitlines()
+    assert "OUT ACCEPT -dest 10.200.1.11 -p tcp -dport 5432" in sender
+    assert "IN ACCEPT -source 10.200.1.0/24" in sender
+    with pytest.raises(ValueError, match="experiment NICs"):
+        module.guest_firewall(dict(db, nics=[{"index": 1}]), state, {"protected_addresses": []})
