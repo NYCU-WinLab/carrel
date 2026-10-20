@@ -3,6 +3,7 @@ package carrel
 import (
 	"fmt"
 	"net/url"
+	"sync"
 )
 
 func (e *Execution) sameOperation(o D) bool { return e.Op != nil && o["operation_id"] == e.Op["id"] }
@@ -266,16 +267,28 @@ func (e *Execution) Reconcile() D {
 	held, _ := obj(result["node"])["certificates"].(map[string]any)
 	e.P.delivered.Store(held)
 	if len(nodes) > 1 {
-		// The other nodes catch up on the next reconcile: one node down for an
-		// upgrade (PLAN 8.3) must not stop every change on the site.
+		// The other nodes reconcile at once and catch up on the next pass: one
+		// node down for an upgrade (PLAN 8.3) must not stop every change.
+		results, failures := make([]any, len(nodes)), make([]any, len(nodes))
+		var wg sync.WaitGroup
+		for i, n := range nodes[1:] {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				failures[i+1] = attempt(func() { results[i+1] = e.Call(request, n.Target) })
+			}()
+		}
+		wg.Wait()
 		each, unreachable := D{nodes[0].Name: result["node"]}, []any{}
-		for _, n := range nodes[1:] {
-			if f := attempt(func() { each[n.Name] = e.Call(request, n.Target) }); f != nil {
+		for i, n := range nodes[1:] {
+			if f := failures[i+1]; f != nil {
 				if _, ok := f.(Failure); !ok {
 					panic(f)
 				}
 				unreachable = append(unreachable, n.Name)
+				continue
 			}
+			each[n.Name] = results[i+1]
 		}
 		result["nodes"] = each
 		if len(unreachable) > 0 {

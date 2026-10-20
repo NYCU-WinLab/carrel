@@ -23,12 +23,14 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	if target == "" {
 		target = "carrel-node"
 	}
-	ctx, cancel := context.WithTimeout(ctx, 900*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, adapterTimeout(str(request["op"])))
 	defer cancel()
 	started := time.Now()
+	// Keepalives notice a node that stopped answering within 45 seconds.
 	cmd := exec.CommandContext(ctx, "ssh", "-F", b.Config,
 		"-o", "ControlMaster=auto", "-o", "ControlPersist=120",
-		"-o", "ControlPath=/var/lib/carrel/ssh-%C", target)
+		"-o", "ControlPath=/var/lib/carrel/ssh-%C",
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", target)
 	cmd.Stdin = bytes.NewReader(encoded(request))
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -51,6 +53,18 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	slog.Info("adapter_completed", "event", "adapter_completed", "op", request["op"], "target", target,
 		"operation", ctx.Value(operationLogKey{}), "seconds", time.Since(started).Seconds())
 	return result["result"], nil
+}
+
+// adapterTimeout bounds one adapter request. Reads and the backup's node files
+// are quick; a reconcile can wait for an SDN reload; creation clones disks.
+func adapterTimeout(op string) time.Duration {
+	switch op {
+	case "inventory", "status", "metrics", "node_files", "storage_usage":
+		return 60 * time.Second
+	case "reconcile":
+		return 300 * time.Second
+	}
+	return 900 * time.Second
 }
 
 // Only observational responses use this cache. Admission bypasses it entirely.

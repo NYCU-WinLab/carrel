@@ -145,14 +145,16 @@ func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []D) {
 
 // nodeCapacities summarizes every node. Store reads stay on this goroutine;
 // only the node adapters are asked in parallel.
-func (e *Execution) nodeCapacities(proposed D, cached bool) ([]D, int) {
-	nodes := e.P.Nodes()
-	if len(nodes) == 1 {
-		return []D{e.nodeCapacity(nodes[0], proposed, cached)}, 0
-	}
+// inventories reads every node's inventory at once; a node that fails has
+// its failure in place of an inventory.
+func (e *Execution) inventories(nodes []nodeRef, cached bool) ([]any, []time.Time, []any) {
 	inventories := make([]any, len(nodes))
 	times := make([]time.Time, len(nodes))
 	failures := make([]any, len(nodes))
+	ctx := e.Ctx
+	if e.Op != nil {
+		ctx = context.WithValue(ctx, operationLogKey{}, e.Op["id"])
+	}
 	var wg sync.WaitGroup
 	for i, n := range nodes {
 		wg.Add(1)
@@ -162,9 +164,9 @@ func (e *Execution) nodeCapacities(proposed D, cached bool) ([]D, int) {
 				fetch := func(ctx context.Context) (any, error) { return e.P.Backend.Call(ctx, D{"op": "inventory"}, n.Target) }
 				var err error
 				if cached {
-					inventories[i], times[i], err = e.P.inventoryCache(n.Target).Get(e.Ctx, 2*time.Second, fetch)
+					inventories[i], times[i], err = e.P.inventoryCache(n.Target).Get(ctx, 2*time.Second, fetch)
 				} else {
-					inventories[i], err = fetch(e.Ctx)
+					inventories[i], err = fetch(ctx)
 					times[i] = time.Now()
 				}
 				must(err)
@@ -172,6 +174,15 @@ func (e *Execution) nodeCapacities(proposed D, cached bool) ([]D, int) {
 		}()
 	}
 	wg.Wait()
+	return inventories, times, failures
+}
+
+func (e *Execution) nodeCapacities(proposed D, cached bool) ([]D, int) {
+	nodes := e.P.Nodes()
+	if len(nodes) == 1 {
+		return []D{e.nodeCapacity(nodes[0], proposed, cached)}, 0
+	}
+	inventories, times, failures := e.inventories(nodes, cached)
 	out := []D{}
 	var failure any
 	for i, n := range nodes {
@@ -257,6 +268,11 @@ func combine(nodes []D) D {
 
 func (e *Execution) admitOn(node nodeRef, cpu, memory, disk float64, proposed D, snapshot bool) (D, D) {
 	c := e.nodeCapacity(node, proposed, false)
+	return e.admits(c, cpu, memory, disk, proposed, snapshot), c
+}
+
+// admits checks a request against one node's fresh capacity summary.
+func (e *Execution) admits(c D, cpu, memory, disk float64, proposed D, snapshot bool) D {
 	for k, amount := range map[string]float64{"vcpu": cpu, "memory_gib": memory / 1024, "disk_gib": disk} {
 		allocation := obj(obj(c["allocatable"])[k])
 		if amount+num(allocation["committed"]) > num(allocation["limit"]) {
@@ -275,7 +291,7 @@ func (e *Execution) admitOn(node nodeRef, cpu, memory, disk float64, proposed D,
 	if growing && boolean(policy["storage_admission_blocked"]) {
 		fail("capacity_exhausted", "Storage usage exceeds admission ceiling")
 	}
-	return D{"accepted": true, "checked_at": c["checked_at"], "reserved": false}, c
+	return D{"accepted": true, "checked_at": c["checked_at"], "reserved": false}
 }
 
 // Place picks the node for new machines: among the nodes that admit the whole
@@ -287,13 +303,27 @@ func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
 		admission, _ := e.admitOn(nodes[0], cpu, memory, disk, nil, false)
 		return nodes[0], admission
 	}
+	// Fresh reads of every node at once; a node that cannot be read or does
+	// not admit the request is skipped.
+	inventories, times, failures := e.inventories(nodes, false)
 	var best nodeRef
 	var admission D
 	var refusal any
 	most := -1.0
-	for _, n := range nodes {
+	for i, n := range nodes {
 		var accepted, c D
-		if f := attempt(func() { accepted, c = e.admitOn(n, cpu, memory, disk, nil, false) }); f != nil {
+		if failures[i] != nil {
+			if _, ok := failures[i].(Failure); !ok {
+				panic(failures[i])
+			}
+			refusal = failures[i]
+			continue
+		}
+		if f := attempt(func() {
+			reservations, snapshots := e.nodeLoad(n, nil)
+			c = summarize(obj(inventories[i]), reservations, snapshots, times[i])
+			accepted = e.admits(c, cpu, memory, disk, nil, false)
+		}); f != nil {
 			if _, ok := f.(Failure); !ok {
 				panic(f)
 			}

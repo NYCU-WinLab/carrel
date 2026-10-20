@@ -221,7 +221,9 @@ def api(method, path, **kwargs):
     args = ["pvesh", method, path, "--output-format", "json"]
     for key, value in kwargs.items():
         args += ["--" + key.replace("_", "-"), str(value)]
-    text = run(*args, timeout=600)
+    # Below the control plane's 300 s bound on a reconcile, so the node never
+    # outlives the request that holds its lock.
+    text = run(*args, timeout=240)
     if not text:
         return None
     try:
@@ -442,9 +444,10 @@ def gateway_tls(state, slugs):
     return "\n".join(lines) + "\n", certificates
 
 
-def serves_private_dhcp():
-    # A private network is one layer 2 segment across the site's nodes: one
-    # DHCP server and one .1, on the first exit node.
+def first_exit_node():
+    # The first exit node reconciles before the others. It alone serves
+    # private DHCP (a private network is one layer 2 segment across the
+    # nodes: one DHCP server and one .1) and writes cluster-wide files.
     return site()["exit_nodes"][0] == NODE
 
 
@@ -704,8 +707,10 @@ table inet carrel_conntrack {{
     run("systemctl", "start", "carrel-conntrack")
     # Per-guest filtering protects routed and same-node bridged paths. Private
     # experiment NICs deliberately have firewall=0; primary NIC is mandatory.
-    for m in state["machines"]:
-        write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, state, config))
+    # The files are cluster-wide: one node writes them.
+    if first_exit_node():
+        for m in state["machines"]:
+            write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, state, config))
     dhcp = [
         "port=0",
         "bind-dynamic",
@@ -728,7 +733,7 @@ table inet carrel_conntrack {{
         run("dnsmasq", "--test", "--conf-file=/etc/carrel/dhcp.conf")
         run("systemctl", "restart", "carrel-dhcp")
     # The infra gateway CT 101 lives on one node; only that node syncs it.
-    private_dhcp(state, serve=serves_private_dhcp())
+    private_dhcp(state, serve=first_exit_node())
     address = public_ingress()
     if address:
         rules = ports_nft(state, address)
