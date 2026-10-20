@@ -260,7 +260,6 @@ func (p *Platform) Close() { p.cancel(); p.wg.Wait() }
 func (e *Execution) MaintainDomains() {
 	for _, t := range e.S.Tenants() {
 		n := integer(t["n"])
-		status := D{"state": "ready", "checked_at": now()}
 		err := attempt(func() {
 			for _, original := range e.S.Objects("domains", n) {
 				if !contains([]string{"queued", "configuring"}, original["state"]) || num(original["ready_at"]) > now() {
@@ -300,13 +299,12 @@ func (e *Execution) MaintainDomains() {
 				}
 			}()
 		})
-		if err != nil {
-			if w, ok := err.(Waiting); ok {
-				status = D{"state": "waiting", "ready_at": w.ReadyAt, "checked_at": now()}
-			} else {
-				status = D{"state": "retrying", "checked_at": now(), "error": "DNS or certificate maintenance failed"}
-			}
+		// The next pass retries; operators read why in the log.
+		if w, ok := err.(Waiting); ok {
+			slog.Info("domain_maintenance_waiting", "tenant", n, "phase", w.Phase, "ready_at", w.ReadyAt)
+		} else if err != nil {
+			failure := obj(failureResult(err)["error"])
+			slog.Warn("domain_maintenance_failed", "tenant", n, "code", failure["code"], "backend_code", failure["backend_code"])
 		}
-		e.S.Put("domain_status", str(n), n, status)
 	}
 }
