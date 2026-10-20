@@ -413,7 +413,7 @@ automatically.
 | Tenant network | `10.200.N.0/24` | `10.200.17.0/24` |
 | VNet name | `t` + 3 digits (Proxmox caps VNet ids at 8 characters) | `t017` |
 | Gateway | `.1`, anycast on every node | `10.200.17.1` |
-| Machine addresses | `.10` to `.250`, static by cloud-init and reserved in carrel's DHCP (section 6.9) | `10.200.17.10` |
+| Machine addresses | `.10` to `.250`, static by cloud-init (no DHCP, section 6.9) | `10.200.17.10` |
 | Primary VNet VNI | `100000 + N` | `100017` |
 | Private networks | VNet `p` + `N` (3 digits) + `k` (2 digits), VNI `200000 + N * 100 + k`, `k` from 1 to 99 | `p01703`, VNI `201703` |
 | VMID | `10000 + N * 100 + i`, at most 100 machines per tenant | `11700` to `11799` |
@@ -898,7 +898,7 @@ so tenants never get it. Machine insides are the tenant's business and are not c
 
 ### 9.2 Reconciler
 
-A loop compares the database with Proxmox, firewall, NAT, DHCP, DNS and Caddy every 5 minutes and
+A loop compares the database with Proxmox, firewall, NAT, private DHCP, DNS and Caddy every 5 minutes and
 at boot. It repairs drift it owns and reports drift it does not understand. `reconcile_run` triggers
 it on demand.
 
@@ -1048,7 +1048,7 @@ old host.
 | Milestone | Done when |
 |---|---|
 | M0 Staging | CI installs a nested node from scratch and the install is idempotent: a second run changes nothing |
-| M1 Host baseline | A bare host after `install.sh` has the configured LVM-thin storage, both SDN zones, the infra network, the firewall, DHCP reservations, the gateway and all templates; a tenant address cannot reach host port 8006, a guest set to DHCP receives exactly its reserved address, and a VXLAN or BGP packet is dropped when it comes from an address that is not a node or carries a forged node address on the public interface |
+| M1 Host baseline | A bare host after `install.sh` has the configured storage, both SDN zones, the infra network, the firewall, the gateway and all templates; a tenant address cannot reach host port 8006, and a VXLAN or BGP packet is dropped when it comes from an address that is not a node or carries a forged node address on the public interface |
 | M2 Control plane | A clean agent with only the MCP connector, given "Open a VM on winlab for my SDN homework", signs in through Keycloak and ends with a working SSH session |
 | M3 Access | The same agent opens a port and a domain under the tenant's wildcard certificate, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas and requests | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date; the project requests a name that already exists, such as `afc.winlab.tw` (its twin in the staging zone on staging), an admin approves it with `adopt: true`, and the site answers over HTTPS on that name |
