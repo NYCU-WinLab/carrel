@@ -104,6 +104,36 @@ func (e *Execution) peers(n ...int) []peerGrant { return rowsOf[peerGrant](e.S, 
 // protocol reads grants written before proto was recorded as TCP.
 func (g peerGrant) protocol() string { return or(g.Proto, "tcp") }
 
+// domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port.
+type domainRecord struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	OperationID string  `json:"operation_id,omitempty"`
+	ReadyAt     float64 `json:"ready_at"`
+	Slug        string  `json:"slug"`
+	State       string  `json:"state"`
+	Sub         string  `json:"sub"`
+	TargetPort  int     `json:"target_port"`
+	TenantN     int     `json:"tenant_n"`
+	VMID        int     `json:"vmid"`
+}
+
+func (d domainRecord) D() D { return decode(string(encoded(d))) }
+
+func (e *Execution) domains(n int) []domainRecord {
+	return rowsOf[domainRecord](e.S, "domains", n)
+}
+
+// domainNamed finds a domain by its full name.
+func domainNamed(domains []domainRecord, name string) (domainRecord, bool) {
+	for _, d := range domains {
+		if d.Name == name {
+			return d, true
+		}
+	}
+	return domainRecord{}, false
+}
+
 // orNil gives nil for an empty text, as a missing field reads.
 func orNil(s string) any {
 	if s == "" {

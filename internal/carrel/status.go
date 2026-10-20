@@ -34,7 +34,7 @@ func (e *Execution) PublicStatus() D {
 			"memory_gib": num(u["memory_mb"]) / 1024,
 			"disk_gib":   num(u["disk_gb"]),
 		}
-		if t["status"] == "active" && publicSlug(e.S.Objects("domains", integer(t["n"]))) {
+		if t["status"] == "active" && publicSlug(e.domains(integer(t["n"]))) {
 			tenants = append(tenants, merge(D{"name": t["slug"]}, share))
 			continue
 		}
@@ -75,9 +75,9 @@ func budget(q D) D {
 
 // publicSlug reports whether a tenant's slug is already published by one of
 // its domains.
-func publicSlug(domains []D) bool {
+func publicSlug(domains []domainRecord) bool {
 	for _, d := range domains {
-		if d["state"] == "ready" {
+		if d.State == "ready" {
 			return true
 		}
 	}

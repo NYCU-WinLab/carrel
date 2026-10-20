@@ -261,13 +261,13 @@ func (e *Execution) MaintainDomains() {
 	for _, t := range e.S.Tenants() {
 		n := integer(t["n"])
 		err := attempt(func() {
-			for _, original := range e.S.Objects("domains", n) {
-				if !contains([]string{"queued", "configuring"}, original["state"]) || num(original["ready_at"]) > now() {
+			for _, original := range e.domains(n) {
+				if (original.State != "queued" && original.State != "configuring") || original.ReadyAt > now() {
 					continue
 				}
 				active := func() bool {
 					return find(e.S.ActiveOperations(n), func(o D) bool {
-						return (o["id"] == original["operation_id"] || (o["tool"] == "domain_add" && len(arr(o["domain_target"])) > 0 && arr(o["domain_target"])[0] == original["id"]))
+						return (original.OperationID != "" && o["id"] == original.OperationID) || (o["tool"] == "domain_add" && len(arr(o["domain_target"])) > 0 && arr(o["domain_target"])[0] == original.ID)
 					}) != nil
 				}
 				if active() || t["status"] != "active" {
@@ -280,22 +280,28 @@ func (e *Execution) MaintainDomains() {
 				func() {
 					e.P.writer.Lock()
 					defer e.P.writer.Unlock()
-					d := e.S.Get("domains", str(original["id"]))
-					if d == nil || !equal(d["operation_id"], original["operation_id"]) || d["state"] == "deleting" || active() || e.S.TenantN(n)["status"] != "active" {
+					d, ok := rowOf[domainRecord](e.S, "domains", original.ID)
+					if !ok || d.OperationID != original.OperationID || d.State == "deleting" || active() || e.S.TenantN(n)["status"] != "active" {
 						return
 					}
-					d["state"] = "configuring"
-					e.Put("domains", d["id"], n, d)
-					e.DomainAction("domain_add", D{"machine": str(d["vmid"]), "sub": d["sub"], "target_port": d["target_port"]}, t)
+					d.State = "configuring"
+					e.Put("domains", d.ID, n, d)
+					e.DomainAction("domain_add", D{"machine": str(d.VMID), "sub": d.Sub, "target_port": d.TargetPort}, t)
 				}()
 			}
 			e.RenewCertificate(t)
 			func() {
 				e.P.writer.Lock()
 				defer e.P.writer.Unlock()
-				domains := filter(e.S.Objects("domains", n), func(d D) bool { return d["state"] != "deleting" })
-				if len(e.S.Objects("certificates", n)) > 0 || find(domains, func(d D) bool { return d["state"] == "ready" }) != nil {
-					e.DomainRecord(t, len(domains) == 0)
+				live, ready := 0, false
+				for _, d := range e.domains(n) {
+					if d.State != "deleting" {
+						live++
+						ready = ready || d.State == "ready"
+					}
+				}
+				if len(e.S.Objects("certificates", n)) > 0 || ready {
+					e.DomainRecord(t, live == 0)
 				}
 			}()
 		})
