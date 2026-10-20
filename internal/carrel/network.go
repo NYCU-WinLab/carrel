@@ -255,23 +255,16 @@ func (e *Execution) Reconcile() D {
 	// node goes first; it holds the infra gateway and creates new VNets.
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
-	first := request
-	exit := str(e.P.Config["ingress"]) == "exit"
-	if exit {
-		// The first node holds the infra gateway, which terminates TLS here.
-		gateway := merge(state, D{"origin": originHost(e.P.Config)})
-		if crt, key, ok := e.originFiles(); ok {
-			gateway["origin_certificate"] = originPair(crt, key)
-		}
-		first = D{"op": "reconcile", "state": gateway}
+	// The first node holds the infra gateway, which terminates TLS.
+	gateway := merge(state, D{"origin": originHost(e.P.Config)})
+	if crt, key, ok := e.originFiles(); ok {
+		gateway["origin_certificate"] = originPair(crt, key)
 	}
-	result := D{"node": e.Call(first, nodes[0].Target)}
-	if exit {
-		// Fingerprints of the pairs the gateway confirmed it holds: records
-		// move to this site only for those (MaintainOrigin, DomainRecord).
-		held, _ := obj(result["node"])["certificates"].(map[string]any)
-		e.P.delivered.Store(held)
-	}
+	result := D{"node": e.Call(D{"op": "reconcile", "state": gateway}, nodes[0].Target)}
+	// Fingerprints of the pairs the gateway confirmed it holds: records
+	// point here only for those (MaintainOrigin, DomainRecord).
+	held, _ := obj(result["node"])["certificates"].(map[string]any)
+	e.P.delivered.Store(held)
 	if len(nodes) > 1 {
 		// The other nodes catch up on the next reconcile: one node down for an
 		// upgrade (PLAN 8.3) must not stop every change on the site.
@@ -288,11 +281,6 @@ func (e *Execution) Reconcile() D {
 		if len(unreachable) > 0 {
 			result["unreachable_nodes"] = unreachable
 		}
-	}
-	// A site with its own public address publishes on its first exit node;
-	// the external edge then only keeps the backups.
-	if str(e.P.Config["ingress"]) != "exit" {
-		result["edge"] = e.Call(D{"op": "reconcile", "state": pick(state, "ports", "domains", "certificates")}, "carrel-edge")
 	}
 	return result
 }

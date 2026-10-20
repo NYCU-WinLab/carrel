@@ -26,7 +26,6 @@ def test_only_the_first_exit_node_holds_the_public_address():
         "gateway": "140.113.60.190",
     }
     assert module.site_layout("carrel02", SITE)["public"] is None
-    assert "public" not in module.site_layout("carrel01", None)
 
 
 def test_public_interface_keeps_host_ports_off_the_internet():
@@ -100,19 +99,12 @@ def test_public_ingress_runs_on_the_first_exit_node(monkeypatch, tmp_path, node,
     module = load("node-agent.py")
     monkeypatch.setattr(module, "NODE", node)
     monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
-    assert module.public_ingress() is None
     (tmp_path / "site.json").write_text(json.dumps(SITE))
     assert module.public_ingress() == address
 
 
-@pytest.mark.parametrize("with_site,source", [(False, "-source 10.254.200.1 "), (True, "")])
-def test_port_grants_admit_the_client_address_when_the_site_is_public(
-    monkeypatch, tmp_path, with_site, source
-):
+def test_port_grants_admit_the_client_address():
     module = load("node-agent.py")
-    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
-    if with_site:
-        (tmp_path / "site.json").write_text(json.dumps(SITE))
     machine = {
         "tenant_n": 3,
         "vmid": 10300,
@@ -125,4 +117,5 @@ def test_port_grants_admit_the_client_address_when_the_site_is_public(
     rules = module.guest_firewall(
         machine, {"ports": [GRANT], "domains": [], "peers": []}, {"protected_addresses": []}
     )
-    assert f"IN ACCEPT {source}-p tcp -dport 22" in rules.splitlines()
+    # The exit node DNATs only, so the client's own address arrives.
+    assert "IN ACCEPT -p tcp -dport 22" in rules.splitlines()

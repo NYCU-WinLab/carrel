@@ -31,8 +31,7 @@ def listed(*args):
 
 def guest_storage():
     # Guest storage id from node.json (PLAN 8.2).
-    config = json.loads(NODE_CONFIG.read_text()) if NODE_CONFIG.exists() else {}
-    storage = config.get("storage", "local-lvm")
+    storage = json.loads(NODE_CONFIG.read_text()).get("storage")
     if not isinstance(storage, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage):
         raise SystemExit("Invalid storage id in node.json")
     return storage

@@ -19,7 +19,7 @@ func main() {
 	configFile := flag.String("config", "/etc/carrel/config.json", "Control plane configuration")
 	listen := flag.String("listen", ":8080", "HTTP listen address")
 	version := flag.Bool("version", false, "Print version")
-	backup := flag.Bool("backup", false, "Create a consistent backup on the ingress host")
+	backup := flag.Bool("backup", false, "Create a consistent backup and send it to the backup target")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if *version {
@@ -46,6 +46,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.DB.Close()
+	if unplaced := carrel.UnplacedMachines(store, cfg); len(unplaced) > 0 {
+		slog.Error("machines without a configured node", "machines", unplaced)
+		os.Exit(1)
+	}
 	backend := &carrel.SSHBackend{Config: "/etc/carrel/ssh_config"}
 	if path, ok := cfg["ssh_config"].(string); ok {
 		backend.Config = path

@@ -15,9 +15,8 @@ def run(*args):
 
 
 def node_storage():
-    # Guest storage id from node.json (PLAN 8.2); nodes without it keep local-lvm.
-    path = Path("/etc/carrel/node.json")
-    storage = json.loads(path.read_text()).get("storage", "local-lvm") if path.exists() else "local-lvm"
+    # Guest storage id from node.json (PLAN 8.2).
+    storage = json.loads(Path("/etc/carrel/node.json").read_text()).get("storage")
     if not isinstance(storage, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage):
         raise SystemExit("Invalid storage id in node.json")
     return storage
@@ -72,7 +71,7 @@ def main():
     parser.add_argument("--prepared-dir", type=Path)
     parser.add_argument("--vmid-base", type=int, default=9010,
                         help="First template VMID; use this node's block of 20 from PLAN 6.1")
-    parser.add_argument("--storage", help="Guest storage id; defaults to node.json, then local-lvm")
+    parser.add_argument("--storage", help="Guest storage id; defaults to node.json")
     parser.add_argument("--image", action="append", choices=["debian-13-minimal", "debian-13", "ubuntu-24.04"],
                         help="Prepared image to import; repeat for several. Defaults to both development images.")
     args = parser.parse_args()

@@ -1,44 +1,21 @@
 # Merge this block into ~/.ssh/config on the administrator workstation.
-# The jump-host password is entered interactively and is never stored here.
+# The management network 192.168.19.0/24 is reached through the site's WireGuard
+# link to 140.113.60.189; root logins use the administrator key.
 # === Carrel: B09 site ===
-Host b09-jump
-  ControlMaster auto
-  ControlPath ~/.ssh/control-%C
-  ControlPersist 10m
-  HostName 140.113.60.189
-  User p4user
-  Port 22
-  ConnectTimeout 15
-  StrictHostKeyChecking accept-new
-  ServerAliveInterval 30
-  ServerAliveCountMax 3
-
-Host carrel01 192.168.13.159
-  IdentityFile ~/.ssh/id_ed25519
-  IdentitiesOnly yes
-  HostName 192.168.13.159
+Host carrel01 carrel02 carrel03 carrel04
   User root
-  Port 22
-  ProxyJump b09-jump
-  ConnectTimeout 20
-  StrictHostKeyChecking accept-new
-  ServerAliveInterval 30
-  ServerAliveCountMax 3
-  ControlMaster auto
-  ControlPath ~/.ssh/control-%C
-  ControlPersist 10m
-Host carrel-stg01
-  HostName 172.31.255.2
-  User root
-  ProxyJump carrel01
   IdentityFile ~/.ssh/id_ed25519
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
   ConnectTimeout 10
   ServerAliveInterval 30
   ServerAliveCountMax 3
-  ControlMaster auto
-  ControlPath ~/.ssh/control-%C
-  ControlPersist 10m
-
+Host carrel01
+  HostName 192.168.19.101
+Host carrel02
+  HostName 192.168.19.102
+Host carrel03
+  HostName 192.168.19.103
+Host carrel04
+  HostName 192.168.19.104
 # === end Carrel: B09 site ===

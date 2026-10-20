@@ -46,7 +46,6 @@ def main():
         ROOT / "scripts/node-agent.py",
         ROOT / "scripts/configure-reader.py",
         # Helpers node-agent loads or calls; they change together with it.
-        ROOT / "scripts/thin-usage.py",
         ROOT / "scripts/guest-report.py",
         ROOT / "scripts/gateway-sync.py",
         # Copies the programs to the other site nodes and checks CT 100 reaches them.
@@ -100,9 +99,9 @@ import hashlib,json,os,re,shutil,socket,subprocess,time,urllib.request
 stage=Path({stage!r})
 node=socket.gethostname().split('.')[0]
 node_config=Path('/etc/carrel/node.json')
-storage=json.loads(node_config.read_text()).get('storage','local-lvm') if node_config.exists() else 'local-lvm'
+storage=json.loads(node_config.read_text()).get('storage')
 assert isinstance(storage,str) and re.fullmatch(r'[a-z][a-z0-9_.-]{{0,62}}',storage), 'Invalid storage id in node.json'
-helpers={{'thin-usage.py':'644','guest-report.py':'644','gateway-sync.py':'644'}}
+helpers={{'guest-report.py':'644','gateway-sync.py':'644'}}
 def ct(*args): subprocess.run(['pct','exec','100','--',*args],check=True)
 def capture(*args): return subprocess.check_output(args,text=True)
 for name,expected in {hashes!r}.items():

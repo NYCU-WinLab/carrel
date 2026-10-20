@@ -48,7 +48,8 @@ func TestValidateNodes(t *testing.T) {
 		nodes []any
 		ok    bool
 	}{
-		{nil, true},
+		{nil, false},
+		{[]any{}, false},
 		{[]any{D{"name": "carrel01", "target": "carrel-node"}, D{"name": "carrel02", "target": "node-02"}}, true},
 		{[]any{D{"name": "carrel01", "target": "a"}, D{"name": "carrel01", "target": "b"}}, false},
 		{[]any{D{"name": "carrel01", "target": "a"}, D{"name": "carrel02", "target": "a"}}, false},
@@ -56,26 +57,9 @@ func TestValidateNodes(t *testing.T) {
 		{[]any{D{"name": "carrel01"}}, false},
 		{[]any{"carrel01"}, false},
 	} {
-		if err := ValidateNodes(D{"nodes": tc.nodes}); (err == nil) != tc.ok {
+		if err := ValidateNodes(D{"nodes": tc.nodes, "public_address": "140.113.60.184", "origin": "https://carrel.winlab.tw"}); (err == nil) != tc.ok {
 			t.Fatalf("%v: %v", tc.nodes, err)
 		}
-	}
-}
-
-func TestLegacyConfigUsesTheSingleNodeWithoutRecordingIt(t *testing.T) {
-	p, _ := fixture(t)
-	if nodes := p.Nodes(); len(nodes) != 1 || nodes[0] != (nodeRef{"", "carrel-node"}) {
-		t.Fatal(nodes)
-	}
-	node, admission := p.execution(context.Background()).Place(1, 1024, 10)
-	if node.Target != "carrel-node" || !boolean(admission["accepted"]) {
-		t.Fatal(node, admission)
-	}
-	if _, ok := node.record(D{"name": "web"})["node"]; ok {
-		t.Fatal("legacy machine records gained a node")
-	}
-	if err := attempt(func() { p.nodeOf(D{"node": "carrel09"}) }); err == nil {
-		t.Fatal("accepted an unconfigured node")
 	}
 }
 
@@ -156,12 +140,12 @@ func TestCapacityCombinesNodesAndReportsTheLargestSingleNode(t *testing.T) {
 
 func TestStorageUsageAsksEachNodeAboutItsMachines(t *testing.T) {
 	p, b, _ := nodeFixture(t)
-	for i, node := range []string{"carrel01", "carrel02", ""} {
+	for i, node := range []string{"carrel01", "carrel02", "carrel01"} {
 		p.Store.Put("machines", 10100+i, 1, D{"vmid": 10100 + i, "tenant_n": 1, "name": "m", "node": node})
 	}
 	p.execution(context.Background()).RefreshStorage()
 	sample := p.Store.Get("storage_usage", "1")
-	// carrel01 holds two machines (one with no node), carrel02 one: three samples.
+	// carrel01 holds two machines, carrel02 one: three samples.
 	if num(sample["unique_total_bytes"]) != 30 || num(sample["retained_snapshot_bytes"]) != 3 {
 		t.Fatal(encoded(sample))
 	}
@@ -225,10 +209,10 @@ func TestReconcileRunsOnEveryNodeFirstNodeFirst(t *testing.T) {
 		return inner(r, target)
 	}
 	r := p.execution(context.Background()).Reconcile()
-	if !equal(order, []any{"node-01", "node-02", "node-03", "carrel-edge"}) && !equalStrings(order, []string{"node-01", "node-02", "node-03", "carrel-edge"}) {
+	if !equalStrings(order, []string{"node-01", "node-02", "node-03"}) {
 		t.Fatalf("order %v", order)
 	}
-	if len(obj(r["nodes"])) != 3 || r["node"] == nil || r["edge"] == nil {
+	if len(obj(r["nodes"])) != 3 || r["node"] == nil {
 		t.Fatal(encoded(r))
 	}
 }
@@ -263,7 +247,7 @@ func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
 		return inner(r, target)
 	}
 	r := p.execution(context.Background()).Reconcile()
-	if !equalStrings(calls, []string{"node-01", "node-02", "node-03", "carrel-edge"}) {
+	if !equalStrings(calls, []string{"node-01", "node-02", "node-03"}) {
 		t.Fatalf("calls %v", calls)
 	}
 	if !equal(r["unreachable_nodes"], []any{"carrel02"}) {
@@ -280,46 +264,20 @@ func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
 	}
 }
 
-func TestExitIngressSkipsTheExternalEdge(t *testing.T) {
-	p, b, _ := nodeFixture(t)
-	p.Config["ingress"] = "exit"
-	targets := []string{}
-	var mu sync.Mutex
-	inner := b.call
-	b.call = func(r D, target string) (any, error) {
-		if r["op"] == "reconcile" {
-			mu.Lock()
-			targets = append(targets, target)
-			mu.Unlock()
-			return D{}, nil
-		}
-		return inner(r, target)
-	}
-	r := p.execution(context.Background()).Reconcile()
-	if _, ok := r["edge"]; ok || len(targets) != 3 {
-		t.Fatalf("edge reconciled: %v %v", targets, encoded(r))
-	}
-	for _, v := range []any{"edge", nil} {
-		if err := ValidateNodes(D{"ingress": v}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := ValidateNodes(D{"ingress": "exit", "public_address": "140.113.60.184", "origin": "https://carrel.winlab.tw"}); err != nil {
+func TestValidateNodesNeedsTheSiteAddressAndOrigin(t *testing.T) {
+	nodes := []any{D{"name": "carrel01", "target": "carrel-node"}}
+	if err := ValidateNodes(D{"nodes": nodes, "public_address": "140.113.60.184", "origin": "https://carrel.winlab.tw"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []D{{"ingress": "exit"}, {"public_address": "fe80::1"}, {"public_address": "x"}} {
+	for _, c := range []D{{"nodes": nodes, "origin": "https://carrel.winlab.tw"}, {"nodes": nodes, "public_address": "fe80::1", "origin": "https://carrel.winlab.tw"}, {"nodes": nodes, "public_address": "x", "origin": "https://carrel.winlab.tw"}, {"nodes": nodes, "public_address": "140.113.60.184"}} {
 		if err := ValidateNodes(c); err == nil {
 			t.Fatalf("accepted %v", c)
 		}
 	}
-	if err := ValidateNodes(D{"ingress": "both"}); err == nil {
-		t.Fatal("accepted an unknown ingress mode")
-	}
 }
 
-func TestExitIngressSendsCertificatesOnlyToTheGatewayNode(t *testing.T) {
+func TestCertificatesGoOnlyToTheGatewayNode(t *testing.T) {
 	p, b, _ := nodeFixture(t)
-	p.Config["ingress"] = "exit"
 	sent := map[string]D{}
 	var mu sync.Mutex
 	inner := b.call
@@ -338,5 +296,15 @@ func TestExitIngressSendsCertificatesOnlyToTheGatewayNode(t *testing.T) {
 	}
 	if _, ok := sent["node-02"]["certificates"]; ok {
 		t.Fatal("a node without the gateway received certificates")
+	}
+}
+
+func TestUnplacedMachinesAreNamed(t *testing.T) {
+	p, _ := fixture(t)
+	seedMachine(p, "placed", 10100)
+	p.Store.Put("machines", 10101, 1, D{"vmid": 10101, "tenant_n": 1, "name": "nameless"})
+	p.Store.Put("machines", 10102, 1, D{"vmid": 10102, "tenant_n": 1, "name": "gone", "node": "carrel09"})
+	if got := UnplacedMachines(p.Store, p.Config); !equalStrings(got, []string{"nameless", "gone"}) {
+		t.Fatal(got)
 	}
 }

@@ -57,7 +57,6 @@ def test_upgrade_payloads_compile_and_keep_existing_database(tmp_path, monkeypat
     shipped = json.loads((tmp_path / "deploy-go.json").read_text())["sha256"]
     assert {
         "node-agent.py",
-        "thin-usage.py",
         "configure-reader.py",
         "guest-report.py",
         "gateway-sync.py",

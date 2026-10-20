@@ -7,6 +7,11 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "install-network.py"
 
 
+def single_node_table():
+    module = load()
+    return module.tenant_host_nft(module.underlay_rules("vmbr0", "", []))
+
+
 def load():
     spec = importlib.util.spec_from_file_location("install_network", SCRIPT)
     module = importlib.util.module_from_spec(spec)
@@ -31,17 +36,17 @@ def matches(pattern, name):
 
 @pytest.mark.parametrize("name", ["t001", "t008", "t999", "t1000", "tap10300i0", "tap190i0"])
 def test_tenant_interfaces_are_dropped(name):
-    patterns = dropped_ifaces(load().TENANT_HOST_NFT)
+    patterns = dropped_ifaces(single_node_table())
     assert any(matches(p, name) for p in patterns)
 
 
-@pytest.mark.parametrize("name", ["tailscale0", "tun0", "team0", "vmbr0", "wg-carrel", "vts0"])
+@pytest.mark.parametrize("name", ["tailscale0", "tun0", "team0", "vmbr0", "vts0"])
 def test_host_interfaces_starting_with_t_are_not_dropped(name):
-    patterns = dropped_ifaces(load().TENANT_HOST_NFT)
+    patterns = dropped_ifaces(single_node_table())
     assert not any(matches(p, name) for p in patterns)
 
 
 def test_dhcp_accept_covers_the_same_interfaces():
-    nft = load().TENANT_HOST_NFT
+    nft = single_node_table()
     dhcp = next(x for x in nft.splitlines() if "dport 67 accept" in x and x.strip().startswith("iifname"))
     assert set(dropped_ifaces(nft)) | {"vrf_tenants"} == set(re.findall(r'"([^"]+)"', dhcp))

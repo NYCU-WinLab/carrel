@@ -112,13 +112,14 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 		cancel()
 		name := str(obj(reply)["node"])
 		// The reply must come from the node it was asked, so two nodes never
-		// share a directory; the legacy single node has no configured name.
-		if err != nil || !nodeName.MatchString(name) || (n.Name != "" && name != n.Name) {
+		// share a directory.
+		if err != nil || !nodeName.MatchString(name) || name != n.Name {
 			missing = append(missing, n.Target)
 			continue
 		}
 		// Real node files are a few KiB; a node over its budget is reported
-		// instead of pushing the whole archive past the edge's 10 MB limit.
+		// instead of pushing the whole archive past the 10 MB limit of the
+		// backup target.
 		files, total := obj(obj(reply)["files"]), 0
 		for _, content := range files {
 			total += len(str(content))
@@ -150,7 +151,9 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	if buffer.Len() > 10_000_000 {
 		return nil, errors.New("backup exceeds bounded transfer size")
 	}
-	response, e := p.Backend.Call(ctx, D{"op": "backup", "archive": base64.StdEncoding.EncodeToString(buffer.Bytes())}, "carrel-edge")
+	// The archive leaves the cluster: carrel-backup is a forced command on a
+	// host outside it (scripts/backup-target.py).
+	response, e := p.Backend.Call(ctx, D{"op": "backup", "archive": base64.StdEncoding.EncodeToString(buffer.Bytes())}, "carrel-backup")
 	if e != nil {
 		return nil, e
 	}

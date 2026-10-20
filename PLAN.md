@@ -460,9 +460,9 @@ Every tenant machine gets the security group of its tenant:
    the old host's guests.
 5. Drop traffic addressed to any node itself, except DHCP (section 6.9). Routing through the
    anycast gateway still works. Public entry points listed in `node.json` `public_entries` are
-   accepted above this drop: today only TCP 443 on the edge (`140.113.194.229`), the HTTPS gateway
-   the internet already reaches, so tenants can use carrel and lab sites by their public names
-   (the hairpin in section 6.4). SSH, `1121`, `8006` and WireGuard on that host stay dropped.
+   accepted above this drop: today only TCP 443 on the public address (`140.113.60.184`), the
+   HTTPS gateway the internet already reaches, so tenants can use carrel and lab sites by their
+   public names (the hairpin in section 6.4). Every other port on that address stays dropped.
 
 `ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports
@@ -851,7 +851,7 @@ is repaired or upgraded: it compares and fixes, never assumes a blank slate.
    dedicated corosync link, because tenants control that traffic (section 6.3).
 2. Same Proxmox VE version on every node.
 3. Two nodes need a QDevice outside the cluster. Three or more nodes can provide quorum for
-   HA, but local LVM-thin alone cannot restart a failed node's guests elsewhere: their disks are
+   HA, but local ZFS alone cannot restart a failed node's guests elsewhere: their disks are
    still on that failed node. Planned migrations copy disks while the source is healthy; host
    failure recovery uses independent backups until shared storage is supplied and tested.
    B09 runs four nodes without a QDevice: 4 votes, quorum 3. Only one node may be down at a time,
@@ -907,6 +907,10 @@ service, and silence is the alert.
 Proxmox Backup Server on a separate machine. Priority: the carrel database and Keycloak client
 configuration, then infra machines, then tenant machines (opt-in, counted against quota).
 
+Until then, the control plane sends one archive each night (database, configuration,
+certificates and each node's files) to the SSH target `carrel-backup`: `scripts/backup-target.py`,
+a forced command on a host outside the cluster (spawner, the old PVE), keeps 14 of them.
+
 ### 10.2 Upgrades
 
 - Several nodes: drain one (`node_drain`), upgrade, reboot, return, next.
@@ -927,14 +931,14 @@ through Release Please. Container images, if any, are tagged by git SHA.
 
 ### 10.5 Staging
 
-A nested Proxmox VE runs inside a VM on the first host. CI installs carrel into it from scratch on
+Planned: a nested Proxmox VE inside a VM on a site node. CI installs carrel into it from scratch on
 every release candidate and runs the acceptance sentences of section 11.3 against it, with two
 differences from production: staging has its own DNS zone (open decision 13.11) and uses the
 Let's Encrypt staging CA, so a run never issues real certificates or touches `winlab.tw` records.
 M9 (import) is production only and is checked once, by hand, against its sentence.
 
-Until its migration, the empty four-node B09 cluster is the staging site for multi-node work
-(section 15.15).
+The nested staging VM on the R640 node retired with that node (2026-10-20). Until the planned
+one exists, changes are checked on disposable tenant machines.
 
 ### 10.6 Importing machines
 

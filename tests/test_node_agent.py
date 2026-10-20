@@ -34,25 +34,6 @@ def load(name):
     return module
 
 
-def test_thin_snapshot_accounting_counts_shared_blocks_once():
-    spec = importlib.util.spec_from_file_location(
-        "thin_usage", Path(__file__).parents[1] / "scripts/thin-usage.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    xml = """<superblock data_block_size="128"><device dev_id="1"><range_mapping data_begin="0" length="10"/></device>
-    <device dev_id="2"><range_mapping data_begin="0" length="15"/></device>
-    <device dev_id="3"><range_mapping data_begin="5" length="15"/></device></superblock>"""
-    volumes = [
-        {"lv_name": "vm-10100-disk-0", "thin_id": "1"},
-        {"lv_name": "snap_vm-10100-disk-0_one", "thin_id": "2"},
-        {"lv_name": "snap_vm-10100-disk-0_two", "thin_id": "3"},
-    ]
-    result = module.account(xml, volumes, [{"vmid": 10100, "tenant_n": 1}])[0]
-    assert result["retained_snapshot_bytes"] == 10 * 65536
-    assert result["unique_total_bytes"] == 20 * 65536
-
-
 def test_cloud_init_matches_all_managed_macs_without_configuring_raw_nics(monkeypatch):
     root = Path(__file__).parents[1]
     spec = importlib.util.spec_from_file_location("node_agent", root / "scripts/node-agent.py")
@@ -204,17 +185,15 @@ def test_template_preparation_preserves_requested_package_install(monkeypatch, p
 
 
 @pytest.mark.parametrize("immutable", [True, False])
-def test_linked_clone_requires_immutable_thin_template(monkeypatch, tmp_path, immutable):
+def test_linked_clone_requires_immutable_template(monkeypatch, tmp_path, immutable):
     machine = dict(MACHINE)
-    spec = importlib.util.spec_from_file_location(
-        "node_agent", Path(__file__).parents[1] / "scripts/node-agent.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load("node-agent.py")
+    (tmp_path / "node.json").write_text(json.dumps({"storage": "local-zfs"}))
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
     monkeypatch.setattr(module, "STATE", tmp_path)
     monkeypatch.setattr(module, "vm_template", lambda image: {"vmid": 9010, "prepared": True})
     monkeypatch.setattr(
-        module, "pve_get", lambda *args: {"template": int(immutable), "scsi0": "local-lvm:base-9010-disk-0"}
+        module, "pve_get", lambda *args: {"template": int(immutable), "scsi0": "local-zfs:base-9010-disk-0"}
     )
     monkeypatch.setattr(
         module, "cloud_init", lambda m, **kwargs: "prepared-snippet" if kwargs["prepared"] else "legacy"
