@@ -904,12 +904,12 @@ def first_firewall(m):
 
 def tenant_route():
     """Whether this node routes tenant traffic out: the VRF needs a default
-    route through a gateway, not only PVE's unreachable placeholder."""
-    try:
-        routes = json.loads(run("ip", "-j", "route", "show", "vrf", "vrf_tenants", "default") or "[]")
-    except CommandFailure:
-        return False
-    return any(r.get("gateway") for r in routes)
+    route through a gateway (one, or several with ECMP), not only PVE's
+    unreachable placeholder. None before the first tenant creates the VRF."""
+    if not Path("/sys/class/net/vrf_tenants").exists():
+        return None
+    routes = json.loads(run("ip", "-j", "route", "show", "vrf", "vrf_tenants", "default") or "[]")
+    return any(r.get("gateway") or any(h.get("gateway") for h in r.get("nexthops", [])) for r in routes)
 
 
 def create(m):

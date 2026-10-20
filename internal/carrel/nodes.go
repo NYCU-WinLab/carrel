@@ -324,7 +324,10 @@ func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
 			// Its guests could not reach the gateway, the control plane or the
 			// internet: the VRF lost its default route (an FRR fault, 2026-10-20).
 			slog.Warn("node_without_tenant_route", "node", n.Name)
-			refusal = Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "No node can route tenant traffic", "recovery": "retry_infrastructure"}}}
+			// A capacity refusal from another node says more.
+			if refusal == nil {
+				refusal = Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "No node can route tenant traffic", "recovery": "retry_infrastructure"}}}
+			}
 			continue
 		}
 		if f := attempt(func() {
