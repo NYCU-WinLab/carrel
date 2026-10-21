@@ -82,12 +82,20 @@
             ]
           },
           "image": {
-            "enum": [
-              "debian-13-minimal",
-              "debian-13",
-              "ubuntu-24.04"
-            ],
-            "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04."
+            "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04. Or \"tenant:<name>\" for one of this tenant's imported cloud images (image_import); the disk is at least the image's virtual size.",
+            "anyOf": [
+              {
+                "enum": [
+                  "debian-13-minimal",
+                  "debian-13",
+                  "ubuntu-24.04"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^tenant:[a-z][a-z0-9-]{0,31}$"
+              }
+            ]
           },
           "size": {
             "enum": [
@@ -1901,6 +1909,78 @@
       }
     },
     {
+      "name": "image_import",
+      "description": "Download a cloud disk image (qcow2 or raw) into this tenant's images, from a public http(s) URL with its SHA-256, to boot VMs from with machine_create image \"tenant:<name>\". The image needs cloud-init and python3 (Debian and Ubuntu cloud images have both) for keys, addresses and readiness. carrel's fetch container downloads it, refuses images that name a backing file or data file, are encrypted, claim another format or exceed 1000 GB, and stores it read-only on the site's shared storage, private to the tenant. Same limits and waiting as iso_import.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 4096,
+            "pattern": "^https?://"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "format": {
+            "enum": [
+              "qcow2",
+              "raw"
+            ],
+            "default": "qcow2"
+          }
+        },
+        "required": [
+          "name",
+          "url",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "image_list",
       "description": "List this tenant's imported images and ISOs with their state, size and checksum, and the images_gb used and allowed.",
       "inputSchema": {
@@ -3579,6 +3659,7 @@
     "snapshot_delete",
     "snapshot_rollback",
     "iso_import",
+    "image_import",
     "image_list",
     "image_delete",
     "quota_request",
@@ -3630,6 +3711,7 @@
     "domain_add",
     "domain_remove",
     "image_delete",
+    "image_import",
     "iso_import",
     "machine_console_url",
     "machine_create",
@@ -3667,6 +3749,7 @@
     "deployment_apply",
     "domain_add",
     "domain_remove",
+    "image_import",
     "iso_import",
     "machine_create",
     "machine_delete",

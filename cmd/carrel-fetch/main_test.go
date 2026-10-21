@@ -122,19 +122,19 @@ func TestImagesThatNameOtherFilesAreRefused(t *testing.T) {
 	q("create", "-f", "qcow2", "-o", "data_file="+filepath.Join(dir, "external.raw"), datafile, "1G")
 	q("create", "-f", "qcow2", "--object", "secret,id=s,data=pw", "-o", "encrypt.format=luks,encrypt.key-secret=s", encrypted, "1G")
 	q("create", "-f", "raw", raw, "1G")
-	if err := checkImage(plain, "qcow2"); err != nil {
+	if v, err := checkImage(plain, "qcow2"); err != nil || v != 1<<30 {
 		t.Fatal("refused a plain image", err)
 	}
-	if err := checkImage(raw, "raw"); err != nil {
+	if _, err := checkImage(raw, "raw"); err != nil {
 		t.Fatal("refused a raw image", err)
 	}
 	for name, c := range map[string][2]string{"backing file": {backed, "qcow2"}, "data file": {datafile, "qcow2"}, "encrypted": {encrypted, "qcow2"}, "qcow2 sent as raw": {plain, "raw"}, "raw sent as qcow2": {raw, "qcow2"}} {
-		if err := checkImage(c[0], c[1]); refusedCode(err) != "image_refused" {
+		if _, err := checkImage(c[0], c[1]); refusedCode(err) != "image_refused" {
 			t.Errorf("%s accepted: %v", name, err)
 		}
 	}
 	q("create", "-f", "qcow2", filepath.Join(dir, "huge.qcow2"), "1001G")
-	if err := checkImage(filepath.Join(dir, "huge.qcow2"), "qcow2"); refusedCode(err) != "image_refused" {
+	if _, err := checkImage(filepath.Join(dir, "huge.qcow2"), "qcow2"); refusedCode(err) != "image_refused" {
 		t.Error("accepted a 1001 GB disk")
 	}
 }

@@ -57,6 +57,12 @@ func TestAnISOImportFetchesStoresAndCounts(t *testing.T) {
 	if obj(op["error"])["code"] != "checksum_mismatch" || state["cleaned"] != "fetch_clean" || len(p.Store.Objects("images", 1)) != 1 {
 		t.Fatal(op)
 	}
+	// A disk image finished without a virtual size cannot be sized: refused.
+	r = p.Execute(ctx, "image_import", D{"name": "nosize", "url": "https://example.com/disk.qcow2", "sha256": sum}, alice)
+	op = awaitStateWithinMs(t, p, str(obj(r["operation"])["id"]), "failed")
+	if obj(op["error"])["code"] != "image_refused" || len(p.Store.Objects("images", 1)) != 1 {
+		t.Fatal(op)
+	}
 	if r := p.Execute(ctx, "image_delete", D{"name": "netinst", "confirm": "nope"}, alice); r["ok"] != false {
 		t.Fatal("deleted without confirmation")
 	}
@@ -158,5 +164,31 @@ func TestAMachineInstalledFromAnISO(t *testing.T) {
 	}
 	if r := p.Execute(ctx, "machine_create", D{"name": "box", "kind": "ct", "iso": "netinst"}, alice); r["ok"] != false && obj(obj(r["operation"])["error"])["code"] == nil {
 		t.Fatal(r)
+	}
+}
+
+func TestAVMBootsATenantCloudImage(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	tenant := p.Store.TenantN(1)
+	vol := "rs822rp1:import/carrel-t001-noble-cdcdcdcdcdcd.qcow2"
+	p.Store.Put("images", "img2", 1, decode(string(encoded(imageRecord{ID: "img2", TenantN: 1, Name: "noble", Kind: "qcow2", SHA256: strings.Repeat("cd", 32), Size: 600 << 20, VirtualSize: 12 << 30, State: "ready", Volume: vol}))))
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
+	m := e.MachineSpec(tenant, D{"name": "vm1", "image": "tenant:noble", "ssh_keys": []any{key}}, false)
+	if m["import_volume"] != vol || m["import_sha256"] != strings.Repeat("cd", 32) || integer(m["disk_gb"]) != 12 || m["image"] != "tenant:noble" {
+		t.Fatal(m)
+	}
+	if f := attempt(func() {
+		e.MachineSpec(tenant, D{"name": "vm2", "image": "tenant:noble", "disk_gb": 11, "ssh_keys": []any{key}}, false)
+	}); f == nil {
+		t.Fatal("a disk smaller than the image was accepted")
+	}
+	// An image without a virtual size (a fetcher that did not report it)
+	// cannot size its disk.
+	p.Store.Put("images", "img3", 1, decode(string(encoded(imageRecord{ID: "img3", TenantN: 1, Name: "nosize", Kind: "raw", SHA256: strings.Repeat("ef", 32), Size: 1 << 30, State: "ready", Volume: "rs822rp1:import/carrel-t001-nosize-efefefefefef.raw"}))))
+	for _, bad := range []string{"tenant:missing", "tenant:netinst", "tenant:nosize"} {
+		if f := attempt(func() { e.MachineSpec(tenant, D{"name": "vm3", "image": bad, "ssh_keys": []any{key}}, false) }); f == nil {
+			t.Fatal("accepted", bad)
+		}
 	}
 }

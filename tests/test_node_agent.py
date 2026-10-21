@@ -750,3 +750,39 @@ def test_a_console_answers_once_then_hands_stdio_to_qm_or_socat(monkeypatch, cap
         module.console(vm, "serial", None)
     with pytest.raises(ValueError):
         module.console(dict(MACHINE, kind="ct"), "serial", None)
+
+
+def test_a_cloud_image_is_checked_then_imported(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "content_storage", lambda kind: "shared")
+    monkeypatch.setattr(module, "storage_entry", lambda s: {"type": "nfs", "path": str(tmp_path)})
+    digest = "cd" * 32
+    name = "carrel-t001-noble-" + digest[:12] + ".qcow2"
+    virtual = {"size": 10 * 1024**3}
+
+    def run(*a, **k):
+        if a[0] == "qemu-img":
+            assert a[1:5] == ("info", "-f", "qcow2", "--output=json")
+            return json.dumps({"virtual-size": virtual["size"]})
+        return digest + "  x"
+
+    monkeypatch.setattr(module, "run", run)
+    vm = dict(MACHINE, kind="vm", disk_gb=10)
+    assert module.import_volume(vm, "shared:import/" + name, digest) == "shared:import/" + name
+    # The host reads the virtual size itself: an image larger than the disk
+    # the quota counted is refused, whatever the fetcher reported.
+    for size in [10 * 1024**3 + 1, 0, "big"]:
+        virtual["size"] = size
+        with pytest.raises(ValueError, match="virtual size"):
+            module.import_volume(vm, "shared:import/" + name, digest)
+    monkeypatch.setattr(module, "run", lambda *a, **k: "0" * 64 + "  x")
+    with pytest.raises(ValueError, match="checksum"):
+        module.import_volume(vm, "shared:import/" + name, digest)
+    for bad, d in [
+        ("shared:import/carrel-t002-noble-" + digest[:12] + ".qcow2", digest),
+        ("other:import/" + name, digest),
+        ("shared:iso/" + name, digest),
+        ("shared:import/" + name, "ab" * 32),
+    ]:
+        with pytest.raises(ValueError):
+            module.import_volume(vm, bad, d)

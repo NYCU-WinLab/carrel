@@ -316,6 +316,11 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	kind := textAt(a, "kind", "vm")
 	defaultImage := find(dicts(Contract["images"]), func(i D) bool { return i["kind"] == kind && boolean(i["default"]) })
 	image := textAt(a, "image", str(defaultImage["name"]))
+	tenantImage := strings.HasPrefix(image, "tenant:")
+	if tenantImage {
+		// Sized and set up like the minimal image; the disk comes from the import.
+		image = "debian-13-minimal"
+	}
 	installed := find(dicts(Contract["images"]), func(i D) bool { return i["name"] == image && i["kind"] == kind })
 	if installed == nil {
 		fail("invalid", "Image is not available")
@@ -348,6 +353,9 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if a["public_ssh"] == false {
 		// Reached through the jump host only (issue #98).
 		m["public_ssh"] = false
+	}
+	if tenantImage {
+		m = e.ImportedMachineSpec(t, a, m)
 	}
 	return m
 }

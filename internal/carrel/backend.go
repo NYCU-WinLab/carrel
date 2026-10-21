@@ -24,7 +24,12 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	if target == "" {
 		target = "carrel-node"
 	}
-	ctx, cancel := context.WithTimeout(ctx, adapterTimeout(str(request["op"])))
+	timeout := adapterTimeout(str(request["op"]))
+	if request["op"] == "create" && obj(request["machine"])["import_volume"] != nil {
+		// Hashing and importing up to 20 GB over NFS (PLAN 7.8).
+		timeout = 3 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	started := time.Now()
 	// Keepalives notice a node that stopped answering within 45 seconds.

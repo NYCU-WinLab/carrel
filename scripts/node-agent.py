@@ -1298,6 +1298,36 @@ def create_from_iso(m, exists, manifest, saved, marker):
     return {"state": "running", "vmid": vmid}
 
 
+def import_volume(m, volume, digest):
+    # Only this tenant's images on the site's import storage, and only the
+    # bytes the fetcher's checks accepted (the database's checksum).
+    storage, _, rest = str(volume).partition(":import/")
+    match = VOLUME.fullmatch(rest)
+    if storage != content_storage("import") or not match or int(match[1]) != m["tenant_n"] or rest.endswith(".iso"):
+        raise ValueError("invalid image volume")
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest) or rest.rsplit("-", 1)[1][:12] != digest[:12]:
+        raise ValueError("invalid image checksum")
+    entry = storage_entry(storage)
+    if entry is None or "path" not in entry:
+        raise ValueError("the image storage is not a directory storage")
+    try:
+        found = run("sha256sum", Path(entry["path"]) / "import" / rest, timeout=3600).split()[0]
+    except (CommandFailure, subprocess.TimeoutExpired) as e:
+        raise StorageUnavailable(f"{rest} missing or its storage unreachable") from e
+    if found != digest:
+        raise ValueError("image does not match its checksum")
+    # The fetcher's virtual size is not trusted (PLAN 7.8): read it here,
+    # before the import, and keep it within the disk the quota counted.
+    try:
+        info = json.loads(run("qemu-img", "info", "-f", rest.rsplit(".", 1)[1], "--output=json", Path(entry["path"]) / "import" / rest, timeout=60))
+    except (CommandFailure, subprocess.TimeoutExpired, ValueError) as e:
+        raise ValueError("image is not a readable disk image") from e
+    size = info.get("virtual-size")
+    if not isinstance(size, int) or size <= 0 or size > integer(m["disk_gb"], 1, 1000) * 1024**3:
+        raise ValueError("the image's virtual size exceeds the machine's disk")
+    return f"{storage}:import/{rest}"
+
+
 def set_media(m, cfg, req):
     vmid = machine(m)
     # A managed VM's ide2 is its cloud-init drive: never touched here.
@@ -1363,7 +1393,7 @@ def create(m):
             return {"state": "exists", "vmid": vmid, **cloud_init_files(m)}
     else:
         saved = {"marker": marker, "complete": False}
-        if m["kind"] == "vm" and not m.get("iso_volume"):
+        if m["kind"] == "vm" and not m.get("iso_volume") and not m.get("import_volume"):
             saved["template"] = vm_template(m["image"])
         write(manifest, json.dumps(saved), 0o600)
     if m.get("iso_volume"):
@@ -1376,6 +1406,15 @@ def create(m):
     keyfile = STATE / f"{vmid}.pub"
     write(keyfile, keys(m["ssh_keys"]), 0o600)
     net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450,rate=12.5"
+    if m["kind"] == "vm" and m.get("import_volume") and not exists:
+        # A tenant's cloud image (PLAN 7.8): checked against its checksum,
+        # then imported as the boot disk; the rest is an ordinary VM.
+        volume = import_volume(m, m["import_volume"], m.get("import_sha256"))
+        run("qm", "create", vmid, "--name", m["name"], "--description", marker, "--scsihw", "virtio-scsi-single",
+            "--scsi0", f"{storage_id()}:0,import-from={volume},iothread=1,discard=on,ssd=1",
+            "--ide2", f"{storage_id()}:cloudinit", "--boot", "order=scsi0", "--serial0", "socket", "--agent", "1",
+            "--ostype", "l26", timeout=3600)
+        exists = True
     if m["kind"] == "vm":
         template = saved.get("template", {"prepared": False})
         if not exists:
