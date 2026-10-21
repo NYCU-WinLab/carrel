@@ -80,7 +80,9 @@ class Node:
             (self.lib / name).write_text("old " + name)
         monkeypatch.setattr(module, "LIB", self.lib)
         monkeypatch.setattr(module, "run", self.run)
-        monkeypatch.setattr(module, "capture", lambda *a: "carrel.test\n")
+        monkeypatch.setattr(
+            module, "capture", lambda *a: '{"version": "1.0.0"}' if a[-1] == "-version" else "carrel.test\n"
+        )
         monkeypatch.setattr(module.subprocess, "run", lambda args, **kw: self.calls.append(tuple(args)))
         monkeypatch.setattr(module, "templates_for", lambda stage, node, storage: {"debian-13-minimal": {}})
         monkeypatch.setattr(module, "healthy", lambda version, host: {"version": version})
@@ -209,3 +211,15 @@ def test_preflight_refuses_active_operations_and_allows_a_first_install(tmp_path
     db.commit()
     with pytest.raises(SystemExit, match="Active operations"):
         module.ct_preflight()
+
+
+def test_a_binary_of_another_version_stops_the_install(monkeypatch, tmp_path):
+    module = load("install-control.py")
+    (tmp_path / "hashes.json").write_text("{}")
+    asked = []
+    monkeypatch.setattr(module, "capture", lambda *a: asked.append(a) or '{"version": "0.9.0"}')
+    # Nothing else on the host runs before the check (issue #56).
+    monkeypatch.setattr(module, "run", lambda *a, **k: pytest.fail("ran " + str(a)))
+    with pytest.raises(SystemExit, match="0.9.0"):
+        module.host(tmp_path, "0.10.0")
+    assert asked == [(tmp_path / "carrel", "-version")]

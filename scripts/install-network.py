@@ -145,6 +145,17 @@ def site_layout(node, site):
             if node == exits[0] else None}
 
 
+def check_underlay(interface, address, node):
+    found = json.loads(run("ip", "-j", "-4", "addr", "show", "dev", interface))
+    if not any(a.get("local") == address for i in found for a in i.get("addr_info", [])):
+        raise SystemExit(f"{address} is not on {interface}: this is not {node} of this site")
+
+
+def mark(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+
+
 def run(*args):
     p = subprocess.run(args, check=True, text=True, capture_output=True)
     return p.stdout.strip()
@@ -158,6 +169,9 @@ def main():
     node = socket.gethostname().split(".")[0]
     layout = site_layout(node, json.loads(args.site.read_text()))
     address = layout["address"]
+    # The hostname alone could match another machine, such as an older host
+    # with the same name (issue #48): the site's address must be here.
+    check_underlay(layout["interface"], address, node)
     peers = ",".join(layout.get("all", [address]))
     exits = ",".join(layout["exit_nodes"])
     # PVE's SDN regeneration hook requires dnsmasq@.service; carrel's private
@@ -165,7 +179,10 @@ def main():
     run("systemctl", "mask", "dnsmasq.service")
     run("apt-get", "install", "-y", "dnsmasq")
     run("systemctl", "enable", "--now", "frr")
-    sdn_changed = False
+    # A change made before a failed run is still owed its apply (issue #48):
+    # the marker survives the failure, and the rerun applies.
+    pending = Path("/var/lib/carrel/sdn-pending")
+    sdn_changed = pending.exists()
     for path, key, ident, args in [
         ("controllers", "controller", "carrel", ["--type", "evpn", "--asn", "65009", "--peers", peers]),
         (
@@ -194,6 +211,7 @@ def main():
         objects = json.loads(run("pvesh", "get", "/cluster/sdn/" + path, "--output-format", "json"))
         current = next((x for x in objects if x[key] == ident), None)
         if current is None:
+            mark(pending)
             run("pvesh", "create", "/cluster/sdn/" + path, "--" + key, ident, *args)
             sdn_changed = True
         else:
@@ -203,6 +221,7 @@ def main():
                 wanted["exitnodes"] = exits
             stale = [f for f, v in wanted.items() if ",".join(sorted(str(current.get(f, "")).split(","))) != ",".join(sorted(v.split(",")))]
             if stale:
+                mark(pending)
                 run("pvesh", "set", f"/cluster/sdn/{path}/{ident}", *[x for f in stale for x in ("--" + f, wanted[f])])
                 sdn_changed = True
     Path("/etc/carrel").mkdir(exist_ok=True)
@@ -287,6 +306,7 @@ WantedBy=multi-user.target
     run("nft", "-c", "-f", "/etc/carrel/tenant-host.nft")
     if sdn_changed:
         run("pvesh", "set", "/cluster/sdn")
+        pending.unlink(missing_ok=True)
     run(
         "systemctl",
         "enable",
