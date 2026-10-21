@@ -15,7 +15,12 @@ func TestAVMFromAnImageWithPortsHasNoSSH(t *testing.T) {
 	vol := "rs822rp1:import/carrel-t001-talos-cdcdcdcdcdcd.qcow2"
 	p.Store.Put("images", "img1", 1, decode(string(encoded(imageRecord{ID: "img1", TenantN: 1, Name: "talos", Kind: "qcow2", SHA256: strings.Repeat("cd", 32), Size: 300 << 20, VirtualSize: 1 << 30, State: "ready", Volume: vol, Ports: []int{50000, 6443}}))))
 	config := "version: v1alpha1\nmachine:\n  token: secret\n"
-	// No saved keys and none given: an image without SSH needs none.
+	// The jump host tunnel needs a saved key.
+	if f := attempt(func() { e.MachineSpec(tenant, D{"name": "cp1", "image": "tenant:talos"}, false) }); f == nil {
+		t.Fatal("created without a saved key for the tunnel")
+	}
+	p.Store.Put("keys", "1-k", 1, D{"id": "k", "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"})
+	// No keys given: the VM itself takes none.
 	m := e.MachineSpec(tenant, D{"name": "cp1", "image": "tenant:talos", "user_data": config}, false)
 	if !unmanaged(m) || m["public_ssh"] != false || integer(m["swap_mb"]) != 0 || len(arr(m["ssh_keys"])) != 0 || m["user_data"] != config || m["readiness_token"] != nil {
 		t.Fatal(m)
@@ -57,8 +62,14 @@ func TestAVMFromAnImageWithPortsHasNoSSH(t *testing.T) {
 	if pub["state"] != "ready" || obj(pub["readiness"])["service_status"] != "verified" || obj(pub["readiness"])["service_port"] != 50000 {
 		t.Fatal(pub)
 	}
+	if pub["install"] != nil {
+		t.Fatal("ISO install details on a Talos VM", pub)
+	}
+	// Its ide2 is the cloud-init drive: no media.
+	if f := attempt(func() { e.Media(m, D{"action": "eject"}, tenant) }); f == nil {
+		t.Fatal("media accepted on a Talos VM")
+	}
 	// The jump host forwards the declared ports, not SSH.
-	p.Store.Put("keys", "1-k", 1, D{"id": "k", "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"})
 	keys := jumpAuthorizedKeys(p.Store)
 	if !strings.Contains(keys, `permitopen="10.200.1.11:50000",permitopen="10.200.1.11:6443"`) || strings.Contains(keys, "10.200.1.11:22") {
 		t.Fatal(keys)

@@ -432,7 +432,7 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	// network_access filters the primary NIC only; private NICs are the
 	// member's own unfiltered segments (issue #75).
 	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": "unfiltered_experiment_networks", "allowed_connections": allowed}
-	if unmanaged(m) {
+	if unmanaged(m) && len(servicePortsOf(m)) == 0 {
 		safe["install"] = installInfo(m)
 	}
 	nics := []D{}

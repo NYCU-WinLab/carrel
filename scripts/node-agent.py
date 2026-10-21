@@ -1001,7 +1001,8 @@ def migrate_prepare(req):
     if where is None:
         raise ValueError("machine not found in the cluster")
     owned(m, node=where)
-    if m["kind"] == "vm" and m.get("guest_management", 1):
+    # Every VM with cloud-init: managed, or without SSH (issue #94).
+    if m["kind"] == "vm" and (m.get("guest_management", 1) or m.get("service_ports")):
         if not req.get("cloud_init"):
             raise ValueError("cloud-init files required to move a VM")
         if where == NODE:
@@ -1345,8 +1346,8 @@ def import_volume(m, volume, digest):
 
 def set_media(m, cfg, req):
     vmid = machine(m)
-    # A managed VM's ide2 is its cloud-init drive: never touched here.
-    if m["kind"] != "vm" or m.get("guest_management", 1):
+    # A managed or Talos VM's ide2 is its cloud-init drive: never touched here.
+    if m["kind"] != "vm" or m.get("guest_management", 1) or m.get("service_ports"):
         raise ValueError("only VMs installed from an ISO take media")
     if req.get("iso_volume"):
         run("qm", "set", vmid, "--ide2", f"{iso_volume(m, req['iso_volume'])},media=cdrom")

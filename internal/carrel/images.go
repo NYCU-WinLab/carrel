@@ -346,7 +346,7 @@ func bootState(m D) string {
 
 // Media inserts or ejects a machine's ISO (machine_media).
 func (e *Execution) Media(m, a, t D) D {
-	if !unmanaged(m) {
+	if !unmanaged(m) || len(servicePortsOf(m)) > 0 {
 		fail("invalid", "Only a machine installed from an ISO takes media")
 	}
 	n := integer(t["n"])
@@ -476,6 +476,10 @@ func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 		if a["size"] == nil && a[k] == nil {
 			m[k] = small[k]
 		}
+	}
+	// The tunnel needs a saved key: the jump host admits saved keys only here.
+	if e.jumpEnabled() && len(rowsOf[sshKey](e.S, "keys", integer(t["n"]))) == 0 && !boolean(a["dry_run"]) {
+		fail("invalid", "Save an SSH public key with ssh_key_add first: the jump host tunnel to this machine needs one", D{"recovery": "resolve_prerequisite"})
 	}
 	m["service_ports"], m["guest_management"], m["public_ssh"], m["swap_mb"], m["ssh_keys"] = ports, 0, false, 0, []any{}
 	delete(m, "readiness_token")

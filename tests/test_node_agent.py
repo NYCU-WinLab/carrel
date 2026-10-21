@@ -567,6 +567,25 @@ def test_a_machine_without_ssh_admits_its_declared_ports_only(monkeypatch):
         module.cloud_init(dict(vm, user_data="x" * 65537))
 
 
+def test_a_talos_vm_moves_with_its_cloud_init_and_takes_no_media(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "located", lambda m: "carrel02")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    monkeypatch.setattr(module, "owned", lambda m, **k: {})
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    restored = []
+    monkeypatch.setattr(module, "restore_cloud_init", lambda m, files: restored.append(files))
+    talos = dict(MACHINE, kind="vm", guest_management=0, service_ports=[50000])
+    files = {"user": "version: v1alpha1\n", "network": "{}"}
+    assert module.migrate_prepare({"machine": talos, "cloud_init": files}) == {"state": "ready"}
+    assert restored == [files]
+    with pytest.raises(ValueError, match="cloud-init"):
+        module.migrate_prepare({"machine": talos})
+    # Its ide2 is the cloud-init drive.
+    with pytest.raises(ValueError, match="ISO"):
+        module.set_media(talos, {}, {"iso_volume": None})
+
+
 def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
     module = load("jump-sync.py")
     line = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22" ssh-ed25519 AAAA'
