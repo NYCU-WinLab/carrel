@@ -327,6 +327,9 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if len(keys) > 0 || !dry {
 		validateKeys(keys)
 	}
+	if a["public_ssh"] == false && !e.jumpEnabled() {
+		fail("invalid", "This site has no SSH jump host; every machine needs a public SSH port", D{"recovery": "revise_request"})
+	}
 	if kind == "ct" && (boolean(a["nested_virt"]) || len(arr(a["packages"])) > 0 || len(arr(a["runcmd"])) > 0 || len(arr(a["health_checks"])) > 0) {
 		fail("invalid", "Use a VM for nested virtualization or cloud-init commands")
 	}
@@ -338,10 +341,19 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if !dry {
 		token = random(32)
 	}
-	return merge(spec, D{"name": a["name"], "kind": kind, "image": image, "ssh_keys": keys, "nested_virt": boolean(a["nested_virt"]), "swap_mb": intAt(a, "swap_mb", swap), "packages": arr(a["packages"]), "runcmd": arr(a["runcmd"]), "health_checks": arr(a["health_checks"]), "network_access": textAt(a, "network_access", "tenant"), "readiness_token": token, "guest_management": 1, "nics": []D{}})
+	m := merge(spec, D{"name": a["name"], "kind": kind, "image": image, "ssh_keys": keys, "nested_virt": boolean(a["nested_virt"]), "swap_mb": intAt(a, "swap_mb", swap), "packages": arr(a["packages"]), "runcmd": arr(a["runcmd"]), "health_checks": arr(a["health_checks"]), "network_access": textAt(a, "network_access", "tenant"), "readiness_token": token, "guest_management": 1, "nics": []D{}})
+	if a["public_ssh"] == false {
+		// Reached through the jump host only (issue #98).
+		m["public_ssh"] = false
+	}
+	return m
 }
 func machineDelta(m D) D {
-	return D{"vcpu": m["cpu"], "memory_mb": m["memory_mb"], "disk_gb": m["disk_gb"], "machines": 1, "ips": 1, "public_ports": 1}
+	ports := 1
+	if m["public_ssh"] == false {
+		ports = 0
+	}
+	return D{"vcpu": m["cpu"], "memory_mb": m["memory_mb"], "disk_gb": m["disk_gb"], "machines": 1, "ips": 1, "public_ports": ports}
 }
 func plannedMachine(m D) D {
 	req := []string{}

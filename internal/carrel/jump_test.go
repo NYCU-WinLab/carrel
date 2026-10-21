@@ -55,3 +55,33 @@ func TestSavedKeysAreBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestMachinesWithoutPublicSSHUseNoPort(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	tenant := p.Store.TenantN(1)
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
+	spec := D{"name": "hidden", "public_ssh": false, "ssh_keys": []any{key}}
+	if f := attempt(func() { e.MachineSpec(tenant, spec, false) }); f == nil {
+		t.Fatal("a site without a jump host accepted public_ssh false")
+	}
+	p.Config["ssh_jump"] = true
+	// More machines than the tenant's 10 public ports.
+	for i := range 12 {
+		s := merge(spec, D{"name": fmt.Sprintf("hidden%d", i)})
+		m := e.MachineSpec(tenant, s, false)
+		if machineDelta(m)["public_ports"] != 0 {
+			t.Fatal("counted a public port")
+		}
+		m, grant := e.AllocateMachine(tenant, merge(m, D{"node": "carrel01"}))
+		if grant.PublicPort != 0 {
+			t.Fatal("allocated a port", grant)
+		}
+		if pub := e.PublicMachine(m, e.ports(1)); !strings.Contains(str(pub["ssh_config"]), "ProxyJump jump@carrel.winlab.tw") {
+			t.Fatal(pub)
+		}
+	}
+	if len(e.ports(1)) != 0 {
+		t.Fatal("ports were granted")
+	}
+}

@@ -207,7 +207,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		m = node.record(m)
 		if dry {
 			planned := plannedMachine(m)
-			return D{"machine": planned, "quota_after": after, "admission": admission, "requirements": planned["requirements"], "units": Units, "connection": D{"available_after": "create", "public_ssh": true}}
+			return D{"machine": planned, "quota_after": after, "admission": admission, "requirements": planned["requirements"], "units": Units, "connection": D{"available_after": "create", "public_ssh": m["public_ssh"] != false}}
 		}
 		var grant portGrant
 		e.Transaction(func(tx *Execution) {
