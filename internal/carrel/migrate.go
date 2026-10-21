@@ -1,6 +1,9 @@
 package carrel
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // Moving machines between nodes (PLAN 7.10). Validation and the plan run
 // under the writer lock; the copy runs outside it, like certificate
@@ -167,10 +170,14 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 		// Marked first: a drain that stops halfway is resumed by running it again.
 		e.S.SitePut("node", node.Name, D{"drained": true})
 	}
-	moving := map[int]any{}
+	// Moves still queued have no machine bound yet: match them by name too.
+	moving := map[string]any{}
 	for _, op := range e.S.ActiveOperations() {
 		if op["tool"] == "machine_migrate" {
-			moving[integer(obj(op["machine_target"])["vmid"])] = op["id"]
+			if id := obj(op["machine_target"])["vmid"]; id != nil {
+				moving[str(id)] = op["id"]
+			}
+			moving[fmt.Sprintf("%d/%s", integer(op["tenant_n"]), str(obj(op["args"])["machine"]))] = op["id"]
 		}
 	}
 	machines := filter(e.S.Objects("machines"), func(m D) bool { return m["node"] == node.Name && m["state"] != "deleting" })
@@ -192,7 +199,11 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 			staying = append(staying, merge(move, D{"reason": reason}))
 			continue
 		}
-		if id, ok := moving[integer(m["vmid"])]; ok {
+		id, ok := moving[str(m["vmid"])]
+		if !ok {
+			id, ok = moving[fmt.Sprintf("%d/%s", integer(m["tenant_n"]), str(m["name"]))]
+		}
+		if ok {
 			// Running the drain again does not move a machine twice.
 			moves = append(moves, merge(move, D{"operation": id}))
 			continue
