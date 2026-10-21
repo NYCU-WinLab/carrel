@@ -62,6 +62,9 @@ func TestAVMFromAnImageWithPortsHasNoSSH(t *testing.T) {
 	if pub["state"] != "ready" || obj(pub["readiness"])["service_status"] != "verified" || obj(pub["readiness"])["service_port"] != 50000 {
 		t.Fatal(pub)
 	}
+	if _, ok := obj(pub["readiness"])["ssh_status"]; ok || pub["ssh_ready"] != nil {
+		t.Fatal("SSH readiness on a machine without SSH", pub)
+	}
 	if pub["install"] != nil {
 		t.Fatal("ISO install details on a Talos VM", pub)
 	}
@@ -84,5 +87,17 @@ func TestImagePortsAreValidated(t *testing.T) {
 		if f := attempt(func() { servicePorts(bad) }); f == nil {
 			t.Fatal("accepted", bad)
 		}
+	}
+}
+
+func TestCapabilitiesFollowTheSite(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	if e.capabilities()["custom_image_import"] != false {
+		t.Fatal("imports without a fetcher")
+	}
+	p.Config["fetch"] = true
+	if e.capabilities()["custom_image_import"] != true || obj(Contract["capabilities"])["custom_image_import"] != false {
+		t.Fatal("the site's fetcher is not reported, or the contract changed")
 	}
 }
