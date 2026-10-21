@@ -547,7 +547,9 @@ def test_the_jump_host_reaches_port_22_of_every_machine(monkeypatch, tmp_path):
 def test_a_machine_without_ssh_admits_its_declared_ports_only(monkeypatch):
     module = load("node-agent.py")
     talos = dict(MACHINE, service_ports=[50000, 6443])
-    rules = module.guest_firewall(talos, {"peers": [], "ports": [], "domains": []}, {"protected_addresses": []}).splitlines()
+    rules = module.guest_firewall(
+        talos, {"peers": [], "ports": [], "domains": []}, {"protected_addresses": []}
+    ).splitlines()
     for source in ("10.200.0.3", "10.200.0.4"):
         assert f"IN ACCEPT -source {source} -p tcp -dport 50000" in rules
         assert f"IN ACCEPT -source {source} -p tcp -dport 6443" in rules
@@ -557,7 +559,10 @@ def test_a_machine_without_ssh_admits_its_declared_ports_only(monkeypatch):
     files = {}
     monkeypatch.setattr(module, "write", lambda path, data, mode: files.update({path: data}))
     vm = dict(MACHINE, kind="vm", service_ports=[50000], ssh_keys=[], user_data="version: v1alpha1\n")
-    assert module.cloud_init(vm) == "user=local:snippets/carrel-10100-user.json,network=local:snippets/carrel-10100-network.json"
+    assert (
+        module.cloud_init(vm)
+        == "user=local:snippets/carrel-10100-user.json,network=local:snippets/carrel-10100-network.json"
+    )
     assert files["/var/lib/vz/snippets/carrel-10100-user.json"] == "version: v1alpha1\n"
     network = json.loads(files["/var/lib/vz/snippets/carrel-10100-network.json"])
     assert network["ethernets"]["primary"]["mtu"] == 1450
