@@ -697,7 +697,8 @@ WantedBy=multi-user.target
     write(STATE / "vips.json", json.dumps(vip_targets(state)))
     if write("/etc/systemd/system/carrel-vip-probe.service", VIP_PROBE_UNIT):
         run("systemctl", "daemon-reload")
-        run("systemctl", "enable", "--now", "carrel-vip-probe")
+    # Every time, so an enable that failed once is retried.
+    run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     return {"changed": changed}
 
@@ -734,7 +735,13 @@ def vip_targets(state):
 def vip_probe_once(targets, run=run):
     probed = []
     for v in targets:
-        for entry in json.loads(run("ip", "-j", "neigh", "show", v["address"], "dev", v["dev"]) or "[]"):
+        try:
+            entries = json.loads(run("ip", "-j", "neigh", "show", v["address"], "dev", v["dev"]) or "[]")
+        except CommandFailure:
+            # One missing bridge must not stop the others.
+            print(f"vip-probe: cannot read {v['dev']}", file=sys.stderr)
+            continue
+        for entry in entries:
             # Only this node's own entry: remote ones are FRR's.
             if "extern_learn" in entry.get("flags", []) or "lladdr" not in entry:
                 continue
@@ -745,7 +752,11 @@ def vip_probe_once(targets, run=run):
 
 
 def vip_probe():
+    started = Path(__file__).stat().st_mtime
     while True:
+        # A deploy replaces this file: run the new code.
+        if Path(__file__).stat().st_mtime != started:
+            os.execv(sys.executable, [sys.executable, __file__, "vip-probe"])
         try:
             path = STATE / "vips.json"
             vip_probe_once(json.loads(path.read_text()) if path.exists() else [])
