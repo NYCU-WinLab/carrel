@@ -917,6 +917,35 @@ def tenant_route():
     return any(r.get("gateway") or any(h.get("gateway") for h in r.get("nexthops", [])) for r in routes)
 
 
+SNIPPETS = Path("/var/lib/vz/snippets")
+
+
+def cloud_init_files(m):
+    """The exact cloud-init files of a VM, for the control plane to keep (issue #93).
+
+    Proxmox makes the instance id the SHA-1 of these bytes, so a copy written
+    on another node must be these bytes, never a regenerated file.
+    """
+    vmid = machine(m)
+    paths = {kind: SNIPPETS / f"carrel-{vmid}-{kind}.json" for kind in ("user", "network")}
+    if m.get("kind") != "vm" or not all(p.exists() for p in paths.values()):
+        return {}
+    return {"cloud_init": {kind: p.read_text() for kind, p in paths.items()}}
+
+
+def restore_cloud_init(m, files):
+    # Only a missing file is written back: one that exists is what this VM
+    # booted with, and replacing it would change its instance id.
+    vmid = machine(m)
+    for kind in ("user", "network"):
+        data = files[kind]
+        if not isinstance(data, str) or len(data) > 1_000_000:
+            raise ValueError("invalid cloud-init file")
+        path = SNIPPETS / f"carrel-{vmid}-{kind}.json"
+        if not path.exists():
+            write(path, data, 0o600)
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -934,10 +963,10 @@ def create(m):
             if saved.get("marker") != marker or cfg.get("description") != marker:
                 raise
         if saved.get("complete") and saved.get("marker") == marker:
-            return {"state": "exists", "vmid": vmid}
+            return {"state": "exists", "vmid": vmid, **cloud_init_files(m)}
         if saved.get("marker") != marker:
             # Older, already handed-over guests are never reconfigured by retry.
-            return {"state": "exists", "vmid": vmid}
+            return {"state": "exists", "vmid": vmid, **cloud_init_files(m)}
     else:
         saved = {"marker": marker, "complete": False}
         if m["kind"] == "vm":
@@ -1045,7 +1074,7 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
     write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
     keyfile.unlink(missing_ok=True)
-    return {"state": "running", "vmid": vmid}
+    return {"state": "running", "vmid": vmid, **cloud_init_files(m)}
 
 
 def power_status(m):
@@ -1111,6 +1140,8 @@ def action(req):
     vmid = m["vmid"]
     op = req["action"]
     if op in ["start", "shutdown", "stop", "reboot", "pause", "resume"]:
+        if op in ("start", "reboot") and req.get("cloud_init"):
+            restore_cloud_init(m, req["cloud_init"])
         return power_action(m, cfg, op)
     elif op == "delete":
         if req.get("confirm") != m["name"]:
@@ -1176,7 +1207,7 @@ def main():
     req = json.loads(data)
     op = req["op"]
     with (STATE / "node.lock").open("w") as lock:
-        if op not in ("inventory", "status", "metrics", "node_files"):
+        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         if req.get("request_id") and op in ("create", "action"):
@@ -1214,6 +1245,10 @@ def main():
             owned(m)
             kind = "qemu" if m["kind"] == "vm" else "lxc"
             out = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+        elif op == "cloud_init_read":
+            m = req["machine"]
+            owned(m)
+            out = cloud_init_files(m)
         elif op == "node_files":
             # For the control plane's backup: only files without secrets
             # (the reader token is rebuilt by configure-reader.py).

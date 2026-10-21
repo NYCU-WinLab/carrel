@@ -379,3 +379,25 @@ def test_vip_probe_touches_only_this_nodes_entries_of_registered_vips():
                 "nud",
                 "probe",
             )
+
+
+def test_cloud_init_files_are_read_whole_and_only_missing_ones_written_back(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    vm = dict(MACHINE, vmid=10100, kind="vm")
+    assert module.cloud_init_files(vm) == {}
+    (tmp_path / "carrel-10100-user.json").write_text("#cloud-config\n{}")
+    (tmp_path / "carrel-10100-network.json").write_text('{"version": 2}')
+    files = module.cloud_init_files(vm)["cloud_init"]
+    assert files == {"user": "#cloud-config\n{}", "network": '{"version": 2}'}
+    assert module.cloud_init_files(dict(vm, kind="ct")) == {}
+    # The node's own copy is what the VM booted with: never replaced.
+    module.restore_cloud_init(vm, {"user": "other", "network": "other"})
+    assert (tmp_path / "carrel-10100-user.json").read_text() == "#cloud-config\n{}"
+    (tmp_path / "carrel-10100-user.json").unlink()
+    (tmp_path / "carrel-10100-network.json").unlink()
+    module.restore_cloud_init(vm, files)
+    assert module.cloud_init_files(vm)["cloud_init"] == files
+    assert oct((tmp_path / "carrel-10100-user.json").stat().st_mode & 0o777) == "0o600"
+    with pytest.raises(ValueError):
+        module.restore_cloud_init(dict(vm, vmid=10101), {"user": None, "network": "x"})

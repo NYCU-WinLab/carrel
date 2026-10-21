@@ -300,7 +300,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			e.Reconcile()
 			e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
 			e.Transaction(func(tx *Execution) {
-				for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports"} {
+				for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports", "cloud_init"} {
 					for _, o := range tx.S.Objects(kind, n) {
 						if integer(o["vmid"]) == integer(m["vmid"]) {
 							tx.S.Remove(kind, fallback(o, "id", o["vmid"]))

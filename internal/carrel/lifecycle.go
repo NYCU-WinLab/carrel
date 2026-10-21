@@ -134,7 +134,7 @@ func (e *Execution) Provision(m D, reconciled bool) {
 		if !reconciled {
 			e.Reconcile()
 		}
-		e.Call(D{"op": "create", "machine": m})
+		e.keepCloudInit(m, obj(e.Call(D{"op": "create", "machine": m}))["cloud_init"])
 		m["state"] = "initializing"
 		e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	})
@@ -329,4 +329,45 @@ func (e *Execution) GuestReport(body D, source string) {
 	}
 	e.S.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"vmid": m["vmid"], "initialization_status": init, "application_status": app, "checks": safe, "interfaces": ifs, "failed_step": body["failed_step"], "boot_id": body["boot_id"], "reported_at": now()})
 	e.P.notifyReport(integer(m["vmid"]))
+}
+
+// keepCloudInit stores the files a node reported for a VM, unchanged.
+func (e *Execution) keepCloudInit(m D, files any) {
+	f := obj(files)
+	user, network := str(f["user"]), str(f["network"])
+	if user == "" || network == "" {
+		return
+	}
+	r := cloudInitRecord{VMID: integer(m["vmid"]), User: user, UserSHA256: digest(user), Network: network, NetworkSHA256: digest(network)}
+	e.S.Put("cloud_init", m["vmid"], integer(m["tenant_n"]), decode(string(encoded(r))))
+}
+
+// cloudInitFiles returns the stored files of a VM, for a node to write back
+// before it boots the VM.
+func (e *Execution) cloudInitFiles(m D) D {
+	r, ok := rowOf[cloudInitRecord](e.S, "cloud_init", str(m["vmid"]))
+	if !ok || m["kind"] != "vm" || digest(r.User) != r.UserSHA256 || digest(r.Network) != r.NetworkSHA256 {
+		return nil
+	}
+	return D{"user": r.User, "network": r.Network}
+}
+
+// CollectCloudInit reads the files of VMs created before carrel kept them.
+func (e *Execution) CollectCloudInit() int {
+	added := 0
+	for _, m := range e.S.Objects("machines") {
+		if m["kind"] != "vm" || m["state"] == "deleting" {
+			continue
+		}
+		if _, ok := rowOf[cloudInitRecord](e.S, "cloud_init", str(m["vmid"])); ok {
+			continue
+		}
+		if err := attempt(func() { e.keepCloudInit(m, obj(e.Call(D{"op": "cloud_init_read", "machine": m}))["cloud_init"]) }); err != nil {
+			continue
+		}
+		if _, ok := rowOf[cloudInitRecord](e.S, "cloud_init", str(m["vmid"])); ok {
+			added++
+		}
+	}
+	return added
 }

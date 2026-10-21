@@ -34,7 +34,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		}
 		r := e.Reconcile()
 		e.RefreshStorage()
-		return D{"dry_run": false, "result": r}
+		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit()}
 	case "request_list_all":
 		return D{"requests": publicRequests(e.S.Objects("requests"))}
 	case "request_approve", "request_reject":
