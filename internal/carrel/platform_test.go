@@ -18,6 +18,8 @@ type fakeBackend struct {
 	calls     []D
 	inventory D
 	call      func(D, string) (any, error)
+	// honourCtx fails a call whose context is done, like ssh would.
+	honourCtx bool
 }
 
 func (b *fakeBackend) Call(ctx context.Context, r D, target string) (any, error) {
@@ -25,7 +27,11 @@ func (b *fakeBackend) Call(ctx context.Context, r D, target string) (any, error)
 	b.calls = append(b.calls, clone(r))
 	fn := b.call
 	inventory := clone(b.inventory)
+	honour := b.honourCtx
 	b.mu.Unlock()
+	if honour && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if fn != nil {
 		return fn(r, target)
 	}

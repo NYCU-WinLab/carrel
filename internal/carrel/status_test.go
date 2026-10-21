@@ -68,6 +68,9 @@ func TestPublicStatusNamesOnlyTenantsWithAPublicDomain(t *testing.T) {
 
 func TestPublicStatusIgnoresAVisitorsCancellation(t *testing.T) {
 	p, b := fixture(t)
+	// The backend fails on a cancelled context, so a fetch tied to the
+	// visitor's request would fail here (issue #38).
+	b.honourCtx = true
 	b.call = func(r D, _ string) (any, error) {
 		if r["op"] == "inventory" {
 			return baseInventory(), nil
