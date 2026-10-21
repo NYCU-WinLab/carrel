@@ -228,6 +228,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.NetworkAction(tool, a, t)
 	case "domain_add", "domain_list", "domain_remove":
 		return e.DomainAction(tool, a, t)
+	case "iso_import":
+		return e.PlanImport(tool, a, t)
+	case "image_list", "image_delete":
+		return e.ImageAction(tool, a, t)
 	case "snapshot_create", "snapshot_list", "snapshot_delete", "snapshot_rollback":
 		return e.SnapshotAction(tool, a, t)
 	case "request_list":
