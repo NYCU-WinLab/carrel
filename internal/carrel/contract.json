@@ -1894,7 +1894,7 @@
     },
     {
       "name": "machine_migrate",
-      "description": "Admin: move a machine to another node of the site (PLAN 7.10). A running VM moves online; a running CT restarts on the target. A VM that is still a linked clone of its node's template moves its disk through the site's shared storage once; later moves copy the disk directly. The VM's stored cloud-init files go to the target first, so cloud-init does not run again. Refused while the machine has snapshots. Waits up to 55 seconds; a disk copy usually takes longer, so follow the operation with operation_get.",
+      "description": "Admin: move a machine to another node of the site (PLAN 7.10); without node, carrel picks the node with the most free memory that is not drained. Moves run one at a time. A running VM moves online; a running CT restarts on the target. A VM that is still a linked clone of its node's template moves its disk through the site's shared storage once; later moves copy the disk directly. The VM's stored cloud-init files go to the target first, so cloud-init does not run again. Refused while the machine has snapshots. Waits up to 55 seconds; a disk copy usually takes longer, so follow the operation with operation_get.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1937,11 +1937,81 @@
             ],
             "default": "summary",
             "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "description": "Move only if the machine is still on this node; node_drain sets it."
           }
         },
         "required": [
           "tenant",
-          "machine",
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "node_drain",
+      "description": "Admin: stop placing new machines on a node and queue a machine_migrate for each machine on it; the moves run one at a time, each visible with operation_get by its ID. Machines that cannot move (snapshots, suspended tenant, transient state) are listed under staying. Running it again only queues machines without a move in progress. node_undrain reopens the node.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: lists the moves without queueing them or changing the node."
+          }
+        },
+        "required": [
+          "node"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "node_undrain",
+      "description": "Admin: let a drained node take new machines again. Machines already moved away stay where they are.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: lists the moves without queueing them or changing the node."
+          }
+        },
+        "required": [
           "node"
         ],
         "additionalProperties": false
@@ -3261,6 +3331,8 @@
     "usage_report",
     "reconcile_run",
     "machine_migrate",
+    "node_drain",
+    "node_undrain",
     "quota_set",
     "tenant_suspend",
     "request_list_all",
@@ -3279,7 +3351,9 @@
   ],
   "admin_tools": [
     "machine_migrate",
+    "node_drain",
     "node_list",
+    "node_undrain",
     "quota_set",
     "reconcile_run",
     "request_approve",
@@ -3306,6 +3380,8 @@
     "machine_resize",
     "network_create",
     "network_delete",
+    "node_drain",
+    "node_undrain",
     "operation_retry",
     "peer_allow",
     "peer_revoke",

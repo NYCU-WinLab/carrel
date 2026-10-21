@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS tenants(n INTEGER PRIMARY KEY AUTOINCREMENT,subject T
 CREATE TABLE IF NOT EXISTS objects(kind TEXT NOT NULL,id TEXT NOT NULL,tenant INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id),FOREIGN KEY(tenant) REFERENCES tenants(n));
 CREATE INDEX IF NOT EXISTS objects_tenant ON objects(tenant,kind);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,actor TEXT NOT NULL,tenant INTEGER,tool TEXT NOT NULL,args TEXT NOT NULL,outcome TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS oauth(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,expires INTEGER NOT NULL,PRIMARY KEY(kind,id));`)
+CREATE TABLE IF NOT EXISTS oauth(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,expires INTEGER NOT NULL,PRIMARY KEY(kind,id));
+CREATE TABLE IF NOT EXISTS site(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id));`)
 	if e != nil {
 		db.Close()
 		return nil, e
@@ -185,6 +186,19 @@ func (s *Store) Get(kind, id string) D {
 }
 func (s *Store) Put(kind string, id any, n int, value D) {
 	s.Exec("INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data", kind, str(id), n, string(encoded(value)))
+}
+
+// SiteGet and SitePut keep state that belongs to no tenant, such as a
+// drained node.
+func (s *Store) SiteGet(kind, id string) D {
+	r := s.Rows("SELECT data FROM site WHERE kind=? AND id=?", kind, id)
+	if len(r) == 0 {
+		return nil
+	}
+	return decode(str(r[0]["data"]))
+}
+func (s *Store) SitePut(kind, id string, value D) {
+	s.Exec("INSERT INTO site VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data", kind, id, string(encoded(value)))
 }
 func (s *Store) Remove(kind string, id any) {
 	s.Exec("DELETE FROM objects WHERE kind=? AND id=?", kind, str(id))
