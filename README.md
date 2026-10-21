@@ -449,7 +449,8 @@ python3 scripts/deploy-go.py --host root@192.168.19.101 --artifacts /path/to/san
 ```
 
 `deploy-go.py` copies the release to the first exit node and runs `scripts/install-control.py`
-there. It creates the reader token, installs the node programs on every node, and installs or
+there. It creates the reader token, installs the node programs on every node, sets every node's
+sshd to keys only (no passwords, root by key; issue #56), and installs or
 upgrades the control plane service and its backup timer. An upgrade waits for idle jobs, keeps
 database, configuration, OAuth and certificates, and saves a private rollback archive; a failed
 health check puts the previous binary, units and the first exit node's programs back. Nothing is compiled on the

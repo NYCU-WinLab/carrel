@@ -150,3 +150,14 @@ def test_the_jump_host_drops_infra_and_gateways_before_it_reaches_tenants():
         if r.startswith("OUT ACCEPT") and "53" not in r
     ]
     assert "10.200.254.1" in rules and "10.200.0.1" not in rules
+
+
+def test_tenants_and_the_node_reach_the_public_address_too():
+    # Issue #28: a tenant reaching another tenant's public port gets its
+    # answer back through the exit node; issue #48: so does the node itself.
+    nft = load("node-agent.py").ports_nft({"ports": [GRANT]}, "140.113.60.184")
+    output = nft[nft.index("chain output") : nft.index("chain postrouting")]
+    assert "ip daddr 140.113.60.184 tcp dport { 80, 443 } dnat to 10.200.0.2" in output
+    assert "tcp dport 20030 dnat to 10.200.3.10:22" in output and "10.200.0.4" not in output
+    assert "ct original ip daddr 140.113.60.184 snat to 140.113.60.184" in nft
+    assert "ip daddr != 10.200.0.0/24" in nft

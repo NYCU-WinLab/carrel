@@ -468,9 +468,13 @@ Every tenant machine gets the security group of its tenant:
    the old host's guests.
 5. Drop traffic addressed to any node itself. Routing through the
    anycast gateway still works. Public entry points listed in `node.json` `public_entries` are
-   accepted above this drop: today only TCP 443 on the public address (`140.113.60.184`), the
-   HTTPS gateway the internet already reaches, so tenants can use carrel and lab sites by their
-   public names (the hairpin in section 6.4). Every other port on that address stays dropped.
+   accepted above this drop: TCP 443 on the public address (`140.113.60.184`), the HTTPS gateway
+   the internet already reaches, so tenants can use carrel and lab sites by their public names
+   (the hairpin in section 6.4), and the tenants' public port blocks (TCP and UDP 20010 to 22549,
+   issue #28): what the internet reaches, tenants reach too. The first exit node gives a tenant
+   reaching another tenant's public port the public address as its source, so the answer comes
+   back through it. The node itself and CT 100 and 101 reach the public address as well (issue
+   #48). Every other port on that address stays dropped.
 
 **Virtual addresses** (issue #96): a highly available service inside a tenant (Kubernetes
 control planes, a database pair) needs one address that moves between machines. `vip_add` keeps
@@ -534,7 +538,8 @@ by guessing its VNI. VNIs are not secrets; this filter is the protection.
   keeps a rolling 7-day count per registered domain that stops at 30 for `winlab.tw`, leaving the
   rest to the lab's other sites. Past that budget `domain_add` returns `queued` with `ready_at`.
 - **Special domains and ports**: section 6.10.
-- **Hairpin**: tenants reaching a public name from inside are sent to the gateway directly.
+- **Hairpin**: tenants reaching a public name from inside are sent to the gateway directly; a
+  tenant's public port works from inside too (section 6.3).
 
 ### 6.5 Reserved names
 
