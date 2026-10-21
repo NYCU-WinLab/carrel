@@ -162,7 +162,7 @@ def test_new_guests_use_the_site_mirror(monkeypatch, tmp_path):
 
     # Without apt_mirrors the image's own sources stay.
     site.write_text("{}")
-    assert "bootcmd" not in user_data("debian-13-minimal") and "apt" not in user_data("ubuntu-24.04")
+    assert "apt" not in user_data("debian-13-minimal") and "apt" not in user_data("ubuntu-24.04")
     site.write_text(
         json.dumps(
             {
@@ -173,10 +173,9 @@ def test_new_guests_use_the_site_mirror(monkeypatch, tmp_path):
             }
         )
     )
-    debian = user_data("debian-13-minimal")
-    command = debian["bootcmd"][0]
-    assert command[:3] == ["cloud-init-per", "once", "carrel-apt-mirror"]
-    assert "debian.cs.nycu.edu.tw/debian" in command[-1] and "security" not in command[-1]
+    debian = user_data("debian-13-minimal")["apt"]
+    assert debian["primary"][0]["uri"] == "https://debian.cs.nycu.edu.tw/debian"
+    assert debian["security"][0]["uri"] == "https://deb.debian.org/debian-security"
     ubuntu = user_data("ubuntu-24.04")
     assert (
         ubuntu["apt"]["primary"][0]["uri"] == "https://ubuntu.cs.nycu.edu.tw/ubuntu"

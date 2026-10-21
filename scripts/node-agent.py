@@ -914,14 +914,14 @@ def cloud_init(m, *, prepared=False, environment="development"):
     }
     if not data["packages"]:
         del data["packages"]
-    if str(m.get("image", "")).startswith("ubuntu") and mirror_url("ubuntu"):
-        # Ubuntu's cloud-init writes its sources from this on first boot.
-        url = mirror_url("ubuntu")
-        data["apt"] = {"primary": [{"arches": ["default"], "uri": url}], "security": [{"arches": ["default"], "uri": url}]}
-    elif command := mirror_command(m.get("image", "")):
-        # Debian keeps its image's sources: rewrite them before package_update,
-        # once, so a member's own change stays.
-        data["bootcmd"] = [["cloud-init-per", "once", "carrel-apt-mirror", "sh", "-c", command]]
+    distro = str(m.get("image", "")).split("-", 1)[0]
+    if url := mirror_url(distro):
+        # cloud-init writes the sources (Debian: its mirror lists) from this on
+        # first boot. Debian's security archive stays upstream.
+        security = url if distro == "ubuntu" else "https://deb.debian.org/debian-security"
+        data["apt"] = {"generate_mirrorlists": True,
+                       "primary": [{"arches": ["default"], "uri": url}],
+                       "security": [{"arches": ["default"], "uri": security}]}
     if m.get("readiness_token"):
         private_macs = " ".join(f"02:cb:{m['tenant_n']:02x}:{m['host']-10:02x}:{i:02x}:01" for i in range(1, 8))
         reporter = Path("/usr/local/lib/carrel/guest-report.py").read_text()
