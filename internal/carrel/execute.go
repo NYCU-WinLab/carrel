@@ -226,6 +226,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.MachineAction(tool, a, t)
 	case "machine_media":
 		return e.Media(e.Machine(t, a["machine"]), a, t)
+	case "machine_console_url":
+		return e.ConsoleURL(a, w, t)
 	case "network_create", "network_list", "network_delete", "machine_nic_attach", "machine_nic_detach", "port_open", "port_list", "port_close", "peer_allow", "peer_list", "peer_revoke", "vip_add", "vip_list", "vip_remove":
 		return e.NetworkAction(tool, a, t)
 	case "domain_add", "domain_list", "domain_remove":

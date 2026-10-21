@@ -657,6 +657,38 @@
       }
     },
     {
+      "name": "machine_console_url",
+      "description": "A link to the VM's screen and keyboard in the browser, for installing from an ISO or rescuing a machine that SSH cannot reach. The link works once, for 15 minutes, and only after a WinLab login as the member who asked for it; the session then lasts at most an hour. Every link and every opening is in audit_log. Treat it like a password: the console is as strong as root.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "network_create",
       "description": "Create an isolated private network. Default managed mode assigns fixed private IPs automatically using DHCP, no default gateway, MTU 1450. Use raw_l2 for Mininet or owner-managed DHCP.",
       "inputSchema": {
@@ -3521,6 +3553,7 @@
     "machine_resize",
     "machine_media",
     "machine_metrics",
+    "machine_console_url",
     "network_create",
     "network_list",
     "network_delete",
@@ -3598,6 +3631,7 @@
     "domain_remove",
     "image_delete",
     "iso_import",
+    "machine_console_url",
     "machine_create",
     "machine_delete",
     "machine_media",

@@ -441,6 +441,8 @@ func goldenScenario(g *goldenRun) {
 	call("images", "image_list", D{}, alice)
 	call("images", "image_delete", D{"name": "netinst", "confirm": "netinst"}, alice)
 	call("images", "machine_media", D{"machine": "api", "action": "eject"}, alice)
+
+	call("console", "machine_console_url", D{"machine": "api", "dry_run": true}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

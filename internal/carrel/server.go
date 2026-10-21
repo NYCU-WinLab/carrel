@@ -93,7 +93,10 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		oauth.Hosted = append(oauth.Hosted, str(v))
 	}
 	mux := http.NewServeMux()
+	console := consoleHandler{p: p, o: oauth}
+	oauth.Console = console.finish
 	mux.Handle("/oauth/", oauth)
+	mux.Handle("/console/", console)
 	mux.Handle("/.well-known/", oauth)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 200, D{"status": "ok", "service": "carrel", "version": Version})

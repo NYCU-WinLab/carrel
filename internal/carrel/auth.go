@@ -161,10 +161,12 @@ type OAuth struct {
 	Origin, Issuer, ClientID string
 	Hosted                   []string
 	Verifier                 IdentityVerifier
-	HTTP                     *http.Client
-	locks                    [64]sync.Mutex
-	replayMu                 sync.Mutex
-	replay                   map[string]rotated
+	// Console finishes browser console logins (console.go).
+	Console  func(http.ResponseWriter, *http.Request, D, string)
+	HTTP     *http.Client
+	locks    [64]sync.Mutex
+	replayMu sync.Mutex
+	replay   map[string]rotated
 }
 
 // replayed returns the response already issued for a refresh token rotated
@@ -327,6 +329,10 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) || q.Get("iss") != o.Issuer || q.Get("code") == "" || q.Get("error") != "" {
 			oauthError(w, "access_denied", 400)
+			return
+		}
+		if txn["console"] != nil && o.Console != nil {
+			o.Console(w, r, txn, q.Get("code"))
 			return
 		}
 		consent := random(32)

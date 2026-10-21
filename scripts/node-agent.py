@@ -1310,6 +1310,36 @@ def set_media(m, cfg, req):
     return {"state": "done"}
 
 
+def console(m, mode, ticket):
+    """The VM's console on stdin and stdout (PLAN 7.8): its screen over VNC
+    (VMs installed from an ISO) or its serial port (cloud images, whose VGA
+    is serial0). The control plane sends nothing more until it reads the
+    reply line, so no console bytes sit in this process's input buffer when
+    qm or socat takes over."""
+    vmid = machine(m)
+    if m["kind"] != "vm":
+        raise ValueError("only VMs have a console")
+    cfg = owned(m)
+    if power_status(m) != "running":
+        raise ValueError("start the machine first")
+    if mode == "vnc":
+        if str(cfg.get("vga", "")).startswith("serial") or not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9]{8}", ticket):
+            raise ValueError("this machine has no screen, or the ticket is invalid")
+        # qm sets this as the VNC password, valid for 30 seconds.
+        os.environ["LC_PVE_TICKET"] = ticket
+        command = ["qm", "vncproxy", str(vmid)]
+    elif mode == "serial":
+        socket_path = Path(f"/var/run/qemu-server/{vmid}.serial0")
+        if not socket_path.exists():
+            raise ValueError("this machine has no serial console")
+        command = ["socat", "-", f"UNIX-CONNECT:{socket_path}"]
+    else:
+        raise ValueError("invalid console mode")
+    sys.stdout.write(json.dumps({"ok": True, "result": {"state": "streaming", "mode": mode}}) + "\n")
+    sys.stdout.flush()
+    os.execvp(command[0], command)
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -1574,11 +1604,14 @@ def main():
     STATE.mkdir(parents=True, exist_ok=True)
     # A start may carry a VM's cloud-init files: user-data with large runcmd
     # arguments reaches about 1 MB, twice that once JSON-escaped again.
-    data = sys.stdin.buffer.read(8_000_001)
+    # One request per line: a console streams the rest of stdin after it.
+    data = sys.stdin.buffer.readline(8_000_001)
     if len(data) > 8_000_000:
         raise ValueError("request too large")
     req = json.loads(data)
     op = req["op"]
+    if op == "console":
+        console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
     long = op in ("migrate", "migrate_finish")
