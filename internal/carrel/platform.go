@@ -63,6 +63,7 @@ type Platform struct {
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
 	sshProbe           func(context.Context, D) bool
+	serviceProbe       func(context.Context, D) bool
 	certificatePrepare func(D) D
 	// issue and lookupTXT replace Let's Encrypt and DNS in tests.
 	issue     func(context.Context, string) ([]byte, []byte, error)
@@ -332,10 +333,10 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 			keys = append(keys, k.Key)
 		}
 	}
-	if len(keys) > 0 || !dry {
+	if (len(keys) > 0 || !dry) && !(tenantImage && e.tenantImageServesPorts(t, a)) {
 		validateKeys(keys)
 	}
-	if a["public_ssh"] == false && !e.jumpEnabled() {
+	if a["public_ssh"] == false && !e.jumpEnabled() && !(tenantImage && e.tenantImageServesPorts(t, a)) {
 		fail("invalid", "This site has no SSH jump host; every machine needs a public SSH port", D{"recovery": "revise_request"})
 	}
 	if kind == "ct" && (boolean(a["nested_virt"]) || len(arr(a["packages"])) > 0 || len(arr(a["runcmd"])) > 0 || len(arr(a["health_checks"])) > 0) {
@@ -356,6 +357,8 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	}
 	if tenantImage {
 		m = e.ImportedMachineSpec(t, a, m)
+	} else if a["user_data"] != nil {
+		fail("invalid", "user_data applies only to an image imported with ports", D{"recovery": "revise_request"})
 	}
 	return m
 }
@@ -412,7 +415,7 @@ func (e *Execution) AllocatePort(t D) int {
 	return 0
 }
 func (e *Execution) PublicMachine(m D, ports []portGrant) D {
-	safe := without(m, "ssh_keys", "runcmd", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node")
+	safe := without(m, "ssh_keys", "runcmd", "user_data", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node")
 	report := e.S.guestReport(m["vmid"])
 	if m["kind"] == "ct" && m["state"] == "ready" {
 		report.InitializationStatus, report.ApplicationStatus = "complete", "not_checked"
@@ -429,7 +432,7 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	// network_access filters the primary NIC only; private NICs are the
 	// member's own unfiltered segments (issue #75).
 	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": "unfiltered_experiment_networks", "allowed_connections": allowed}
-	if unmanaged(m) {
+	if unmanaged(m) && len(servicePortsOf(m)) == 0 {
 		safe["install"] = installInfo(m)
 	}
 	nics := []D{}
@@ -441,6 +444,17 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 		nics = append(nics, entry)
 	}
 	safe["nics"] = nics
+	if ports := servicePortsOf(m); len(ports) > 0 {
+		// No SSH (issue #94): its ports, forwarded through the jump host.
+		if e.jumpEnabled() {
+			forwards := ""
+			for _, p := range ports {
+				forwards += fmt.Sprintf(" -L %d:%s:%d", p, str(m["ip"]), p)
+			}
+			safe["tunnel"] = "ssh -N" + forwards + " jump@carrel.winlab.tw"
+		}
+		return safe
+	}
 	var ssh *portGrant
 	for i, p := range ports {
 		if p.VMID == integer(m["vmid"]) && p.Port == 22 && p.Proto == "tcp" {

@@ -44,7 +44,14 @@ func jumpAuthorizedKeys(s *Store) string {
 				reach[key] = map[string]bool{}
 			}
 			for _, m := range machines {
-				reach[key][str(m["ip"])+":22"] = true
+				// A machine without SSH forwards its declared ports (#94).
+				ports := servicePortsOf(m)
+				if len(ports) == 0 {
+					ports = []int{22}
+				}
+				for _, p := range ports {
+					reach[key][fmt.Sprintf("%s:%d", str(m["ip"]), p)] = true
+				}
 			}
 		}
 	}

@@ -203,6 +203,11 @@ IN ACCEPT -p tcp -dport 22
 OUT ACCEPT -dest 10.200.0.0/16 -p tcp -dport 22
 OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53
 OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53
+OUT DROP -dest 10.200.0.0/24
+OUT DROP -dest 10.200.255.0/24
+# Declared ports of machines without SSH (issue #94); sshd's permitopen and
+# each guest's firewall decide which ones.
+OUT ACCEPT -dest 10.200.0.0/16 -p tcp
 OUT DROP -dest 10.0.0.0/8
 OUT DROP -dest 172.16.0.0/12
 OUT DROP -dest 192.168.0.0/16

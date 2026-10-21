@@ -511,9 +511,15 @@ def test_jump_sync_accepts_only_forwarding_lines_to_tenant_ssh():
     module = load("jump-sync.py")
     good = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22",permitopen="10.200.3.109:22" ssh-ed25519 AAAAC3Nz=='
     assert module.check(good + "\n") == good + "\n"
+    # A machine without SSH forwards its declared ports (issue #94).
+    talos = good.replace("10.200.1.10:22", "10.200.1.10:50000").replace("10.200.3.109:22", "10.200.1.10:6443")
+    assert module.check(talos + "\n") == talos + "\n"
     for bad in [
         good.replace("10.200.1.10:22", "10.200.0.3:22"),
-        good.replace("10.200.1.10:22", "10.200.1.10:8080"),
+        good.replace("10.200.1.10:22", "10.200.1.10:0"),
+        good.replace("10.200.1.10:22", "10.200.1.10:65536"),
+        good.replace("10.200.1.10:22", "10.200.1.10:022"),
+        good.replace("10.200.1.10:22", "10.200.1.10:"),
         good.replace("10.200.1.10:22", "10.200.1.110:22"),
         good.replace("restrict,", ""),
         good.replace('command="/usr/sbin/nologin",', 'command="/bin/sh",'),
@@ -536,6 +542,53 @@ def test_the_jump_host_reaches_port_22_of_every_machine(monkeypatch, tmp_path):
     assert "tcp dport 22 dnat to 10.200.0.4" in module.ports_nft({"ports": []}, "140.113.60.184")
     (tmp_path / "site.json").write_text(json.dumps({"exit_nodes": ["x"]}))
     assert "10.200.0.4" not in module.ports_nft({"ports": []}, "140.113.60.184")
+
+
+def test_a_machine_without_ssh_admits_its_declared_ports_only(monkeypatch):
+    module = load("node-agent.py")
+    talos = dict(MACHINE, service_ports=[50000, 6443])
+    rules = module.guest_firewall(
+        talos, {"peers": [], "ports": [], "domains": []}, {"protected_addresses": []}
+    ).splitlines()
+    for source in ("10.200.0.3", "10.200.0.4"):
+        assert f"IN ACCEPT -source {source} -p tcp -dport 50000" in rules
+        assert f"IN ACCEPT -source {source} -p tcp -dport 6443" in rules
+        assert f"IN ACCEPT -source {source} -p tcp -dport 22" not in rules
+    # Its cloud-init is the member's document unchanged, or an empty
+    # cloud-config that Talos skips; the network file is carrel's.
+    files = {}
+    monkeypatch.setattr(module, "write", lambda path, data, mode: files.update({path: data}))
+    vm = dict(MACHINE, kind="vm", service_ports=[50000], ssh_keys=[], user_data="version: v1alpha1\n")
+    assert (
+        module.cloud_init(vm)
+        == "user=local:snippets/carrel-10100-user.json,network=local:snippets/carrel-10100-network.json"
+    )
+    assert files["/var/lib/vz/snippets/carrel-10100-user.json"] == "version: v1alpha1\n"
+    network = json.loads(files["/var/lib/vz/snippets/carrel-10100-network.json"])
+    assert network["ethernets"]["primary"]["mtu"] == 1450
+    module.cloud_init(dict(vm, user_data=None))
+    assert files["/var/lib/vz/snippets/carrel-10100-user.json"].startswith("#cloud-config\n")
+    with pytest.raises(ValueError):
+        module.cloud_init(dict(vm, user_data="x" * 65537))
+
+
+def test_a_talos_vm_moves_with_its_cloud_init_and_takes_no_media(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "located", lambda m: "carrel02")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    monkeypatch.setattr(module, "owned", lambda m, **k: {})
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    restored = []
+    monkeypatch.setattr(module, "restore_cloud_init", lambda m, files: restored.append(files))
+    talos = dict(MACHINE, kind="vm", guest_management=0, service_ports=[50000])
+    files = {"user": "version: v1alpha1\n", "network": "{}"}
+    assert module.migrate_prepare({"machine": talos, "cloud_init": files}) == {"state": "ready"}
+    assert restored == [files]
+    with pytest.raises(ValueError, match="cloud-init"):
+        module.migrate_prepare({"machine": talos})
+    # Its ide2 is the cloud-init drive.
+    with pytest.raises(ValueError, match="ISO"):
+        module.set_media(talos, {}, {"iso_volume": None})
 
 
 def test_jump_sync_reads_ascii_lines_split_on_newlines_only():

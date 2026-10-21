@@ -899,10 +899,18 @@ key injection, the SSH check and graceful shutdown.
   included, is in `audit_log`. Links are not emailed (decided 2026-10-21): in a personal tenant the
   member is the owner, project members share their machines anyway, and the audit log answers
   "who opened it". This page is the one exception to 1.4.
-- **Images without SSH**: an imported image may declare that it runs no cloud-config and no SSH,
-  as Talos does (issue #94). carrel still writes the network file, passes the member's own
-  document as user-data, and checks readiness on a declared TCP port instead of SSH. This comes
-  with #94, after the first import release.
+- **Images without SSH**: `image_import` takes `ports` (1 to 4 TCP ports, not 22) for an image
+  that runs no cloud-config and no SSH, as Talos does (issue #94; `[50000, 6443]`). A VM from it
+  is unmanaged: no keys, no swap, no public SSH port, small by default (Talos needs 2 GiB for a
+  control plane). carrel still writes the network file (Talos' nocloud platform reads the same
+  version 2 document) and passes the member's `user_data` unchanged as user-data, which Talos
+  reads as its machine config; without it, an empty cloud-config, which Talos skips and boots
+  into maintenance mode for `talosctl apply-config --insecure`. `user_data` is stored like
+  `runcmd`: never shown, audited or sent to other nodes. Readiness is a TCP connection from the
+  control plane to the first port, checked by `machine_get`. Each guest firewall admits the
+  control plane and the jump host on the declared ports instead of 22, the jump host's key lines
+  permit those ports, and `machine_get` returns a `tunnel` line (`ssh -N -L ...`) for
+  `talosctl` and `kubectl`. `port_open` still publishes a port when a member wants one.
 - **CTs** keep to the platform images in version 1.
 
 **Order of work** (planned 2026-10-21; each line one PR, `R` = independent review):

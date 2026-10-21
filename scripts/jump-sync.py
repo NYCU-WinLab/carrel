@@ -3,7 +3,8 @@
 
 Runs in CT 102 for the control plane's key (configure-nodes.py installs it). One
 JSON request on stdin: {"op": "sync", "authorized": text} or {"op": "status"}.
-Every line must forward only to port 22 of tenant machines (issue #98).
+Every line must forward only to tenant machines: port 22 (issue #98), or a
+port a machine without SSH declares (issue #94), which its firewall admits.
 """
 
 import fcntl
@@ -15,7 +16,7 @@ import sys
 
 KEYS = Path("/etc/carrel-jump/jump")
 STATE = Path("/var/lib/carrel-jump")
-TARGET = r'permitopen="10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d):22"'
+TARGET = r'permitopen="10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d):(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d\d|655[0-2]\d|6553[0-5])"'
 LINE = re.compile(
     r'restrict,port-forwarding,command="/usr/sbin/nologin",' + TARGET + "(?:," + TARGET + ")*"
     r" (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,3}",

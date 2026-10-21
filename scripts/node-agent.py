@@ -260,10 +260,12 @@ def guest_firewall(m, state, config):
         if domain["vmid"] == m["vmid"]:
             port = integer(domain["target_port"], 1, 65535)
             rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
-    # Reachability probes only, from the authenticated control plane.
-    rules.append("IN ACCEPT -source 10.200.0.3 -p tcp -dport 22")
-    # The SSH jump host forwards members to their machines (issue #98).
-    rules.append("IN ACCEPT -source 10.200.0.4 -p tcp -dport 22")
+    # Reachability probes only, from the authenticated control plane, and
+    # the jump host forwarding members to their machines (issue #98): SSH,
+    # or the declared ports of a machine without it (issue #94).
+    for port in [integer(p, 1, 65535) for p in m.get("service_ports") or []] or [22]:
+        rules.append(f"IN ACCEPT -source 10.200.0.3 -p tcp -dport {port}")
+        rules.append(f"IN ACCEPT -source 10.200.0.4 -p tcp -dport {port}")
     return "\n".join(rules) + "\n"
 
 
@@ -800,6 +802,16 @@ def keys(values):
 
 
 def cloud_init(m, *, prepared=False, environment="development"):
+    name = f"carrel-{m['vmid']}-user.json"
+    if m.get("service_ports"):
+        # An image without SSH (issue #94): the member's own document, which
+        # Talos reads as its machine config. Without one, an empty
+        # cloud-config, which Talos skips and boots into maintenance mode.
+        user = m.get("user_data") or "#cloud-config\n{}\n"
+        if not isinstance(user, str) or len(user.encode()) > 65536:
+            raise ValueError("user_data is a string of at most 64 KiB")
+        write("/var/lib/vz/snippets/" + name, user, 0o600)
+        return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
     keys(m["ssh_keys"])
     blocked = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
     data = {
@@ -863,8 +875,11 @@ def cloud_init(m, *, prepared=False, environment="development"):
             "size": str(integer(m.get("swap_mb", 1024), 0, 65536)) + "M",
             "maxsize": str(m.get("swap_mb", 1024)) + "M",
         }
-    name = f"carrel-{m['vmid']}-user.json"
     write("/var/lib/vz/snippets/" + name, "#cloud-config\n" + json.dumps(data), 0o600)
+    return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
+
+
+def network_file(m):
     network_name = f"carrel-{m['vmid']}-network.json"
     network = {"version": 2, "ethernets": {"primary": {
         "match": {"macaddress": m["mac"]}, "addresses": [m["ip"] + "/24"],
@@ -872,7 +887,7 @@ def cloud_init(m, *, prepared=False, environment="development"):
         "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": 1450,
     }}}
     write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
-    return "user=local:snippets/" + name + ",network=local:snippets/" + network_name
+    return network_name
 
 
 def zfs_usage(machines, pool):
@@ -986,7 +1001,8 @@ def migrate_prepare(req):
     if where is None:
         raise ValueError("machine not found in the cluster")
     owned(m, node=where)
-    if m["kind"] == "vm" and m.get("guest_management", 1):
+    # Every VM with cloud-init: managed, or without SSH (issue #94).
+    if m["kind"] == "vm" and (m.get("guest_management", 1) or m.get("service_ports")):
         if not req.get("cloud_init"):
             raise ValueError("cloud-init files required to move a VM")
         if where == NODE:
@@ -1330,8 +1346,8 @@ def import_volume(m, volume, digest):
 
 def set_media(m, cfg, req):
     vmid = machine(m)
-    # A managed VM's ide2 is its cloud-init drive: never touched here.
-    if m["kind"] != "vm" or m.get("guest_management", 1):
+    # A managed or Talos VM's ide2 is its cloud-init drive: never touched here.
+    if m["kind"] != "vm" or m.get("guest_management", 1) or m.get("service_ports"):
         raise ValueError("only VMs installed from an ISO take media")
     if req.get("iso_volume"):
         run("qm", "set", vmid, "--ide2", f"{iso_volume(m, req['iso_volume'])},media=cdrom")
@@ -1404,7 +1420,8 @@ def create(m):
     n = m["tenant_n"]
     tags = f"carrel;tenant-{n}"
     keyfile = STATE / f"{vmid}.pub"
-    write(keyfile, keys(m["ssh_keys"]), 0o600)
+    if not m.get("service_ports"):
+        write(keyfile, keys(m["ssh_keys"]), 0o600)
     net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450,rate=12.5"
     if m["kind"] == "vm" and m.get("import_volume") and not exists:
         # A tenant's cloud image (PLAN 7.8): checked against its checksum,
@@ -1444,10 +1461,7 @@ def create(m):
             "10.200.0.2",
             "--cicustom",
             cloud_init(m, prepared=template["prepared"], environment=template.get("environment", "development")),
-            "--ciuser",
-            "user",
-            "--sshkeys",
-            keyfile,
+            *([] if m.get("service_ports") else ["--ciuser", "user", "--sshkeys", keyfile]),
             "--onboot",
             "1",
             "--startup",
