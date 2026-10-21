@@ -437,7 +437,9 @@ Each script is idempotent and runs where it acts (PLAN 8.1):
    defaults to `local`. A shared storage (B09: the NFS storage `rs822rp1`) keeps one copy per site.
 2. First exit node: `scripts/bootstrap-platform.py --admin-key <public key>` creates CT 100 and CT 101.
    After a node joins the site, or when `JUMP_FIREWALL` changes, run
-   `scripts/bootstrap-platform.py --firewall` there: it rewrites only the infra firewalls.
+   `scripts/bootstrap-platform.py --firewall` on the first exit node: it rewrites only the infra
+   firewalls. The infra CTs leave through the site file's `management_interface`, which defaults
+   to `underlay_interface`.
 3. Every node: `scripts/build-templates.py` imports the prepared images (below).
 4. CT 100: write `/etc/carrel/config.json` from `sites/<site>/config.example.json`, mode 0640.
 5. Workstation, with binaries built on the sandbox:

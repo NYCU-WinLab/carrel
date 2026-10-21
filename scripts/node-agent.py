@@ -237,7 +237,7 @@ def guest_firewall(m, state, config):
         # Only a protected public host (issue #28): an entry for a private
         # range would open it above the drops below.
         protected = [ipaddress.ip_network(a, strict=False) for a in config["protected_addresses"]]
-        if dest.prefixlen != 32 or not dest.network_address.is_global or not any(dest.subnet_of(p) for p in protected):
+        if dest.version != 4 or dest.prefixlen != 32 or not dest.network_address.is_global or not any(p.version == 4 and dest.subnet_of(p) for p in protected):
             raise ValueError(f"public entry {entry['address']} is not a protected public address")
         port = integer(entry["port"], 1, 65535)
         rules.append(f"OUT ACCEPT -dest {dest} -p tcp -dport {port}")
