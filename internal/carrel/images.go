@@ -159,7 +159,13 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 		refused = append(refused, ip.String()+"/32")
 	}
 	e.Put("images", r.ID, n, r)
-	e.Call(D{"op": "fetch_start", "job": r.Job, "url": url, "sha256": sum, "max_bytes": reserve, "format": kind, "refused": refused}, e.P.Nodes()[0].Target)
+	if f := attempt(func() {
+		e.Call(D{"op": "fetch_start", "job": r.Job, "url": url, "sha256": sum, "max_bytes": reserve, "format": kind, "refused": refused}, e.P.Nodes()[0].Target)
+	}); f != nil {
+		// Nothing started: the reservation goes too.
+		e.S.Remove("images", r.ID)
+		panic(f)
+	}
 	if e.Op != nil {
 		e.Op["import"] = D{"id": r.ID}
 		e.P.Operations.Save(e.Op)
