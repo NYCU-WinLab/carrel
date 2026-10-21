@@ -1,5 +1,6 @@
 """node-agent and its helpers, without a live node: PVE reads and commands are replaced."""
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -544,3 +545,124 @@ def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
         with pytest.raises(ValueError):
             module.check(bad)  # the last one lacks its final newline
     assert module.check("") == ""
+
+
+def test_the_fetch_container_reaches_only_public_web_and_the_resolver():
+    module = load("node-agent.py")
+    rules = module.fetch_firewall({"protected_addresses": ["140.113.60.184/32"]}).splitlines()
+    assert "policy_in: DROP" in rules and "policy_out: DROP" in rules
+    assert rules[rules.index("[IPSET ipfilter-net0]") + 1] == "10.200.255.10"
+    # Private drops come before the web accepts, so 80/443 to the lab stay closed.
+    assert rules.index("OUT DROP -dest 192.168.0.0/16") < rules.index("OUT ACCEPT -p tcp -dport 443")
+    assert "OUT DROP -dest 140.113.60.184/32" in rules
+    assert not any("IN ACCEPT" in r for r in rules)
+
+
+def test_fetch_jobs_are_checked_before_anything_runs(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    job = "a" * 32
+    good = {
+        "job": job,
+        "url": "https://example.com/x.iso",
+        "sha256": "b" * 64,
+        "max_bytes": 1024,
+        "format": "iso",
+    }
+    module.fetch_start(good)
+    assert calls[0][:2] == ("pct", "push") and calls[1][:5] == ("pct", "exec", 103, "--", "systemd-run")
+    assert "--uid=carrel-fetch" in calls[1] and f"--unit=carrel-fetch-{job}" in calls[1]
+    for bad in [
+        {"job": "../x"},
+        {"sha256": "x"},
+        {"format": "vmdk"},
+        {"max_bytes": 30 * 1024**3},
+        {"url": "x" * 5000},
+    ]:
+        calls.clear()
+        with pytest.raises(ValueError):
+            module.fetch_start({**good, **bad})
+        assert not any(c[:2] == ("pct", "exec") for c in calls)
+
+
+def test_fetch_store_checks_the_name_and_the_bytes(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    nfs = tmp_path / "nfs"
+    (nfs / "template" / "iso").mkdir(parents=True)
+    monkeypatch.setattr(module, "content_storage", lambda kind: "shared")
+    monkeypatch.setattr(module, "storage_entry", lambda s: {"type": "nfs", "path": str(nfs)})
+    data = b"iso bytes"
+    digest = hashlib.sha256(data).hexdigest()
+
+    def run(*args, **kwargs):
+        if args[0] == "sha256sum":
+            return hashlib.sha256(Path(args[1]).read_bytes()).hexdigest() + "  x"
+        return ""
+
+    reads = []
+
+    def bounded(args, out, limit, timeout):
+        reads.append(args)
+        out.write(data)
+        return len(data)
+
+    monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module, "bounded", bounded)
+    req = {
+        "job": "c" * 32,
+        "volume": "carrel-t003-netinst-" + digest[:12] + ".iso",
+        "kind": "iso",
+        "sha256": digest,
+        "tenant_n": 3,
+        "max_bytes": 1024,
+    }
+    assert module.fetch_store(req)["volume"] == "shared:iso/" + req["volume"]
+    stored = nfs / "template" / "iso" / req["volume"]
+    assert stored.read_bytes() == data and oct(stored.stat().st_mode & 0o777) == "0o444"
+    assert not list((nfs / "template" / "iso").glob(".carrel-*"))
+    # The file is read inside the container, never through a host path.
+    assert reads[0][:4] == ["pct", "exec", 103, "--"] and "test ! -L" in reads[0][-1]
+    # Bytes that do not match the database's checksum never land.
+    with pytest.raises(ValueError, match="does not match its checksum"):
+        module.fetch_store(
+            {**req, "job": "d" * 32, "volume": "carrel-t003-other-" + "e" * 12 + ".iso", "sha256": "e" * 64}
+        )
+    assert not list((nfs / "template" / "iso").glob(".carrel-*"))
+    assert not (nfs / "template" / "iso" / ("carrel-t003-other-" + "e" * 12 + ".iso")).exists()
+    for bad in [
+        "../x.iso",
+        "carrel-t003-x-" + digest[:12] + ".exe",
+        "carrel-t3-x-" + digest[:12] + ".iso",
+        "carrel-t003-x-" + digest[:12] + ".qcow2",
+    ]:
+        with pytest.raises(ValueError):
+            module.fetch_store({**req, "volume": bad})
+    # The name must carry the request's tenant and the checksum's start.
+    for bad in [{"tenant_n": 4}, {"volume": "carrel-t003-netinst-" + "0" * 12 + ".iso"}]:
+        with pytest.raises(ValueError, match="tenant or checksum"):
+            module.fetch_store({**req, **bad})
+
+
+def test_bounded_stops_at_its_limit_and_kills_the_group(tmp_path):
+    module = load("node-agent.py")
+    with (tmp_path / "out").open("wb") as out:
+        assert module.bounded(["printf", "abc"], out, 10, 5) == 3
+    with (tmp_path / "out").open("wb") as out, pytest.raises(ValueError, match="limit"):
+        module.bounded(["yes"], out, 1 << 20, 5)
+    with (tmp_path / "out").open("wb") as out, pytest.raises(module.subprocess.TimeoutExpired):
+        module.bounded(["sh", "-c", "sleep 30 & sleep 30"], out, 10, 1)
+
+
+def test_fetch_status_reports_progress_and_results(monkeypatch):
+    module = load("node-agent.py")
+    outputs = iter(
+        ["\n1048576\nactive", '{"ok": true, "size": 9, "sha256": "x"}\n9\ninactive', "\n\ninactive"]
+    )
+    monkeypatch.setattr(module, "run", lambda *a, **k: next(outputs))
+    job = {"job": "f" * 32}
+    assert module.fetch_status(job) == {"state": "running", "received": 1048576}
+    assert module.fetch_status(job)["state"] == "done"
+    assert module.fetch_status(job)["state"] == "failed"

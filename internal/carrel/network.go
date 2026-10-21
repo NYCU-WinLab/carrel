@@ -354,6 +354,10 @@ func (e *Execution) Reconcile() D {
 	// Every node reconciles: SDN and guest firewalls are cluster-wide, while
 	// rate limits and connection tracking live on each node. The first
 	// node goes first; it holds the infra gateway and creates new VNets.
+	if boolean(e.P.Config["fetch"]) {
+		// The fetch network and its container's firewall (PLAN 7.8).
+		state["fetch"] = true
+	}
 	request := D{"op": "reconcile", "state": without(state, "certificates")}
 	nodes := e.P.Nodes()
 	result := D{"node": e.Call(request, nodes[0].Target)}

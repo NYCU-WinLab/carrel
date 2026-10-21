@@ -27,5 +27,6 @@
     "https://claude.ai/api/mcp/auth_callback",
     "https://chatgpt.com/connector_platform/oauth/callback"
   ],
-  "ssh_jump": true
+  "ssh_jump": true,
+  "fetch": true
 }

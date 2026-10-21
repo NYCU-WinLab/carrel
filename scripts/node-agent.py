@@ -18,6 +18,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 
@@ -557,6 +558,13 @@ def reconcile(state):
                 snat=1,
             )
             changed.append(f"subnet-{n}")
+    if state.get("fetch"):
+        # The fetch network (PLAN 6.1, N = 255): only the fetch container.
+        if ensure("/cluster/sdn/vnets", "vnet", "t255", existing=vnets, zone="tenants", tag=100255, alias="carrel-fetch"):
+            changed.append("t255")
+        if not subnets_by_vnet.get("t255"):
+            api("create", "/cluster/sdn/vnets/t255/subnets", subnet="10.200.255.0/24", type="subnet", gateway="10.200.255.1", snat=1)
+            changed.append("subnet-255")
     for net in state["networks"]:
         n = integer(net["tenant_n"], 1, 254)
         k = integer(net["serial"], 1, 99)
@@ -647,6 +655,9 @@ def reconcile(state):
     # it must share the guests' zone, or the reply of a cross-node connection
     # finds no entry and is dropped as invalid.
     interfaces += [f"vxlan_{tenant_config(t)[1]}" for t in state["tenants"]]
+    if state.get("fetch"):
+        # The fetch container and its network cross the VRF like a tenant's.
+        interfaces += [f"veth{FETCH_CT}i0", "vxlan_t255"]
     # Routed tenant traffic between nodes (egress to the exit node, replies of
     # public DNAT) crosses the zone's L3VNI port; it needs the same zone.
     interfaces.append("vrfvx_tenants")
@@ -678,6 +689,8 @@ table inet carrel_conntrack {{
     if first_exit_node():
         for m in state["machines"]:
             write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, state, config))
+        if state.get("fetch"):
+            write(f"/etc/pve/firewall/{FETCH_CT}.fw", fetch_firewall(config))
     private_dhcp(state, serve=first_exit_node())
     address = public_ingress()
     if address:
@@ -1046,6 +1059,171 @@ def cloud_init_remove(req):
     return {"state": "removed"}
 
 
+# The fetch container (PLAN 7.8): unprivileged, on the fetch network, with
+# no view of the shared storage. Downloads land in its own disk; a root step
+# here pulls them out through the container, so a symlink it plants
+# resolves inside the container, never on this host.
+FETCH_CT = 103
+FETCH_DIR = "/var/lib/carrel-fetch"
+JOB = re.compile(r"[a-f0-9]{32}")
+VOLUME = re.compile(r"carrel-t(\d{3})-[a-z][a-z0-9-]{0,31}-[a-f0-9]{12}\.(iso|qcow2|raw)")
+
+
+def bounded(args, out, limit, timeout):
+    """Run a command whose output is untrusted: at most limit bytes into out,
+    and at the deadline the whole process group dies (pct forks a worker),
+    even while a read is blocked."""
+    with subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE, start_new_session=True) as p:
+        expired = threading.Event()
+
+        def expire():
+            expired.set()
+            os.killpg(p.pid, 9)
+
+        timer = threading.Timer(timeout, expire)
+        timer.start()
+        total = 0
+        try:
+            while chunk := p.stdout.read(1 << 20):
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError("output over its limit")
+                out.write(chunk)
+            p.wait()
+        except BaseException:
+            os.killpg(p.pid, 9)
+            raise
+        finally:
+            timer.cancel()
+        if expired.is_set():
+            raise subprocess.TimeoutExpired(args, timeout)
+        if p.returncode:
+            raise CommandFailure(f"{args[0]} failed")
+    return total
+
+
+def in_fetch(job, name, limit):
+    # Read inside the container as its root, so its paths resolve there; a
+    # regular file only, never more than limit bytes.
+    path = f"{FETCH_DIR}/{job}.{name}"
+    return ["pct", "exec", FETCH_CT, "--", "sh", "-c",
+            f'test -f "{path}" && test ! -L "{path}" && exec head -c {limit + 1} "{path}"']
+
+
+def fetch_firewall(config):
+    rules = [
+        "[OPTIONS]", "enable: 1", "ipfilter: 1", "macfilter: 1", "dhcp: 0", "ndp: 0", "radv: 0",
+        "policy_in: DROP", "policy_out: DROP", "",
+        "[IPSET ipfilter-net0]", "10.200.255.10", "",
+        "[RULES]",
+        "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
+        "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
+    ]
+    for block in ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16",
+                  "127.0.0.0/8", "224.0.0.0/4", *config["protected_addresses"]]:
+        rules.append(f"OUT DROP -dest {ipaddress.ip_network(block, strict=False)}")
+    rules += ["OUT ACCEPT -p tcp -dport 80", "OUT ACCEPT -p tcp -dport 443"]
+    return "\n".join(rules) + "\n"
+
+
+def fetch_job(req):
+    job = req["job"]
+    if not isinstance(job, str) or not JOB.fullmatch(job):
+        raise ValueError("invalid job")
+    return job
+
+
+def fetch_start(req):
+    job = fetch_job(req)
+    spec = {
+        "url": req["url"], "sha256": req["sha256"], "max_bytes": integer(req["max_bytes"], 1, 20 * 1024**3),
+        "format": req["format"], "out": f"{FETCH_DIR}/{job}.data",
+        "refused": [str(ipaddress.ip_network(r, strict=False)) for r in req.get("refused", [])],
+    }
+    if not isinstance(spec["url"], str) or len(spec["url"]) > 4096 or not re.fullmatch(r"[a-f0-9]{64}", spec["sha256"]):
+        raise ValueError("invalid fetch")
+    if spec["format"] not in ("iso", "qcow2", "raw"):
+        raise ValueError("invalid format")
+    staged = STATE / f"fetch-{job}.json"
+    write(staged, json.dumps(spec), 0o644)
+    try:
+        run("pct", "push", FETCH_CT, staged, f"{FETCH_DIR}/{job}.json", "--user", "carrel-fetch", "--group", "carrel-fetch")
+    finally:
+        staged.unlink(missing_ok=True)
+    run("pct", "exec", FETCH_CT, "--", "systemd-run", "--collect", f"--unit=carrel-fetch-{job}", "--uid=carrel-fetch", "--gid=carrel-fetch",
+        f"--property=StandardInput=file:{FETCH_DIR}/{job}.json", f"--property=StandardOutput=file:{FETCH_DIR}/{job}.result",
+        "--property=RuntimeMaxSec=11000", "--property=MemoryMax=512M", "--property=NoNewPrivileges=yes",
+        "/usr/local/bin/carrel-fetch")
+    return {"state": "running"}
+
+
+def fetch_status(req):
+    job = fetch_job(req)
+    out = run("pct", "exec", FETCH_CT, "--", "sh", "-c",
+              f"head -c 4096 {FETCH_DIR}/{job}.result 2>/dev/null; echo; stat -c %s {FETCH_DIR}/{job}.data 2>/dev/null; "
+              f"systemctl is-active carrel-fetch-{job} 2>/dev/null; true", timeout=30)
+    lines = out.splitlines()
+    result = {}
+    if lines and lines[0].startswith("{"):
+        result = json.loads(lines[0])
+    received = next((int(x) for x in lines[1:] if x.isdigit()), 0)
+    active = "active" in lines[-1:] or "activating" in lines[-1:]
+    if result:
+        return {"state": "done" if result.get("ok") else "failed", "result": result, "received": received}
+    return {"state": "running" if active else "failed", "received": received,
+            **({} if active else {"result": {"code": "fetch_failed", "error": "the download stopped"}})}
+
+
+def fetch_store(req):
+    # Root step: the checksum from the database, never the fetcher's word.
+    job = fetch_job(req)
+    name, kind = req["volume"], req["kind"]
+    match = VOLUME.fullmatch(name) if isinstance(name, str) else None
+    if not match or kind not in ("iso", "import"):
+        raise ValueError("invalid volume")
+    if (kind == "iso") != name.endswith(".iso"):
+        raise ValueError("volume kind does not match its file")
+    digest = req["sha256"]
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("invalid checksum")
+    # The name carries its tenant and the start of its checksum.
+    if int(match[1]) != integer(req["tenant_n"], 1, 254) or name.rsplit("-", 1)[1][:12] != digest[:12]:
+        raise ValueError("volume name does not match its tenant or checksum")
+    limit = integer(req["max_bytes"], 1, 20 * 1024**3)
+    storage = content_storage(kind)
+    entry = storage_entry(storage)
+    if entry is None or "path" not in entry:
+        raise ValueError("the image storage is not a directory storage")
+    folder = Path(entry["path"]) / ("template/iso" if kind == "iso" else "import")
+    final = folder / name
+    lock_path = STATE / f"fetch-{job}.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not final.exists():
+            partial = folder / f".carrel-{job}.partial"
+            try:
+                with partial.open("wb") as out:
+                    bounded(in_fetch(job, "data", limit), out, limit, 4 * 3600)
+                if run("sha256sum", partial, timeout=3600).split()[0] != digest:
+                    raise ValueError("stored file does not match its checksum")
+                partial.chmod(0o444)
+                os.replace(partial, final)
+            except subprocess.TimeoutExpired as e:
+                raise StorageUnavailable("the image storage did not answer") from e
+            finally:
+                partial.unlink(missing_ok=True)
+        fetch_clean(req)
+    lock_path.unlink(missing_ok=True)
+    return {"state": "stored", "volume": f"{storage}:{kind}/{name}"}
+
+
+def fetch_clean(req):
+    job = fetch_job(req)
+    run("pct", "exec", FETCH_CT, "--", "sh", "-c",
+        f"systemctl stop carrel-fetch-{job} 2>/dev/null; rm -f {FETCH_DIR}/{job}.json {FETCH_DIR}/{job}.data {FETCH_DIR}/{job}.result")
+    return {"state": "cleaned"}
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -1316,7 +1494,7 @@ def main():
     long = op in ("migrate", "migrate_finish")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
-        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read"):
+        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "fetch_status", "fetch_store"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         if req.get("request_id") and op in ("create", "action"):
@@ -1362,6 +1540,11 @@ def main():
             out = migrate_finish(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
+        elif op in ("fetch_start", "fetch_status", "fetch_store", "fetch_clean"):
+            if not first_exit_node():
+                raise ValueError("fetches run on the first exit node")
+            out = {"fetch_start": fetch_start, "fetch_status": fetch_status, "fetch_store": fetch_store,
+                   "fetch_clean": fetch_clean}[op](req)
         elif op == "cloud_init_read":
             m = req["machine"]
             owned(m)

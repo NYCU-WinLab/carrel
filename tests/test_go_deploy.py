@@ -22,7 +22,7 @@ def load(name):
 
 def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, monkeypatch):
     deploy = load("deploy-go.py")
-    for name in ("carrel", "carrel-deployd"):
+    for name in ("carrel", "carrel-deployd", "carrel-fetch"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     calls = []
     monkeypatch.setattr(
@@ -37,6 +37,7 @@ def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, 
     assert {
         "carrel",
         "carrel-deployd",
+        "carrel-fetch",
         "install-control.py",
         "node-agent.py",
         "configure-nodes.py",
@@ -106,6 +107,7 @@ def staged(tmp_path, tamper=False):
     for name in (
         "carrel",
         "carrel-deployd",
+        "carrel-fetch",
         "install-control.py",
         "node-agent.py",
         "configure-reader.py",
