@@ -3,6 +3,9 @@
 import hashlib
 import importlib.util
 import json
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -651,8 +654,9 @@ def test_fetch_store_checks_the_name_and_the_bytes(monkeypatch, tmp_path):
     digest = hashlib.sha256(data).hexdigest()
 
     def run(*args, **kwargs):
-        if args[0] == "sha256sum":
-            return hashlib.sha256(Path(args[1]).read_bytes()).hexdigest() + "  x"
+        if args[0] == sys.executable:
+            # The real rate-limited checksum, in its child.
+            return subprocess.run([str(a) for a in args], capture_output=True, text=True, check=True).stdout
         return ""
 
     reads = []
@@ -817,7 +821,7 @@ def test_a_cloud_image_is_checked_then_imported(monkeypatch, tmp_path):
         if a[0] == "qemu-img":
             assert a[1:5] == ("info", "-f", "qcow2", "--output=json")
             return json.dumps({"virtual-size": virtual["size"]})
-        return digest + "  x"
+        return digest + "\n"
 
     monkeypatch.setattr(module, "run", run)
     vm = dict(MACHINE, kind="vm", disk_gb=10)
@@ -828,7 +832,7 @@ def test_a_cloud_image_is_checked_then_imported(monkeypatch, tmp_path):
         virtual["size"] = size
         with pytest.raises(ValueError, match="virtual size"):
             module.import_volume(vm, "shared:import/" + name, digest)
-    monkeypatch.setattr(module, "run", lambda *a, **k: "0" * 64 + "  x")
+    monkeypatch.setattr(module, "run", lambda *a, **k: "0" * 64 + "\n")
     with pytest.raises(ValueError, match="checksum"):
         module.import_volume(vm, "shared:import/" + name, digest)
     for bad, d in [
@@ -839,3 +843,22 @@ def test_a_cloud_image_is_checked_then_imported(monkeypatch, tmp_path):
     ]:
         with pytest.raises(ValueError):
             module.import_volume(vm, bad, d)
+
+
+def test_checksums_of_shared_storage_are_rate_limited(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    path = tmp_path / "image.raw"
+    data = b"x" * (2 << 20)
+    path.write_bytes(data)
+    monkeypatch.setattr(module, "HASH_RATE", 2 << 20)
+    monkeypatch.setattr(
+        module,
+        "run",
+        lambda *a, **k: (
+            subprocess.run([str(x) for x in a], capture_output=True, text=True, check=True).stdout
+        ),
+    )
+    started = time.monotonic()
+    assert module.sha256_limited(path) == hashlib.sha256(data).hexdigest()
+    # 2 MiB at 2 MiB/s: about a second, never at disk speed.
+    assert time.monotonic() - started >= 0.5
