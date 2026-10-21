@@ -4,6 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,6 +66,10 @@ func TestExtractRejectsEscapes(t *testing.T) {
 		"absolute link": {{name: "l", link: "/etc", kind: tar.TypeSymlink}},
 		"outside link":  {{name: "l", link: "../..", kind: tar.TypeSymlink}},
 		"chained links": {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "evil", link: "d/up/d/up/../../../evil", kind: tar.TypeSymlink}, {name: "evil", body: "x", kind: tar.TypeReg}},
+		// Issue #33: a link through a link, even when nothing writes through it.
+		"link through a link":  {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "x", link: "d/up/d/up", kind: tar.TypeSymlink}},
+		"entry through a link": {{name: "d", link: ".", kind: tar.TypeSymlink}, {name: "d/f", body: "x", kind: tar.TypeReg}},
+		"hard link":            {{name: "a", body: "x", kind: tar.TypeReg}, {name: "b", link: "a", kind: tar.TypeLink}},
 	} {
 		base := t.TempDir()
 		if err := extract(archive(t, entries...), filepath.Join(base, "release"), os.Getuid(), os.Getgid()); err == nil {
@@ -90,5 +100,50 @@ func TestSwapReplacesLinkAtomically(t *testing.T) {
 	}
 	if got, _ := os.Readlink(link); got != filepath.Join(dir, "b") {
 		t.Fatalf("link points at %s", got)
+	}
+}
+
+// Issue #33: the app user owns <root> and releases; root must not follow
+// a link they plant there, nor reuse a release it did not unpack.
+func TestFetchPinsTheReleasesDirectoryAndReusesOnlyItsOwnUnpacks(t *testing.T) {
+	body := archive(t, entry{name: "index.js", body: "v1", kind: tar.TypeReg})
+	raw, _ := io.ReadAll(body)
+	sum := sha256.Sum256(raw)
+	downloads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloads++
+		w.Write(raw)
+	}))
+	defer srv.Close()
+	base := t.TempDir()
+	a := &agent{cfg: config{Origin: srv.URL, Token: "t"}, root: filepath.Join(base, "app"), state: filepath.Join(base, "state"), http: srv.Client(), uid: os.Getuid(), gid: os.Getgid()}
+	r := release{ID: "r1", SHA256: hex.EncodeToString(sum[:])}
+	ctx := context.Background()
+
+	// releases is a link to somewhere else: refused.
+	os.MkdirAll(a.root, 0755)
+	os.MkdirAll(filepath.Join(base, "elsewhere"), 0755)
+	os.Symlink(filepath.Join(base, "elsewhere"), filepath.Join(a.root, "releases"))
+	if err := a.fetch(ctx, r, ""); err == nil {
+		t.Fatal("followed a planted releases link")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(base, "elsewhere")); len(entries) != 0 {
+		t.Fatal("wrote through the link", entries)
+	}
+	os.Remove(filepath.Join(a.root, "releases"))
+	os.Mkdir(filepath.Join(a.root, "releases"), 0755)
+
+	// A directory the app user made under the release's name is replaced.
+	os.MkdirAll(filepath.Join(a.root, "releases", "r1"), 0755)
+	os.WriteFile(filepath.Join(a.root, "releases", "r1", "index.js"), []byte("planted"), 0644)
+	if err := a.fetch(ctx, r, ""); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(a.root, "releases", "r1", "index.js")); string(b) != "v1" || downloads != 1 {
+		t.Fatalf("got %q after %d downloads", b, downloads)
+	}
+	// Its own finished unpack is reused without a download.
+	if err := a.fetch(ctx, r, ""); err != nil || downloads != 1 {
+		t.Fatal("did not reuse its own release", err, downloads)
 	}
 }
