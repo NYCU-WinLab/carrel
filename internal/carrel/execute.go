@@ -67,7 +67,7 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 	dry := boolean(a["dry_run"])
 	switch tool {
 	case "catalog_get":
-		return D{"service": D{"name": "carrel", "version": Version}, "images": Contract["images"], "vm_environment": fallback(e.P.Config, "vm_environment", D{}), "sizes": Contract["sizes"], "units": Units, "capabilities": Contract["capabilities"], "machine_kinds": D{"vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.", "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation."}}, nil
+		return D{"service": D{"name": "carrel", "version": Version}, "images": Contract["images"], "vm_environment": fallback(e.P.Config, "vm_environment", D{}), "sizes": Contract["sizes"], "units": Units, "capabilities": e.capabilities(), "machine_kinds": D{"vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.", "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation."}}, nil
 	case "capacity_get":
 		return D{"capacity": e.Capacity(nil, true)}, nil
 	}
@@ -116,7 +116,7 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 				ts = append(ts, D{"slug": t["slug"], "kind": kind, "status": t["status"], "quota": e.Quota(t)})
 			}
 		}
-		return D{"service": D{"name": "carrel", "version": Version}, "username": w["username"], "admin": w["admin"], "default_tenant": obj(e.S.Tenant("user:" + str(w["sub"])))["slug"], "onboarding": onboarding, "tenants": ts, "capabilities": Contract["capabilities"]}, nil
+		return D{"service": D{"name": "carrel", "version": Version}, "username": w["username"], "admin": w["admin"], "default_tenant": obj(e.S.Tenant("user:" + str(w["sub"])))["slug"], "onboarding": onboarding, "tenants": ts, "capabilities": e.capabilities()}, nil
 	}
 	t := e.Tenant(w, str(a["tenant"]))
 	if (named("mutations", tool) || tool == "deployment_plan") && t["status"] != "active" {
@@ -383,4 +383,12 @@ func parseExpiry(v string) time.Time {
 	}
 	fail("invalid", "Use an ISO date for until")
 	return time.Time{}
+}
+
+// capabilities is the contract's list with what this site turns on:
+// imports need the fetch container (PLAN 7.8).
+func (e *Execution) capabilities() D {
+	c := clone(obj(Contract["capabilities"]))
+	c["custom_image_import"] = boolean(e.P.Config["fetch"])
+	return c
 }

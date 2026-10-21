@@ -427,6 +427,15 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	}
 	safe["readiness"] = D{"ssh_ready": boolean(m["ssh_ready"]), "initialization_status": or(report.InitializationStatus, "unknown"), "application_status": or(report.ApplicationStatus, "not_checked"), "checks": orEmpty(report.Checks), "reported_at": optional(report.ReportedAt), "private_interfaces": orEmpty(report.Interfaces), "failed_step": optional(report.FailedStep)}
 	presentReadiness(safe, report)
+	if len(servicePortsOf(m)) > 0 {
+		// No SSH and no guest reports (issue #125): machine_get fills in the
+		// port check instead.
+		r := obj(safe["readiness"])
+		for _, k := range []string{"ssh_ready", "ssh_status", "ssh_checked_at", "initialization_status", "application_status", "checks", "freshness", "failed_step", "private_interfaces", "reported_at"} {
+			delete(r, k)
+		}
+		delete(safe, "ssh_ready")
+	}
 	allowed := []D{}
 	for _, p := range e.peers(integer(m["tenant_n"])) {
 		if p.Target == m["ip"] && p.State != "deleting" {
