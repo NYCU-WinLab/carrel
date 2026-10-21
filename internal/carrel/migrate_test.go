@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 )
 
@@ -84,4 +85,45 @@ func TestAMoveThatFailsAfterTheMigrationKeepsTheNewNode(t *testing.T) {
 	if obj(r["operation"])["state"] != "failed" || p.Store.Get("machines", "10100")["node"] != "carrel02" {
 		t.Fatal("the record must follow the machine once it runs on the target", r)
 	}
+}
+
+func TestOtherJobsOnAMachineWaitWhileItMoves(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	release := make(chan struct{})
+	var actions []string
+	var mu sync.Mutex
+	b.call = func(r D, target string) (any, error) {
+		switch r["op"] {
+		case "migrate":
+			<-release
+			return D{"state": "moved"}, nil
+		case "migrate_prepare", "migrate_finish", "cloud_init_remove":
+			return D{"state": "done"}, nil
+		case "cloud_init_read":
+			return D{"cloud_init": D{"user": "u", "network": "n"}}, nil
+		case "action":
+			mu.Lock()
+			actions = append(actions, str(r["action"]))
+			mu.Unlock()
+			return D{"power_state": "stopped", "changed": true}, nil
+		}
+		return inner(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	runQueue(p)
+	ctx := context.Background()
+	move := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "web", "node": "carrel02", "wait_seconds": 0}, person("root", true))
+	awaitState(t, p, str(obj(move["operation"])["id"]), "moving_machine")
+	stop := p.Execute(ctx, "machine_power", D{"machine": "web", "action": "shutdown", "wait_seconds": 0}, person("alice", false))
+	awaitState(t, p, str(obj(stop["operation"])["id"]), "waiting_for_machine_operation")
+	mu.Lock()
+	sent := len(actions)
+	mu.Unlock()
+	if sent != 0 {
+		t.Fatal("a power action reached a node during the move")
+	}
+	close(release)
+	awaitState(t, p, str(obj(move["operation"])["id"]), "succeeded")
+	awaitState(t, p, str(obj(stop["operation"])["id"]), "succeeded")
 }

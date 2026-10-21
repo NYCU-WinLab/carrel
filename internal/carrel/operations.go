@@ -508,7 +508,7 @@ func (e *Execution) CheckBusy(t D) {
 		}
 	}
 	for _, other := range e.S.ActiveOperations() {
-		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing"}, other["phase"]) {
+		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine"}, other["phase"]) {
 			continue
 		}
 		ids := arr(obj(other["deployment"])["machines"])
