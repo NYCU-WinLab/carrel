@@ -37,6 +37,9 @@ table inet carrel_tenant_host {{
  chain input {{
   type filter hook input priority -25; policy accept;
   iifname "vmbr98" ip saddr {{ 10.200.0.2, 10.200.0.3 }} accept
+  # Answers to the node's own connections, such as its public address
+  # forwarded to a tenant port (issue #48); nothing new from tenants.
+  ip saddr 10.200.0.0/16 ct direction reply ct state established accept
   ip saddr 10.200.0.0/16 counter drop
   iifname {{ {TENANT_IFACES} }} counter drop
   iifname "vrf_tenants" counter drop
@@ -89,9 +92,11 @@ table inet carrel_public {{
 """
 
 
-def public_interface(interface, cidr, gateway, address):
-    network = ipaddress.IPv4Interface(cidr).network
-    rules = [
+def public_rules(address):
+    return [
+        # The node's own connections to its public address that the output
+        # hook sends to carrel's networks (issue #48): main, not the uplink.
+        (f"from {address} to 10.200.0.0/16 lookup main priority 1599"),
         (f"fwmark {PUBLIC_MARK} lookup {PUBLIC_TABLE} priority 1600"),
         (f"from {address} lookup {PUBLIC_TABLE} priority 1601"),
         # Tenant egress leaves the VRF into main on xvrf_tenants and goes out the
@@ -106,6 +111,11 @@ def public_interface(interface, cidr, gateway, address):
         # sets the conntrack mark to its VMID, so the fwmark rule misses them.
         (f"from 10.200.0.4 ipproto tcp sport 22 lookup {PUBLIC_TABLE} priority 1605"),
     ]
+
+
+def public_interface(interface, cidr, gateway, address):
+    network = ipaddress.IPv4Interface(cidr).network
+    rules = public_rules(address)
     up = [f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
           f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
     up += [f"    post-up ip rule del {r} 2>/dev/null; ip rule add {r}" for r in rules]
@@ -266,6 +276,12 @@ WantedBy=multi-user.target
             public_interface(public["interface"], public["cidr"], public["gateway"], public["address"])
         )
         run("ifup", public["interface"])
+        # ifup skips post-up on an interface already up: a rule added since
+        # the last boot is applied here too.
+        for rule in public_rules(public["address"]):
+            # Only a missing one: deleting a present rule would leave a gap.
+            priority = rule.rsplit(" ", 1)[1]
+            subprocess.run(["sh", "-c", f"ip rule list priority {priority} | grep -q . || ip rule add {rule}"], check=True)
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target

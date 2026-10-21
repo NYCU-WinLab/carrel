@@ -34,8 +34,13 @@ def test_public_entry_is_accepted_before_the_protected_drop():
 
 def test_only_the_listed_port_is_opened_on_a_protected_host():
     lines = rules({"protected_addresses": [EDGE], "public_entries": [{"address": EDGE, "port": 443}]})
+    # 443 and the tenant public port block (issue #28), nothing else.
     opened = [line for line in lines if line.startswith("OUT ACCEPT") and EDGE in line]
-    assert opened == [f"OUT ACCEPT -dest {EDGE} -p tcp -dport 443"]
+    assert opened == [
+        f"OUT ACCEPT -dest {EDGE} -p tcp -dport 443",
+        f"OUT ACCEPT -dest {EDGE} -p tcp -dport 20010:22549",
+        f"OUT ACCEPT -dest {EDGE} -p udp -dport 20010:22549",
+    ]
 
 
 def test_no_public_entries_keeps_the_host_fully_protected():
@@ -57,3 +62,10 @@ def test_a_public_entry_must_be_a_protected_public_host():
         except ValueError:
             continue
         raise AssertionError(f"accepted {entry}")
+
+
+def test_tenants_reach_every_tenant_public_port():
+    lines = rules({"protected_addresses": [EDGE], "public_entries": [{"address": EDGE, "port": 443}]})
+    drop = lines.index(f"OUT DROP -dest {EDGE}")
+    for proto in ("tcp", "udp"):
+        assert lines.index(f"OUT ACCEPT -dest {EDGE} -p {proto} -dport 20010:22549") < drop

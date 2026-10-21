@@ -285,6 +285,9 @@ PEER_SSH
  chain postrouting {
   type nat hook postrouting priority srcnat; policy accept;
   ip saddr 10.200.0.0/24 oifname "MANAGEMENT" masquerade
+  # CT 100 or 101 reaching the public address lands back on vmbr98 (issue
+  # #48): the answer must come back through the node.
+  iifname "vmbr98" oifname "vmbr98" ct status dnat masquerade
  }
 }
 """

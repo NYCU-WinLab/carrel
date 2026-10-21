@@ -241,6 +241,11 @@ def guest_firewall(m, state, config):
             raise ValueError(f"public entry {entry['address']} is not a protected public address")
         port = integer(entry["port"], 1, 65535)
         rules.append(f"OUT ACCEPT -dest {dest} -p tcp -dport {port}")
+    for dest in sorted({str(ipaddress.ip_network(e["address"], strict=False)) for e in config.get("public_entries", [])}):
+        # Every tenant's public ports are public (issue #28): tenants reach
+        # them by the public address too, like anyone on the internet.
+        for proto in ("tcp", "udp"):
+            rules.append(f"OUT ACCEPT -dest {dest} -p {proto} -dport {TENANT_PORTS}")
     for block in [
         "10.0.0.0/8",
         "172.16.0.0/12",
@@ -390,6 +395,10 @@ def public_ingress():
     return str(ipaddress.IPv4Interface(s["public"]["address"]).ip)
 
 
+# The public port blocks of tenants 1 to 254 (20000 + 10n to 20009 + 10n).
+TENANT_PORTS = "20010:22549"
+
+
 def ports_nft(state, address):
     """DNAT the public address: HTTP(S) to the infra gateway, granted ports to machines."""
     rules = [f"ip daddr {address} tcp dport {{ 80, 443 }} dnat to 10.200.0.2"]
@@ -409,12 +418,25 @@ def ports_nft(state, address):
         seen.add((g["proto"], public))
         rules.append(f"ip daddr {address} {g['proto']} dport {public} dnat to {ip}:{port}")
     body = "\n".join("  " + r for r in rules)
+    # The node itself reaches its public address too (issue #48): its own
+    # packets take the output hook, not prerouting.
+    local = "\n".join("  " + r for r in rules if "dport 22 dnat to 10.200.0.4" not in r)
     return f"""add table ip carrel_ports
 flush table ip carrel_ports
 table ip carrel_ports {{
  chain prerouting {{
   type nat hook prerouting priority dstnat - 5; policy accept;
 {body}
+ }}
+ chain output {{
+  type nat hook output priority dstnat - 5; policy accept;
+{local}
+ }}
+ chain postrouting {{
+  type nat hook postrouting priority srcnat - 5; policy accept;
+  # A tenant reaching another tenant's public port (issue #28): the answer
+  # must come back through here, so the source becomes the public address.
+  ip saddr 10.200.0.0/16 ip daddr 10.200.0.0/16 ip daddr != 10.200.0.0/24 ct status dnat ct original ip daddr {address} snat to {address}
  }}
 }}
 """

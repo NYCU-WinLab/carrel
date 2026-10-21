@@ -150,3 +150,26 @@ def test_the_jump_host_drops_infra_and_gateways_before_it_reaches_tenants():
         if r.startswith("OUT ACCEPT") and "53" not in r
     ]
     assert "10.200.254.1" in rules and "10.200.0.1" not in rules
+
+
+def test_tenants_and_the_node_reach_the_public_address_too():
+    # Issue #28: a tenant reaching another tenant's public port gets its
+    # answer back through the exit node; issue #48: so does the node itself.
+    nft = load("node-agent.py").ports_nft({"ports": [GRANT]}, "140.113.60.184")
+    output = nft[nft.index("chain output") : nft.index("chain postrouting")]
+    assert "ip daddr 140.113.60.184 tcp dport { 80, 443 } dnat to 10.200.0.2" in output
+    assert "tcp dport 20030 dnat to 10.200.3.10:22" in output and "10.200.0.4" not in output
+    assert "ct original ip daddr 140.113.60.184 snat to 140.113.60.184" in nft
+    assert "ip daddr != 10.200.0.0/24" in nft
+
+
+def test_the_node_reaches_its_public_address_through_main():
+    # Issue #48: the node's own packets to carrel's networks, sourced from the
+    # public address, must not follow rule 1601 out the public uplink.
+    rules = load("install-network.py").public_rules("140.113.60.184")
+    assert rules[0] == "from 140.113.60.184 to 10.200.0.0/16 lookup main priority 1599"
+    assert any(r.endswith("priority 1601") for r in rules[1:])
+    nft = load("install-network.py").tenant_host_nft([])
+    assert nft.index("ct direction reply ct state established accept") < nft.index(
+        "ip saddr 10.200.0.0/16 counter drop"
+    )

@@ -123,6 +123,30 @@ def jump(key):
     return " ".join(run("pct", "exec", "102", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
 
 
+# Every node takes SSH keys only (issue #56): no passwords, root by key.
+NODE_SSHD = """# Managed by carrel configure-nodes.py (issue #56).
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+"""
+NODE_SSHD_PATH = "/etc/ssh/sshd_config.d/10-carrel-keys.conf"
+# sshd -t first: a bad file never reaches a running sshd. A reload keeps
+# open sessions; sshd -T then shows what new logins get.
+NODE_SSHD_APPLY = (
+    f"umask 022 && cat > {NODE_SSHD_PATH}.next && mv {NODE_SSHD_PATH}.next {NODE_SSHD_PATH}"
+    f" && {{ sshd -t || {{ rm -f {NODE_SSHD_PATH}; exit 1; }}; }}"
+    f" && {{ systemctl reload ssh.service || {{ rm -f {NODE_SSHD_PATH}; systemctl reload ssh.service; exit 1; }}; }}"
+    " && sshd -T | grep -qx 'passwordauthentication no'"
+)
+
+
+def node_sshd(n, local):
+    if local:
+        run("sh", "-c", NODE_SSHD_APPLY, input=NODE_SSHD)
+    else:
+        run("ssh", *peer(n), "root@" + n["address"], NODE_SSHD_APPLY, input=NODE_SSHD)
+
+
 def ssh_config(existing, nodes):
     block = [BEGIN]
     for n in nodes:
@@ -216,6 +240,14 @@ def main():
         status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", JUMP["target"], input='{"op":"status"}'))
         if not status.get("ok"):
             raise SystemExit("the jump host did not answer through carrel-jump")
+    # 6. Keys only on every node, last: everything above already answered by
+    # key. The site turns it on once nobody logs in to a node by password.
+    if site.get("ssh_keys_only"):
+        for n in nodes:
+            node_sshd(n, n is me)
+        for n in nodes:
+            # A new login by key still works after the reload, here too.
+            run("ssh", *peer(n), "root@" + n["address"], "true")
     print(json.dumps({"nodes": report, "gateway": GATEWAY["target"], **({"jump": JUMP["target"]} if jump_key else {})}))
 
 
