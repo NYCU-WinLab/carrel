@@ -162,7 +162,9 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 	if f := attempt(func() {
 		e.Call(D{"op": "fetch_start", "job": r.Job, "url": url, "sha256": sum, "max_bytes": reserve, "format": kind, "refused": refused}, e.P.Nodes()[0].Target)
 	}); f != nil {
-		// Nothing started: the reservation goes too.
+		// Nothing started, or nothing anyone tracks: the reservation goes,
+		// and so does whatever the container may have begun.
+		_ = attempt(func() { e.Call(D{"op": "fetch_clean", "job": r.Job}, e.P.Nodes()[0].Target) })
 		e.S.Remove("images", r.ID)
 		panic(f)
 	}
@@ -186,6 +188,10 @@ func (e *Execution) PerformImport() {
 	}
 	target := e.P.Nodes()[0].Target
 	abandon := func(code, message string) {
+		// A shutdown is not a failure: the job resumes after the restart.
+		if err := e.Ctx.Err(); err != nil {
+			panic(err)
+		}
 		_ = attempt(func() { e.Call(D{"op": "fetch_clean", "job": r.Job}, target) })
 		e.P.writer.Lock()
 		e.S.Remove("images", id)
@@ -198,8 +204,18 @@ func (e *Execution) PerformImport() {
 		e.Op["phase"] = "downloading"
 		e.P.Operations.Save(e.Op)
 	}()
+	misses := 0
 	for {
-		status := obj(e.Call(D{"op": "fetch_status", "job": r.Job}, target))
+		var status D
+		if f := attempt(func() { status = obj(e.Call(D{"op": "fetch_status", "job": r.Job}, target)) }); f != nil {
+			// A node that does not answer once is not a failed download.
+			if misses++; misses >= 6 || e.Ctx.Err() != nil {
+				panic(f)
+			}
+			status = D{"state": "running"}
+		} else {
+			misses = 0
+		}
 		if status["state"] == "done" {
 			break
 		}
@@ -233,8 +249,8 @@ func (e *Execution) PerformImport() {
 // FinishImport reports the stored image.
 func (e *Execution) FinishImport() D {
 	r, ok := rowOf[imageRecord](e.S, "images", str(obj(e.Op["import"])["id"]))
-	if !ok {
-		return D{}
+	if !ok || r.State != "ready" {
+		fail("backend_unavailable", "The image was not stored", D{"recovery": "retry_infrastructure"})
 	}
 	return D{"image": r.public()}
 }

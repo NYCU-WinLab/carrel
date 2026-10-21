@@ -300,7 +300,7 @@ func (p *Platform) reserveUpload(e *Execution, app D, size int64) func() {
 		}
 	}
 	t := e.S.TenantN(n)
-	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+float64(tenant+size) > limit {
+	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+e.imageBytes(n)+float64(tenant+size) > limit {
 		fail("quota_exceeded", "Stored releases would exceed images_gb", D{"dimension": "images_gb"})
 	}
 	must(os.MkdirAll(p.appsDir(), 0700))
@@ -359,7 +359,7 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 	app = e.appBySlug(slug, name)
 	e.authorizeRelease(app, c)
 	t := e.S.TenantN(n)
-	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+float64(written) > limit {
+	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+e.imageBytes(n)+float64(written) > limit {
 		fail("quota_exceeded", "Stored releases would exceed images_gb", D{"dimension": "images_gb"})
 	}
 	must(os.Rename(tmp.Name(), p.releasePath(str(app["id"]), id)))

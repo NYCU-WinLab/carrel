@@ -74,3 +74,32 @@ func awaitStateWithinMs(t *testing.T, p *Platform, id, state string) D {
 	t.Helper()
 	return awaitStateWithin(t, p, id, state, 20e9)
 }
+
+func TestAnImportCutByARestartDoesNotReportSuccess(t *testing.T) {
+	p, b := fixture(t)
+	p.Config["fetch"] = true
+	ctx, cancel := context.WithCancel(context.Background())
+	e := p.execution(ctx)
+	e.Op = D{"id": "op1", "tool": "iso_import", "tenant_n": 1}
+	tenant := p.Store.TenantN(1)
+	b.call = func(r D, _ string) (any, error) {
+		switch r["op"] {
+		case "fetch_status":
+			return D{"state": "done"}, nil
+		case "fetch_store":
+			cancel()
+			return nil, context.Canceled
+		}
+		return D{"state": "running"}, nil
+	}
+	e.PlanImport("iso_import", D{"name": "netinst", "url": "https://example.com/x.iso", "sha256": strings.Repeat("ab", 32)}, tenant)
+	if attempt(e.PerformImport) == nil {
+		t.Fatal("a cut store passed")
+	}
+	if len(p.Store.Objects("images", 1)) != 1 {
+		t.Fatal("a shutdown dropped the record")
+	}
+	if attempt(func() { e.FinishImport() }) == nil {
+		t.Fatal("reported an image that is not stored")
+	}
+}
