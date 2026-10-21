@@ -331,8 +331,9 @@ iface vmbr98 inet static
     caddy(101)
     infra = [100, 101]
     if config.get("ssh_jump"):
-        write("/etc/pve/firewall/102.fw", JUMP_FIREWALL)
-        ct(102, "carrel-jump", "10.200.0.4", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template, firewall=True)
+        write("/etc/pve/firewall/102.fw", JUMP_FIREWALL, 0o640)  # pmxcfs takes 0640 only
+        ct(102, "carrel-jump", "10.200.0.4", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template,
+           nameserver="10.200.0.2", firewall=True)
         packages(102, "jump")
         jump(102)
         infra.append(102)
