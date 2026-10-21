@@ -236,7 +236,7 @@ from outside still needs a client-side check.
 ### 4.4 Admin tools
 
 Callable only by `winlab-admin`: `quota_set`, `request_approve`, `request_reject`, `tenant_list`,
-`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `reconcile_run`, `image_build`,
+`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `node_undrain`, `machine_migrate`, `reconcile_run`, `image_build`,
 `issue_triage` (label, merge a duplicate), `issue_resolve` (`id`, `fixed_in`, `note`),
 `machine_import` and `source_add` (section 10.6), `zone_add` and `zone_list` (section 6.10).
 
@@ -928,7 +928,11 @@ are shared, so only memory moves), and move the disks to the target node's guest
 first move also detaches the disk from the template. Each step is bandwidth-limited, because the
 nodes reach the NAS over the link corosync uses (13.14). The record's `node` changes only after
 Proxmox reports the machine on the target, and the source's cloud-init files go last.
-`node_drain` marks a node unschedulable and moves its machines one at a time.
+`node_drain` marks a node unschedulable (kept in the database's `site` table, outside any
+tenant) and queues a `machine_migrate` for each of its machines; `machine_migrate` without a node
+picks the node with the most free memory that is not drained. Moves run one at a time across the
+site, since they share the nodes' one link with corosync; a move that finds another in progress
+waits for its slot. `node_undrain` reopens placement and leaves moved machines where they are.
 
 ## 8. Hosts and sites
 

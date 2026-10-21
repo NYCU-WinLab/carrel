@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMachineMigrateMovesTheRecordAfterTheNodesAgree(t *testing.T) {
@@ -126,4 +127,75 @@ func TestOtherJobsOnAMachineWaitWhileItMoves(t *testing.T) {
 	close(release)
 	awaitState(t, p, str(obj(move["operation"])["id"]), "succeeded")
 	awaitState(t, p, str(obj(stop["operation"])["id"]), "succeeded")
+}
+
+func TestNodeDrainMovesEveryMachineOneAtATime(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	var mu sync.Mutex
+	running, most := 0, 0
+	b.call = func(r D, target string) (any, error) {
+		switch r["op"] {
+		case "migrate":
+			mu.Lock()
+			running++
+			most = max(most, running)
+			mu.Unlock()
+			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			running--
+			mu.Unlock()
+			return D{"state": "moved"}, nil
+		case "migrate_prepare", "migrate_finish", "cloud_init_remove":
+			return D{"state": "done"}, nil
+		case "cloud_init_read":
+			return D{"cloud_init": D{"user": "u", "network": "n"}}, nil
+		}
+		return inner(r, target)
+	}
+	p.Config["migration_slot_retry_seconds"] = 0.1
+	a := seedMachine(p, "a", 10100)
+	b2 := seedMachine(p, "b", 10101)
+	b2["ip"], b2["host"], b2["mac"] = "10.200.1.11", 11, "02:ca:01:01:00:01"
+	p.Store.Put("machines", 10101, 1, b2)
+	_ = a
+	runQueue(p)
+	ctx, admin := context.Background(), person("root", true)
+	r := p.Execute(ctx, "node_drain", D{"node": "carrel01"}, admin)
+	moves := dicts(r["moves"])
+	if len(moves) != 2 || r["drained"] != true {
+		t.Fatal(r)
+	}
+	for _, m := range moves {
+		awaitStateWithin(t, p, str(m["operation"]), "succeeded", 10*time.Second)
+	}
+	for _, id := range []string{"10100", "10101"} {
+		if node := p.Store.Get("machines", id)["node"]; node == "carrel01" || node == nil {
+			t.Fatal("machine left on the drained node", id, node)
+		}
+	}
+	if most != 1 {
+		t.Fatal("moves overlapped", most)
+	}
+	e := p.execution(ctx)
+	if n, _ := e.Place(1, 1024, 10); n.Name == "carrel01" {
+		t.Fatal("placed on a drained node")
+	}
+	p.Execute(ctx, "node_undrain", D{"node": "carrel01"}, admin)
+	if e.drained("carrel01") {
+		t.Fatal("undrain did not reopen the node")
+	}
+}
+
+func awaitStateWithin(t *testing.T, p *Platform, id, state string, limit time.Duration) D {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if op := p.Store.Get("operations", id); op["state"] == state {
+			return op
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("operation %s never reached %s: %v", id, state, p.Store.Get("operations", id))
+	return nil
 }

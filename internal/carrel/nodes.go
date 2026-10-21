@@ -305,9 +305,17 @@ func (e *Execution) admits(c D, cpu, memory, disk float64, proposed D, snapshot 
 // Place picks the node for new machines: among the nodes that admit the whole
 // request, the one with the most memory left after it. Nothing is reserved;
 // apply places again inside its own admission check.
-func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
-	nodes := e.P.Nodes()
-	if len(nodes) == 1 {
+func (e *Execution) Place(cpu, memory, disk float64, skip ...string) (nodeRef, D) {
+	nodes := []nodeRef{}
+	for _, n := range e.P.Nodes() {
+		if !e.drained(n.Name) && !contains(skip, n.Name) {
+			nodes = append(nodes, n)
+		}
+	}
+	if len(nodes) == 0 {
+		fail("capacity_exhausted", "No node accepts new machines", D{"recovery": "retry_infrastructure"})
+	}
+	if len(nodes) == 1 && len(e.P.Nodes()) == 1 {
 		admission, _ := e.admitOn(nodes[0], cpu, memory, disk, nil, false)
 		return nodes[0], admission
 	}
@@ -356,6 +364,11 @@ func (e *Execution) Place(cpu, memory, disk float64) (nodeRef, D) {
 		panic(refusal)
 	}
 	return best, admission
+}
+
+// drained reports whether an admin took the node out of placement.
+func (e *Execution) drained(name string) bool {
+	return boolean(e.S.SiteGet("node", name)["drained"])
 }
 
 // record stores the node on a machine.

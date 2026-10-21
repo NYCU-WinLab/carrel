@@ -1,5 +1,7 @@
 package carrel
 
+import "sort"
+
 // Moving machines between nodes (PLAN 7.10). Validation and the plan run
 // under the writer lock; the copy runs outside it, like certificate
 // preparation, because it takes minutes; the record changes node at the end.
@@ -19,14 +21,30 @@ func (e *Execution) PlanMigration(a D) D {
 		fail("not_found", "Tenant not found")
 	}
 	m := e.Machine(t, a["machine"])
-	target, ok := e.nodeNamed(str(a["node"]))
-	if !ok {
-		fail("invalid", "Unknown node", D{"recovery": "revise_request"})
-	}
 	from := e.P.nodeOf(m)
-	if plan := obj(obj(e.Op)["migration"]); plan["to"] == target.Name {
+	if plan := obj(obj(e.Op)["migration"]); plan["to"] != nil {
 		// A retried job keeps its plan, wherever the machine is by now.
 		return D{"machine": m["name"], "from": plan["from"], "to": plan["to"], "state": "migrating"}
+	}
+	// One move at a time: the copies share the nodes' one link with corosync.
+	if e.Op != nil {
+		for _, other := range e.S.ActiveOperations() {
+			if other["id"] != e.Op["id"] && other["tool"] == "machine_migrate" && other["migration"] != nil {
+				panic(Waiting{"waiting_for_migration_slot", now() + num(fallback(e.P.Config, "migration_slot_retry_seconds", 15))})
+			}
+		}
+	}
+	var target nodeRef
+	if a["node"] == nil {
+		target, _ = e.Place(num(m["cpu"]), num(m["memory_mb"]), num(m["disk_gb"]), from.Name)
+	} else {
+		var ok bool
+		if target, ok = e.nodeNamed(str(a["node"])); !ok {
+			fail("invalid", "Unknown node", D{"recovery": "revise_request"})
+		}
+		if e.drained(target.Name) {
+			fail("conflict", "The target node is drained", D{"recovery": "revise_request"})
+		}
 	}
 	if from.Name == target.Name {
 		fail("conflict", "The machine is already on that node", D{"recovery": "revise_request"})
@@ -112,4 +130,38 @@ func (e *Execution) FinishMigration(t D) D {
 	// the next move from there.
 	_ = attempt(func() { e.Call(D{"op": "cloud_init_remove", "machine": m}, from.Target) })
 	return D{"machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "from": plan["from"], "to": plan["to"], "state": "moved"}
+}
+
+// DrainNode takes a node out of placement and queues a move for each of its
+// machines; the moves run one at a time. Undrain only reopens placement.
+func (e *Execution) DrainNode(tool string, a, w D) D {
+	node, ok := e.nodeNamed(str(a["node"]))
+	if !ok {
+		fail("invalid", "Unknown node", D{"recovery": "revise_request"})
+	}
+	if tool == "node_undrain" {
+		if !boolean(a["dry_run"]) {
+			e.S.SitePut("node", node.Name, D{"drained": false})
+		}
+		return D{"node": node.Name, "drained": false, "dry_run": boolean(a["dry_run"])}
+	}
+	if len(e.P.Nodes()) < 2 {
+		fail("conflict", "A site with one node cannot drain it", D{"recovery": "revise_request"})
+	}
+	machines := filter(e.S.Objects("machines"), func(m D) bool { return m["node"] == node.Name && m["state"] != "deleting" })
+	sort.Slice(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
+	moves := []D{}
+	for _, m := range machines {
+		t := e.S.TenantN(integer(m["tenant_n"]))
+		move := D{"tenant": t["slug"], "machine": m["name"]}
+		if !boolean(a["dry_run"]) {
+			op := e.P.Operations.Submit("machine_migrate", move, w, t)
+			move["operation"] = op["id"]
+		}
+		moves = append(moves, move)
+	}
+	if !boolean(a["dry_run"]) {
+		e.S.SitePut("node", node.Name, D{"drained": true})
+	}
+	return D{"node": node.Name, "drained": true, "moves": moves, "dry_run": boolean(a["dry_run"])}
 }

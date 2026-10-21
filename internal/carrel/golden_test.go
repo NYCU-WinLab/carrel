@@ -432,6 +432,10 @@ func goldenScenario(g *goldenRun) {
 
 	call("migrate", "machine_migrate", D{"tenant": "alice", "machine": "api", "node": "carrel01"}, admin)
 	call("migrate", "machine_migrate", D{"tenant": "alice", "machine": "api", "node": "carrel01"}, alice)
+
+	call("drain", "node_drain", D{"node": "carrel01"}, admin)
+	call("drain", "node_undrain", D{"node": "carrel01"}, admin)
+	call("drain", "node_drain", D{"node": "carrel01"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {
