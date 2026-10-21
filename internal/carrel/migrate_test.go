@@ -199,3 +199,45 @@ func awaitStateWithin(t *testing.T, p *Platform, id, state string, limit time.Du
 	t.Fatalf("operation %s never reached %s: %v", id, state, p.Store.Get("operations", id))
 	return nil
 }
+
+func TestDrainingTwiceMovesEachMachineOnce(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	p.Config["migration_slot_retry_seconds"] = 0.1
+	inner := b.call
+	var mu sync.Mutex
+	moved := map[string]int{}
+	b.call = func(r D, target string) (any, error) {
+		switch r["op"] {
+		case "migrate":
+			mu.Lock()
+			moved[str(obj(r["machine"])["name"])]++
+			mu.Unlock()
+			time.Sleep(30 * time.Millisecond)
+			return D{"state": "moved"}, nil
+		case "migrate_prepare", "migrate_finish", "cloud_init_remove":
+			return D{"state": "done"}, nil
+		case "cloud_init_read":
+			return D{"cloud_init": D{"user": "u", "network": "n"}}, nil
+		}
+		return inner(r, target)
+	}
+	seedMachine(p, "a", 10100)
+	runQueue(p)
+	ctx, admin := context.Background(), person("root", true)
+	first := dicts(p.Execute(ctx, "node_drain", D{"node": "carrel01"}, admin)["moves"])
+	second := dicts(p.Execute(ctx, "node_drain", D{"node": "carrel01"}, admin)["moves"])
+	if len(first) != 1 || len(second) != 1 || first[0]["operation"] != second[0]["operation"] {
+		t.Fatal("a second drain queued another move", first, second)
+	}
+	awaitStateWithin(t, p, str(first[0]["operation"]), "succeeded", 10*time.Second)
+	// After the move, a stale request for the same drain does nothing.
+	r := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "a", "from": "carrel01"}, admin)
+	if obj(obj(r["operation"])["result"])["state"] != "moved" || moved["a"] != 1 {
+		t.Fatal("moved twice", moved, r)
+	}
+	// The last open node cannot be drained.
+	p.Execute(ctx, "node_drain", D{"node": "carrel02"}, admin)
+	if f := p.Execute(ctx, "node_drain", D{"node": "carrel03"}, admin); f["ok"] != false {
+		t.Fatal("drained every node", f)
+	}
+}

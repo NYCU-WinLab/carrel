@@ -1937,6 +1937,11 @@
             ],
             "default": "summary",
             "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+            "description": "Move only if the machine is still on this node; node_drain sets it."
           }
         },
         "required": [
@@ -1953,7 +1958,7 @@
     },
     {
       "name": "node_drain",
-      "description": "Admin: stop placing new machines on a node and queue a machine_migrate for each machine on it; the moves run one at a time, each visible with operation_get by its ID. A machine with snapshots fails its move and stays. Use before maintenance; node_undrain reopens the node.",
+      "description": "Admin: stop placing new machines on a node and queue a machine_migrate for each machine on it; the moves run one at a time, each visible with operation_get by its ID. Machines that cannot move (snapshots, suspended tenant, transient state) are listed under staying. Running it again only queues machines without a move in progress. node_undrain reopens the node.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1970,7 +1975,7 @@
           "dry_run": {
             "type": "boolean",
             "default": false,
-            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+            "description": "Preview only: lists the moves without queueing them or changing the node."
           }
         },
         "required": [
@@ -2003,7 +2008,7 @@
           "dry_run": {
             "type": "boolean",
             "default": false,
-            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+            "description": "Preview only: lists the moves without queueing them or changing the node."
           }
         },
         "required": [

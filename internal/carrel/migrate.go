@@ -22,6 +22,10 @@ func (e *Execution) PlanMigration(a D) D {
 	}
 	m := e.Machine(t, a["machine"])
 	from := e.P.nodeOf(m)
+	if a["from"] != nil && from.Name != str(a["from"]) && obj(obj(e.Op)["migration"])["to"] == nil {
+		// A drain's move for a machine that already left that node.
+		return D{"machine": m["name"], "from": a["from"], "to": from.Name, "state": "moved"}
+	}
 	if plan := obj(obj(e.Op)["migration"]); plan["to"] != nil {
 		// A retried job keeps its plan, wherever the machine is by now.
 		return D{"machine": m["name"], "from": plan["from"], "to": plan["to"], "state": "migrating"}
@@ -81,7 +85,8 @@ func (e *Execution) PlanMigration(a D) D {
 // PerformMigration copies the machine without the writer lock. Each step
 // on a node is idempotent, so a job that restarts runs them again.
 func (e *Execution) PerformMigration() {
-	if e.Op["tool"] != "machine_migrate" {
+	// A drain's move for a machine that already left has no plan.
+	if e.Op["tool"] != "machine_migrate" || e.Op["migration"] == nil {
 		return
 	}
 	plan := obj(e.Op["migration"])
@@ -119,6 +124,9 @@ func (e *Execution) PerformMigration() {
 
 // FinishMigration records the new node under the writer lock.
 func (e *Execution) FinishMigration(t D) D {
+	if e.Op["migration"] == nil {
+		return D{}
+	}
 	plan := obj(e.Op["migration"])
 	m := e.S.Get("machines", str(plan["vmid"]))
 	if m == nil {
@@ -145,23 +153,57 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 		}
 		return D{"node": node.Name, "drained": false, "dry_run": boolean(a["dry_run"])}
 	}
-	if len(e.P.Nodes()) < 2 {
-		fail("conflict", "A site with one node cannot drain it", D{"recovery": "revise_request"})
+	open := 0
+	for _, n := range e.P.Nodes() {
+		if n.Name != node.Name && !e.drained(n.Name) {
+			open++
+		}
+	}
+	if open == 0 {
+		fail("conflict", "Draining this node would leave no node for machines", D{"recovery": "revise_request"})
+	}
+	dry := boolean(a["dry_run"])
+	if !dry {
+		// Marked first: a drain that stops halfway is resumed by running it again.
+		e.S.SitePut("node", node.Name, D{"drained": true})
+	}
+	moving := map[int]any{}
+	for _, op := range e.S.ActiveOperations() {
+		if op["tool"] == "machine_migrate" {
+			moving[integer(obj(op["machine_target"])["vmid"])] = op["id"]
+		}
 	}
 	machines := filter(e.S.Objects("machines"), func(m D) bool { return m["node"] == node.Name && m["state"] != "deleting" })
 	sort.Slice(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
-	moves := []D{}
+	moves, staying := []D{}, []D{}
 	for _, m := range machines {
 		t := e.S.TenantN(integer(m["tenant_n"]))
 		move := D{"tenant": t["slug"], "machine": m["name"]}
-		if !boolean(a["dry_run"]) {
-			op := e.P.Operations.Submit("machine_migrate", move, w, t)
+		reason := ""
+		switch {
+		case t["status"] != "active":
+			reason = "tenant_suspended"
+		case !contains([]string{"ready", "running", "stopped"}, m["state"]):
+			reason = "machine_" + str(m["state"])
+		case len(filter(e.snapshotRows(integer(t["n"])), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) })) > 0:
+			reason = "has_snapshots"
+		}
+		if reason != "" {
+			staying = append(staying, merge(move, D{"reason": reason}))
+			continue
+		}
+		if id, ok := moving[integer(m["vmid"])]; ok {
+			// Running the drain again does not move a machine twice.
+			moves = append(moves, merge(move, D{"operation": id}))
+			continue
+		}
+		if !dry {
+			op := e.P.Operations.Submit("machine_migrate", merge(move, D{"from": node.Name}), w, t)
 			move["operation"] = op["id"]
 		}
 		moves = append(moves, move)
 	}
-	if !boolean(a["dry_run"]) {
-		e.S.SitePut("node", node.Name, D{"drained": true})
-	}
-	return D{"node": node.Name, "drained": true, "moves": moves, "dry_run": boolean(a["dry_run"])}
+	return D{"node": node.Name, "drained": true, "moves": moves, "staying": staying, "dry_run": dry}
 }
+
+func (e *Execution) snapshotRows(n int) []D { return e.S.Objects("snapshots", n) }
