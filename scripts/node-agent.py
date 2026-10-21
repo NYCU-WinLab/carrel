@@ -1316,6 +1316,15 @@ def import_volume(m, volume, digest):
         raise StorageUnavailable(f"{rest} missing or its storage unreachable") from e
     if found != digest:
         raise ValueError("image does not match its checksum")
+    # The fetcher's virtual size is not trusted (PLAN 7.8): read it here,
+    # before the import, and keep it within the disk the quota counted.
+    try:
+        info = json.loads(run("qemu-img", "info", "-f", rest.rsplit(".", 1)[1], "--output=json", Path(entry["path"]) / "import" / rest, timeout=60))
+    except (CommandFailure, subprocess.TimeoutExpired, ValueError) as e:
+        raise ValueError("image is not a readable disk image") from e
+    size = info.get("virtual-size")
+    if not isinstance(size, int) or size <= 0 or size > integer(m["disk_gb"], 1, 1000) * 1024**3:
+        raise ValueError("the image's virtual size exceeds the machine's disk")
     return f"{storage}:import/{rest}"
 
 

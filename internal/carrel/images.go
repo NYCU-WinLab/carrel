@@ -236,6 +236,9 @@ func (e *Execution) PerformImport() {
 		}
 		if status["state"] == "done" {
 			virtual = int64(num(obj(status["result"])["virtual_size"]))
+			if r.Kind != "iso" && virtual <= 0 {
+				abandon("image_refused", "The fetcher did not report the image's virtual size")
+			}
 			break
 		}
 		if status["state"] == "failed" {
@@ -376,7 +379,7 @@ func lastDot(s string) int {
 func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 	name := strings.TrimPrefix(str(a["image"]), "tenant:")
 	r, ok := e.imageNamed(integer(t["n"]), name)
-	if !ok || r.Kind == "iso" || r.State != "ready" {
+	if !ok || r.Kind == "iso" || r.State != "ready" || r.VirtualSize <= 0 {
 		fail("not_found", "No ready cloud image with that name in this tenant; import one with image_import")
 	}
 	if textAt(a, "kind", "vm") != "vm" {
