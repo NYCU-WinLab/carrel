@@ -387,6 +387,31 @@ def site():
     return json.loads(SITE.read_text())
 
 
+def mirror_url(distro):
+    mirrors = site().get("apt_mirrors", {}) if SITE.exists() else {}
+    url = mirrors.get(distro) if distro in ("debian", "ubuntu") else None
+    if url and not re.fullmatch(r"https?://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?", url):
+        raise ValueError("invalid apt mirror")
+    return url.rstrip("/") if url else None
+
+
+def mirror_command(image):
+    """The shell command that points a new guest's package sources at the
+    site's mirror (apt_mirrors in the site file), or None. Debian's
+    security archive stays upstream: the NYCU mirror does not carry it."""
+    distro = str(image).split("-", 1)[0]
+    url = mirror_url(distro)
+    if not url:
+        return None
+    if distro == "debian":
+        pattern = r"s#https?://deb\.debian\.org/debian(/?)([[:space:]]|$)#" + url + r"\1\2#g"
+        files = "/etc/apt/mirrors/debian.list /etc/apt/sources.list.d/debian.sources"
+    else:
+        pattern = r"s#https?://(archive|security)\.ubuntu\.com/ubuntu(/?)([[:space:]]|$)#" + url + r"\2\3#g"
+        files = "/etc/apt/sources.list.d/ubuntu.sources"
+    return f"for f in {files}; do [ -f \"$f\" ] && sed -i -E '{pattern}' \"$f\"; done; true"
+
+
 def public_ingress():
     # The first exit node holds the public address and terminates ingress (PLAN 15.15).
     s = site()
@@ -889,6 +914,14 @@ def cloud_init(m, *, prepared=False, environment="development"):
     }
     if not data["packages"]:
         del data["packages"]
+    if str(m.get("image", "")).startswith("ubuntu") and mirror_url("ubuntu"):
+        # Ubuntu's cloud-init writes its sources from this on first boot.
+        url = mirror_url("ubuntu")
+        data["apt"] = {"primary": [{"arches": ["default"], "uri": url}], "security": [{"arches": ["default"], "uri": url}]}
+    elif command := mirror_command(m.get("image", "")):
+        # Debian keeps its image's sources: rewrite them before package_update,
+        # once, so a member's own change stays.
+        data["bootcmd"] = [["cloud-init-per", "once", "carrel-apt-mirror", "sh", "-c", command]]
     if m.get("readiness_token"):
         private_macs = " ".join(f"02:cb:{m['tenant_n']:02x}:{m['host']-10:02x}:{i:02x}:01" for i in range(1, 8))
         reporter = Path("/usr/local/lib/carrel/guest-report.py").read_text()
@@ -1587,6 +1620,8 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "daemon-reload")
         run("pct", "exec", vmid, "--", "systemctl", "reset-failed", "systemd-journald")
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
+        if command := mirror_command(m["image"]):
+            run("pct", "exec", vmid, "--", "sh", "-c", command)
     write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
     keyfile.unlink(missing_ok=True)
     return {"state": "running", "vmid": vmid, **cloud_init_files(m)}

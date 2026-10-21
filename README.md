@@ -435,6 +435,8 @@ Each script is idempotent and runs where it acts (PLAN 8.1):
    `/etc/carrel/node.json`, then run `scripts/install-network.py`. The site file's
    `content_storage` names the storage for CT templates (`vztmpl`), ISOs and imports; each kind
    defaults to `local`. A shared storage (B09: the NFS storage `rs822rp1`) keeps one copy per site.
+   `apt_mirrors` (`debian`, `ubuntu`) points new VMs and CTs at a package mirror (B09: NYCU's);
+   Debian's security archive stays upstream.
 2. First exit node: `scripts/bootstrap-platform.py --admin-key <public key>` creates CT 100 and CT 101.
    After a node joins the site, or when `JUMP_FIREWALL` changes, run
    `scripts/bootstrap-platform.py --firewall` on the first exit node: it rewrites only the infra

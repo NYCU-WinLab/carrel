@@ -127,3 +127,62 @@ def test_minimal_preparation_does_not_fetch_development_tools(tmp_path, monkeypa
     resize = next(c for c in calls if c[0] == "guestfish")
     assert resize[resize.index("part-resize") + 2] == "3"
     assert resize[-1] == "/dev/sda3"
+
+
+def test_new_guests_use_the_site_mirror(monkeypatch, tmp_path):
+    module = load_script("node-agent.py")
+    site = tmp_path / "site.json"
+    monkeypatch.setattr(module, "SITE", site)
+    files = {}
+    read_text = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, *a, **k: (
+            "# reporter" if str(path).endswith("guest-report.py") else read_text(path, *a, **k)
+        ),
+    )
+    monkeypatch.setattr(module, "write", lambda path, data, mode: files.update({path: data}))
+    vm = {
+        "name": "m",
+        "vmid": 10100,
+        "tenant_n": 1,
+        "host": 10,
+        "mac": "02:ca:01:00:00:01",
+        "ip": "10.200.1.10",
+        "ssh_keys": ["ssh-ed25519 AAAA fixture"],
+        "readiness_token": "t",
+    }
+
+    def user_data(image):
+        module.cloud_init(dict(vm, image=image), prepared=True, environment="minimal")
+        return json.loads(
+            files["/var/lib/vz/snippets/carrel-10100-user.json"].removeprefix("#cloud-config\n")
+        )
+
+    # Without apt_mirrors the image's own sources stay.
+    site.write_text("{}")
+    assert "bootcmd" not in user_data("debian-13-minimal") and "apt" not in user_data("ubuntu-24.04")
+    site.write_text(
+        json.dumps(
+            {
+                "apt_mirrors": {
+                    "debian": "https://debian.cs.nycu.edu.tw/debian",
+                    "ubuntu": "https://ubuntu.cs.nycu.edu.tw/ubuntu",
+                }
+            }
+        )
+    )
+    debian = user_data("debian-13-minimal")
+    command = debian["bootcmd"][0]
+    assert command[:3] == ["cloud-init-per", "once", "carrel-apt-mirror"]
+    assert "debian.cs.nycu.edu.tw/debian" in command[-1] and "security" not in command[-1]
+    ubuntu = user_data("ubuntu-24.04")
+    assert (
+        ubuntu["apt"]["primary"][0]["uri"] == "https://ubuntu.cs.nycu.edu.tw/ubuntu"
+        and "bootcmd" not in ubuntu
+    )
+    assert module.mirror_command("tenant:talos") is None
+    site.write_text(json.dumps({"apt_mirrors": {"debian": "https://x; rm -rf /"}}))
+    with pytest.raises(ValueError):
+        module.mirror_command("debian-13")

@@ -13,6 +13,7 @@
   "exit_nodes": ["carrel01"],
   "ssh_jump": true,
   "ssh_keys_only": true,
+  "apt_mirrors": {"debian": "https://debian.cs.nycu.edu.tw/debian", "ubuntu": "https://ubuntu.cs.nycu.edu.tw/ubuntu"},
   "fetch": true,
   "public": {
     "address": "140.113.60.184/27",
