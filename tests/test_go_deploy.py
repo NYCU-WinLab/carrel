@@ -43,6 +43,7 @@ def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, 
         "configure-reader.py",
         "guest-report.py",
         "gateway-sync.py",
+        "jump-sync.py",
         "hashes.json",
     } == names
     assert copied[-1].startswith("root@192.168.19.101:/var/lib/carrel/go-upgrade-")
@@ -74,7 +75,7 @@ class Node:
         self.calls, self.fail_on = [], fail_on
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
-        for name in ("node-agent.py", "guest-report.py", "gateway-sync.py"):
+        for name in ("node-agent.py", "guest-report.py", "gateway-sync.py", "jump-sync.py"):
             (self.lib / name).write_text("old " + name)
         monkeypatch.setattr(module, "LIB", self.lib)
         monkeypatch.setattr(module, "run", self.run)
@@ -111,6 +112,7 @@ def staged(tmp_path, tamper=False):
         "configure-nodes.py",
         "guest-report.py",
         "gateway-sync.py",
+        "jump-sync.py",
     ):
         (stage / name).write_text("new " + name)
         hashes[name] = hashlib.sha256(("new " + name).encode()).hexdigest()

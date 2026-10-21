@@ -30,7 +30,7 @@ LIB = Path("/usr/local/lib/carrel")
 # On the node.
 NODE_JSON = Path("/etc/carrel/node.json")
 TEMPLATES = Path("/etc/carrel/templates.json")
-HELPERS = {"guest-report.py": "644", "gateway-sync.py": "644"}
+HELPERS = {"guest-report.py": "644", "gateway-sync.py": "644", "jump-sync.py": "644"}
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
 KEEP = 5
 DATABASE = Path("/var/lib/carrel/carrel.db")

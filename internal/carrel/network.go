@@ -367,6 +367,16 @@ func (e *Execution) Reconcile() D {
 		defer gatewayDone.Done()
 		gatewayFailure = attempt(func() { held = e.SyncGateway(state) })
 	}()
+	var jump any
+	if e.jumpEnabled() {
+		// Store reads stay on this goroutine; only the request runs beside.
+		keys := jumpAuthorizedKeys(e.S)
+		gatewayDone.Add(1)
+		go func() {
+			defer gatewayDone.Done()
+			jump = e.SyncJump(keys)
+		}()
+	}
 	if len(nodes) > 1 {
 		// The other nodes reconcile at once and catch up on the next pass: one
 		// node down for an upgrade (PLAN 8.3) must not stop every change.
@@ -399,6 +409,9 @@ func (e *Execution) Reconcile() D {
 	gatewayDone.Wait()
 	if gatewayFailure != nil {
 		panic(gatewayFailure)
+	}
+	if jump != nil {
+		result["jump"] = jump
 	}
 	// Fingerprints of the pairs the gateway holds: records point here only
 	// for those (MaintainOrigin, DomainRecord).

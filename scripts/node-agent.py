@@ -260,6 +260,8 @@ def guest_firewall(m, state, config):
             rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
     # Reachability probes only, from the authenticated control plane.
     rules.append("IN ACCEPT -source 10.200.0.3 -p tcp -dport 22")
+    # The SSH jump host forwards members to their machines (issue #98).
+    rules.append("IN ACCEPT -source 10.200.0.4 -p tcp -dport 22")
     return "\n".join(rules) + "\n"
 
 
@@ -382,6 +384,9 @@ def public_ingress():
 def ports_nft(state, address):
     """DNAT the public address: HTTP(S) to the infra gateway, granted ports to machines."""
     rules = [f"ip daddr {address} tcp dport {{ 80, 443 }} dnat to 10.200.0.2"]
+    if SITE.exists() and site().get("ssh_jump"):
+        # The platform SSH jump host (issue #98) in CT 102.
+        rules.append(f"ip daddr {address} tcp dport 22 dnat to 10.200.0.4")
     seen = set()
     for g in state["ports"]:
         n = integer(g["tenant_n"], 1, 254)

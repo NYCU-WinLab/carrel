@@ -422,17 +422,28 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 			break
 		}
 	}
+	user := "user"
+	if m["kind"] == "ct" {
+		user = "root"
+	}
+	t := e.S.TenantN(integer(m["tenant_n"]))
+	alias := str(m["name"]) + "." + str(t["slug"])
 	if ssh != nil {
-		user := "user"
-		if m["kind"] == "ct" {
-			user = "root"
-		}
-		t := e.S.TenantN(integer(m["tenant_n"]))
-		alias := str(m["name"]) + "." + str(t["slug"])
 		safe["ssh"] = fmt.Sprintf("ssh -p %d %s@carrel.winlab.tw", ssh.PublicPort, user)
 		safe["ssh_short"] = "ssh " + alias
 		safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName carrel.winlab.tw\n  User %s\n  Port %d\n", alias, alias, user, ssh.PublicPort)
 		safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
+	}
+	if e.jumpEnabled() {
+		// Through the platform jump host (issue #98): no public port needed.
+		jump := fmt.Sprintf("ssh -J jump@carrel.winlab.tw %s@%s", user, str(m["ip"]))
+		safe["ssh_jump"] = jump
+		if ssh == nil {
+			safe["ssh"] = jump
+			safe["ssh_short"] = "ssh " + alias
+			safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName %s\n  User %s\n  ProxyJump jump@carrel.winlab.tw\n", alias, alias, str(m["ip"]), user)
+			safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
+		}
 	}
 	return safe
 }

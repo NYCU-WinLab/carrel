@@ -30,6 +30,8 @@ SITE = Path("/etc/carrel/site.json")
 PROGRAMS = ["node-agent.py", "guest-report.py"]
 GATEWAY = {"name": "carrel-gateway", "target": "carrel-gateway", "host": "10.200.0.2"}
 GATEWAY_SYNC = "/usr/local/lib/carrel/gateway-sync.py"
+JUMP = {"name": "carrel-jump", "target": "carrel-jump", "host": "10.200.0.4"}
+JUMP_SYNC = "/usr/local/lib/carrel/jump-sync.py"
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'
 BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
@@ -107,6 +109,20 @@ def gateway(key):
     return " ".join(run("pct", "exec", "101", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
 
 
+def jump(key):
+    """Install jump-sync.py in CT 102 as the forced command for CT 100's key (issue #98)."""
+    run("pct", "exec", "102", "--", "install", "-d", "-m", "755", "/usr/local/lib/carrel")
+    run("pct", "push", "102", JUMP_SYNC, JUMP_SYNC, "--perms", "755")
+    current = run("pct", "exec", "102", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
+    kept = [x for x in current.splitlines() if JUMP_SYNC not in x]
+    line = f'from="10.200.0.3",restrict,command="{JUMP_SYNC}" {key}'
+    run("pct", "exec", "102", "--", "sh", "-c",
+        "umask 077 && mkdir -p /root/.ssh && cat > /root/.ssh/authorized_keys.carrel-next"
+        " && mv /root/.ssh/authorized_keys.carrel-next /root/.ssh/authorized_keys",
+        input="\n".join([*kept, line]) + "\n")
+    return " ".join(run("pct", "exec", "102", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
+
+
 def ssh_config(existing, nodes):
     block = [BEGIN]
     for n in nodes:
@@ -143,7 +159,8 @@ def main():
         raise SystemExit("run on the first exit node, which holds CT 100")
     nodes = targets(site, node)
     me = nodes[0]
-    for program in [*PROGRAMS, "gateway-sync.py"]:
+    infra = [GATEWAY, JUMP] if site.get("ssh_jump") else [GATEWAY]
+    for program in [*PROGRAMS, "gateway-sync.py", *(["jump-sync.py"] if site.get("ssh_jump") else [])]:
         if not Path("/usr/local/lib/carrel", program).exists():
             raise SystemExit(f"install the node programs here first ({program} missing)")
     # 1. Node programs on the other nodes, the same version as here.
@@ -159,6 +176,7 @@ def main():
     replace_file(AUTHORIZED, merge_authorized(AUTHORIZED.read_text() if AUTHORIZED.exists() else "", authorized_line(key, me["address"]), key), 0o600)
     # 3. The gateway's forced command in CT 101.
     gateway_key = gateway(key)
+    jump_key = jump(key) if site.get("ssh_jump") else None
     # 4. CT 100: targets, pinned host keys, the node list.
     entries = []
     for n in nodes:
@@ -168,8 +186,10 @@ def main():
             host_key = run("ssh", *peer(n), "root@" + n["address"], "cat /etc/ssh/ssh_host_ed25519_key.pub")
         entries.append((n["host"], " ".join(host_key.split()[:2])))
     entries.append((GATEWAY["host"], gateway_key))
+    if jump_key:
+        entries.append((JUMP["host"], jump_key))
     current = ct("sh", "-c", "cat /etc/carrel/ssh_config 2>/dev/null || true")
-    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, [*nodes, GATEWAY]))
+    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, [*nodes, *infra]))
     current = ct("sh", "-c", "cat /etc/carrel/known_hosts 2>/dev/null || true")
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
     listed = json.dumps([{"name": n["name"], "target": n["target"]} for n in nodes])
@@ -192,7 +212,11 @@ def main():
     status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", GATEWAY["target"], input='{"op":"status"}'))
     if not status.get("ok"):
         raise SystemExit("the gateway did not answer through carrel-gateway")
-    print(json.dumps({"nodes": report, "gateway": GATEWAY["target"]}))
+    if jump_key:
+        status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", JUMP["target"], input='{"op":"status"}'))
+        if not status.get("ok"):
+            raise SystemExit("the jump host did not answer through carrel-jump")
+    print(json.dumps({"nodes": report, "gateway": GATEWAY["target"], **({"jump": JUMP["target"]} if jump_key else {})}))
 
 
 if __name__ == "__main__":
