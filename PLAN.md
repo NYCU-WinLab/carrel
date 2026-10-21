@@ -721,50 +721,86 @@ key injection, the SSH check and graceful shutdown.
 | Kind | How it arrives | Managed? | What the member gets |
 |---|---|---|---|
 | Cloud image (`qcow2`, `raw`) | `image_import` with `url` and `sha256`, through carrel's fetcher | yes when the image carries cloud-init: keys, addresses and the SSH check work as usual | `machine_create` with `image: "tenant:<name>"` |
-| ISO | `iso_import` with `url` and `sha256`, through carrel's fetcher | no | an empty disk with the ISO attached, a browser console for the installer, and the reserved address by DHCP |
+| ISO | `iso_import` with `url` and `sha256`, through carrel's fetcher | no | an empty disk with the ISO attached, a browser console for the installer, and the machine's reserved address to enter in the installer |
 
+- **Where files live** (issue #92, decided 2026-10-21): the site file's `content_storage` names one
+  storage for each file kind: `vztmpl` (the platform CT templates), `iso` and `import`. Each
+  defaults to `local`. B09 uses `rs822rp1`, an NFS export of the lab NAS that every node mounts
+  and Proxmox marks `shared`, so each file exists once per site. Tenant imports are offered only
+  where the `iso` and `import` storages are shared, or the site has one node; carrel never copies
+  an image between nodes. VM base templates stay per node on the guest storage (7.2), and
+  cloud-init files stay on each node's `local` storage (7.10).
 - **Fetcher**: imports are downloaded by carrel, not by Proxmox's `download-url`, which runs from
   the node's own network (Proxmox guards it with the `Sys.AccessNetwork` privilege for that
   reason). The fetcher runs on every node as a dedicated unprivileged user with no capabilities,
   inside its own network namespace whose only interface sits on the fetch network (`N = 255`,
-  section 6.1). Without capabilities it can neither change that namespace's rules nor enter the
-  host's namespace. It resolves the name once and pins that address; refuses private, loopback,
-  link-local, `100.64.0.0/10` and the site's own addresses; follows at most 3 redirects and checks
-  each one the same way; streams into its own staging directory with a hard stop at the smaller of
-  20 GB and the tenant's remaining `images_gb`; and verifies the checksum.
+  section 6.1), and inside a mount namespace without `/mnt/pve`. The export trusts any user id
+  from a node (NFSv3, `sec=sys`), so a fetcher that could see the mount could write to it. It
+  resolves the name once and pins that address; refuses private, loopback, link-local,
+  `100.64.0.0/10` and the site's own addresses; follows at most 3 redirects and checks each one
+  the same way; streams into its staging directory with a hard stop at the smaller of 20 GB and
+  the tenant's remaining `images_gb`; and verifies the checksum. The staging directory is a ZFS
+  dataset of the node's pool with a fixed `quota` (20 GB times the node's import slots), so a
+  server that lies about size cannot fill the pool.
 - **Rules on the host side**: the fetch network's rules sit on the host end of the fetcher's
-  interface, out of the fetcher's reach: the drops of section 6.3, outbound TCP 80 and 443 only,
-  DNS to the infra resolver only, no traffic between fetchers on different nodes, and a bandwidth
-  cap (section 6.6). The host end is named `veth...`, because a Proxmox SDN reload keeps only
-  bridge ports named `tap`, `veth` or `fwpr`; the reconciler checks that it stays attached.
+  interface, out of the fetcher's reach: the drops of section 6.3 (which cover the NAS), outbound
+  TCP 80 and 443 only, DNS to the infra resolver only, no traffic between fetchers on different
+  nodes, and a bandwidth cap (section 6.6). The host end is named `veth...`, because a Proxmox SDN
+  reload keeps only bridge ports named `tap`, `veth` or `fwpr`; the reconciler checks that it
+  stays attached.
 - **Limits**: one import per tenant and one per member, 3 per site at a time, so a member of
   several projects cannot take every slot; more return `queued` (section 4.2). A download that
   stays under 2 MB/s for 60 seconds, or runs longer than 3 hours, is aborted, so a slow server
   cannot hold a slot; at 2 MB/s a 20 GB file still finishes inside 3 hours.
-- **Storage**: a root step on the node, not the fetcher, checks each accepted file against the
-  checksum in the database and moves it, read-only, from staging into `carrel-images`. That storage
-  is a dedicated, size-limited logical volume with its own ext4 filesystem, separate from the root
-  filesystem, so a server that lies about size cannot fill the root filesystem. It is configured
-  with `is_mountpoint`, so Proxmox refuses writes when the volume is not mounted. Physical thin-pool
-  space still needs admission and monitoring (5.2, 9.3); a volume size limit alone does not reserve
-  pool capacity. A full image volume makes new imports on that node return `capacity_exhausted`.
-  When a machine lands on a node that lacks its image, carrel copies it from a node that has it, over
-  the nodes' own SSH trust, the way templates keep one copy per node (section 7.2); copies do not
-  count again against `images_gb`. The checksum is checked again before every copy and every
-  `import-from`, so a swapped file is caught.
-- **Migration**: Proxmox refuses to migrate a VM whose CD-ROM sits on storage it believes is local.
-  `carrel-images` is therefore marked `shared`, and carrel keeps that promise itself: before any
-  migration, `node_drain` included, it copies every attached ISO to the target node and checks the
-  checksum.
-- **Hand-off to Proxmox**: `qemu-img info` runs as the unprivileged fetcher user, under CPU and
-  memory limits, on every cloud image, and the image is refused if its format differs from the
-  `format` argument or it names a backing file or a qcow2 data file. A backing file that points at
-  another tenant's disk would otherwise copy that disk into the attacker's machine. Files go into
-  `carrel-images` as `import` content (ISOs as `iso` content), never as `images`, because Proxmox
-  applies its own untrusted-image checks only to `import` volumes, so those checks still hold if a
-  compromised fetcher lies about an image. Nothing goes through the upload API, which spools to
-  `/var/tmp` on the root file system first. A machine created from the image counts its virtual
-  size against `disk_gb`.
+- **Format checks**: `qemu-img info` runs as the fetcher user, under CPU and memory limits, on
+  every staged cloud image. The image is refused if the probed format differs from the `format`
+  argument (a `raw` file that probes as anything else included), or if it names a backing file or
+  a qcow2 data file, is encrypted, or has a virtual size above 1000 GB. A backing file that points
+  at another tenant's disk would otherwise copy that disk into the attacker's machine.
+- **Storing**: a root step on the node (node-agent), not the fetcher, checks the staged file
+  against the checksum in the database. It copies the file to the shared storage under a temporary
+  name that Proxmox does not list, reads it back and checks the checksum again, makes it read-only
+  (`0444`), renames it to its final name and removes the staged copy. Nothing goes through the
+  upload API, which spools to `/var/tmp` on the root file system first.
+- **Layout**: files use Proxmox's own directories: ISOs in `template/iso/` as `iso` content, cloud
+  images in `import/` as `import` content, never `images`, because Proxmox applies its
+  untrusted-image checks only to `import` volumes. Those checks still hold if a compromised
+  fetcher lies about an image. Proxmox volume names are flat, so the name carries the tenant:
+  `carrel-t<NNN>-<name>-<first 12 hex of sha256>.<iso|qcow2|raw>`, for example
+  `carrel-t017-alpine-1a2b3c4d5e6f.qcow2`. The prefix marks carrel's files among others on the
+  export, and a new import under the same name is a new file. node-agent refuses a volume whose
+  tenant number is not the machine's. The reconciler reports carrel files without a database
+  record, and records without a file; it deletes neither.
+- **Checks before use**: before every `import-from` and every ISO attach, node-agent checks the
+  file's size and SHA-256 against the database. A match means these are the bytes the format
+  checks accepted, so those checks need not run again; Proxmox's own `import` checks run anyway.
+  Starting a machine whose ISO is already attached does not read the file again. A cloud image's
+  virtual size counts against `disk_gb` and may not exceed the requested disk. CT templates are
+  pinned to the sha512 of Proxmox's signed index and checked before every `pct create` (#100),
+  since one rewritten template on shared storage would reach every new CT on every node. These
+  reads, the copies of the storing step and migrations share the nodes' one link with corosync
+  (13.14), so they are rate-limited.
+- **Quota**: files count their size against `images_gb`, together with app releases (7.9), at
+  most 20 GB per file; a download in flight reserves its limit. A checksum is mandatory, and
+  imports stay private to the tenant: two tenants who import the same file store it twice, so
+  neither learns what the other imported. A machine created from a cloud image gets its own copy
+  on the guest storage, so `image_delete` frees the file at once. An ISO stays while a machine
+  has it attached; `image_delete` refuses it until `machine_media` ejects it.
+- **When the shared storage is down**: the NAS is a network service outside the cluster, and the
+  mount is `hard`, so a read waits for the server forever. Before any action that reads the
+  storage (CT creation from a template, `import-from`, ISO attach, starting or migrating a machine
+  with an ISO attached), node-agent reads it in a child process with a deadline. If that fails,
+  the action returns `storage_unavailable` and nothing is created. A creation that fails after the
+  check removes the machine it started, under the existing creation manifest. Running machines do
+  not depend on the storage, except that reads from an attached ISO wait until the server
+  returns. A machine with an ISO can always start once `machine_media` ejects it.
+- **Who can read the files**: the export accepts only the site's node addresses, and its
+  directories are `0755 root` (they were `0777` until 2026-10-21; the export does not squash
+  root). Tenant machines, the infra CTs and the fetcher cannot reach the NAS (section 6.3). The NAS
+  administrators can read every imported file, and the README says so next to the note on
+  hypervisor root (7.7).
+- **Migration**: an ISO on shared storage needs no copy, and Proxmox migrates a machine with one
+  attached. Moving machines is section 7.10.
 - **Unmanaged machines**: `machine_create` returns in state `installing`, without an SSH line.
   The member installs through `machine_console_url` and ejects the ISO with `machine_media`, which
   marks the machine ready. The SSH check is only a hint for these machines, because systems such as
@@ -779,9 +815,26 @@ key injection, the SSH check and graceful shutdown.
   machine's owner (for a project, its members) and audited, like `machine_reset_access`, because a
   console is as strong as a key reset. The proxy sits in front of the Proxmox VNC console and is
   the one new component custom ISOs need.
-- **Quota**: image and ISO files count against `images_gb`, at most 20 GB per file. A checksum is
-  mandatory, and imports stay private to the tenant.
+- **Images without SSH**: an imported image may declare that it runs no cloud-config and no SSH,
+  as Talos does (issue #94). carrel still writes the network file, passes the member's own
+  document as user-data, and checks readiness on a declared TCP port instead of SSH. This comes
+  with #94, after the first import release.
 - **CTs** keep to the platform images in version 1.
+
+**Order of work** (planned 2026-10-21; each line one PR, `R` = independent review):
+
+1. Content storage per kind, CT templates on it (#92, done in #100).
+2. Cloud-init bytes in the database (#93, 7.10). R
+3. `machine_migrate`, admin (7.10). R
+4. `node_drain`, admin. R
+5. Fetcher infrastructure without a member tool: namespace, user, mount sandbox, host rules,
+   staging dataset, `qemu-img` sandbox. R
+6. `iso_import`, `image_delete`, `images_gb` in `quota_get` and `quota_request`, the storing step,
+   queue limits, drift report. R
+7. ISO machines: `iso` on `machine_create`, `machine_media`, firmware, `installing`.
+8. `machine_console_url`. R
+9. `image_import` and `tenant:<name>` creation through `import-from`. R
+10. Talos (#94).
 
 ### 7.9 Apps: deploy on push
 
@@ -850,6 +903,26 @@ so an admin agent can answer which commit runs where (section 9.1).
 
 **Version 1 limits**: GitHub only. GitLab CI also issues OIDC tokens (`id_tokens`), so the same
 design extends to it later. One app per machine port; one machine per app.
+
+### 7.10 Cloud-init files and moving machines
+
+Proxmox derives a VM's cloud-init instance id from the SHA-1 of its user-data and network files,
+so any change to their bytes makes cloud-init run again (new SSH host keys, `runcmd` again).
+Regenerating the files on another node is therefore never safe. At creation the control plane
+stores the exact bytes of both files and their SHA-256 in its database, and node-agent writes them
+back, mode `0600`, on the node that starts or receives the machine, before every start and every
+migration. The files stay on each node's `local` storage, never on shared storage, because they
+hold keys, member commands and the readiness token. Deletion removes them on every node.
+`machine_reset_access` is the one action that stores new bytes.
+
+Machines are linked clones of their node's base template (7.2), and Proxmox refuses to migrate a
+linked clone on local storage. `machine_migrate` (admin) therefore moves a machine in three steps,
+online when it runs: move its disks to the shared storage (`qm disk move`), migrate it (the disks
+are shared, so only memory moves), and move the disks to the target node's guest storage. The
+first move also detaches the disk from the template. Each step is bandwidth-limited, because the
+nodes reach the NAS over the link corosync uses (13.14). The record's `node` changes only after
+Proxmox reports the machine on the target, and the source's cloud-init files go last.
+`node_drain` marks a node unschedulable and moves its machines one at a time.
 
 ## 8. Hosts and sites
 
