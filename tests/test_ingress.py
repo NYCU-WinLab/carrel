@@ -119,3 +119,13 @@ def test_port_grants_admit_the_client_address():
     )
     # The exit node DNATs only, so the client's own address arrives.
     assert "IN ACCEPT -p tcp -dport 22" in rules.splitlines()
+
+
+def test_a_node_must_hold_its_site_address(monkeypatch):
+    module = load("install-network.py")
+    shown = [{"addr_info": [{"local": "192.168.19.101"}]}]
+    monkeypatch.setattr(module, "run", lambda *a: json.dumps(shown))
+    module.check_underlay("vmbr0", "192.168.19.101", "carrel01")
+    # An older host with the same name, elsewhere (issue #48).
+    with pytest.raises(SystemExit, match="not carrel01"):
+        module.check_underlay("vmbr0", "192.168.19.102", "carrel01")

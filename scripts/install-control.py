@@ -246,6 +246,11 @@ def host(stage, version):
     for name, expected in json.loads((stage / "hashes.json").read_text()).items():
         if hashlib.sha256((stage / name).read_bytes()).hexdigest() != expected:
             raise SystemExit("Transfer checksum mismatch: " + name)
+    # The binary itself names its version (issue #56): a checkout and a build
+    # that disagree stop here, before anything changes.
+    built = json.loads(capture(stage / "carrel", "-version"))["version"]
+    if built != version:
+        raise SystemExit(f"The binary is version {built}, the checkout {version}")
     node = socket.gethostname().split(".")[0]
     storage = json.loads(NODE_JSON.read_text())["storage"]
     templates = templates_for(stage, node, storage)
