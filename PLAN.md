@@ -476,7 +476,13 @@ control planes, a database pair) needs one address that moves between machines. 
 `.251` to `.254` of the tenant network for that, 4 per tenant, outside every machine address. The
 address joins the `ipfilter` set of each listed machine and nothing else changes: keepalived or
 kube-vip in the guests decides which machine holds it and announces the move with gratuitous ARP,
-and EVPN carries the new MAC to the other nodes. VRRP multicast is dropped with the rest of
+and EVPN carries the new MAC to the other nodes. A remote EVPN neighbour entry is `NOARP`, so the
+kernel ignores the new holder's ARP until the old node withdraws its route, and the old node's
+entry stays `STALE` while nothing uses it: a move between nodes then never finished (measured on
+B09, 2026-10-21). Every node therefore runs `carrel-vip-probe`, which probes its own entries of
+registered virtual addresses each second; an address that left fails within about 4 seconds, FRR
+withdraws it, and the holder's next gratuitous ARP is learned. Guests repeat gratuitous ARP for at
+least 5 seconds after taking the address, as keepalived and kube-vip do by default. VRRP multicast is dropped with the rest of
 `224.0.0.0/4`, so keepalived runs with unicast peers. Inbound rules have no destination, so a
 holder accepts at the virtual address what it accepts at its own. Deleting a machine drops it from
 the holders and keeps the address. carrel neither balances load nor checks health; a load balancer
