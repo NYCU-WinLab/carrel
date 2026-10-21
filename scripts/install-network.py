@@ -279,7 +279,9 @@ WantedBy=multi-user.target
         # ifup skips post-up on an interface already up: a rule added since
         # the last boot is applied here too.
         for rule in public_rules(public["address"]):
-            subprocess.run(["sh", "-c", f"ip rule del {rule} 2>/dev/null; ip rule add {rule}"], check=True)
+            # Only a missing one: deleting a present rule would leave a gap.
+            priority = rule.rsplit(" ", 1)[1]
+            subprocess.run(["sh", "-c", f"ip rule list priority {priority} | grep -q . || ip rule add {rule}"], check=True)
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
