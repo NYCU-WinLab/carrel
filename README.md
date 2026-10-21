@@ -430,7 +430,9 @@ Without a prepared manifest, the original templates retain their first-boot pack
 Each script is idempotent and runs where it acts (PLAN 8.1):
 
 1. Every node: copy `sites/<site>/cluster.json` to `/etc/carrel/site.json`, set `"storage"` in
-   `/etc/carrel/node.json`, then run `scripts/install-network.py`.
+   `/etc/carrel/node.json`, then run `scripts/install-network.py`. The site file's
+   `content_storage` names the storage for CT templates (`vztmpl`), ISOs and imports; each kind
+   defaults to `local`. A shared storage (B09: the NFS storage `rs822rp1`) keeps one copy per site.
 2. First exit node: `scripts/bootstrap-platform.py --admin-key <public key>` creates CT 100 and CT 101.
 3. Every node: `scripts/build-templates.py` imports the prepared images (below).
 4. CT 100: write `/etc/carrel/config.json` from `sites/<site>/config.example.json`, mode 0640.

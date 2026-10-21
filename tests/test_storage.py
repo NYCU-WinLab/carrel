@@ -80,3 +80,39 @@ def test_zfs_usage_counts_only_owned_volumes_per_tenant(monkeypatch):
     assert (result[1]["unique_total_bytes"], result[1]["retained_snapshot_bytes"]) == (554, 50)
     assert (result[2]["unique_total_bytes"], result[2]["retained_snapshot_bytes"]) == (770, 70)
     assert (result[3]["unique_total_bytes"], result[3]["retained_snapshot_bytes"]) == (0, 0)
+
+
+def test_ct_template_pins_match_across_scripts():
+    agent = load_script("node-agent.py").CT_TEMPLATES
+    assert load_script("build-templates.py").CT_TEMPLATES == agent
+    assert load_script("bootstrap-platform.py").DEBIAN_CT == agent["debian-13"]
+
+
+def test_ct_templates_come_from_the_site_storage_and_must_match_the_pin(monkeypatch, tmp_path):
+    module = load_script("node-agent.py")
+    cfg = tmp_path / "storage.cfg"
+    cfg.write_text(STORAGE_CFG + f"\nnfs: shared\n\tpath {tmp_path}/nfs\n\tcontent vztmpl,iso\n")
+    monkeypatch.setattr(module, "STORAGE_CONFIG", cfg)
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    name, digest = module.CT_TEMPLATES["debian-13"]
+    # Without a site file, or without the key: local.
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: digest + "  " + str(args[1]))
+    assert module.ct_template("debian-13") == f"local:vztmpl/{name}"
+    (tmp_path / "site.json").write_text(json.dumps({"content_storage": {"vztmpl": "shared"}}))
+    seen = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: seen.append(args) or digest + "  x")
+    assert module.ct_template("debian-13") == f"shared:vztmpl/{name}"
+    assert seen == [("sha512sum", tmp_path / "nfs" / "template" / "cache" / name)]
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "0" * 128 + "  x")
+    with pytest.raises(ValueError, match="checksum"):
+        module.ct_template("debian-13")
+
+    def unreachable(*args, **kwargs):
+        raise module.subprocess.TimeoutExpired(args, 60)
+
+    monkeypatch.setattr(module, "run", unreachable)
+    with pytest.raises(module.StorageUnavailable):
+        module.ct_template("debian-13")
+    (tmp_path / "site.json").write_text(json.dumps({"content_storage": {"vztmpl": "local-zfs"}}))
+    with pytest.raises(ValueError, match="directory storage"):
+        module.ct_template("debian-13")

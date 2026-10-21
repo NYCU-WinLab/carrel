@@ -30,6 +30,13 @@ SITE = Path("/etc/carrel/site.json")
 # Cluster-wide and root-only: every node reads the same token (configure-reader.py).
 READER = Path("/etc/pve/priv/carrel-reader.json")
 PVE_CA = "/etc/pve/pve-root-ca.pem"
+# Platform CT templates (PLAN 7.1), pinned to the sha512 in Proxmox's signed
+# appliance index. On a shared storage one rewritten file would reach every
+# new CT of every node, so each use checks it.
+CT_TEMPLATES = {
+    "debian-13": ("debian-13-standard_13.6-1_amd64.tar.zst", "4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b"),
+    "ubuntu-24.04": ("ubuntu-24.04-standard_24.04-2_amd64.tar.zst", "45c2978e6b97fe292ada95fe06834276015e5739a594db4de2fdfd830fa0c37942e8ae118fc1e32ffd9154b3f9378b592738b668ea3957db41f2907b86f219de"),
+}
 
 
 def storage_id():
@@ -40,7 +47,7 @@ def storage_id():
     return value
 
 
-def storage_definition(storage, text=None):
+def storage_entry(storage, text=None):
     # Parse storage.cfg directly: pvesh would load every PVE module.
     found = None
     for line in (STORAGE_CONFIG.read_text() if text is None else text).splitlines():
@@ -53,9 +60,44 @@ def storage_definition(storage, text=None):
         elif found is not None and line.strip():
             key, _, value = line.strip().partition(" ")
             found[key] = value.strip()
+    return found
+
+
+def storage_definition(storage, text=None):
+    found = storage_entry(storage, text)
     if found is None or found["type"] != "zfspool":
         raise ValueError("guest storage must be a ZFS pool")
     return found
+
+
+class StorageUnavailable(RuntimeError):
+    pass
+
+
+def content_storage(kind):
+    # The site file names one storage per file kind (issue #92), "local" when
+    # it names none; B09 keeps them once per site on its shared NFS storage.
+    value = (json.loads(SITE.read_text()) if SITE.exists() else {}).get("content_storage", {}).get(kind, "local")
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", value):
+        raise ValueError("invalid content storage id")
+    return value
+
+
+def ct_template(image):
+    name, digest = CT_TEMPLATES[image]
+    storage = content_storage("vztmpl")
+    entry = storage_entry(storage)
+    if entry is None or entry["type"] not in ("dir", "nfs", "cifs") or "path" not in entry:
+        raise ValueError("CT template storage must be a directory storage")
+    # A hard NFS mount waits for its server forever: read in a child with a
+    # deadline, before anything is created.
+    try:
+        found = run("sha512sum", Path(entry["path"]) / "template" / "cache" / name, timeout=60).split()[0]
+    except (CommandFailure, subprocess.TimeoutExpired) as e:
+        raise StorageUnavailable(f"CT template {name} missing or {storage} unreachable") from e
+    if found != digest:
+        raise ValueError("CT template checksum mismatch")
+    return f"{storage}:vztmpl/{name}"
 
 
 _reader = None
@@ -887,17 +929,12 @@ def create(m):
         if "running" not in run("qm", "status", vmid):
             run("qm", "start", vmid)
     else:
-        images = {
-            "debian-13": "debian-13-standard_13.1-2_amd64.tar.zst",
-            "ubuntu-24.04": "ubuntu-24.04-standard_24.04-2_amd64.tar.zst",
-        }
-        template = images[m["image"]]
         if not exists:
             run(
                 "pct",
                 "create",
                 vmid,
-                "local:vztmpl/" + template,
+                ct_template(m["image"]),
                 "--hostname",
                 m["name"],
                 "--unprivileged",
@@ -1139,6 +1176,8 @@ if __name__ == "__main__":
         code = "adapter_internal"
         if isinstance(e, ValueError):
             code = "invalid_request"
+        elif isinstance(e, StorageUnavailable):
+            code = "storage_unavailable"
         elif isinstance(e, subprocess.TimeoutExpired):
             code = "command_timeout"
         elif isinstance(e, (subprocess.CalledProcessError, CommandFailure)):

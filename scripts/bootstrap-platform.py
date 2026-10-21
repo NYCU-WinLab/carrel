@@ -45,20 +45,36 @@ def write(path, data, mode=0o644):
     return True
 
 
-def ct(vmid, name, ip, bridge, gateway, memory, key, storage):
+# Same pin as CT_TEMPLATES["debian-13"] in node-agent.py (tests/test_storage.py checks).
+DEBIAN_CT = ("debian-13-standard_13.6-1_amd64.tar.zst", "4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b")
+
+def ct_template_file(name, digest, site):
+    """Make sure a pinned CT template is on the site's template storage (issue #92).
+
+    pveam checks the signed index; the pin also holds when a file is already
+    there, since on shared storage every node uses that one copy.
+    """
+    storage = site.get("content_storage", {}).get("vztmpl", "local")
+    path = Path(run("pvesm", "path", f"{storage}:vztmpl/{name}", capture=True))
+    if not path.exists():
+        run("pveam", "download", storage, name)
+    with path.open("rb") as f:
+        if hashlib.file_digest(f, "sha512").hexdigest() != digest:
+            raise SystemExit(f"CT template checksum mismatch: {path}")
+    return f"{storage}:vztmpl/{name}"
+
+
+def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
     config = Path(f"/etc/pve/lxc/{vmid}.conf")
     if config.exists():
         if f"hostname: {name}\n" not in config.read_text() or "carrel-infra" not in config.read_text():
             raise RuntimeError(f"refusing existing unowned CT {vmid}")
         return
-    template = "debian-13-standard_13.1-2_amd64.tar.zst"
-    if not Path(f"/var/lib/vz/template/cache/{template}").exists():
-        run("pveam", "download", "local", template)
     run(
         "pct",
         "create",
         str(vmid),
-        f"local:vztmpl/{template}",
+        template,
         "--hostname",
         name,
         "--unprivileged",
@@ -230,8 +246,9 @@ WantedBy=multi-user.target
     )
     run("systemctl", "daemon-reload")
     run("systemctl", "enable", "--now", "carrel-infra-firewall")
-    ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, storage)
-    ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage)
+    template = ct_template_file(*DEBIAN_CT, config)
+    ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, storage, template)
+    ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template)
     packages(100, "control")
     packages(101, "gateway")
     caddy(101)
