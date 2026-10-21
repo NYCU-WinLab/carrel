@@ -23,7 +23,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 				fail("forbidden", "winlab-admin membership required")
 			}
 			t = find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
-			if t == nil && tool == "tenant_suspend" {
+			if t == nil && (tool == "tenant_suspend" || tool == "machine_migrate") {
 				fail("not_found", "Tenant not found")
 			}
 			if t == nil {
@@ -50,7 +50,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 		if err != nil {
 			panic(err)
 		}
-		if !named("admin_tools", tool) {
+		if !named("admin_tools", tool) || tool == "machine_migrate" {
 			op = p.Operations.Wait(ctx, t, str(op["id"]), intAt(a, "wait_seconds", 55))
 		}
 		return D{"ok": true, "operation": op}
@@ -95,6 +95,14 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 			r = merge(r, D{"state": "planned", "reserved": false, "resource_changes": false})
 		}
 		return r, n
+	}
+	if tool == "operation_get" && boolean(w["admin"]) && a["id"] != nil {
+		// Admin jobs such as machine_migrate run in the machine's tenant.
+		if op := e.S.Get("operations", str(a["id"])); op != nil && a["tenant"] == nil {
+			t := e.S.TenantN(integer(op["tenant_n"]))
+			e.P.Operations.Wait(e.Ctx, t, str(a["id"]), intAt(a, "wait_seconds", 55))
+			return D{"operations": []D{publicOperation(e.P.Operations.Find(t, str(a["id"])))}}, t["n"]
+		}
 	}
 	onboarding := e.Register(w, str(a["tenant"]), tool == "whoami")
 	if tool == "whoami" {

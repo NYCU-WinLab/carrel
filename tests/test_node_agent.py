@@ -403,3 +403,84 @@ def test_cloud_init_files_are_read_whole_and_only_missing_ones_written_back(monk
         module.restore_cloud_init(dict(vm, vmid=10101), {"user": None, "network": "x"})
     # Files already in place are not even checked, however large the copy.
     module.restore_cloud_init(vm, {"user": "x" * 5_000_000, "network": None})
+
+
+def test_migrate_unlinks_a_linked_clone_through_shared_storage_and_is_idempotent(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    vm = dict(MACHINE, vmid=10100, kind="vm")
+    nodes = tmp_path / "nodes"
+    for n in ("carrel01", "carrel02"):
+        (nodes / n / "qemu-server").mkdir(parents=True)
+    conf = nodes / "carrel01" / "qemu-server" / "10100.conf"
+    conf.write_text("x")
+    monkeypatch.setattr(module, "PVE_NODES", nodes)
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    monkeypatch.setattr(module, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(module, "content_storage", lambda kind: "shared")
+    monkeypatch.setattr(module, "storage_entry", lambda s: {"type": "nfs", "content": "images,iso"})
+    cfg = {"scsi0": "local-zfs:base-9010-disk-0/vm-10100-disk-0,size=10G"}
+    monkeypatch.setattr(module, "owned", lambda m, node=None, **k: cfg)
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("qm", "migrate"):
+            conf.rename(nodes / "carrel02" / "qemu-server" / "10100.conf")
+        return "status: running" if args[1] == "status" else ""
+
+    monkeypatch.setattr(module, "run", run)
+    assert module.migrate({"machine": vm, "target": "carrel02", "bwlimit": 51200}) == {"state": "moved"}
+    assert calls[1] == (
+        "qm",
+        "disk",
+        "move",
+        10100,
+        "scsi0",
+        "shared",
+        "--format",
+        "qcow2",
+        "--delete",
+        "1",
+        "--bwlimit",
+        51200,
+    )
+    assert calls[2] == (
+        "qm",
+        "migrate",
+        10100,
+        "carrel02",
+        "--with-local-disks",
+        "--bwlimit",
+        51200,
+        "--online",
+    )
+    # A retry after the move does nothing.
+    calls.clear()
+    assert module.migrate({"machine": vm, "target": "carrel02"}) == {"state": "moved"} and calls == []
+    with pytest.raises(ValueError):
+        module.migrate({"machine": vm, "target": "../etc"})
+    # On the target, the disk goes back to the guest storage.
+    monkeypatch.setattr(module, "NODE", "carrel02")
+    cfg["scsi0"] = "shared:10100/vm-10100-disk-0.qcow2,size=10G"
+    assert module.migrate_finish({"machine": vm}) == {"state": "done"}
+    assert calls[-1] == (
+        "qm",
+        "disk",
+        "move",
+        10100,
+        "scsi0",
+        "local-zfs",
+        "--delete",
+        "1",
+        "--bwlimit",
+        51200,
+    )
+    # The old node removes its copy of the cloud-init files only once the VM left.
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    (tmp_path / "carrel-10100-user.json").write_text("u")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    module.cloud_init_remove({"machine": vm})
+    assert not (tmp_path / "carrel-10100-user.json").exists()
+    monkeypatch.setattr(module, "NODE", "carrel02")
+    with pytest.raises(ValueError):
+        module.cloud_init_remove({"machine": vm})

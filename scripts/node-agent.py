@@ -336,10 +336,10 @@ def provision_marker(m):
     return "carrel-provision-" + hashlib.sha256(str(m.get("readiness_token", m["name"])).encode()).hexdigest()
 
 
-def owned(m, allow_provisioning=False):
+def owned(m, allow_provisioning=False, node=None):
     vmid = machine(m)
     kind = "qemu" if m["kind"] == "vm" else "lxc"
-    cfg = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config")
+    cfg = pve_get(f"/nodes/{node or NODE}/{kind}/{vmid}/config")
     tags = cfg.get("tags", "").split(";")
     if "carrel" not in tags or f"tenant-{m['tenant_n']}" not in tags:
         manifest = STATE / f"create-{vmid}.json"
@@ -947,6 +947,92 @@ def restore_cloud_init(m, files):
         write(path, data, 0o600)
 
 
+def located(m):
+    """The node whose configuration holds this machine, or None."""
+    vmid = machine(m)
+    kind = "qemu-server" if m["kind"] == "vm" else "lxc"
+    found = [p.parts[-3] for p in PVE_NODES.glob(f"*/{kind}/{vmid}.conf")]
+    return found[0] if len(found) == 1 else None
+
+
+def migration_bwlimit(req):
+    return integer(req.get("bwlimit", 51200), 1024, 1048576)
+
+
+def migrate_prepare(req):
+    # On the target, before the machine arrives (PLAN 7.10): its exact
+    # cloud-init files, so the first boot here keeps its instance id.
+    m = req["machine"]
+    where = located(m)
+    if where is None:
+        raise ValueError("machine not found in the cluster")
+    owned(m, node=where)
+    if m["kind"] == "vm":
+        if not req.get("cloud_init"):
+            raise ValueError("cloud-init files required to move a VM")
+        restore_cloud_init(m, req["cloud_init"])
+    return {"state": "ready"}
+
+
+def migrate(req):
+    # Runs where the machine is. A retry after it already moved is done.
+    m, target = req["machine"], req["target"]
+    vmid = machine(m)
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", target) or not (PVE_NODES / target).is_dir() or target == NODE:
+        raise ValueError("invalid target node")
+    where = located(m)
+    if where == target:
+        return {"state": "moved"}
+    if where != NODE:
+        raise ValueError("machine is not on this node")
+    cfg = owned(m)
+    bw = migration_bwlimit(req)
+    if m["kind"] == "vm":
+        running = "running" in run("qm", "status", vmid)
+        volume = cfg["scsi0"].split(",")[0]
+        if "/" in volume.partition(":")[2]:
+            # Proxmox refuses to migrate a linked clone on local storage: its
+            # disk goes to the shared storage first, which also unlinks it.
+            transit = content_storage("images")
+            entry = storage_entry(transit)
+            if entry is None or entry["type"] not in ("nfs", "cifs") or "images" not in entry.get("content", ""):
+                raise ValueError("moving a linked clone needs the site's shared images storage")
+            run("qm", "disk", "move", vmid, "scsi0", transit, "--format", "qcow2", "--delete", "1", "--bwlimit", bw, timeout=4 * 3600)
+        run("qm", "migrate", vmid, target, "--with-local-disks", "--bwlimit", bw, *(["--online"] if running else []), timeout=4 * 3600)
+    else:
+        running = "running" in run("pct", "status", vmid)
+        run("pct", "migrate", vmid, target, "--bwlimit", bw, *(["--restart"] if running else []), timeout=4 * 3600)
+    if located(m) != target:
+        raise CommandFailure("migration did not reach the target")
+    return {"state": "moved"}
+
+
+def migrate_finish(req):
+    # On the target: a disk that arrived on the shared storage goes back to
+    # this node's guest storage, still online.
+    m = req["machine"]
+    vmid = machine(m)
+    if located(m) != NODE:
+        raise ValueError("machine is not on this node")
+    cfg = owned(m)
+    if m["kind"] == "vm":
+        storage = storage_id()
+        if cfg["scsi0"].split(",")[0].partition(":")[0] != storage:
+            run("qm", "disk", "move", vmid, "scsi0", storage, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+    return {"state": "done"}
+
+
+def cloud_init_remove(req):
+    # On the node a VM left: its files must not outlive it here.
+    m = req["machine"]
+    vmid = machine(m)
+    if located(m) == NODE:
+        raise ValueError("machine is still on this node")
+    for kind in ("user", "network"):
+        (SNIPPETS / f"carrel-{vmid}-{kind}.json").unlink(missing_ok=True)
+    return {"state": "removed"}
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -1209,7 +1295,11 @@ def main():
         raise ValueError("request too large")
     req = json.loads(data)
     op = req["op"]
-    with (STATE / "node.lock").open("w") as lock:
+    # A migration copies disks for minutes: it takes a lock of its machine
+    # only, so reconciles and other machines on this node go on.
+    long = op in ("migrate", "migrate_finish")
+    lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
+    with lock_path.open("w") as lock:
         if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
@@ -1248,6 +1338,14 @@ def main():
             owned(m)
             kind = "qemu" if m["kind"] == "vm" else "lxc"
             out = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+        elif op == "migrate_prepare":
+            out = migrate_prepare(req)
+        elif op == "migrate":
+            out = migrate(req)
+        elif op == "migrate_finish":
+            out = migrate_finish(req)
+        elif op == "cloud_init_remove":
+            out = cloud_init_remove(req)
         elif op == "cloud_init_read":
             m = req["machine"]
             owned(m)

@@ -1893,6 +1893,66 @@
       }
     },
     {
+      "name": "machine_migrate",
+      "description": "Admin: move a machine to another node of the site, online when it runs (PLAN 7.10). A VM that is still a linked clone of its node's template moves its disk through the site's shared storage once; later moves copy the disk directly. The VM's stored cloud-init files go to the target first, so cloud-init does not run again. Refused while the machine has snapshots. Waits up to 55 seconds; a disk copy usually takes longer, so follow the operation with operation_get.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "node": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "tenant",
+          "machine",
+          "node"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "quota_set",
       "description": "Admin: set a tenant's total quota limit.",
       "inputSchema": {
@@ -3200,6 +3260,7 @@
     "node_list",
     "usage_report",
     "reconcile_run",
+    "machine_migrate",
     "quota_set",
     "tenant_suspend",
     "request_list_all",
@@ -3217,6 +3278,7 @@
     "operation_retry"
   ],
   "admin_tools": [
+    "machine_migrate",
     "node_list",
     "quota_set",
     "reconcile_run",
@@ -3237,6 +3299,7 @@
     "domain_remove",
     "machine_create",
     "machine_delete",
+    "machine_migrate",
     "machine_nic_attach",
     "machine_nic_detach",
     "machine_power",
@@ -3268,6 +3331,7 @@
     "domain_remove",
     "machine_create",
     "machine_delete",
+    "machine_migrate",
     "machine_nic_attach",
     "machine_nic_detach",
     "machine_power",

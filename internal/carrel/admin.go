@@ -24,6 +24,8 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			return D{"inventory": nodes[0]["inventory"]}
 		}
 		return D{"inventory": nodes[0]["inventory"], "nodes": nodes}
+	case "machine_migrate":
+		return e.PlanMigration(a)
 	case "reconcile_run":
 		if dry {
 			counts := D{}
