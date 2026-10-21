@@ -164,7 +164,7 @@ func (a *agent) deploy(ctx context.Context, r release) {
 	slog.Info("deploy_started", "release", r.ID, "sha", r.SHA)
 	a.report(ctx, r.ID, "deploying", "", "")
 	dir := filepath.Join(a.root, "releases", r.ID)
-	if err := a.fetch(ctx, r, dir); err != nil {
+	if err := a.fetch(ctx, r); err != nil {
 		a.report(ctx, r.ID, "failed", err.Error(), "")
 		return
 	}
@@ -197,7 +197,7 @@ func (a *agent) deploy(ctx context.Context, r release) {
 // unpacking before (its marker is in the state directory) is reused, which
 // keeps the running release in place when it is deployed again; anything
 // else under its name is replaced.
-func (a *agent) fetch(ctx context.Context, r release, dir string) error {
+func (a *agent) fetch(ctx context.Context, r release) error {
 	rel, err := a.releases()
 	if err != nil {
 		return err
@@ -207,6 +207,14 @@ func (a *agent) fetch(ctx context.Context, r release, dir string) error {
 	if info, err := rel.Lstat(r.ID); err == nil {
 		if _, done := os.Stat(marker); done == nil && info.IsDir() {
 			return nil
+		}
+		// The running release, unpacked by an agent before markers: keep it
+		// rather than tear it down for a redeploy.
+		if live, _ := os.Readlink(filepath.Join(a.root, "current")); info.IsDir() && live == filepath.Join(a.root, "releases", r.ID) {
+			if err := os.MkdirAll(a.state, 0700); err != nil {
+				return err
+			}
+			return os.WriteFile(marker, nil, 0600)
 		}
 		if err := rel.RemoveAll(r.ID); err != nil {
 			return err
@@ -306,7 +314,10 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 		return err
 	}
 	defer root.Close()
-	links := map[string]bool{}
+	// links are the links made so far; walked are the paths their targets
+	// go through. A new link may not sit on an earlier walk, so the check
+	// does not depend on the order of the entries.
+	links, walked := map[string]bool{}, map[string]bool{}
 	var total int64
 	for {
 		h, err := tr.Next()
@@ -347,12 +358,20 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 				return err
 			}
 			_, err = io.Copy(f, io.LimitReader(tr, h.Size))
+			if err == nil {
+				// Through the descriptor: the name could be swapped by now.
+				err = f.Chown(uid, gid)
+			}
 			f.Close()
 			if err != nil {
 				return err
 			}
+			continue
 		case tar.TypeSymlink:
-			if err := linkInside(name, h.Linkname, links); err != nil {
+			if walked[name] {
+				return fmt.Errorf("link %q sits on the path of an earlier link", h.Name)
+			}
+			if err := linkInside(name, h.Linkname, links, walked); err != nil {
 				return err
 			}
 			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
@@ -375,7 +394,7 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 
 // linkInside walks a link's target from the link's directory, one name at
 // a time: it may not climb out of the release or pass through another link.
-func linkInside(name, target string, links map[string]bool) error {
+func linkInside(name, target string, links, walked map[string]bool) error {
 	if target == "" || filepath.IsAbs(target) {
 		return fmt.Errorf("link %q points outside the release", name)
 	}
@@ -393,9 +412,11 @@ func linkInside(name, target string, links map[string]bool) error {
 			at = at[:len(at)-1]
 		default:
 			at = append(at, part)
-			if links[strings.Join(at, "/")] {
+			path := strings.Join(at, "/")
+			if links[path] {
 				return fmt.Errorf("link %q resolves through another link", name)
 			}
+			walked[path] = true
 		}
 	}
 	return nil

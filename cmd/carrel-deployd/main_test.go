@@ -70,6 +70,8 @@ func TestExtractRejectsEscapes(t *testing.T) {
 		"link through a link":  {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "x", link: "d/up/d/up", kind: tar.TypeSymlink}},
 		"entry through a link": {{name: "d", link: ".", kind: tar.TypeSymlink}, {name: "d/f", body: "x", kind: tar.TypeReg}},
 		"hard link":            {{name: "a", body: "x", kind: tar.TypeReg}, {name: "b", link: "a", kind: tar.TypeLink}},
+		// The outer link first, the link it goes through after (review of #134).
+		"link order": {{name: "d/", kind: tar.TypeDir}, {name: "evil", link: "d/up/d/up/../../../secret", kind: tar.TypeSymlink}, {name: "d/up", link: "..", kind: tar.TypeSymlink}},
 	} {
 		base := t.TempDir()
 		if err := extract(archive(t, entries...), filepath.Join(base, "release"), os.Getuid(), os.Getgid()); err == nil {
@@ -124,7 +126,7 @@ func TestFetchPinsTheReleasesDirectoryAndReusesOnlyItsOwnUnpacks(t *testing.T) {
 	os.MkdirAll(a.root, 0755)
 	os.MkdirAll(filepath.Join(base, "elsewhere"), 0755)
 	os.Symlink(filepath.Join(base, "elsewhere"), filepath.Join(a.root, "releases"))
-	if err := a.fetch(ctx, r, ""); err == nil {
+	if err := a.fetch(ctx, r); err == nil {
 		t.Fatal("followed a planted releases link")
 	}
 	if entries, _ := os.ReadDir(filepath.Join(base, "elsewhere")); len(entries) != 0 {
@@ -136,14 +138,33 @@ func TestFetchPinsTheReleasesDirectoryAndReusesOnlyItsOwnUnpacks(t *testing.T) {
 	// A directory the app user made under the release's name is replaced.
 	os.MkdirAll(filepath.Join(a.root, "releases", "r1"), 0755)
 	os.WriteFile(filepath.Join(a.root, "releases", "r1", "index.js"), []byte("planted"), 0644)
-	if err := a.fetch(ctx, r, ""); err != nil {
+	if err := a.fetch(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(a.root, "releases", "r1", "index.js")); string(b) != "v1" || downloads != 1 {
 		t.Fatalf("got %q after %d downloads", b, downloads)
 	}
 	// Its own finished unpack is reused without a download.
-	if err := a.fetch(ctx, r, ""); err != nil || downloads != 1 {
+	if err := a.fetch(ctx, r); err != nil || downloads != 1 {
 		t.Fatal("did not reuse its own release", err, downloads)
+	}
+}
+
+// A release unpacked by an older agent has no marker; redeploying the live
+// one keeps it, even when the download would fail.
+func TestRedeployKeepsTheLiveReleaseOfAnOlderAgent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502) }))
+	defer srv.Close()
+	base := t.TempDir()
+	a := &agent{cfg: config{Origin: srv.URL, Token: "t"}, root: filepath.Join(base, "app"), state: filepath.Join(base, "state"), http: srv.Client(), uid: os.Getuid(), gid: os.Getgid()}
+	live := filepath.Join(a.root, "releases", "r1")
+	os.MkdirAll(live, 0755)
+	os.WriteFile(filepath.Join(live, "index.js"), []byte("live"), 0644)
+	os.Symlink(live, filepath.Join(a.root, "current"))
+	if err := a.fetch(context.Background(), release{ID: "r1", SHA256: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(live, "index.js")); string(b) != "live" {
+		t.Fatal("the live release was removed")
 	}
 }
