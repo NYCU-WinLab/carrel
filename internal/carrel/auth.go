@@ -317,12 +317,12 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		txn := D{"client": c["client_id"], "name": c["client_name"], "redirect": q.Get("redirect_uri"), "state": q.Get("state"), "challenge": q.Get("code_challenge"), "cookie": digest(cookie)}
 		o.Store.OAuthPut("state", state, txn, 600)
 		params := url.Values{"client_id": {o.ClientID}, "redirect_uri": {callback}, "response_type": {"code"}, "scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge": {str(txn["challenge"])}, "code_challenge_method": {"S256"}}
-		http.SetCookie(w, &http.Cookie{Name: "carrel_oauth", Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/oauth"})
+		http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/"})
 		http.Redirect(w, r, o.Issuer+"/protocol/openid-connect/auth?"+params.Encode(), 302)
 	case path == "/oauth/callback" && method == "GET":
 		q := r.URL.Query()
 		txn := o.Store.OAuthPop("state", q.Get("state"))
-		cookie, _ := r.Cookie("carrel_oauth")
+		cookie, _ := r.Cookie(oauthCookie)
 		value := ""
 		if cookie != nil {
 			value = cookie.Value
@@ -345,7 +345,7 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		txn := o.Store.OAuthPop("consent", r.PostForm.Get("consent"))
-		cookie, _ := r.Cookie("carrel_oauth")
+		cookie, _ := r.Cookie(oauthCookie)
 		value := ""
 		if cookie != nil {
 			value = cookie.Value

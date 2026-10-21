@@ -95,11 +95,15 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 		if view.StatusCode != 200 || strings.Count(string(body), `nonce="`+nonce+`"`) == 0 {
 			t.Fatal(view.StatusCode)
 		}
+		// Scripts from the two pinned releases only, not the whole CDN.
+		if csp := view.Header.Get("Content-Security-Policy"); strings.Contains(csp, "https://cdn.jsdelivr.net ") || !strings.Contains(csp, novnc+"/") {
+			t.Fatal(csp)
+		}
 		return string(body)
 	}
 	// A cloud image has no screen: its serial port, in a terminal.
-	if body := page(); !strings.Contains(body, "lib/xterm.js") || strings.Contains(body, "rfb.js") {
-		t.Fatal("a cloud image got no serial terminal")
+	if body := page(); !strings.Contains(body, "lib/xterm.js") || strings.Contains(body, "rfb.js") || strings.Contains(body, "ticket") || !strings.Contains(body, `integrity="`+xtermJS+`"`) {
+		t.Fatal("a cloud image got no serial terminal, or the page carries the VNC ticket")
 	}
 	if cs := jar.Cookies(must2(url.Parse(origin + "/"))); !strings.Contains(fmt.Sprint(cs), "__Host-carrel_console") {
 		t.Fatal("the session cookie is not host-only", cs)
@@ -124,7 +128,13 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	if err != nil || string(got) != "RFB" || len(backend.opened) != 1 || backend.opened[0]["op"] != "console" || backend.opened[0]["mode"] != "serial" {
 		t.Fatal("console not bridged", err, string(got))
 	}
-	c.CloseNow()
+	// The serial port takes one client: a 2nd tab is told so.
+	second, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{HTTPHeader: header, Subprotocols: []string{"binary"}})
+	must(err)
+	if _, _, err := second.Read(context.Background()); websocket.CloseStatus(err) != websocket.StatusTryAgainLater {
+		t.Fatal("a 2nd serial session opened", err)
+	}
+	c.Close(websocket.StatusNormalClosure, "")
 	// A machine installed from an ISO: its screen over VNC, with the
 	// session's password on both ends.
 	m := p.Store.Get("machines", "10100")

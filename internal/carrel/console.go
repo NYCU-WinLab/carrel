@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -32,10 +33,15 @@ const (
 	// noVNC v1.6.0, pinned to its commit so the tag cannot move under it.
 	novnc = "https://cdn.jsdelivr.net/gh/novnc/noVNC@a8dfd6a3ea3c74244f5ebdaa5a7f1023007a7820"
 	xterm = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0"
-	cdn   = "https://cdn.jsdelivr.net"
+	// The files of that release, checked by the browser (issue #122).
+	xtermJS  = "sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/"
+	xtermCSS = "sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP"
 	// __Host-: no other host under winlab.tw (member sites included) can
 	// set or shadow it.
 	consoleCookie = "__Host-carrel_console"
+	// The login binding of /oauth/authorize and of a console link: also
+	// __Host-, so a member's site cannot plant its own (issue #122).
+	oauthCookie = "__Host-carrel_oauth"
 )
 
 // ConsoleURL makes the link.
@@ -139,7 +145,7 @@ func (h consoleHandler) begin(w http.ResponseWriter, r *http.Request, token stri
 	state, cookie, verifier := random(32), random(32), random(48)
 	h.p.Store.OAuthPut("state", state, D{"console": rec["id"], "verifier": verifier, "cookie": digest(cookie)}, 600)
 	params := url.Values{"client_id": {h.o.ClientID}, "redirect_uri": {h.o.Origin + "/oauth/callback"}, "response_type": {"code"}, "scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}}
-	http.SetCookie(w, &http.Cookie{Name: "carrel_oauth", Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/oauth"})
+	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/"})
 	http.Redirect(w, r, h.o.Issuer+"/protocol/openid-connect/auth?"+params.Encode(), 302)
 }
 
@@ -200,12 +206,18 @@ func (h consoleHandler) view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nonce := random(16)
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"' "+cdn+"; style-src 'unsafe-inline' "+cdn+"; connect-src 'self'; img-src data: blob:; font-src "+cdn+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	// Only the two pinned releases on the CDN, not the whole CDN.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"' "+novnc+"/ "+xterm+"/lib/; style-src 'unsafe-inline' "+xterm+"/css/; connect-src 'self'; img-src data: blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	// json.Marshal escapes <, > and &, so the value cannot close the script.
-	config, _ := json.Marshal(map[string]string{"name": str(m["name"]), "ticket": str(s["ticket"])})
+	config := map[string]string{"name": str(m["name"])}
+	if unmanaged(m) {
+		// Only VNC uses the ticket; the serial page does not carry it.
+		config["ticket"] = str(s["ticket"])
+	}
+	data, _ := json.Marshal(config)
 	name := html.EscapeString(str(m["name"]))
 	head := `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>` + name + ` · Carrel</title><style>html,body{margin:0;height:100%;background:#111;color:#eee;font:14px system-ui}#bar{height:32px;line-height:32px;padding:0 12px}#screen{height:calc(100% - 32px)}</style>`
 	if unmanaged(m) {
@@ -216,10 +228,10 @@ const bar = document.getElementById("bar");
 const rfb = new RFB(document.getElementById("screen"), "wss://" + location.host + "/console/ws", {wsProtocols: ["binary"], credentials: {password: config.ticket}});
 rfb.scaleViewport = true;
 rfb.addEventListener("disconnect", () => { bar.textContent = config.name + "：已中斷，重新整理可再連線"; });
-</script></body></html>`, head, name, nonce, novnc, config)
+</script></body></html>`, head, name, nonce, novnc, data)
 		return
 	}
-	fmt.Fprintf(w, `%s<link rel="stylesheet" href="%s/css/xterm.css"></head><body><div id="bar">%s：序列埠主控台，按 Enter 叫出登入提示</div><div id="screen"></div><script src="%s/lib/xterm.js" nonce="%s"></script><script nonce="%s">
+	fmt.Fprintf(w, `%s<link rel="stylesheet" href="%s/css/xterm.css" integrity="%s" crossorigin="anonymous"></head><body><div id="bar">%s：序列埠主控台，看開機訊息與救援用；登入要有密碼的帳號，SSH 金鑰在這裡不能用。一次只能開一個分頁。</div><div id="screen"></div><script src="%s/lib/xterm.js" integrity="%s" crossorigin="anonymous" nonce="%s"></script><script nonce="%s">
 const config = %s;
 const bar = document.getElementById("bar");
 const term = new Terminal({scrollback: 5000});
@@ -228,10 +240,10 @@ const ws = new WebSocket("wss://" + location.host + "/console/ws", ["binary"]);
 ws.binaryType = "arraybuffer";
 const encoder = new TextEncoder();
 ws.onmessage = (e) => term.write(new Uint8Array(e.data));
-ws.onclose = () => { bar.textContent = config.name + "：已中斷，重新整理可再連線"; };
+ws.onclose = (e) => { bar.textContent = config.name + "：" + (e.reason === "busy" ? "另一個分頁正在使用序列埠，先關掉它" : "已中斷，重新整理可再連線"); };
 term.onData((d) => { if (ws.readyState === 1) ws.send(encoder.encode(d)); });
 term.focus();
-</script></body></html>`, head, xterm, name, xterm, nonce, nonce, config)
+</script></body></html>`, head, xterm, xtermCSS, name, xterm, xtermJS, nonce, nonce, data)
 }
 
 func (h consoleHandler) socket(w http.ResponseWriter, r *http.Request) {
@@ -259,11 +271,18 @@ func (h consoleHandler) socket(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), consoleSessionTTL*time.Second)
 	defer cancel()
-	mode := "serial"
+	request := D{"op": "console", "machine": m, "mode": "serial"}
 	if unmanaged(m) {
-		mode = "vnc"
+		request["mode"], request["ticket"] = "vnc", s["ticket"]
+	} else {
+		// QEMU's serial socket takes one client: a 2nd tab would hang.
+		if _, busy := serialInUse.LoadOrStore(str(m["vmid"]), true); busy {
+			c.Close(websocket.StatusTryAgainLater, "busy")
+			return
+		}
+		defer serialInUse.Delete(str(m["vmid"]))
 	}
-	vnc, err := streamer.Stream(ctx, D{"op": "console", "machine": m, "mode": mode, "ticket": s["ticket"]}, node.Target)
+	vnc, err := streamer.Stream(ctx, request, node.Target)
 	if err != nil {
 		c.Close(websocket.StatusInternalError, "console unavailable")
 		return
@@ -276,6 +295,9 @@ func (h consoleHandler) socket(w http.ResponseWriter, r *http.Request) {
 	go func() { _, _ = io.Copy(vnc, conn); done <- struct{}{} }()
 	<-done
 }
+
+// serialInUse holds the VMs whose serial console is open in this process.
+var serialInUse sync.Map
 
 func consolePage(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

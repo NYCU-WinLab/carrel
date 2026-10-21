@@ -671,7 +671,7 @@
     },
     {
       "name": "machine_console_url",
-      "description": "A link to the VM's screen and keyboard in the browser, for installing from an ISO or rescuing a machine that SSH cannot reach. The link works once, for 15 minutes, and only after a WinLab login as the member who asked for it; the session then lasts at most an hour. Every link and every opening is in audit_log. Treat it like a password: the console is as strong as root.",
+      "description": "A link to the VM's screen and keyboard in the browser, for installing from an ISO or rescuing a machine that SSH cannot reach. The link works once, for 15 minutes, and only after a WinLab login as the member who asked for it; the session then lasts at most an hour. Every link and every opening is in audit_log. Treat it like a password: the console is as strong as root. A cloud-image VM shows its serial port, one browser tab at a time: boot messages and rescue, where logging in needs an account with a password, since SSH keys do not apply there. A VM installed from an ISO, or without SSH, shows its screen.",
       "inputSchema": {
         "type": "object",
         "properties": {
