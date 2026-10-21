@@ -360,7 +360,7 @@ func machineDelta(m D) D {
 }
 func plannedMachine(m D) D {
 	req := []string{}
-	if len(arr(m["ssh_keys"])) == 0 {
+	if len(arr(m["ssh_keys"])) == 0 && !unmanaged(m) {
 		req = append(req, "ssh_public_key")
 	}
 	return merge(pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "swap_mb", "nested_virt", "packages", "health_checks", "network_access"), D{"state": "planned", "reserved": false, "requirements": req})

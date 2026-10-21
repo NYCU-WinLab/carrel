@@ -1300,8 +1300,9 @@ def create_from_iso(m, exists, manifest, saved, marker):
 
 def set_media(m, cfg, req):
     vmid = machine(m)
-    if m["kind"] != "vm":
-        raise ValueError("only VMs take installer media")
+    # A managed VM's ide2 is its cloud-init drive: never touched here.
+    if m["kind"] != "vm" or m.get("guest_management", 1):
+        raise ValueError("only VMs installed from an ISO take media")
     if req.get("iso_volume"):
         run("qm", "set", vmid, "--ide2", f"{iso_volume(m, req['iso_volume'])},media=cdrom")
     else:
