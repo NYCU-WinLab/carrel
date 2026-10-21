@@ -24,6 +24,10 @@ type imageRecord struct {
 	Kind        string `json:"kind"`
 	Name        string `json:"name"`
 	OperationID string `json:"operation_id,omitempty"`
+	// Ports marks an image that runs no SSH and no cloud-config, such as
+	// Talos (issue #94): its VMs are ready when the first port answers,
+	// and the jump host forwards these ports instead of SSH.
+	Ports       []int  `json:"ports,omitempty"`
 	SHA256      string `json:"sha256"`
 	Size        int64  `json:"size"`
 	State       string `json:"state"`
@@ -37,6 +41,9 @@ func (r imageRecord) public() D {
 	out := D{"name": r.Name, "kind": r.Kind, "sha256": r.SHA256, "size_bytes": r.Size, "state": r.State, "volume": orNil(r.Volume), "created_at": r.CreatedAt}
 	if r.VirtualSize > 0 {
 		out["virtual_size_bytes"] = r.VirtualSize
+	}
+	if len(r.Ports) > 0 {
+		out["ports"] = r.Ports
 	}
 	return out
 }
@@ -117,6 +124,13 @@ func (e *Execution) imageNamed(n int, name string) (imageRecord, bool) {
 	return imageRecord{}, false
 }
 
+// tenantImageServesPorts reports whether a["image"] names one of the
+// tenant's images imported with ports (no SSH, no saved keys needed).
+func (e *Execution) tenantImageServesPorts(t, a D) bool {
+	r, ok := e.imageNamed(integer(t["n"]), strings.TrimPrefix(str(a["image"]), "tenant:"))
+	return ok && len(r.Ports) > 0
+}
+
 // PlanImport checks and reserves an import under the writer lock.
 func (e *Execution) PlanImport(tool string, a, t D) D {
 	n := integer(t["n"])
@@ -134,6 +148,10 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 		if kind != "qcow2" && kind != "raw" {
 			fail("invalid", "format is qcow2 or raw")
 		}
+	}
+	var ports []int
+	if tool == "image_import" {
+		ports = servicePorts(a["ports"])
 	}
 	name, url, sum := str(a["name"]), str(a["url"]), str(a["sha256"])
 	if !labelPattern.MatchString(name) {
@@ -167,7 +185,7 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 	if reserve < 1<<20 {
 		fail("quota_exceeded", "images_gb is full", D{"dimension": "images_gb", "images_gb": e.imageUsage(t), "recovery": "remove_unused"})
 	}
-	r := imageRecord{ID: randomID()[:16], TenantN: n, Name: name, Kind: kind, URL: url, SHA256: sum, Size: reserve, State: "fetching", Job: randomID(), CreatedAt: time.Now().Unix()}
+	r := imageRecord{ID: randomID()[:16], TenantN: n, Name: name, Kind: kind, URL: url, SHA256: sum, Size: reserve, State: "fetching", Job: randomID(), CreatedAt: time.Now().Unix(), Ports: ports}
 	if boolean(a["dry_run"]) {
 		return D{"image": merge(r.public(), D{"state": "planned"}), "dry_run": true, "images_gb": e.imageUsage(t)}
 	}
@@ -285,7 +303,7 @@ func (e *Execution) ISOMachineSpec(t, a D) D {
 	if textAt(a, "kind", "vm") != "vm" {
 		fail("invalid", "Only a VM installs from an ISO")
 	}
-	for _, k := range []string{"image", "packages", "runcmd", "health_checks", "ssh_keys"} {
+	for _, k := range []string{"image", "packages", "runcmd", "health_checks", "ssh_keys", "user_data"} {
 		if a[k] != nil {
 			fail("invalid", k+" does not apply to a machine installed from an ISO", D{"recovery": "revise_request"})
 		}
@@ -309,7 +327,8 @@ func (e *Execution) ISOMachineSpec(t, a D) D {
 	return m
 }
 
-// unmanaged reports a machine without guest reports (installed from an ISO).
+// unmanaged reports a machine without guest reports: installed from an ISO,
+// or booted from an image imported with ports.
 func unmanaged(m D) bool { return m["guest_management"] != nil && integer(m["guest_management"]) == 0 }
 
 // bootState is the state a machine takes when it boots: a managed guest
@@ -373,9 +392,43 @@ func lastDot(s string) int {
 	return 0
 }
 
-// ImportedMachineSpec is a managed VM whose boot disk is one of the
-// tenant's cloud images (image "tenant:<name>"). It needs cloud-init and
-// python3 in the image for keys, addresses and readiness reports.
+// servicePorts validates image_import's ports: 1 to 4 distinct TCP ports,
+// never 22, which these images do not serve.
+func servicePorts(v any) []int {
+	if v == nil {
+		return nil
+	}
+	ps := arr(v)
+	if len(ps) < 1 || len(ps) > 4 {
+		fail("invalid", "ports takes 1 to 4 TCP ports", D{"recovery": "revise_request"})
+	}
+	out, seen := []int{}, map[int]bool{}
+	for _, p := range ps {
+		port, ok := p.(float64)
+		if !ok || port != float64(int(port)) || port < 1 || port > 65535 || port == 22 || seen[int(port)] {
+			fail("invalid", "ports are distinct TCP ports from 1 to 65535, not 22", D{"recovery": "revise_request"})
+		}
+		seen[int(port)] = true
+		out = append(out, int(port))
+	}
+	return out
+}
+
+// servicePortsOf is a machine's declared ports, empty for SSH machines.
+func servicePortsOf(m D) []int {
+	out := []int{}
+	for _, p := range arr(m["service_ports"]) {
+		out = append(out, integer(p))
+	}
+	return out
+}
+
+// ImportedMachineSpec is a VM whose boot disk is one of the tenant's cloud
+// images (image "tenant:<name>"). A managed one needs cloud-init and
+// python3 in the image for keys, addresses and readiness reports. One
+// imported with ports (Talos, issue #94) runs no SSH and no cloud-config:
+// carrel writes its network file, passes the member's user_data unchanged
+// (Talos reads it as its machine config) and probes the first port.
 func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 	name := strings.TrimPrefix(str(a["image"]), "tenant:")
 	r, ok := e.imageNamed(integer(t["n"]), name)
@@ -393,5 +446,38 @@ func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 		m["disk_gb"] = least
 	}
 	m["image"], m["import_volume"], m["import_sha256"] = "tenant:"+r.Name, r.Volume, r.SHA256
+	if len(r.Ports) == 0 {
+		if a["user_data"] != nil {
+			fail("invalid", "user_data applies only to an image imported with ports", D{"recovery": "revise_request"})
+		}
+		return m
+	}
+	for _, k := range []string{"packages", "runcmd", "health_checks", "ssh_keys", "swap_mb"} {
+		if a[k] != nil {
+			fail("invalid", k+" does not apply to an image without SSH", D{"recovery": "revise_request"})
+		}
+	}
+	if a["public_ssh"] == true {
+		fail("invalid", "This image runs no SSH; reach its ports through the jump host or port_open", D{"recovery": "revise_request"})
+	}
+	if a["user_data"] != nil {
+		if s, ok := a["user_data"].(string); !ok || len(s) > 65536 {
+			fail("invalid", "user_data is a string of at most 64 KiB", D{"recovery": "revise_request"})
+		}
+		m["user_data"] = a["user_data"]
+	}
+	ports := make([]any, len(r.Ports))
+	for i, p := range r.Ports {
+		ports[i] = p
+	}
+	// Talos needs 2 GiB for a control plane: small, unless the member sized it.
+	small := obj(obj(Contract["sizes"])["small"])
+	for _, k := range []string{"cpu", "memory_mb"} {
+		if a["size"] == nil && a[k] == nil {
+			m[k] = small[k]
+		}
+	}
+	m["service_ports"], m["guest_management"], m["public_ssh"], m["swap_mb"], m["ssh_keys"] = ports, 0, false, 0, []any{}
+	delete(m, "readiness_token")
 	return m
 }

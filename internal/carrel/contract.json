@@ -298,6 +298,11 @@
             "type": "boolean",
             "default": false,
             "description": "With iso and firmware uefi: a TPM 2.0, for systems such as Windows 11."
+          },
+          "user_data": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "Only for an image imported with ports: the document passed unchanged as cloud-init user-data, such as a Talos machine config. Omitted, a Talos VM boots into maintenance mode for talosctl apply-config --insecure. Stored like a secret: never shown or audited."
           }
         },
         "required": [
@@ -1910,7 +1915,7 @@
     },
     {
       "name": "image_import",
-      "description": "Download a cloud disk image (qcow2 or raw) into this tenant's images, from a public http(s) URL with its SHA-256, to boot VMs from with machine_create image \"tenant:<name>\". The image needs cloud-init and python3 (Debian and Ubuntu cloud images have both) for keys, addresses and readiness. carrel's fetch container downloads it, refuses images that name a backing file or data file, are encrypted, claim another format or exceed 1000 GB, and stores it read-only on the site's shared storage, private to the tenant. Same limits and waiting as iso_import.",
+      "description": "Download a cloud disk image (qcow2 or raw) into this tenant's images, from a public http(s) URL with its SHA-256, to boot VMs from with machine_create image \"tenant:<name>\". The image needs cloud-init and python3 (Debian and Ubuntu cloud images have both) for keys, addresses and readiness, unless it is imported with ports: then it runs no SSH and no cloud-config (Talos), its VMs take user_data as their own document, are ready when the first port answers, and are reached on those ports through the jump host. carrel's fetch container downloads it, refuses images that name a backing file or data file, are encrypted, claim another format or exceed 1000 GB, and stores it read-only on the site's shared storage, private to the tenant. Same limits and waiting as iso_import.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1965,6 +1970,18 @@
               "raw"
             ],
             "default": "qcow2"
+          },
+          "ports": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "description": "For an image without SSH and cloud-config, such as Talos ([50000, 6443] for the Talos API and Kubernetes): the TCP ports its VMs serve. The first one is the readiness check. Not 22."
           }
         },
         "required": [

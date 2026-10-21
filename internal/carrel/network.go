@@ -348,7 +348,7 @@ func (e *Execution) Reconcile() D {
 	state["certificates"] = e.CertificateBundles(domains)
 	machines := []D{}
 	for _, m := range dicts(state["machines"]) {
-		machines = append(machines, without(m, "ssh_keys", "runcmd"))
+		machines = append(machines, without(m, "ssh_keys", "runcmd", "user_data"))
 	}
 	state["machines"] = machines
 	// Every node reconciles: SDN and guest firewalls are cluster-wide, while

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -273,6 +274,21 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		checks = last.Checks
 	}
 	fail("guest_not_ready", "Timed out waiting for guest initialization and health checks", D{"machine": original["name"], "checks": checks, "failed_step": optional(last.FailedStep)})
+}
+
+// probeServicePort connects to the first declared port of a machine
+// without SSH; a completed TCP handshake is the readiness signal.
+func probeServicePort(ctx context.Context, m D) bool {
+	ports := servicePortsOf(m)
+	if len(ports) == 0 {
+		return false
+	}
+	conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(str(m["ip"]), strconv.Itoa(ports[0])))
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func probeSSH(ctx context.Context, m D) bool {

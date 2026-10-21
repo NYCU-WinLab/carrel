@@ -64,6 +64,22 @@ func readinessState(m D) {
 
 func (e *Execution) ObserveSSH(m D) {
 	r := obj(m["readiness"])
+	if ports := servicePortsOf(m); len(ports) > 0 {
+		// No SSH here (issue #94): ready means the first port answers.
+		probe := probeServicePort
+		if e.P.serviceProbe != nil {
+			probe = e.P.serviceProbe
+		}
+		ready := m["power_state"] == "running" && probe(e.Ctx, m)
+		r["service_port"], r["service_checked_at"] = ports[0], now()
+		r["service_status"] = "unavailable"
+		if ready {
+			r["service_status"] = "verified"
+		} else if m["state"] == "ready" {
+			m["state"] = "initializing"
+		}
+		return
+	}
 	if m["power_state"] != "running" {
 		m["ssh_ready"], r["ssh_ready"] = false, false
 		r["ssh_status"] = "unavailable"
