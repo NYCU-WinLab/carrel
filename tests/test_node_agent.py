@@ -683,3 +683,40 @@ def test_image_delete_removes_only_the_tenants_file(monkeypatch, tmp_path):
             module.image_delete({"volume": bad, "kind": "iso", "tenant_n": 3})
     assert module.image_delete({"volume": name, "kind": "iso", "tenant_n": 3}) == {"state": "deleted"}
     assert not (folder / name).exists()
+
+
+def test_an_iso_machine_is_created_empty_with_its_tenants_iso(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "content_storage", lambda kind: "shared")
+    monkeypatch.setattr(module, "storage_entry", lambda s: {"type": "nfs", "path": str(tmp_path)})
+    monkeypatch.setattr(module, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(module, "first_firewall", lambda m: None)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "status: stopped")
+    vol = "shared:iso/carrel-t001-netinst-abababababab.iso"
+    vm = dict(
+        MACHINE,
+        kind="vm",
+        iso_volume=vol,
+        firmware="uefi",
+        tpm=True,
+        disk_gb=20,
+        cpu=2,
+        memory_mb=2048,
+        nics=[],
+    )
+    assert module.create_from_iso(vm, False, tmp_path / "m.json", {}, "marker")["state"] == "running"
+    create = next(c for c in calls if c[:2] == ("qm", "create"))
+    assert f"{vol},media=cdrom" in create and "order=scsi0;ide2" in create and "ovmf" in create
+    assert any(str(a).startswith("local-zfs:1,version=v2.0") for a in create)
+    for bad in [
+        "shared:iso/carrel-t002-netinst-abababababab.iso",
+        "other:iso/carrel-t001-netinst-abababababab.iso",
+        "shared:iso/../../etc/passwd",
+        "shared:import/carrel-t001-disk-abababababab.qcow2",
+    ]:
+        with pytest.raises(ValueError):
+            module.iso_volume(vm, bad)
+    with pytest.raises(ValueError, match="UEFI"):
+        module.create_from_iso(dict(vm, firmware="bios"), False, tmp_path / "m.json", {}, "marker")

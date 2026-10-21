@@ -78,6 +78,11 @@ func (e *Execution) ImageAction(tool string, a, t D) D {
 		if r.State != "ready" {
 			fail("conflict", "The image is still being imported", D{"recovery": "resolve_prerequisite"})
 		}
+		for _, m := range e.S.Objects("machines", n) {
+			if m["iso"] == r.Name && m["iso_volume"] != nil {
+				fail("conflict", "Eject the ISO from "+str(m["name"])+" first (machine_media)", D{"recovery": "resolve_prerequisite"})
+			}
+		}
 		if boolean(a["dry_run"]) {
 			return D{"image": r.public(), "dry_run": true, "images_gb": e.imageUsage(t)}
 		}
@@ -253,4 +258,100 @@ func (e *Execution) FinishImport() D {
 		fail("backend_unavailable", "The image was not stored", D{"recovery": "retry_infrastructure"})
 	}
 	return D{"image": r.public()}
+}
+
+// ISOMachineSpec is a VM that installs from one of the tenant's ISOs (PLAN
+// 7.8): an empty disk, no cloud-init, no guest reports. carrel manages its
+// power, network and firewall; the member installs through the console and
+// ejects the ISO with machine_media.
+func (e *Execution) ISOMachineSpec(t, a D) D {
+	if textAt(a, "kind", "vm") != "vm" {
+		fail("invalid", "Only a VM installs from an ISO")
+	}
+	for _, k := range []string{"image", "packages", "runcmd", "health_checks", "ssh_keys"} {
+		if a[k] != nil {
+			fail("invalid", k+" does not apply to a machine installed from an ISO", D{"recovery": "revise_request"})
+		}
+	}
+	r, ok := e.imageNamed(integer(t["n"]), str(a["iso"]))
+	if !ok || r.Kind != "iso" || r.State != "ready" {
+		fail("not_found", "No ready ISO with that name in this tenant; import one with iso_import")
+	}
+	firmware := textAt(a, "firmware", "bios")
+	if boolean(a["tpm"]) && firmware != "uefi" {
+		fail("invalid", "A TPM needs firmware uefi")
+	}
+	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", "small")]), pick(a, "cpu", "memory_mb", "disk_gb"))
+	m := merge(spec, D{"name": a["name"], "kind": "vm", "image": "iso:" + r.Name, "iso": r.Name, "iso_volume": r.Volume, "firmware": firmware, "tpm": boolean(a["tpm"]), "ssh_keys": []any{}, "nested_virt": boolean(a["nested_virt"]), "swap_mb": 0, "packages": []any{}, "runcmd": []any{}, "health_checks": []any{}, "network_access": textAt(a, "network_access", "tenant"), "guest_management": 0, "nics": []D{}})
+	if a["public_ssh"] == false {
+		if !e.jumpEnabled() {
+			fail("invalid", "This site has no SSH jump host; every machine needs a public SSH port", D{"recovery": "revise_request"})
+		}
+		m["public_ssh"] = false
+	}
+	return m
+}
+
+// unmanaged reports a machine without guest reports (installed from an ISO).
+func unmanaged(m D) bool { return m["guest_management"] != nil && integer(m["guest_management"]) == 0 }
+
+// bootState is the state a machine takes when it boots: a managed guest
+// initializes until it reports; one installed from an ISO is installing
+// while the ISO is in, and ready once it is out.
+func bootState(m D) string {
+	if !unmanaged(m) {
+		return "initializing"
+	}
+	if m["iso_volume"] != nil {
+		return "installing"
+	}
+	return "ready"
+}
+
+// Media inserts or ejects a machine's ISO (machine_media).
+func (e *Execution) Media(m, a, t D) D {
+	if !unmanaged(m) {
+		fail("invalid", "Only a machine installed from an ISO takes media")
+	}
+	n := integer(t["n"])
+	request := D{"op": "action", "machine": m, "action": "media"}
+	switch a["action"] {
+	case "eject":
+		delete(m, "iso_volume")
+	case "insert":
+		r, ok := e.imageNamed(n, str(a["iso"]))
+		if !ok || r.Kind != "iso" || r.State != "ready" {
+			fail("not_found", "No ready ISO with that name in this tenant")
+		}
+		m["iso"], m["iso_volume"] = r.Name, r.Volume
+		request["iso_volume"] = r.Volume
+	default:
+		fail("invalid", "action is eject or insert")
+	}
+	if boolean(a["dry_run"]) {
+		return D{"dry_run": true, "machine": e.PublicMachine(m, e.ports(n))}
+	}
+	e.Call(request)
+	if m["power_state"] == "running" || m["state"] == "installing" || m["state"] == "ready" {
+		m["state"] = bootState(m)
+	}
+	e.Put("machines", m["vmid"], n, m)
+	return D{"dry_run": false, "machine": e.PublicMachine(m, e.ports(n))}
+}
+
+// installInfo is what an installer asks for: carrel gives no DHCP on the
+// primary network, so the address is typed in.
+func installInfo(m D) D {
+	ip := str(m["ip"])
+	gateway := ip[:len(ip)-len(ip[lastDot(ip):])] + ".1"
+	return D{"iso": m["iso"], "media": map[bool]string{true: "inserted", false: "ejected"}[m["iso_volume"] != nil], "address": ip + "/24", "gateway": gateway, "dns": "10.200.0.2", "mtu": 1450, "firmware": m["firmware"]}
+}
+
+func lastDot(s string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '.' {
+			return i
+		}
+	}
+	return 0
 }

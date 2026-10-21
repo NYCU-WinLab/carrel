@@ -68,7 +68,7 @@ func (e *Execution) PlanMigration(a D) D {
 		fail("conflict", "The target node has no tenant route", D{"recovery": "retry_infrastructure"})
 	}
 	e.Admission(target, 0, 0, 0, merge(m, D{"node": target.Name}), false)
-	if m["kind"] == "vm" && e.cloudInitFiles(m) == nil {
+	if m["kind"] == "vm" && !unmanaged(m) && e.cloudInitFiles(m) == nil {
 		e.keepCloudInit(m, obj(e.Call(D{"op": "cloud_init_read", "machine": m}))["cloud_init"])
 		if e.cloudInitFiles(m) == nil {
 			fail("conflict", "The VM's cloud-init files are unknown; moving it would run cloud-init again", D{"recovery": "retry_infrastructure"})

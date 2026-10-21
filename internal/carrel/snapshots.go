@@ -87,7 +87,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			m["ssh_ready"] = false
 			if boolean(restore["running"]) {
 				e.Call(D{"op": "action", "machine": m, "action": "start"})
-				m["state"] = "initializing"
+				m["state"] = bootState(m)
 				state = "running"
 			} else {
 				m["state"] = "stopped"

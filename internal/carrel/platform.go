@@ -310,6 +310,9 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	if find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["name"] == a["name"] }) != nil {
 		fail("conflict", "Machine name is already allocated", D{"recovery": "revise_request", "machine": a["name"]})
 	}
+	if a["iso"] != nil {
+		return e.ISOMachineSpec(t, a)
+	}
 	kind := textAt(a, "kind", "vm")
 	defaultImage := find(dicts(Contract["images"]), func(i D) bool { return i["kind"] == kind && boolean(i["default"]) })
 	image := textAt(a, "image", str(defaultImage["name"]))
@@ -418,6 +421,9 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	// network_access filters the primary NIC only; private NICs are the
 	// member's own unfiltered segments (issue #75).
 	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": "unfiltered_experiment_networks", "allowed_connections": allowed}
+	if unmanaged(m) {
+		safe["install"] = installInfo(m)
+	}
 	nics := []D{}
 	for _, nic := range dicts(m["nics"]) {
 		entry := clone(nic)

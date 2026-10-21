@@ -45,6 +45,13 @@ func readinessState(m D) {
 	if contains([]string{"stopped", "paused", "deleting", "error", "provisioning", "initializing"}, m["state"]) {
 		return
 	}
+	if unmanaged(m) {
+		// No guest reports: SSH is only a hint for these machines.
+		if m["power_state"] == "running" || m["state"] == "readiness_unknown" {
+			m["state"] = bootState(m)
+		}
+		return
+	}
 	r := obj(m["readiness"])
 	if r["initialization_status"] == "failed" || r["application_status"] == "failed" {
 		m["state"] = "needs_owner_fix"
@@ -91,7 +98,9 @@ func (e *Execution) NICReadiness(m, nic D) {
 	if state == "paused" {
 		m["network_verification"] = "pending_guest_resume"
 	}
-	if state == "running" {
+	if state == "running" && unmanaged(m) {
+		m["state"] = bootState(m)
+	} else if state == "running" {
 		m["state"], m["network_verification"] = "initializing", "pending_guest_report"
 	}
 	e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)

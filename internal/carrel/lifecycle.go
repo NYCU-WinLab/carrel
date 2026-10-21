@@ -139,7 +139,7 @@ func (e *Execution) Provision(m D, reconciled bool) {
 			e.Reconcile()
 		}
 		e.keepCloudInit(m, obj(e.Call(D{"op": "create", "machine": m}))["cloud_init"])
-		m["state"] = "initializing"
+		m["state"] = bootState(m)
 		e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	})
 	if err != nil {
