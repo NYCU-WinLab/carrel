@@ -135,7 +135,8 @@ NODE_SSHD_PATH = "/etc/ssh/sshd_config.d/10-carrel-keys.conf"
 NODE_SSHD_APPLY = (
     f"umask 022 && cat > {NODE_SSHD_PATH}.next && mv {NODE_SSHD_PATH}.next {NODE_SSHD_PATH}"
     f" && {{ sshd -t || {{ rm -f {NODE_SSHD_PATH}; exit 1; }}; }}"
-    " && systemctl reload ssh.service && sshd -T | grep -qx 'passwordauthentication no'"
+    f" && {{ systemctl reload ssh.service || {{ rm -f {NODE_SSHD_PATH}; systemctl reload ssh.service; exit 1; }}; }}"
+    " && sshd -T | grep -qx 'passwordauthentication no'"
 )
 
 
@@ -239,12 +240,14 @@ def main():
         status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", JUMP["target"], input='{"op":"status"}'))
         if not status.get("ok"):
             raise SystemExit("the jump host did not answer through carrel-jump")
-    # 6. Keys only on every node, last: everything above already answered by key.
-    for n in nodes:
-        node_sshd(n, n is me)
-    for n in nodes[1:]:
-        # A new login by key still works after the reload.
-        run("ssh", *peer(n), "root@" + n["address"], "true")
+    # 6. Keys only on every node, last: everything above already answered by
+    # key. The site turns it on once nobody logs in to a node by password.
+    if site.get("ssh_keys_only"):
+        for n in nodes:
+            node_sshd(n, n is me)
+        for n in nodes:
+            # A new login by key still works after the reload, here too.
+            run("ssh", *peer(n), "root@" + n["address"], "true")
     print(json.dumps({"nodes": report, "gateway": GATEWAY["target"], **({"jump": JUMP["target"]} if jump_key else {})}))
 
 
