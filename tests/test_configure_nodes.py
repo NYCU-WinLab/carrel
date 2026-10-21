@@ -139,7 +139,9 @@ def test_infra_containers_match_the_infra_bridge_mtu(monkeypatch):
             else real(p)
         ),
     )
-    module.ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, "k", "local-zfs")
+    module.ct(
+        101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, "k", "local-zfs", "local:vztmpl/t"
+    )
     net = next(a[a.index("--net0") + 1] for a in calls if "--net0" in a)
     assert net.endswith(",mtu=1450")
 

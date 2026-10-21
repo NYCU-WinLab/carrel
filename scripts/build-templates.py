@@ -22,6 +22,28 @@ def node_storage():
     return storage
 
 
+# Same pins as CT_TEMPLATES in node-agent.py (tests/test_storage.py checks).
+CT_TEMPLATES = {
+    "debian-13": ("debian-13-standard_13.6-1_amd64.tar.zst", "4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b"),
+    "ubuntu-24.04": ("ubuntu-24.04-standard_24.04-2_amd64.tar.zst", "45c2978e6b97fe292ada95fe06834276015e5739a594db4de2fdfd830fa0c37942e8ae118fc1e32ffd9154b3f9378b592738b668ea3957db41f2907b86f219de"),
+}
+
+def ct_template_file(name, digest, site):
+    """Make sure a pinned CT template is on the site's template storage (issue #92).
+
+    pveam checks the signed index; the pin also holds when a file is already
+    there, since on shared storage every node uses that one copy.
+    """
+    storage = site.get("content_storage", {}).get("vztmpl", "local")
+    path = Path(run("pvesm", "path", f"{storage}:vztmpl/{name}"))
+    if not path.exists():
+        run("pveam", "download", storage, name)
+    with path.open("rb") as f:
+        if hashlib.file_digest(f, "sha512").hexdigest() != digest:
+            raise SystemExit(f"CT template checksum mismatch: {path}")
+    return f"{storage}:vztmpl/{name}"
+
+
 def build(vmid, name, path, storage):
     # VMIDs are unique across the cluster, and a linked clone works only on the
     # node that holds its template: look at every node, build only on this one.
@@ -124,9 +146,9 @@ def main():
     with ubuntu.open("rb") as f:
         assert hashlib.file_digest(f, "sha256").hexdigest() == expected
     build(9001, "ubuntu-24.04", ubuntu, storage)
-    for image in ["debian-13-standard_13.1-2_amd64.tar.zst", "ubuntu-24.04-standard_24.04-2_amd64.tar.zst"]:
-        if not Path("/var/lib/vz/template/cache/" + image).exists():
-            run("pveam", "download", "local", image)
+    site = json.loads(Path("/etc/carrel/site.json").read_text())
+    for name, digest in CT_TEMPLATES.values():
+        ct_template_file(name, digest, site)
     print(json.dumps({"vm_templates": [9000, 9001], "ubuntu_sha256": expected}))
 
 

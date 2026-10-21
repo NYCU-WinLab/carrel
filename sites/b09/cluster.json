@@ -2,6 +2,7 @@
   "site": "b09",
   "cluster": "carrel",
   "storage": "local-zfs",
+  "content_storage": {"vztmpl": "rs822rp1", "iso": "rs822rp1", "import": "rs822rp1"},
   "underlay_interface": "vmbr0",
   "nodes": [
     {"name": "carrel01", "address": "192.168.19.101"},

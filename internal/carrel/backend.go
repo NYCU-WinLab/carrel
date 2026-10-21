@@ -44,7 +44,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		} else if err != nil {
 			code = "adapter_process_failed"
 		}
-		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal"}, result["error_code"]) {
+		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal", "storage_unavailable"}, result["error_code"]) {
 			code = str(result["error_code"])
 		}
 		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": target, "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
