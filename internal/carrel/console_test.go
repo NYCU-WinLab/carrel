@@ -9,19 +9,30 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 )
 
 type streamBackend struct {
 	*fakeBackend
+	mu     sync.Mutex
 	opened []D
+}
+
+func (s *streamBackend) last() D {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opened[len(s.opened)-1]
 }
 
 // Stream answers like `qm vncproxy` would: an echo of what the browser sends.
 func (s *streamBackend) Stream(_ context.Context, r D, _ string) (io.ReadWriteCloser, error) {
+	s.mu.Lock()
 	s.opened = append(s.opened, r)
+	s.mu.Unlock()
 	a, b := net.Pipe()
 	go func() { _, _ = io.Copy(b, b) }()
 	return a, nil
@@ -46,7 +57,7 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	srv := httptest.NewUnstartedServer(nil)
 	origin := "http://" + srv.Listener.Addr().String()
 	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: keycloak.URL, ClientID: "carrel-mcp", Verifier: tokenVerifier{}, HTTP: keycloak.Client()}
-	console := consoleHandler{p: p, o: oauth}
+	console := consoleHandler{p: p, o: oauth, ping: 100 * time.Millisecond}
 	oauth.Console = console.finish
 	mux := http.NewServeMux()
 	mux.Handle("/oauth/", oauth)
@@ -125,7 +136,7 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	defer c.CloseNow()
 	must(c.Write(context.Background(), websocket.MessageBinary, []byte("RFB")))
 	_, got, err := c.Read(context.Background())
-	if err != nil || string(got) != "RFB" || len(backend.opened) != 1 || backend.opened[0]["op"] != "console" || backend.opened[0]["mode"] != "serial" {
+	if err != nil || string(got) != "RFB" || backend.last()["op"] != "console" || backend.last()["mode"] != "serial" {
 		t.Fatal("console not bridged", err, string(got))
 	}
 	// The serial port takes one client: a 2nd tab is told so.
@@ -135,6 +146,30 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 		t.Fatal("a 2nd serial session opened", err)
 	}
 	c.Close(websocket.StatusNormalClosure, "")
+	// The port is free again once a session ends (issue #130), also when
+	// the tab vanished without closing: it answers no ping.
+	reopen := func() *websocket.Conn {
+		for range 50 {
+			next, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{HTTPHeader: header, Subprotocols: []string{"binary"}})
+			must(err)
+			must(next.Write(context.Background(), websocket.MessageBinary, []byte("hi")))
+			read, cancel := context.WithTimeout(context.Background(), time.Second)
+			_, got, err := next.Read(read)
+			cancel()
+			if err == nil && string(got) == "hi" {
+				return next
+			}
+			next.CloseNow()
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("the serial port stayed taken")
+		return nil
+	}
+	gone := reopen()
+	// gone stops reading: its pings go unanswered.
+	time.Sleep(400 * time.Millisecond)
+	reopen().Close(websocket.StatusNormalClosure, "")
+	gone.CloseNow()
 	// A machine installed from an ISO: its screen over VNC, with the
 	// session's password on both ends.
 	m := p.Store.Get("machines", "10100")
@@ -146,9 +181,9 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	defer c.CloseNow()
 	must(c.Write(context.Background(), websocket.MessageBinary, []byte("RFB")))
 	_, _, err = c.Read(context.Background())
-	ticket := str(backend.opened[len(backend.opened)-1]["ticket"])
-	if err != nil || !strings.Contains(body, "core/rfb.js") || backend.opened[1]["mode"] != "vnc" || len(ticket) != 8 || !strings.Contains(body, `"ticket":"`+ticket+`"`) {
-		t.Fatal("an ISO machine got no VNC screen", err, backend.opened[1])
+	ticket := str(backend.last()["ticket"])
+	if err != nil || !strings.Contains(body, "core/rfb.js") || backend.last()["mode"] != "vnc" || len(ticket) != 8 || !strings.Contains(body, `"ticket":"`+ticket+`"`) {
+		t.Fatal("an ISO machine got no VNC screen", err, backend.last())
 	}
 	if n := len(p.Store.Rows("SELECT * FROM audit WHERE tool='console_open'")); n != 2 {
 		t.Fatal("console openings audited", n)

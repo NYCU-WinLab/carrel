@@ -111,6 +111,8 @@ type Streamer interface {
 type consoleHandler struct {
 	p *Platform
 	o *OAuth
+	// ping overrides the keepalive interval (tests).
+	ping time.Duration
 }
 
 func (h consoleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -290,10 +292,39 @@ func (h consoleHandler) socket(w http.ResponseWriter, r *http.Request) {
 	defer vnc.Close()
 	conn := websocket.NetConn(ctx, c, websocket.MessageBinary)
 	defer conn.Close()
-	done := make(chan struct{}, 2)
+	done := make(chan struct{}, 3)
 	go func() { _, _ = io.Copy(conn, vnc); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(vnc, conn); done <- struct{}{} }()
+	// A tab that vanished (sleep, a network change) answers no ping: the
+	// session ends within a minute and frees the serial port (issue #130).
+	go func() { keepAlive(ctx, c, h.pingEvery()); done <- struct{}{} }()
 	<-done
+}
+
+// pingEvery is how often the console socket checks that the browser is there.
+func (h consoleHandler) pingEvery() time.Duration {
+	if h.ping > 0 {
+		return h.ping
+	}
+	return 30 * time.Second
+}
+
+func keepAlive(ctx context.Context, c *websocket.Conn, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			ping, cancel := context.WithTimeout(ctx, every)
+			err := c.Ping(ping)
+			cancel()
+			if err != nil {
+				return
+			}
+		}
+	}
 }
 
 // serialInUse holds the VMs whose serial console is open in this process.
