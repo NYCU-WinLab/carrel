@@ -211,7 +211,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return D{"machine": e.PublicMachine(m, []portGrant{grant}), "quota_after": e.Quota(t)}
 	case "machine_power", "machine_delete", "machine_resize", "machine_metrics":
 		return e.MachineAction(tool, a, t)
-	case "network_create", "network_list", "network_delete", "machine_nic_attach", "machine_nic_detach", "port_open", "port_list", "port_close", "peer_allow", "peer_list", "peer_revoke":
+	case "network_create", "network_list", "network_delete", "machine_nic_attach", "machine_nic_detach", "port_open", "port_list", "port_close", "peer_allow", "peer_list", "peer_revoke", "vip_add", "vip_list", "vip_remove":
 		return e.NetworkAction(tool, a, t)
 	case "domain_add", "domain_list", "domain_remove":
 		return e.DomainAction(tool, a, t)
@@ -310,6 +310,19 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 				for _, p := range tx.peers() {
 					if p.Target == m["ip"] || p.Source == str(m["ip"])+"/32" {
 						tx.S.Remove("peers", p.ID)
+					}
+				}
+				// The address stays reserved for the tenant; only this holder goes.
+				for _, v := range tx.vips(n) {
+					holders := []int{}
+					for _, id := range v.VMIDs {
+						if id != integer(m["vmid"]) {
+							holders = append(holders, id)
+						}
+					}
+					if len(holders) != len(v.VMIDs) {
+						v.VMIDs = holders
+						tx.Put("vips", v.ID, n, v)
 					}
 				}
 				tx.S.Remove("machines", m["vmid"])

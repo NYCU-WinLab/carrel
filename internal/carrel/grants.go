@@ -27,6 +27,16 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 		if g["state"] == "ready" {
 			g["verification"] = "routing_configured"
 		}
+	case "vips":
+		names := []any{}
+		for _, id := range arr(g["vmids"]) {
+			for _, m := range e.S.Objects("machines", n) {
+				if integer(m["vmid"]) == integer(id) {
+					names = append(names, m["name"])
+				}
+			}
+		}
+		g["machines"] = names
 	case "peers":
 		for _, t := range e.S.Tenants() {
 			prefix := fmt.Sprintf("10.200.%d.", integer(t["n"]))
@@ -65,6 +75,8 @@ func grantSummary(kind string, g D) D {
 		return pick(g, "id", "machine", "from_tenant", "from_machine", "source", "port", "proto", "state")
 	case "networks":
 		return pick(g, "id", "name", "mode", "cidr", "mtu", "gateway", "dhcp", "state")
+	case "vips":
+		return pick(g, "name", "address", "machines", "state")
 	}
 	return g
 }

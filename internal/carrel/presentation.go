@@ -43,7 +43,7 @@ func memberResponse(tool string, args, result D) D {
 	if tool == "ssh_key_add" || tool == "ssh_key_remove" {
 		return without(r, "quota_before", "quota_after", "delta", "dry_run")
 	}
-	for _, kind := range []string{"ports", "domains", "peers", "networks"} {
+	for _, kind := range []string{"ports", "domains", "peers", "networks", "vips"} {
 		if values, exists := r[kind]; exists {
 			out := []D{}
 			for _, g := range dicts(values) {
@@ -103,7 +103,7 @@ func operationSummary(op D) D {
 		}
 		result["domain"] = pub
 	}
-	for singular, plural := range map[string]string{"peer": "peers", "network": "networks"} {
+	for singular, plural := range map[string]string{"peer": "peers", "network": "networks", "vip": "vips"} {
 		if value, ok := result[singular]; ok {
 			result[singular] = grantSummary(plural, obj(value))
 		}

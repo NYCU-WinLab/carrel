@@ -369,7 +369,7 @@ func (o *Operations) saveOutcome(e *Execution) {
 	}
 	op := e.Op
 	reserved := false
-	for _, kind := range []string{"machines", "networks", "snapshots", "ports", "domains", "peers"} {
+	for _, kind := range []string{"machines", "networks", "snapshots", "ports", "domains", "peers", "vips"} {
 		for _, v := range e.S.Objects(kind, integer(op["tenant_n"])) {
 			reserved = reserved || v["operation_id"] == op["id"]
 		}
@@ -437,7 +437,7 @@ func (e *Execution) BindMachine(t D) bool {
 	return false
 }
 func (e *Execution) BindObject(t D) bool {
-	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "snapshot_delete": {"snapshots", "name", "name"}, "snapshot_rollback": {"snapshots", "name", "name"}}
+	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "snapshot_delete": {"snapshots", "name", "name"}, "snapshot_rollback": {"snapshots", "name", "name"}}
 	op, a := e.Op, obj(e.Op["args"])
 	spec, ok := selectors[str(op["tool"])]
 	if !ok {

@@ -3,6 +3,7 @@ package carrel
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"sync"
 )
 
@@ -16,6 +17,10 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 		return D{"ports": e.PublicGrants("ports", n)}
 	case "peer_list":
 		return D{"peers": e.PublicGrants("peers", n)}
+	case "vip_list":
+		return D{"vips": e.PublicGrants("vips", n)}
+	case "vip_add", "vip_remove":
+		return e.VIPAction(tool, a, t)
 	case "network_create", "network_delete":
 		nets := e.S.Objects("networks", n)
 		var network, delta D
@@ -247,6 +252,81 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 	fail("invalid", "Unknown network tool")
 	return nil
 }
+
+// VIPAction keeps a tenant's virtual addresses (issue #96). carrel only lets
+// each holder's NIC use the address; keepalived or kube-vip in the guests
+// decides which holder answers for it.
+func (e *Execution) VIPAction(tool string, a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	vips := e.vips(n)
+	var vip vipRecord
+	found := false
+	for _, v := range vips {
+		if v.Name == a["name"] {
+			vip, found = v, true
+		}
+	}
+	if tool == "vip_add" {
+		if found && vip.State == "deleting" {
+			fail("conflict", "Finish removing this address before reusing its name", D{"recovery": "finish_cleanup"})
+		}
+		holders, seen := []int{}, map[int]bool{}
+		for _, name := range arr(a["machines"]) {
+			id := integer(e.Machine(t, name)["vmid"])
+			if seen[id] {
+				fail("invalid", "A machine is listed twice", D{"recovery": "revise_request"})
+			}
+			seen[id] = true
+			holders = append(holders, id)
+		}
+		sort.Ints(holders)
+		if !found {
+			used := map[string]bool{}
+			for _, v := range vips {
+				used[v.Address] = true
+			}
+			for _, host := range vipHosts {
+				if address := fmt.Sprintf("10.200.%d.%d", n, host); !used[address] {
+					vip = vipRecord{ID: randomID()[:16], TenantN: n, Name: str(a["name"]), Address: address}
+					if e.Op != nil {
+						vip.OperationID = str(e.Op["id"])
+					}
+					break
+				}
+			}
+			if vip.Address == "" {
+				fail("conflict", fmt.Sprintf("A tenant keeps at most %d virtual addresses", len(vipHosts)), D{"recovery": "revise_request"})
+			}
+		}
+		vip.VMIDs, vip.State = holders, "ready"
+	} else {
+		if !found {
+			fail("not_found", "Virtual address not found")
+		}
+		vip.State = "deleted"
+	}
+	if dry {
+		vip.State = "planned"
+		if tool == "vip_remove" {
+			vip.State = "deleted"
+		}
+		return D{"vip": e.PublicGrant("vips", without(vip.D(), "id", "tenant_n", "operation_id"), n), "dry_run": true, "quota_after": e.Quota(t)}
+	}
+	if tool == "vip_add" {
+		e.Put("vips", vip.ID, n, vip)
+		e.Reconcile()
+	} else {
+		// Holders drop the address before the record goes, so a failed
+		// reconcile leaves it visible and retryable.
+		vip.State = "deleting"
+		e.Put("vips", vip.ID, n, vip)
+		e.Reconcile()
+		e.S.Remove("vips", vip.ID)
+		vip.State = "deleted"
+	}
+	return D{"vip": e.PublicGrant("vips", vip.D(), n), "dry_run": false, "quota_after": e.Quota(t)}
+}
+
 func nextNIC(nics []D) int {
 	for i := 1; i < 8; i++ {
 		if find(nics, func(n D) bool { return integer(n["index"]) == i }) == nil {

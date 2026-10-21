@@ -123,6 +123,21 @@ def topology_read():
     return vnets, subnets
 
 
+def vip_addresses(m, state):
+    # Virtual addresses this machine may hold (issue #96): only .251 to .254
+    # of its own tenant network, so no grant can claim another machine's.
+    n = m["tenant_n"]
+    out = []
+    for vip in state.get("vips", []):
+        if m["vmid"] not in vip["vmids"]:
+            continue
+        address = ipaddress.IPv4Address(vip["address"])
+        if vip["tenant_n"] != n or address not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 251 <= int(address) % 256 <= 254:
+            raise ValueError("invalid virtual address")
+        out.append(str(address))
+    return sorted(out)
+
+
 def guest_firewall(m, state, config):
     # These rules cover net0 only: experiment NICs run with firewall=0, so a
     # restricted machine's private NICs stay unfiltered (issue #75).
@@ -142,6 +157,7 @@ def guest_firewall(m, state, config):
         "",
         "[IPSET ipfilter-net0]",
         m["ip"],
+        *vip_addresses(m, state),
         "0.0.0.0",
         "",
         "[RULES]",

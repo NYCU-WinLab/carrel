@@ -290,6 +290,25 @@ def test_firewall_enforces_only_the_declared_source_protocol_and_port():
     assert with_nic.splitlines() == rules
 
 
+def test_a_virtual_address_joins_only_its_holders_ipfilter_set():
+    module = load("node-agent.py")
+    holder = dict(MACHINE, name="cp1", vmid=10100, host=10, ip="10.200.1.10", tenant_n=1)
+    other = dict(MACHINE, name="worker", vmid=10101, host=11, ip="10.200.1.11", tenant_n=1)
+    vip = {"name": "api", "address": "10.200.1.251", "tenant_n": 1, "vmids": [10100]}
+    state = {"peers": [], "ports": [], "domains": [], "vips": [vip]}
+    ipset = (
+        module.guest_firewall(holder, state, {"protected_addresses": []})
+        .split("[IPSET ipfilter-net0]\n")[1]
+        .split("\n\n")[0]
+    )
+    assert ipset.splitlines() == ["10.200.1.10", "10.200.1.251", "0.0.0.0"]
+    assert "10.200.1.251" not in module.guest_firewall(other, state, {"protected_addresses": []})
+    # No grant can hand a holder another machine's address or another tenant's.
+    for bad in ({"address": "10.200.1.11"}, {"address": "10.200.2.251"}, {"tenant_n": 2}):
+        with pytest.raises(ValueError):
+            module.guest_firewall(holder, dict(state, vips=[dict(vip, **bad)]), {"protected_addresses": []})
+
+
 @pytest.mark.parametrize(
     "routes,ready",
     [

@@ -167,6 +167,9 @@ Stopping or pausing a VM retains its reservations. Available quota does not rese
 capacity; creation and growth also pass the node's admission checks.
 Each machine's SSH occupies one of 10 tenant public ports, so eight machines leave two ports for
 additional TCP/UDP publications. Tenant HTTPS domains use the gateway without consuming these ports.
+`vip_add(name="api", machines=["cp1", "cp2", "cp3"])` keeps a virtual address (`.251` to `.254`
+of the tenant network) that those machines may hold, for keepalived or kube-vip. Use unicast peers:
+VRRP multicast is dropped.
 `domain_add(sub="*")` is a catch-all: every single-label name under the tenant without a domain of
 its own goes to one machine and port, so an ingress controller can route by Host. It counts as one
 domain. The gateway ends TLS and forwards plain HTTP with the original `Host` header,

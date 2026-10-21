@@ -124,6 +124,26 @@ func (e *Execution) domains(n int) []domainRecord {
 	return rowsOf[domainRecord](e.S, "domains", n)
 }
 
+// vipRecord is a virtual address in a tenant network (issue #96): every
+// machine in VMIDs may claim it, and software in the guests moves it.
+type vipRecord struct {
+	Address     string `json:"address"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	OperationID string `json:"operation_id,omitempty"`
+	State       string `json:"state,omitempty"`
+	TenantN     int    `json:"tenant_n"`
+	VMIDs       []int  `json:"vmids"`
+}
+
+func (v vipRecord) D() D { return decode(string(encoded(v))) }
+
+func (e *Execution) vips(n int) []vipRecord { return rowsOf[vipRecord](e.S, "vips", n) }
+
+// vipHosts are the host numbers kept for virtual addresses, above every
+// machine address (10 + slot, at most 100 machines per tenant).
+var vipHosts = []int{251, 252, 253, 254}
+
 // domainNamed finds a domain by its full name.
 func domainNamed(domains []domainRecord, name string) (domainRecord, bool) {
 	for _, d := range domains {
