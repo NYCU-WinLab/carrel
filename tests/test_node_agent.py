@@ -598,33 +598,40 @@ def test_fetch_store_checks_the_name_and_the_bytes(monkeypatch, tmp_path):
     digest = hashlib.sha256(data).hexdigest()
 
     def run(*args, **kwargs):
-        if args[:2] == ("pct", "pull"):
-            Path(args[4]).write_bytes(data)
         if args[0] == "sha256sum":
             return hashlib.sha256(Path(args[1]).read_bytes()).hexdigest() + "  x"
         return ""
 
+    reads = []
+
+    def bounded(args, out, limit, timeout):
+        reads.append(args)
+        out.write(data)
+        return len(data)
+
     monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module, "bounded", bounded)
     req = {
         "job": "c" * 32,
         "volume": "carrel-t003-netinst-" + digest[:12] + ".iso",
         "kind": "iso",
         "sha256": digest,
+        "tenant_n": 3,
+        "max_bytes": 1024,
     }
     assert module.fetch_store(req)["volume"] == "shared:iso/" + req["volume"]
     stored = nfs / "template" / "iso" / req["volume"]
     assert stored.read_bytes() == data and oct(stored.stat().st_mode & 0o777) == "0o444"
     assert not list((nfs / "template" / "iso").glob(".carrel-*"))
-    with pytest.raises(ValueError, match="checksum"):
+    # The file is read inside the container, never through a host path.
+    assert reads[0][:4] == ["pct", "exec", 103, "--"] and "test ! -L" in reads[0][-1]
+    # Bytes that do not match the database's checksum never land.
+    with pytest.raises(ValueError, match="does not match its checksum"):
         module.fetch_store(
-            {
-                **req,
-                "job": "d" * 32,
-                "volume": "carrel-t003-other-" + digest[:12] + ".iso",
-                "sha256": "e" * 64,
-            }
+            {**req, "job": "d" * 32, "volume": "carrel-t003-other-" + "e" * 12 + ".iso", "sha256": "e" * 64}
         )
     assert not list((nfs / "template" / "iso").glob(".carrel-*"))
+    assert not (nfs / "template" / "iso" / ("carrel-t003-other-" + "e" * 12 + ".iso")).exists()
     for bad in [
         "../x.iso",
         "carrel-t003-x-" + digest[:12] + ".exe",
@@ -633,6 +640,20 @@ def test_fetch_store_checks_the_name_and_the_bytes(monkeypatch, tmp_path):
     ]:
         with pytest.raises(ValueError):
             module.fetch_store({**req, "volume": bad})
+    # The name must carry the request's tenant and the checksum's start.
+    for bad in [{"tenant_n": 4}, {"volume": "carrel-t003-netinst-" + "0" * 12 + ".iso"}]:
+        with pytest.raises(ValueError, match="tenant or checksum"):
+            module.fetch_store({**req, **bad})
+
+
+def test_bounded_stops_at_its_limit_and_kills_the_group(tmp_path):
+    module = load("node-agent.py")
+    with (tmp_path / "out").open("wb") as out:
+        assert module.bounded(["printf", "abc"], out, 10, 5) == 3
+    with (tmp_path / "out").open("wb") as out, pytest.raises(ValueError, match="limit"):
+        module.bounded(["yes"], out, 1 << 20, 5)
+    with (tmp_path / "out").open("wb") as out, pytest.raises(module.subprocess.TimeoutExpired):
+        module.bounded(["sh", "-c", "sleep 30 & sleep 30"], out, 10, 1)
 
 
 def test_fetch_status_reports_progress_and_results(monkeypatch):

@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -128,35 +129,47 @@ func client(refused []netip.Prefix) *http.Client {
 	}
 }
 
-// meter aborts a download that stays slow or runs too long.
+// meter counts bytes and stops at the size limit.
 type meter struct {
-	r       io.Reader
-	started time.Time
-	window  time.Time
-	inWin   int64
-	total   int64
-	limit   int64
+	r     io.Reader
+	total atomic.Int64
+	limit int64
 }
 
 func (m *meter) Read(p []byte) (int, error) {
 	n, err := m.r.Read(p)
-	m.total += int64(n)
-	m.inWin += int64(n)
-	now := time.Now()
-	if m.total > m.limit {
+	if m.total.Add(int64(n)) > m.limit {
 		return n, refusal{"too_large", "the file is larger than allowed"}
-	}
-	if now.Sub(m.started) > maxDuration {
-		return n, refusal{"too_slow", "the download ran longer than 3 hours"}
-	}
-	if now.Sub(m.window) >= slowWindow {
-		if m.inWin < slowBytes {
-			return n, refusal{"too_slow", "the download stayed under 2 MB/s for 60 seconds"}
-		}
-		m.window, m.inWin = now, 0
 	}
 	return n, err
 }
+
+// watch cancels a download that stays slow, even one whose server stopped
+// sending: a blocked Read never returns to check the rate itself.
+func watch(ctx context.Context, cancel context.CancelCauseFunc, m *meter, window time.Duration, least int64) {
+	tick := time.NewTicker(window)
+	defer tick.Stop()
+	last := int64(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			now := m.total.Load()
+			if now-last < least {
+				cancel(refusal{"too_slow", "the download stayed under 2 MB/s for 60 seconds"})
+				return
+			}
+			last = now
+		}
+	}
+}
+
+// slowCheck is the window and the least bytes in it; tests shorten them.
+var slowCheck = struct {
+	window time.Duration
+	least  int64
+}{slowWindow, slowBytes}
 
 func fetch(j job) (result, error) {
 	u, err := url.Parse(j.URL)
@@ -174,8 +187,10 @@ func fetch(j job) (result, error) {
 		}
 		refused = append(refused, p)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), maxDuration+time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	ctx, stop := context.WithTimeoutCause(ctx, maxDuration, refusal{"too_slow", "the download ran longer than 3 hours"})
+	defer stop()
 	req, _ := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	req.Header.Set("User-Agent", "carrel-fetch")
 	resp, err := client(refused).Do(req)
@@ -198,15 +213,16 @@ func fetch(j job) (result, error) {
 		return result{}, err
 	}
 	h := sha256.New()
-	start := time.Now()
-	n, err := io.Copy(io.MultiWriter(f, h), &meter{r: resp.Body, started: start, window: start, limit: j.MaxBytes})
+	m := &meter{r: resp.Body, limit: j.MaxBytes}
+	go watch(ctx, cancel, m, slowCheck.window, slowCheck.least)
+	n, err := io.Copy(io.MultiWriter(f, h), m)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		os.Remove(j.Out)
 		var r refusal
-		if errors.As(err, &r) {
+		if errors.As(err, &r) || errors.As(context.Cause(ctx), &r) {
 			return result{}, r
 		}
 		return result{}, refusal{"fetch_failed", "the download broke off"}
@@ -239,11 +255,9 @@ func checkImage(path, format string) error {
 		return refusal{"image_refused", "qemu-img gave no answer"}
 	}
 	probe, err := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", path).Output()
-	if err == nil {
-		var probed map[string]any
-		if json.Unmarshal(probe, &probed) == nil && probed["format"] != format {
-			return refusal{"image_refused", "the file is not " + format}
-		}
+	var probed map[string]any
+	if err != nil || json.Unmarshal(probe, &probed) != nil || probed["format"] != format {
+		return refusal{"image_refused", "the file is not " + format}
 	}
 	if info["backing-filename"] != nil || info["full-backing-filename"] != nil || info["backing-filename-format"] != nil {
 		return refusal{"image_refused", "images with a backing file are refused"}

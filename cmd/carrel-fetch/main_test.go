@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOnlyPublicAddressesAreAllowed(t *testing.T) {
@@ -135,5 +136,31 @@ func TestImagesThatNameOtherFilesAreRefused(t *testing.T) {
 	q("create", "-f", "qcow2", filepath.Join(dir, "huge.qcow2"), "1001G")
 	if err := checkImage(filepath.Join(dir, "huge.qcow2"), "qcow2"); refusedCode(err) != "image_refused" {
 		t.Error("accepted a 1001 GB disk")
+	}
+}
+
+func TestAServerThatStopsSendingIsCutOff(t *testing.T) {
+	stall := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000000")
+		w.Write([]byte("x"))
+		w.(http.Flusher).Flush()
+		<-stall
+	}))
+	// The handler must return before Close can.
+	defer srv.Close()
+	defer close(stall)
+	u, _ := url.Parse(srv.URL)
+	ports[u.Port()] = true
+	defer delete(ports, u.Port())
+	permit = func(netip.Addr, []netip.Prefix) bool { return true }
+	defer func() { permit = allowed }()
+	saved := slowCheck
+	slowCheck.window, slowCheck.least = 300*time.Millisecond, 1000
+	defer func() { slowCheck = saved }()
+	start := time.Now()
+	_, err := fetch(job{URL: srv.URL + "/x", SHA256: strings.Repeat("0", 64), MaxBytes: 1 << 20, Format: "iso", Out: filepath.Join(t.TempDir(), "x")})
+	if refusedCode(err) != "too_slow" || time.Since(start) > 5*time.Second {
+		t.Fatal(err, time.Since(start))
 	}
 }

@@ -283,7 +283,9 @@ def host(stage, version):
         push(stage / "carrel-deployd", "/usr/local/lib/carrel/carrel-deployd", "755")
         # The fetch container's downloader (PLAN 7.8), when the site has one.
         if Path("/etc/pve/lxc/103.conf").exists():
-            run("pct", "push", "103", stage / "carrel-fetch", "/usr/local/bin/carrel-fetch", "--perms", "755")
+            # Beside the running binary, then renamed: a download in progress keeps its copy.
+            run("pct", "push", "103", stage / "carrel-fetch", "/usr/local/bin/carrel-fetch.next", "--perms", "755")
+            run("pct", "exec", "103", "--", "mv", "/usr/local/bin/carrel-fetch.next", "/usr/local/bin/carrel-fetch")
         activated = True
         ct_command("activate")
         ct("systemctl", "daemon-reload")
