@@ -1371,7 +1371,7 @@
     },
     {
       "name": "vip_add",
-      "description": "Reserve a virtual address in your tenant network that the listed machines may hold, for a highly available service (keepalived, kube-vip). carrel lets each listed machine's primary NIC use the address; the software in the guests moves it between them with gratuitous ARP. Adding an existing name again replaces its machines. VRRP multicast is dropped: configure keepalived with unicast peers. Addresses are .251 to .254 of the tenant network, 4 per tenant.",
+      "description": "Reserve a virtual address in your tenant network that the listed machines may hold, for a highly available service (keepalived, kube-vip). carrel lets each listed machine's primary NIC use the address; the software in the guests moves it between them with gratuitous ARP. Adding an existing name again replaces its machines. VRRP multicast is dropped: configure keepalived with unicast peers, on machines with network_access tenant (restricted machines accept only TCP and UDP connections). Addresses are .251 to .254 of the tenant network, 4 per tenant.",
       "inputSchema": {
         "type": "object",
         "properties": {

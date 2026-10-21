@@ -266,10 +266,10 @@ func (e *Execution) VIPAction(tool string, a, t D) D {
 			vip, found = v, true
 		}
 	}
-	if found && vip.State == "deleting" {
-		fail("conflict", "Finish removing this address before reusing its name", D{"recovery": "finish_cleanup"})
-	}
 	if tool == "vip_add" {
+		if found && vip.State == "deleting" {
+			fail("conflict", "Finish removing this address before reusing its name", D{"recovery": "finish_cleanup"})
+		}
 		holders, seen := []int{}, map[int]bool{}
 		for _, name := range arr(a["machines"]) {
 			id := integer(e.Machine(t, name)["vmid"])

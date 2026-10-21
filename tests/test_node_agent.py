@@ -296,7 +296,11 @@ def test_a_virtual_address_joins_only_its_holders_ipfilter_set():
     other = dict(MACHINE, name="worker", vmid=10101, host=11, ip="10.200.1.11", tenant_n=1)
     vip = {"name": "api", "address": "10.200.1.251", "tenant_n": 1, "vmids": [10100]}
     state = {"peers": [], "ports": [], "domains": [], "vips": [vip]}
-    ipset = module.guest_firewall(holder, state, {"protected_addresses": []}).split("[IPSET ipfilter-net0]\n")[1].split("\n\n")[0]
+    ipset = (
+        module.guest_firewall(holder, state, {"protected_addresses": []})
+        .split("[IPSET ipfilter-net0]\n")[1]
+        .split("\n\n")[0]
+    )
     assert ipset.splitlines() == ["10.200.1.10", "10.200.1.251", "0.0.0.0"]
     assert "10.200.1.251" not in module.guest_firewall(other, state, {"protected_addresses": []})
     # No grant can hand a holder another machine's address or another tenant's.
