@@ -80,6 +80,16 @@ func (p *Platform) nodeOf(m D) nodeRef {
 	return n
 }
 
+// nodeNameOf names the node behind an SSH target, or the target itself.
+func (p *Platform) nodeNameOf(target string) string {
+	for _, n := range p.Nodes() {
+		if n.Target == target {
+			return n.Name
+		}
+	}
+	return target
+}
+
 func (p *Platform) lookupNode(m D) (nodeRef, bool) {
 	name := str(m["node"])
 	for _, n := range p.Nodes() {
@@ -108,6 +118,25 @@ func (p *Platform) invalidateInventory() {
 	}
 }
 
+// fetchInventory reads a node's inventory and checks that the node behind
+// the SSH target is the one configured (issue #45): a swapped alias would
+// otherwise place machines on the wrong node.
+func fetchInventory(ctx context.Context, b Backend, n nodeRef) (any, error) {
+	v, err := b.Call(ctx, D{"op": "inventory"}, n.Target)
+	if err != nil {
+		return nil, err
+	}
+	return v, checkInventoryNode(v, n)
+}
+
+func checkInventoryNode(v any, n nodeRef) error {
+	if name, ok := obj(v)["node"]; ok && name != n.Name {
+		slog.Error("node_name_mismatch", "configured", n.Name, "reported", name)
+		return Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "A node answers under another name; operators must fix the site configuration", "recovery": "retry_infrastructure"}}}
+	}
+	return nil
+}
+
 func (e *Execution) nodeCapacity(node nodeRef, proposed D, cached bool) D {
 	reservations, snapshots := e.nodeLoad(node, proposed)
 	var inventory any
@@ -115,11 +144,12 @@ func (e *Execution) nodeCapacity(node nodeRef, proposed D, cached bool) D {
 	if cached {
 		var err error
 		inventory, at, err = e.P.inventoryCache(node.Target).Get(e.Ctx, 2*time.Second, func(ctx context.Context) (any, error) {
-			return e.P.Backend.Call(ctx, D{"op": "inventory"}, node.Target)
+			return fetchInventory(ctx, e.P.Backend, node)
 		})
 		must(err)
 	} else {
 		inventory = e.Call(D{"op": "inventory"}, node.Target)
+		must(checkInventoryNode(inventory, node))
 	}
 	return summarize(obj(inventory), reservations, snapshots, at)
 }
@@ -165,7 +195,7 @@ func (e *Execution) inventories(nodes []nodeRef, cached bool) ([]any, []time.Tim
 		go func() {
 			defer wg.Done()
 			failures[i] = attempt(func() {
-				fetch := func(ctx context.Context) (any, error) { return e.P.Backend.Call(ctx, D{"op": "inventory"}, n.Target) }
+				fetch := func(ctx context.Context) (any, error) { return fetchInventory(ctx, e.P.Backend, n) }
 				var err error
 				if cached {
 					inventories[i], times[i], err = e.P.inventoryCache(n.Target).Get(ctx, 2*time.Second, fetch)
@@ -332,7 +362,7 @@ func (e *Execution) Place(cpu, memory, disk float64, skip ...string) (nodeRef, D
 			if _, ok := failures[i].(Failure); !ok {
 				panic(failures[i])
 			}
-			refusal = failures[i]
+			refusal = moreTelling(refusal, failures[i])
 			continue
 		}
 		if obj(inventories[i])["tenant_route"] == false {
@@ -340,9 +370,7 @@ func (e *Execution) Place(cpu, memory, disk float64, skip ...string) (nodeRef, D
 			// internet: the VRF lost its default route (an FRR fault, 2026-10-20).
 			slog.Warn("node_without_tenant_route", "node", n.Name)
 			// A capacity refusal from another node says more.
-			if refusal == nil {
-				refusal = Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "No node can route tenant traffic", "recovery": "retry_infrastructure"}}}
-			}
+			refusal = moreTelling(refusal, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "No node can route tenant traffic", "recovery": "retry_infrastructure"}}})
 			continue
 		}
 		if f := attempt(func() {
@@ -353,7 +381,7 @@ func (e *Execution) Place(cpu, memory, disk float64, skip ...string) (nodeRef, D
 			if _, ok := f.(Failure); !ok {
 				panic(f)
 			}
-			refusal = f
+			refusal = moreTelling(refusal, f)
 			continue
 		}
 		if left := num(obj(obj(c["allocatable"])["memory_gib"])["remaining"]) - memory/1024; left > most {
@@ -364,6 +392,21 @@ func (e *Execution) Place(cpu, memory, disk float64, skip ...string) (nodeRef, D
 		panic(refusal)
 	}
 	return best, admission
+}
+
+// moreTelling keeps the refusal that says most when every node refuses
+// (issue #45): a capacity answer from one node over another's outage.
+func moreTelling(kept, next any) any {
+	code := func(f any) any {
+		if x, ok := f.(Failure); ok {
+			return obj(x.Result["error"])["code"]
+		}
+		return nil
+	}
+	if kept == nil || (code(kept) == "backend_unavailable" && code(next) != "backend_unavailable") {
+		return next
+	}
+	return kept
 }
 
 // drained reports whether an admin took the node out of placement.

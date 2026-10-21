@@ -52,7 +52,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal", "storage_unavailable"}, result["error_code"]) {
 			code = str(result["error_code"])
 		}
-		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": target, "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
+		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": "node_adapter", "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
 		// The adapter's own error text stays in the operator log.
 		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "detail", truncate(str(result["error"]), 400), "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
 		return nil, Failure{D{"ok": false, "error": details}}

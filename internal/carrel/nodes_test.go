@@ -387,3 +387,19 @@ func TestPlacementSkipsANodeThatCannotRouteTenantTraffic(t *testing.T) {
 		t.Fatal("placed a machine although no node routes tenant traffic")
 	}
 }
+
+// Issue #45: what a member sees when nodes fail, and a node under the
+// wrong name.
+func TestNodeRefusalsAndNamesAreChecked(t *testing.T) {
+	outage := Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
+	full := Failure{D{"ok": false, "error": D{"code": "capacity_exhausted"}}}
+	if moreTelling(moreTelling(nil, full), outage) != any(full) || moreTelling(moreTelling(nil, outage), full) != any(full) {
+		t.Fatal("an outage hid a capacity refusal")
+	}
+	if checkInventoryNode(D{"node": "carrel02"}, nodeRef{"carrel01", "carrel-node"}) == nil {
+		t.Fatal("a node under another name was accepted")
+	}
+	if checkInventoryNode(D{"node": "carrel01"}, nodeRef{"carrel01", "carrel-node"}) != nil {
+		t.Fatal(nil)
+	}
+}
