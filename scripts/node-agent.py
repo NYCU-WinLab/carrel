@@ -1310,6 +1310,21 @@ def set_media(m, cfg, req):
     return {"state": "done"}
 
 
+def console(m):
+    """The VM's VNC console on stdin and stdout (PLAN 7.8). The control plane
+    sends nothing more until it reads this line, so no console bytes sit in
+    this process's input buffer when qm takes over."""
+    vmid = machine(m)
+    if m["kind"] != "vm":
+        raise ValueError("only VMs have a console")
+    owned(m)
+    if power_status(m) != "running":
+        raise ValueError("start the machine first")
+    sys.stdout.write(json.dumps({"ok": True, "result": {"state": "streaming"}}) + "\n")
+    sys.stdout.flush()
+    os.execvp("qm", ["qm", "vncproxy", str(vmid)])
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -1574,11 +1589,14 @@ def main():
     STATE.mkdir(parents=True, exist_ok=True)
     # A start may carry a VM's cloud-init files: user-data with large runcmd
     # arguments reaches about 1 MB, twice that once JSON-escaped again.
-    data = sys.stdin.buffer.read(8_000_001)
+    # One request per line: a console streams the rest of stdin after it.
+    data = sys.stdin.buffer.readline(8_000_001)
     if len(data) > 8_000_000:
         raise ValueError("request too large")
     req = json.loads(data)
     op = req["op"]
+    if op == "console":
+        console(req["machine"])
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
     long = op in ("migrate", "migrate_finish")

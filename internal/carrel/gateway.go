@@ -21,7 +21,7 @@ import (
 // the names in the database, and any other name to the tenant's catch-all
 // domain (sub "*") or a 404.
 
-var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*"}
+var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*", "/console/*"}
 
 const gatewayCerts = "/etc/caddy/carrel-certs"
 

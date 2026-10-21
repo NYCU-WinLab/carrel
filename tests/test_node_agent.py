@@ -720,3 +720,19 @@ def test_an_iso_machine_is_created_empty_with_its_tenants_iso(monkeypatch, tmp_p
             module.iso_volume(vm, bad)
     with pytest.raises(ValueError, match="UEFI"):
         module.create_from_iso(dict(vm, firmware="bios"), False, tmp_path / "m.json", {}, "marker")
+
+
+def test_a_console_answers_once_then_hands_stdio_to_qm(monkeypatch, capsys):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "owned", lambda m: {})
+    monkeypatch.setattr(module, "power_status", lambda m: "running")
+    execs = []
+    monkeypatch.setattr(module.os, "execvp", lambda f, args: execs.append(args))
+    module.console(dict(MACHINE, kind="vm"))
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "result": {"state": "streaming"}}
+    assert execs == [["qm", "vncproxy", "10100"]]
+    monkeypatch.setattr(module, "power_status", lambda m: "stopped")
+    with pytest.raises(ValueError, match="start"):
+        module.console(dict(MACHINE, kind="vm"))
+    with pytest.raises(ValueError):
+        module.console(dict(MACHINE, kind="ct"))

@@ -889,11 +889,16 @@ key injection, the SSH check and graceful shutdown.
   Windows 11. The virtio driver ISO can be attached as a second drive. Licences are the tenant's
   responsibility.
 - **Browser console**: `machine_console_url` returns a single-use link, valid for 15 minutes.
-  Opening it requires a Keycloak browser login as the member who asked for it, so a forwarded link
-  is useless to anyone else. This page is the one exception to 1.4. Every link is emailed to the
-  machine's owner (for a project, its members) and audited, like `machine_reset_access`, because a
-  console is as strong as a key reset. The proxy sits in front of the Proxmox VNC console and is
-  the one new component custom ISOs need.
+  Opening it sends the browser through a WinLab login (Keycloak, through carrel's own
+  `/oauth/callback`, so no new redirect URI), and any login spends the link; only the member who
+  asked for it gets the console, in a session cookie for `/console` only (`HttpOnly`, `Secure`,
+  `SameSite=Strict`, one hour). The page is noVNC, loaded from jsdelivr pinned to the commit of
+  v1.6.0; its WebSocket is accepted only from carrel's origin, and the control plane bridges it to
+  `qm vncproxy` on the machine's node through the node adapter, which answers one line and then
+  hands its standard input and output to `qm`. Every link and every opening, refused ones
+  included, is in `audit_log`. Links are not emailed (decided 2026-10-21): in a personal tenant the
+  member is the owner, project members share their machines anyway, and the audit log answers
+  "who opened it". This page is the one exception to 1.4.
 - **Images without SSH**: an imported image may declare that it runs no cloud-config and no SSH,
   as Talos does (issue #94). carrel still writes the network file, passes the member's own
   document as user-data, and checks readiness on a declared TCP port instead of SSH. This comes
