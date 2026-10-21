@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -85,10 +86,23 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	if r := open(link); r.StatusCode != 404 {
 		t.Fatal("a link worked twice", r.StatusCode)
 	}
-	view, err := client.Get(origin + "/console/view")
-	must(err)
-	if body, _ := io.ReadAll(view.Body); view.StatusCode != 200 || !strings.Contains(string(body), "core/rfb.js") {
-		t.Fatal(view.StatusCode)
+	page := func() string {
+		view, err := client.Get(origin + "/console/view")
+		must(err)
+		body, _ := io.ReadAll(view.Body)
+		// The page's own scripts carry the nonce that the policy allows.
+		nonce := strings.Split(strings.Split(view.Header.Get("Content-Security-Policy"), "'nonce-")[1], "'")[0]
+		if view.StatusCode != 200 || strings.Count(string(body), `nonce="`+nonce+`"`) == 0 {
+			t.Fatal(view.StatusCode)
+		}
+		return string(body)
+	}
+	// A cloud image has no screen: its serial port, in a terminal.
+	if body := page(); !strings.Contains(body, "lib/xterm.js") || strings.Contains(body, "rfb.js") {
+		t.Fatal("a cloud image got no serial terminal")
+	}
+	if cs := jar.Cookies(must2(url.Parse(origin + "/"))); !strings.Contains(fmt.Sprint(cs), "__Host-carrel_console") {
+		t.Fatal("the session cookie is not host-only", cs)
 	}
 	header := http.Header{}
 	for _, c := range jar.Cookies(must2(url.Parse(origin + "/console/ws"))) {
@@ -107,8 +121,24 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	defer c.CloseNow()
 	must(c.Write(context.Background(), websocket.MessageBinary, []byte("RFB")))
 	_, got, err := c.Read(context.Background())
-	if err != nil || string(got) != "RFB" || len(backend.opened) != 1 || backend.opened[0]["op"] != "console" {
+	if err != nil || string(got) != "RFB" || len(backend.opened) != 1 || backend.opened[0]["op"] != "console" || backend.opened[0]["mode"] != "serial" {
 		t.Fatal("console not bridged", err, string(got))
+	}
+	c.CloseNow()
+	// A machine installed from an ISO: its screen over VNC, with the
+	// session's password on both ends.
+	m := p.Store.Get("machines", "10100")
+	m["guest_management"] = 0
+	p.Store.Put("machines", "10100", 1, m)
+	body := page()
+	c, _, err = websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{HTTPHeader: header, Subprotocols: []string{"binary"}})
+	must(err)
+	defer c.CloseNow()
+	must(c.Write(context.Background(), websocket.MessageBinary, []byte("RFB")))
+	_, _, err = c.Read(context.Background())
+	ticket := str(backend.opened[len(backend.opened)-1]["ticket"])
+	if err != nil || !strings.Contains(body, "core/rfb.js") || backend.opened[1]["mode"] != "vnc" || len(ticket) != 8 || !strings.Contains(body, `"ticket":"`+ticket+`"`) {
+		t.Fatal("an ISO machine got no VNC screen", err, backend.opened[1])
 	}
 	if n := len(p.Store.Rows("SELECT * FROM audit WHERE tool='console_open'")); n != 2 {
 		t.Fatal("console openings audited", n)

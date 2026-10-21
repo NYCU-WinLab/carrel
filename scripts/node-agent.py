@@ -1310,19 +1310,34 @@ def set_media(m, cfg, req):
     return {"state": "done"}
 
 
-def console(m):
-    """The VM's VNC console on stdin and stdout (PLAN 7.8). The control plane
-    sends nothing more until it reads this line, so no console bytes sit in
-    this process's input buffer when qm takes over."""
+def console(m, mode, ticket):
+    """The VM's console on stdin and stdout (PLAN 7.8): its screen over VNC
+    (VMs installed from an ISO) or its serial port (cloud images, whose VGA
+    is serial0). The control plane sends nothing more until it reads the
+    reply line, so no console bytes sit in this process's input buffer when
+    qm or socat takes over."""
     vmid = machine(m)
     if m["kind"] != "vm":
         raise ValueError("only VMs have a console")
-    owned(m)
+    cfg = owned(m)
     if power_status(m) != "running":
         raise ValueError("start the machine first")
-    sys.stdout.write(json.dumps({"ok": True, "result": {"state": "streaming"}}) + "\n")
+    if mode == "vnc":
+        if str(cfg.get("vga", "")).startswith("serial") or not isinstance(ticket, str) or not re.fullmatch(r"[A-Za-z0-9]{8}", ticket):
+            raise ValueError("this machine has no screen, or the ticket is invalid")
+        # qm sets this as the VNC password, valid for 30 seconds.
+        os.environ["LC_PVE_TICKET"] = ticket
+        command = ["qm", "vncproxy", str(vmid)]
+    elif mode == "serial":
+        socket_path = Path(f"/var/run/qemu-server/{vmid}.serial0")
+        if not socket_path.exists():
+            raise ValueError("this machine has no serial console")
+        command = ["socat", "-", f"UNIX-CONNECT:{socket_path}"]
+    else:
+        raise ValueError("invalid console mode")
+    sys.stdout.write(json.dumps({"ok": True, "result": {"state": "streaming", "mode": mode}}) + "\n")
     sys.stdout.flush()
-    os.execvp("qm", ["qm", "vncproxy", str(vmid)])
+    os.execvp(command[0], command)
 
 
 def create(m):
@@ -1596,7 +1611,7 @@ def main():
     req = json.loads(data)
     op = req["op"]
     if op == "console":
-        console(req["machine"])
+        console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
     long = op in ("migrate", "migrate_finish")

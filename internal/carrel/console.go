@@ -20,15 +20,22 @@ import (
 // The browser console (PLAN 7.8): machine_console_url gives a single-use
 // link valid for 15 minutes. Opening it needs a WinLab login as the member
 // who asked for it, so a forwarded link is useless to anyone else. The
-// session that follows is a cookie for /console only, and the page talks
-// VNC over a WebSocket that the control plane bridges to `qm vncproxy` on
-// the machine's node. Every link and every opening is audited.
+// session that follows is a __Host- cookie, and the page talks over a
+// WebSocket that the control plane bridges to the machine's node: VNC from
+// `qm vncproxy` for a VM installed from an ISO, the serial port through
+// socat for a cloud image (its VGA is serial0). Every link and every
+// opening is audited.
 
 const (
 	consoleLinkTTL    = 15 * 60
 	consoleSessionTTL = 3600
 	// noVNC v1.6.0, pinned to its commit so the tag cannot move under it.
 	novnc = "https://cdn.jsdelivr.net/gh/novnc/noVNC@a8dfd6a3ea3c74244f5ebdaa5a7f1023007a7820"
+	xterm = "https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0"
+	cdn   = "https://cdn.jsdelivr.net"
+	// __Host-: no other host under winlab.tw (member sites included) can
+	// set or shadow it.
+	consoleCookie = "__Host-carrel_console"
 )
 
 // ConsoleURL makes the link.
@@ -71,8 +78,9 @@ func (b *SSHBackend) Stream(ctx context.Context, request D, target string) (io.R
 		stop()
 		return nil, err
 	}
-	reader := bufio.NewReader(out)
-	line, err := reader.ReadBytes('\n')
+	// ReadSlice stops at the buffer: a node cannot make this read unbounded.
+	reader := bufio.NewReaderSize(out, 4096)
+	line, err := reader.ReadSlice('\n')
 	var reply D
 	if err != nil || json.Unmarshal(line, &reply) != nil || reply["ok"] != true {
 		stop()
@@ -166,14 +174,14 @@ func (h consoleHandler) finish(w http.ResponseWriter, r *http.Request, txn D, co
 		return
 	}
 	session := random(32)
-	h.p.Store.OAuthPut("console", digest(session), D{"tenant_n": rec["tenant_n"], "vmid": rec["vmid"], "sub": rec["sub"]}, consoleSessionTTL)
+	h.p.Store.OAuthPut("console", digest(session), D{"tenant_n": rec["tenant_n"], "vmid": rec["vmid"], "sub": rec["sub"], "ticket": vncTicket()}, consoleSessionTTL)
 	h.p.Store.Log(str(who["sub"]), rec["tenant_n"], "console_open", D{"vmid": rec["vmid"]}, "ok")
-	http.SetCookie(w, &http.Cookie{Name: "carrel_console", Value: session, MaxAge: consoleSessionTTL, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, Path: "/console"})
+	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Value: session, MaxAge: consoleSessionTTL, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, Path: "/"})
 	http.Redirect(w, r, "/console/view", 302)
 }
 
 func (h consoleHandler) session(r *http.Request) D {
-	c, err := r.Cookie("carrel_console")
+	c, err := r.Cookie(consoleCookie)
 	if err != nil || len(c.Value) > 200 {
 		return nil
 	}
@@ -187,20 +195,43 @@ func (h consoleHandler) view(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := h.p.Store.Get("machines", str(s["vmid"]))
-	name := ""
-	if m != nil {
-		name = str(m["name"])
+	if m == nil {
+		consolePage(w, 404, "這台機器已不存在。")
+		return
 	}
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src "+strings.SplitN(novnc, "/gh/", 2)[0]+"; connect-src 'self'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; frame-ancestors 'none'")
+	nonce := random(16)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"' "+cdn+"; style-src 'unsafe-inline' "+cdn+"; connect-src 'self'; img-src data: blob:; font-src "+cdn+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprintf(w, `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>%s · Carrel</title><style>html,body{margin:0;height:100%%;background:#111;color:#eee;font:14px system-ui}#bar{height:32px;line-height:32px;padding:0 12px}#screen{height:calc(100%% - 32px)}</style></head><body><div id="bar">%s</div><div id="screen"></div><script type="module">
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	// json.Marshal escapes <, > and &, so the value cannot close the script.
+	config, _ := json.Marshal(map[string]string{"name": str(m["name"]), "ticket": str(s["ticket"])})
+	name := html.EscapeString(str(m["name"]))
+	head := `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>` + name + ` · Carrel</title><style>html,body{margin:0;height:100%;background:#111;color:#eee;font:14px system-ui}#bar{height:32px;line-height:32px;padding:0 12px}#screen{height:calc(100% - 32px)}</style>`
+	if unmanaged(m) {
+		fmt.Fprintf(w, `%s</head><body><div id="bar">%s</div><div id="screen"></div><script type="module" nonce="%s">
 import RFB from "%s/core/rfb.js";
+const config = %s;
 const bar = document.getElementById("bar");
-const rfb = new RFB(document.getElementById("screen"), "wss://" + location.host + "/console/ws", {wsProtocols: ["binary"]});
+const rfb = new RFB(document.getElementById("screen"), "wss://" + location.host + "/console/ws", {wsProtocols: ["binary"], credentials: {password: config.ticket}});
 rfb.scaleViewport = true;
-rfb.addEventListener("disconnect", () => { bar.textContent = %q; });
-</script></body></html>`, html.EscapeString(name), html.EscapeString(name), novnc, "已中斷："+name)
+rfb.addEventListener("disconnect", () => { bar.textContent = config.name + "：已中斷，重新整理可再連線"; });
+</script></body></html>`, head, name, nonce, novnc, config)
+		return
+	}
+	fmt.Fprintf(w, `%s<link rel="stylesheet" href="%s/css/xterm.css"></head><body><div id="bar">%s：序列埠主控台，按 Enter 叫出登入提示</div><div id="screen"></div><script src="%s/lib/xterm.js" nonce="%s"></script><script nonce="%s">
+const config = %s;
+const bar = document.getElementById("bar");
+const term = new Terminal({scrollback: 5000});
+term.open(document.getElementById("screen"));
+const ws = new WebSocket("wss://" + location.host + "/console/ws", ["binary"]);
+ws.binaryType = "arraybuffer";
+const encoder = new TextEncoder();
+ws.onmessage = (e) => term.write(new Uint8Array(e.data));
+ws.onclose = () => { bar.textContent = config.name + "：已中斷，重新整理可再連線"; };
+term.onData((d) => { if (ws.readyState === 1) ws.send(encoder.encode(d)); });
+term.focus();
+</script></body></html>`, head, xterm, name, xterm, nonce, nonce, config)
 }
 
 func (h consoleHandler) socket(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +259,11 @@ func (h consoleHandler) socket(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), consoleSessionTTL*time.Second)
 	defer cancel()
-	vnc, err := streamer.Stream(ctx, D{"op": "console", "machine": m}, node.Target)
+	mode := "serial"
+	if unmanaged(m) {
+		mode = "vnc"
+	}
+	vnc, err := streamer.Stream(ctx, D{"op": "console", "machine": m, "mode": mode, "ticket": s["ticket"]}, node.Target)
 	if err != nil {
 		c.Close(websocket.StatusInternalError, "console unavailable")
 		return
@@ -247,4 +282,15 @@ func consolePage(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	fmt.Fprintf(w, `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Carrel 主控台</title><style>%s</style></head><body><header><span>WinLab</span><span aria-hidden="true">/</span><span>Carrel</span></header><main><p>%s</p></main></body></html>`, consentStyle, html.EscapeString(message))
+}
+
+// vncTicket is one session's VNC password: qm vncproxy sets it on the VM
+// for 30 seconds, and VNC reads only 8 characters.
+func vncTicket() string {
+	const letters = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+	b := []byte(random(8))
+	for i := range b[:8] {
+		b[i] = letters[int(b[i])%len(letters)]
+	}
+	return string(b[:8])
 }

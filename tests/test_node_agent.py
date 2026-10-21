@@ -722,17 +722,31 @@ def test_an_iso_machine_is_created_empty_with_its_tenants_iso(monkeypatch, tmp_p
         module.create_from_iso(dict(vm, firmware="bios"), False, tmp_path / "m.json", {}, "marker")
 
 
-def test_a_console_answers_once_then_hands_stdio_to_qm(monkeypatch, capsys):
+def test_a_console_answers_once_then_hands_stdio_to_qm_or_socat(monkeypatch, capsys):
     module = load("node-agent.py")
-    monkeypatch.setattr(module, "owned", lambda m: {})
+    cfg = {"vga": "std"}
+    monkeypatch.setattr(module, "owned", lambda m: cfg)
     monkeypatch.setattr(module, "power_status", lambda m: "running")
+    monkeypatch.setattr(module.os, "environ", {})
     execs = []
     monkeypatch.setattr(module.os, "execvp", lambda f, args: execs.append(args))
-    module.console(dict(MACHINE, kind="vm"))
-    assert json.loads(capsys.readouterr().out) == {"ok": True, "result": {"state": "streaming"}}
-    assert execs == [["qm", "vncproxy", "10100"]]
+    vm = dict(MACHINE, kind="vm")
+    module.console(vm, "vnc", "Ab3dEf7h")
+    assert json.loads(capsys.readouterr().out)["result"] == {"state": "streaming", "mode": "vnc"}
+    assert execs == [["qm", "vncproxy", "10100"]] and module.os.environ["LC_PVE_TICKET"] == "Ab3dEf7h"
+    for ticket in [None, "short", "Ab3dEf7h;", "Ab3dEf7h\n"]:
+        with pytest.raises(ValueError):
+            module.console(vm, "vnc", ticket)
+    cfg["vga"] = "serial0"
+    with pytest.raises(ValueError, match="no screen"):
+        module.console(vm, "vnc", "Ab3dEf7h")
+    monkeypatch.setattr(module.Path, "exists", lambda self: str(self) == "/var/run/qemu-server/10100.serial0")
+    module.console(vm, "serial", None)
+    assert execs[-1] == ["socat", "-", "UNIX-CONNECT:/var/run/qemu-server/10100.serial0"]
+    with pytest.raises(ValueError, match="mode"):
+        module.console(vm, "shell", None)
     monkeypatch.setattr(module, "power_status", lambda m: "stopped")
     with pytest.raises(ValueError, match="start"):
-        module.console(dict(MACHINE, kind="vm"))
+        module.console(vm, "serial", None)
     with pytest.raises(ValueError):
-        module.console(dict(MACHINE, kind="ct"))
+        module.console(dict(MACHINE, kind="ct"), "serial", None)
