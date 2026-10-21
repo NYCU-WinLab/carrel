@@ -112,7 +112,8 @@ func (e *Execution) Call(r D, target ...string) any {
 		to = e.P.nodeOf(m).Target
 	}
 	if e.Op != nil && (r["op"] == "create" || r["op"] == "action") {
-		identity := without(r, "machine")
+		// The files a start carries are not part of what it asks for.
+		identity := without(r, "machine", "cloud_init")
 		identity["vmid"] = obj(r["machine"])["vmid"]
 		r = merge(r, D{"request_id": digest(string(encoded([]any{e.Op["id"], e.Op["generation"], to, identity})))})
 	}

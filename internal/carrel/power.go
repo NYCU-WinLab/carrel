@@ -49,7 +49,11 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 		e.Op["power_restore"] = D{"boot_id": previous}
 		e.P.Operations.Save(e.Op)
 	}
-	result := obj(e.Call(D{"op": "action", "machine": m, "action": action}))
+	request := D{"op": "action", "machine": m, "action": action}
+	if files := e.cloudInitFiles(m); files != nil && (action == "start" || action == "reboot") {
+		request["cloud_init"] = files
+	}
+	result := obj(e.Call(request))
 	state := powerState(result)
 	want := "running"
 	if action == "pause" {

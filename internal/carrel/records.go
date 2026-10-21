@@ -170,6 +170,17 @@ func (e *Execution) snapshots(n ...int) []snapshotRecord {
 	return rowsOf[snapshotRecord](e.S, "snapshots", n...)
 }
 
+// cloudInitRecord keeps the exact cloud-init files of a VM (issue #93).
+// Proxmox makes the instance id the SHA-1 of these bytes, so the copy a node
+// gets back must be these bytes; regenerating them reruns cloud-init.
+type cloudInitRecord struct {
+	Network       string `json:"network"`
+	NetworkSHA256 string `json:"network_sha256"`
+	User          string `json:"user"`
+	UserSHA256    string `json:"user_sha256"`
+	VMID          int    `json:"vmid"`
+}
+
 // ownedBy reports whether a record's operation ID is the running job's.
 func (e *Execution) ownedBy(operationID string) bool {
 	return e.Op != nil && operationID != "" && operationID == e.Op["id"]
