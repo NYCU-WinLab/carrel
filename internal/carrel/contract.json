@@ -267,6 +267,11 @@
             ],
             "default": "summary",
             "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "public_ssh": {
+            "type": "boolean",
+            "default": true,
+            "description": "false: no public SSH port; the machine is reached through the site's SSH jump host (ssh -J jump@<origin>), so it uses none of the tenant's 10 public ports. The returned ssh_config sets ProxyJump."
           }
         },
         "required": [
@@ -2637,6 +2642,11 @@
                     }
                   },
                   "description": "VM bootstrap commands as argument arrays. Each argument is limited to 65536 UTF-8 bytes; the complete MCP HTTP request is limited to 256 KiB. Use scp/rsync over SSH after creation for larger project files."
+                },
+                "public_ssh": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false: no public SSH port; the machine is reached through the site's SSH jump host (ssh -J jump@<origin>), so it uses none of the tenant's 10 public ports. The returned ssh_config sets ProxyJump."
                 }
               },
               "required": [
@@ -2989,6 +2999,11 @@
                     }
                   },
                   "description": "VM bootstrap commands as argument arrays. Each argument is limited to 65536 UTF-8 bytes; the complete MCP HTTP request is limited to 256 KiB. Use scp/rsync over SSH after creation for larger project files."
+                },
+                "public_ssh": {
+                  "type": "boolean",
+                  "default": true,
+                  "description": "false: no public SSH port; the machine is reached through the site's SSH jump host (ssh -J jump@<origin>), so it uses none of the tenant's 10 public ports. The returned ssh_config sets ProxyJump."
                 }
               },
               "required": [

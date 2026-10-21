@@ -374,8 +374,9 @@ Eight default 1 vCPU / 1024 MiB / 10 GiB machines consume 8 vCPU / 8 GiB / 80 Gi
 then requires quota headroom or approval; stopping does not release reservations. Every machine
 uses one of the tenant's 10 public ports for SSH, leaving two for extra TCP/UDP publications.
 HTTPS domains do not consume this port block. Domains (10), networks (4), snapshots (4) and
-snapshot space (100 GiB) retain their existing defaults. More than 10 SSH machines requires
-an address/port allocation design change, not merely a larger machine quota.
+snapshot space (100 GiB) retain their existing defaults. A machine created with
+`public_ssh: false` takes no public port and is reached through the platform SSH jump host
+(CT 102, issue #98), so the machine quota, not the port block, bounds how many a tenant runs.
 
 | Layer | Rule (initial values, tuned after the hardware inventory) |
 |---|---|

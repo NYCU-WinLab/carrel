@@ -27,14 +27,18 @@ func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
 	if slot == 100 {
 		fail("quota_exceeded", "No machine address slots remain")
 	}
-	vmid, port := 10000+n*100+slot, e.AllocatePort(t)
+	vmid := 10000 + n*100 + slot
 	var op any
 	if e.Op != nil {
 		op = e.Op["id"]
 	}
 	m := merge(spec, D{"vmid": vmid, "tenant_n": n, "ip": fmt.Sprintf("10.200.%d.%d", n, 10+slot), "host": 10 + slot, "mac": fmt.Sprintf("02:ca:%02x:%02x:00:01", n, slot), "state": "provisioning", "created_at": time.Now().Unix(), "allocation_id": randomID(), "nics": []D{}, "operation_id": op})
-	grant := portGrant{ID: fmt.Sprintf("%d-%d-tcp", n, port), TenantN: n, VMID: vmid, IP: str(m["ip"]), PublicPort: port, Port: 22, Proto: "tcp"}
 	e.Put("machines", vmid, n, m)
+	if m["public_ssh"] == false {
+		return m, portGrant{}
+	}
+	port := e.AllocatePort(t)
+	grant := portGrant{ID: fmt.Sprintf("%d-%d-tcp", n, port), TenantN: n, VMID: vmid, IP: str(m["ip"]), PublicPort: port, Port: 22, Proto: "tcp"}
 	e.Put("ports", grant.ID, n, grant)
 	return m, grant
 }
