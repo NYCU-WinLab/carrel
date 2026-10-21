@@ -234,6 +234,11 @@ def guest_firewall(m, state, config):
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
         dest = ipaddress.ip_network(entry["address"], strict=False)
+        # Only a protected public host (issue #28): an entry for a private
+        # range would open it above the drops below.
+        protected = [ipaddress.ip_network(a, strict=False) for a in config["protected_addresses"]]
+        if dest.prefixlen != 32 or not dest.network_address.is_global or not any(dest.subnet_of(p) for p in protected):
+            raise ValueError(f"public entry {entry['address']} is not a protected public address")
         port = integer(entry["port"], 1, 65535)
         rules.append(f"OUT ACCEPT -dest {dest} -p tcp -dport {port}")
     for block in [
@@ -538,7 +543,23 @@ def nic_value(m, nic):
     return f"name=eth{index},type=veth,hwaddr={mac},mtu=1450,ip={address},{base}"
 
 
-def reconcile(state):
+def sdn_owed(links_missing, first, wait=30):
+    """Whether this node must reload SDN for tenant links it lacks. The first
+    node applies new VNets for the whole cluster, and that reload usually
+    brings the links to the others too (issue #48): they wait for it and
+    reload only if the links are still missing, not once per node."""
+    if not links_missing():
+        return False
+    if first:
+        return True
+    for _ in range(wait):
+        time.sleep(1)
+        if not links_missing():
+            return False
+    return True
+
+
+def reconcile(state, first=True):
     config = json.loads(CONFIG.read_text())
     changed = []
     # One fresh observation per reconciliation. Mutations remain serialized
@@ -589,8 +610,10 @@ def reconcile(state):
         if v["zone"] == "private" and v.get("alias", "").startswith("carrel-") and v["vnet"] not in wanted:
             api("delete", f"/cluster/sdn/vnets/{v['vnet']}")
             changed.append("removed-" + v["vnet"])
-    missing_links = any(not Path("/sys/class/net/" + f"t{t['n']:03d}").exists() for t in state["tenants"])
-    if changed or missing_links:
+    def links_missing():
+        return any(not Path("/sys/class/net/" + f"t{t['n']:03d}").exists() for t in state["tenants"])
+
+    if changed or sdn_owed(links_missing, first):
         task = api("set", "/cluster/sdn")
         if isinstance(task, str) and task.startswith("UPID:"):
             for _ in range(60):
@@ -1702,7 +1725,7 @@ def main():
                 print(journal.read_text())
                 return
         if op == "reconcile":
-            out = reconcile(req["state"])
+            out = reconcile(req["state"], first=req.get("first", True))
         elif op == "create":
             out = create(req["machine"])
         elif op == "action":

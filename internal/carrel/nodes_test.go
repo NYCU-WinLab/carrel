@@ -203,6 +203,10 @@ func TestReconcileRunsOnEveryNodeFirstNodeFirst(t *testing.T) {
 		if r["op"] == "reconcile" {
 			mu.Lock()
 			order = append(order, target)
+			// Only the first node applies SDN for new VNets (issue #48).
+			if (target == "node-01") != (r["first"] != false) {
+				t.Errorf("%s first=%v", target, r["first"])
+			}
 			mu.Unlock()
 			return D{"changed": []any{}}, nil
 		}
