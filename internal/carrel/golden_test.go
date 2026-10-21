@@ -429,6 +429,9 @@ func goldenScenario(g *goldenRun) {
 	call("vips", "vip_add", D{"name": "api", "machines": []any{"api", "db"}}, alice)
 	call("vips", "vip_list", D{}, alice)
 	call("vips", "vip_remove", D{"name": "api"}, alice)
+
+	call("migrate", "machine_migrate", D{"tenant": "alice", "machine": "api", "node": "carrel01"}, admin)
+	call("migrate", "machine_migrate", D{"tenant": "alice", "machine": "api", "node": "carrel01"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

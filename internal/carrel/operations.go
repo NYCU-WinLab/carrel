@@ -289,6 +289,7 @@ func (o *Operations) apply(id string) {
 				}
 			}
 			e.PreparePublication()
+			e.PerformMigration()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
@@ -300,6 +301,9 @@ func (o *Operations) apply(id string) {
 				t := e.S.TenantN(integer(op["tenant_n"]))
 				if op["tool"] == "domain_add" {
 					result = merge(result, e.DomainAction("domain_add", obj(op["args"]), t))
+				}
+				if op["tool"] == "machine_migrate" {
+					result = merge(result, e.FinishMigration(t))
 				}
 				if op["tool"] == "deployment_apply" {
 					e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))
@@ -504,7 +508,7 @@ func (e *Execution) CheckBusy(t D) {
 		}
 	}
 	for _, other := range e.S.ActiveOperations() {
-		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing"}, other["phase"]) {
+		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine"}, other["phase"]) {
 			continue
 		}
 		ids := arr(obj(other["deployment"])["machines"])
