@@ -102,6 +102,9 @@ def public_interface(interface, cidr, gateway, address):
         ("iif xvrf_tenants lookup local priority 1602"),
         ("iif xvrf_tenants to 10.200.0.0/16 lookup main priority 1603"),
         (f"iif xvrf_tenants lookup {PUBLIC_TABLE} priority 1604"),
+        # Replies of the SSH jump host (CT 102, issue #98). Its Proxmox firewall
+        # sets the conntrack mark to its VMID, so the fwmark rule misses them.
+        (f"from 10.200.0.4 ipproto tcp sport 22 lookup {PUBLIC_TABLE} priority 1605"),
     ]
     up = [f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
           f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
