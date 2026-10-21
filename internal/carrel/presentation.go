@@ -96,7 +96,9 @@ func operationSummary(op D) D {
 	if domain, ok := result["domain"]; ok {
 		pub := grantSummary("domains", obj(domain))
 		if op["tool"] == "domain_add" {
-			pub["url"] = "https://" + str(pub["name"])
+			if pub["sub"] != "*" {
+				pub["url"] = "https://" + str(pub["name"])
+			}
 			pub["verification"] = "routing_configured"
 		}
 		result["domain"] = pub

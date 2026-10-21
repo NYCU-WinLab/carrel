@@ -491,7 +491,11 @@ by guessing its VNI. VNIs are not secrets; this filter is the protection.
   machine. The rules are generated from the database.
 - **Tenant domains**: a tenant's first `domain_add` creates `*.<slug>.winlab.tw` in Cloudflare
   (DNS only) pointing at the exit node, and one wildcard certificate for it. Caddy on the infra
-  gateway routes only names that exist in the database; any other name under the wildcard gets 404.
+  gateway routes only names that exist in the database; any other name under the wildcard gets 404,
+  unless the tenant registered the catch-all `sub: "*"` (issue #95). The catch-all forwards every
+  name that has no domain of its own to one machine and port, counts as one domain, and uses the
+  same wildcard certificate, so an ingress controller in the tenant can route by Host. Names with
+  two labels stay outside: they would need another certificate per tenant.
 - **Who issues certificates**: the control plane, through the DNS-01 challenge with the Cloudflare
   token it already holds for records. It renders the gateway's Caddyfile and hosts file, checks
   each pair (name, expiry, key) and sends them over SSH to a forced command in CT 101

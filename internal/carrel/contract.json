@@ -1088,7 +1088,7 @@
     },
     {
       "name": "domain_add",
-      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check.",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1099,7 +1099,7 @@
           },
           "sub": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+            "pattern": "^(\\*|[a-z][a-z0-9-]{0,31})$"
           },
           "target_port": {
             "type": "integer",
