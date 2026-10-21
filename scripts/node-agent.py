@@ -938,12 +938,13 @@ def restore_cloud_init(m, files):
     # booted with, and replacing it would change its instance id.
     vmid = machine(m)
     for kind in ("user", "network"):
-        data = files[kind]
-        if not isinstance(data, str) or len(data) > 1_000_000:
-            raise ValueError("invalid cloud-init file")
         path = SNIPPETS / f"carrel-{vmid}-{kind}.json"
-        if not path.exists():
-            write(path, data, 0o600)
+        if path.exists():
+            continue
+        data = files[kind]
+        if not isinstance(data, str) or len(data) > 4_000_000:
+            raise ValueError("invalid cloud-init file")
+        write(path, data, 0o600)
 
 
 def create(m):
@@ -1201,8 +1202,10 @@ def action(req):
 
 def main():
     STATE.mkdir(parents=True, exist_ok=True)
-    data = sys.stdin.buffer.read(2_000_001)
-    if len(data) > 2_000_000:
+    # A start may carry a VM's cloud-init files: user-data with large runcmd
+    # arguments reaches about 1 MB, twice that once JSON-escaped again.
+    data = sys.stdin.buffer.read(8_000_001)
+    if len(data) > 8_000_000:
         raise ValueError("request too large")
     req = json.loads(data)
     op = req["op"]
@@ -1267,7 +1270,9 @@ def main():
             raise ValueError("unknown operation")
         response = json.dumps({"ok": True, "result": out})
         if journal:
-            write(journal, response, 0o600)
+            # The journal outlives the machine: no copy of its user-data.
+            kept = {k: v for k, v in out.items() if k != "cloud_init"} if isinstance(out, dict) else out
+            write(journal, json.dumps({"ok": True, "result": kept}), 0o600)
         print(response)
 
 

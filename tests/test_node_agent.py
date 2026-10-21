@@ -401,3 +401,5 @@ def test_cloud_init_files_are_read_whole_and_only_missing_ones_written_back(monk
     assert oct((tmp_path / "carrel-10100-user.json").stat().st_mode & 0o777) == "0o600"
     with pytest.raises(ValueError):
         module.restore_cloud_init(dict(vm, vmid=10101), {"user": None, "network": "x"})
+    # Files already in place are not even checked, however large the copy.
+    module.restore_cloud_init(vm, {"user": "x" * 5_000_000, "network": None})
