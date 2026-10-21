@@ -577,4 +577,11 @@ func domainScenario(g *goldenRun) {
 		call("x", "domain_remove", D{"name": d["name"]}, alice)
 	}
 	call("x", "domain_list", D{}, alice)
+
+	// A catch-all: one domain for every other name of the tenant.
+	call("w", "domain_add", D{"machine": "api", "sub": "*", "target_port": 80, "detail": "full"}, alice)
+	call("w", "domain_add", D{"machine": "api", "sub": "named", "target_port": 8080}, alice)
+	call("w", "domain_list", D{}, alice)
+	call("w", "domain_remove", D{"name": "*.alice.winlab.tw", "detail": "full"}, alice)
+	call("w", "domain_remove", D{"name": "named.alice.winlab.tw"}, alice)
 }

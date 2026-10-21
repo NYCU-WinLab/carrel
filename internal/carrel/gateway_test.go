@@ -50,6 +50,18 @@ func TestGatewayServesTheOriginAndTenantWildcardsOverTLS(t *testing.T) {
 	}
 }
 
+func TestACatchAllDomainTakesEveryOtherNameOfItsTenant(t *testing.T) {
+	state, origin := gatewayState(t)
+	state["machines"] = append(arr(state["machines"]), D{"vmid": 10301, "tenant_n": 3, "name": "ingress", "ip": "10.200.3.11"})
+	state["domains"] = append(arr(state["domains"]), D{"id": "8", "vmid": 10301, "sub": "*", "name": "*.zyx1121.winlab.tw", "target_port": 80, "state": "ready"})
+	caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", origin, dicts(state["certificates"]))
+	tenant := strings.SplitN(caddy, "https://*.zyx1121.winlab.tw {", 2)[1]
+	want := " @d7 host book.zyx1121.winlab.tw\n handle @d7 {\n  reverse_proxy 10.200.3.10:3000\n }\n handle {\n  reverse_proxy 10.200.3.11:80\n }\n}\n"
+	if !strings.Contains(tenant, want) || strings.Contains(tenant, "respond 404") || strings.Contains(tenant, "@d8") {
+		t.Fatalf("tenant block %q", tenant)
+	}
+}
+
 func TestGatewayRefusesWrongCertificates(t *testing.T) {
 	for name, change := range map[string]func(D, D){
 		"another name": func(s, _ D) {
@@ -66,6 +78,14 @@ func TestGatewayRefusesWrongCertificates(t *testing.T) {
 			origin["fullchain"], origin["privkey"] = string(crt), string(key)
 		},
 		"domain outside its tenant": func(s, _ D) { obj(arr(s["domains"])[0])["name"] = "book.bensonho.winlab.tw" },
+		"wildcard below a label": func(s, _ D) {
+			d := obj(arr(s["domains"])[0])
+			d["sub"], d["name"] = "*.book", "*.book.zyx1121.winlab.tw"
+		},
+		"catch-all outside its tenant": func(s, _ D) {
+			d := obj(arr(s["domains"])[0])
+			d["sub"], d["name"] = "*", "*.bensonho.winlab.tw"
+		},
 	} {
 		state, origin := gatewayState(t)
 		change(state, origin)

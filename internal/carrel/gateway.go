@@ -18,7 +18,8 @@ import (
 // command gateway-sync.py in CT 101: private keys never pass through a node.
 // Plain HTTP redirects to HTTPS; carrel's own paths go to the control plane
 // and the rest of its origin is the static site; each tenant wildcard routes
-// only the names in the database.
+// the names in the database, and any other name to the tenant's catch-all
+// domain (sub "*") or a 404.
 
 var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*"}
 
@@ -77,7 +78,8 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		m := machines[integer(d["vmid"])]
 		slug := slugs[integer(m["tenant_n"])]
-		if m == nil || !labelPattern.MatchString(str(d["sub"])) || str(d["name"]) != str(d["sub"])+"."+slug+".winlab.tw" {
+		sub := str(d["sub"])
+		if m == nil || (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+".winlab.tw" {
 			fail("conflict", "Invalid tenant domain")
 		}
 		port := integer(d["target_port"])
@@ -130,16 +132,24 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		certificates[slug] = checkedPair(bundle, "probe."+slug+".winlab.tw")
 		lines = append(lines, "https://*."+slug+".winlab.tw {", " tls "+gatewayCerts+"/"+slug+"/fullchain.pem "+gatewayCerts+"/"+slug+"/privkey.pem")
+		fallback := "  respond 404"
 		for _, r := range routes[slug] {
+			upstream := fmt.Sprintf("  reverse_proxy %s:%d", str(r.machine["ip"]), r.port)
+			if r.domain["sub"] == "*" {
+				// Caddy runs a handle without a matcher after every named
+				// one, so a domain of its own always wins over the catch-all.
+				fallback = upstream
+				continue
+			}
 			id := str(r.domain["id"])
 			lines = append(lines,
 				" @d"+id+" host "+str(r.domain["name"]),
 				" handle @d"+id+" {",
-				fmt.Sprintf("  reverse_proxy %s:%d", str(r.machine["ip"]), r.port),
+				upstream,
 				" }",
 			)
 		}
-		lines = append(lines, " handle {", "  respond 404", " }", "}")
+		lines = append(lines, " handle {", fallback, " }", "}")
 	}
 	return strings.Join(lines, "\n") + "\n", hosts.String(), certificates
 }

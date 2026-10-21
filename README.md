@@ -167,6 +167,10 @@ Stopping or pausing a VM retains its reservations. Available quota does not rese
 capacity; creation and growth also pass the node's admission checks.
 Each machine's SSH occupies one of 10 tenant public ports, so eight machines leave two ports for
 additional TCP/UDP publications. Tenant HTTPS domains use the gateway without consuming these ports.
+`domain_add(sub="*")` is a catch-all: every single-label name under the tenant without a domain of
+its own goes to one machine and port, so an ingress controller can route by Host. It counts as one
+domain. The gateway ends TLS and forwards plain HTTP with the original `Host` header,
+`X-Forwarded-For` and `X-Forwarded-Proto`; WebSockets pass through.
 Defaults for domains (10), networks (4), snapshots (4) and snapshot space (100 GiB) are unchanged.
 
 When a preview is wanted, dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
