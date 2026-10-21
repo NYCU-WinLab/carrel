@@ -113,7 +113,7 @@ func operationSummary(op D) D {
 }
 
 func machineSummary(m D) D {
-	r := pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "state", "power_state", "ssh_ready", "runtime", "reason", "ssh", "ssh_short", "ssh_config", "ssh_short_requires", "ssh_jump", "install", "ip", "access", "network_verification", "resize")
+	r := pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "state", "power_state", "ssh_ready", "runtime", "reason", "ssh", "ssh_short", "ssh_config", "ssh_short_requires", "ssh_jump", "install", "ip", "access", "network_verification", "resize", "netbox")
 	if len(arr(m["nics"])) > 0 {
 		out := []D{}
 		for _, nic := range dicts(m["nics"]) {

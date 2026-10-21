@@ -46,6 +46,7 @@ func NewOperations(p *Platform) *Operations {
 func (o *Operations) Save(op D) {
 	op["updated_at"] = now()
 	o.p.Store.Put("operations", op["id"], integer(op["tenant_n"]), op)
+	o.p.NetBoxKick()
 }
 func (o *Operations) Find(t D, id string) D {
 	op := o.p.Store.Get("operations", id)
