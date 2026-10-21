@@ -27,7 +27,8 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 		}
 	}
 	var delta D
-	configuration := pick(m, "cpu", "memory_mb", "disk_gb", "nics")
+	// iso_volume: a rollback brings PVE's ide2 back, so the record must match.
+	configuration := pick(m, "cpu", "memory_mb", "disk_gb", "nics", "iso_volume")
 	if tool == "snapshot_create" {
 		if found && !e.ownedBy(snap.OperationID) {
 			fail("conflict", "Snapshot exists", D{"recovery": "revise_request"})
@@ -87,7 +88,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			m["ssh_ready"] = false
 			if boolean(restore["running"]) {
 				e.Call(D{"op": "action", "machine": m, "action": "start"})
-				m["state"] = "initializing"
+				m["state"] = bootState(m)
 				state = "running"
 			} else {
 				m["state"] = "stopped"

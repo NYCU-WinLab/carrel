@@ -78,7 +78,7 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	}
 	m["state"], m["power_state"], m["ssh_ready"] = state, state, false
 	if state == "running" {
-		m["state"] = "initializing"
+		m["state"] = bootState(m)
 	}
 	e.Put("machines", m["vmid"], integer(t["n"]), m)
 	e.P.invalidateInventory()

@@ -919,7 +919,7 @@ def first_firewall(m):
     """
     saved = STATE / "desired.json"
     state = json.loads(saved.read_text()) if saved.exists() else {}
-    grants = {k: state.get(k, []) for k in ("peers", "ports", "domains")}
+    grants = {k: state.get(k, []) for k in ("peers", "ports", "domains", "vips")}
     write(f"/etc/pve/firewall/{m['vmid']}.fw", guest_firewall(m, grants, json.loads(CONFIG.read_text())))
 
 
@@ -986,7 +986,7 @@ def migrate_prepare(req):
     if where is None:
         raise ValueError("machine not found in the cluster")
     owned(m, node=where)
-    if m["kind"] == "vm":
+    if m["kind"] == "vm" and m.get("guest_management", 1):
         if not req.get("cloud_init"):
             raise ValueError("cloud-init files required to move a VM")
         if where == NODE:
@@ -1243,6 +1243,73 @@ def fetch_clean(req):
     return {"state": "cleaned"}
 
 
+def iso_volume(m, volume):
+    # Only this tenant's ISOs, on the site's ISO storage (PLAN 7.8).
+    storage, _, rest = str(volume).partition(":iso/")
+    match = VOLUME.fullmatch(rest)
+    if storage != content_storage("iso") or not match or int(match[1]) != m["tenant_n"] or not rest.endswith(".iso"):
+        raise ValueError("invalid ISO volume")
+    entry = storage_entry(storage)
+    if entry is None or "path" not in entry:
+        raise ValueError("the ISO storage is not a directory storage")
+    probe(Path(entry["path"]) / "template" / "iso" / rest)
+    return f"{storage}:iso/{rest}"
+
+
+def probe(path):
+    # A hard NFS mount waits forever: look in a child with a deadline.
+    try:
+        run("test", "-f", path, timeout=10)
+    except (CommandFailure, subprocess.TimeoutExpired) as e:
+        raise StorageUnavailable(f"{path.name} missing or its storage unreachable") from e
+
+
+def create_from_iso(m, exists, manifest, saved, marker):
+    """An empty VM with an installer ISO (PLAN 7.8): no template, no
+    cloud-init. The disk boots first, so a finished install never loops back
+    into the installer."""
+    vmid = machine(m)
+    integer(m["cpu"], 1, 64)
+    integer(m["memory_mb"], 512, 131072)
+    integer(m["disk_gb"], 10, 1000)
+    n = m["tenant_n"]
+    iso = iso_volume(m, m["iso_volume"])
+    storage = storage_id()
+    if not exists:
+        args = ["qm", "create", vmid, "--name", m["name"], "--description", marker, "--tags", f"carrel;tenant-{n}",
+                "--cores", m["cpu"], "--memory", m["memory_mb"], "--balloon", "0", "--cpu", "x86-64-v2-AES",
+                "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1,rate=12.5",
+                "--scsihw", "virtio-scsi-single", "--scsi0", f"{storage}:{m['disk_gb']},iothread=1,discard=on,ssd=1",
+                "--ide2", f"{iso},media=cdrom", "--boot", "order=scsi0;ide2", "--ostype", "l26",
+                "--vga", "std", "--onboot", "1", "--startup", "order=20,up=3"]
+        if m.get("firmware") == "uefi":
+            args += ["--bios", "ovmf", "--machine", "q35", "--efidisk0", f"{storage}:1,efitype=4m,pre-enrolled-keys=1"]
+            if m.get("tpm"):
+                args += ["--tpmstate0", f"{storage}:1,version=v2.0"]
+        elif m.get("tpm"):
+            raise ValueError("a TPM needs UEFI firmware")
+        run(*args, timeout=600)
+    for nic in m["nics"]:
+        run("qm", "set", vmid, f"--net{integer(nic['index'], 1, 7)}", nic_value(m, nic))
+    first_firewall(m)
+    if "running" not in run("qm", "status", vmid):
+        run("qm", "start", vmid)
+    write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
+    return {"state": "running", "vmid": vmid}
+
+
+def set_media(m, cfg, req):
+    vmid = machine(m)
+    # A managed VM's ide2 is its cloud-init drive: never touched here.
+    if m["kind"] != "vm" or m.get("guest_management", 1):
+        raise ValueError("only VMs installed from an ISO take media")
+    if req.get("iso_volume"):
+        run("qm", "set", vmid, "--ide2", f"{iso_volume(m, req['iso_volume'])},media=cdrom")
+    else:
+        run("qm", "set", vmid, "--ide2", "none,media=cdrom")
+    return {"state": "done"}
+
+
 def create(m):
     vmid = machine(m)
     manifest = STATE / f"create-{vmid}.json"
@@ -1266,9 +1333,11 @@ def create(m):
             return {"state": "exists", "vmid": vmid, **cloud_init_files(m)}
     else:
         saved = {"marker": marker, "complete": False}
-        if m["kind"] == "vm":
+        if m["kind"] == "vm" and not m.get("iso_volume"):
             saved["template"] = vm_template(m["image"])
         write(manifest, json.dumps(saved), 0o600)
+    if m.get("iso_volume"):
+        return create_from_iso(m, exists, manifest, saved, marker)
     integer(m["cpu"], 1, 64)
     integer(m["memory_mb"], 512, 131072)
     integer(m["disk_gb"], 10, 1000)
@@ -1482,6 +1551,8 @@ def action(req):
         run(cmd, op, vmid, name, timeout=600)
         if op == "rollback":
             return {"state": "running" if "running" in run(cmd, "status", vmid) else "stopped"}
+    elif op == "media":
+        return set_media(m, cfg, req)
     elif op in ["nic_attach", "nic_detach"]:
         index = integer(req["index"], 1, 7)
         if op == "nic_detach":

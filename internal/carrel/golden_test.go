@@ -440,6 +440,7 @@ func goldenScenario(g *goldenRun) {
 	call("images", "iso_import", D{"name": "netinst", "url": "https://example.com/x.iso", "sha256": strings.Repeat("a", 64)}, alice)
 	call("images", "image_list", D{}, alice)
 	call("images", "image_delete", D{"name": "netinst", "confirm": "netinst"}, alice)
+	call("images", "machine_media", D{"machine": "api", "action": "eject"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

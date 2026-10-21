@@ -272,6 +272,24 @@
             "type": "boolean",
             "default": true,
             "description": "false: no public SSH port; the machine is reached through the site's SSH jump host (ssh -J jump@<origin>), so it uses none of the tenant's 10 public ports. The returned ssh_config sets ProxyJump."
+          },
+          "iso": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "Install from one of this tenant's ISOs (iso_import) instead of an image: an empty disk with the ISO attached, no cloud-init, no SSH keys. The machine stays installing until machine_media ejects the ISO; machine_get shows the address, gateway and DNS to type into the installer (no DHCP). Default size small."
+          },
+          "firmware": {
+            "enum": [
+              "bios",
+              "uefi"
+            ],
+            "default": "bios",
+            "description": "With iso: the firmware the installer expects."
+          },
+          "tpm": {
+            "type": "boolean",
+            "default": false,
+            "description": "With iso and firmware uefi: a TPM 2.0, for systems such as Windows 11."
           }
         },
         "required": [
@@ -537,6 +555,71 @@
         },
         "required": [
           "machine"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_media",
+      "description": "Eject the installer ISO from a machine installed from an ISO, which marks it ready, or insert one of the tenant's ISOs again (rescue). Only for machines created with iso.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "action": {
+            "enum": [
+              "eject",
+              "insert"
+            ]
+          },
+          "iso": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "machine",
+          "action"
         ],
         "additionalProperties": false
       },
@@ -3436,6 +3519,7 @@
     "machine_delete",
     "machine_power",
     "machine_resize",
+    "machine_media",
     "machine_metrics",
     "network_create",
     "network_list",
@@ -3516,6 +3600,7 @@
     "iso_import",
     "machine_create",
     "machine_delete",
+    "machine_media",
     "machine_migrate",
     "machine_nic_attach",
     "machine_nic_detach",
@@ -3551,6 +3636,7 @@
     "iso_import",
     "machine_create",
     "machine_delete",
+    "machine_media",
     "machine_migrate",
     "machine_nic_attach",
     "machine_nic_detach",
