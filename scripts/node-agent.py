@@ -6,6 +6,7 @@ passthrough operations. Only tagged carrel tenant VMIDs may be changed. The
 control plane owns authorization and quotas; this boundary owns host integrity.
 """
 
+import contextlib
 import fcntl
 import hashlib
 import http.client
@@ -1076,9 +1077,14 @@ def bounded(args, out, limit, timeout):
     with subprocess.Popen([str(a) for a in args], stdout=subprocess.PIPE, start_new_session=True) as p:
         expired = threading.Event()
 
+        def kill():
+            # The group may be gone already; that must not hide the error.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(p.pid, 9)
+
         def expire():
             expired.set()
-            os.killpg(p.pid, 9)
+            kill()
 
         timer = threading.Timer(timeout, expire)
         timer.start()
@@ -1091,7 +1097,7 @@ def bounded(args, out, limit, timeout):
                 out.write(chunk)
             p.wait()
         except BaseException:
-            os.killpg(p.pid, 9)
+            kill()
             raise
         finally:
             timer.cancel()
