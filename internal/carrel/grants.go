@@ -20,7 +20,10 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 			g["verification"] = "recorded_route"
 		}
 	case "domains":
-		g["url"] = "https://" + str(g["name"])
+		// A catch-all name is no address one can open.
+		if g["sub"] != "*" {
+			g["url"] = "https://" + str(g["name"])
+		}
 		if g["state"] == "ready" {
 			g["verification"] = "routing_configured"
 		}
