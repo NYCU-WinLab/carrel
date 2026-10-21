@@ -535,3 +535,12 @@ def test_the_jump_host_reaches_port_22_of_every_machine(monkeypatch, tmp_path):
     assert "tcp dport 22 dnat to 10.200.0.4" in module.ports_nft({"ports": []}, "140.113.60.184")
     (tmp_path / "site.json").write_text(json.dumps({"exit_nodes": ["x"]}))
     assert "10.200.0.4" not in module.ports_nft({"ports": []}, "140.113.60.184")
+
+
+def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
+    module = load("jump-sync.py")
+    line = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22" ssh-ed25519 AAAA'
+    for bad in [line.replace("10.200.1.10", "10.200.١.10"), line + " " + line, line + "\x1c", line]:
+        with pytest.raises(ValueError):
+            module.check(bad)  # the last one lacks its final newline
+    assert module.check("") == ""

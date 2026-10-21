@@ -18,14 +18,16 @@ STATE = Path("/var/lib/carrel-jump")
 TARGET = r'permitopen="10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d):22"'
 LINE = re.compile(
     r'restrict,port-forwarding,command="/usr/sbin/nologin",' + TARGET + "(?:," + TARGET + ")*"
-    r" (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,3}"
+    r" (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,3}",
+    re.ASCII,
 )
 
 
 def check(text):
-    if not isinstance(text, str) or len(text) > 4_000_000:
+    if not isinstance(text, str) or len(text) > 16_000_000 or (text and not text.endswith("\n")):
         raise ValueError("expected authorized keys text")
-    for line in text.splitlines():
+    # sshd splits on newlines only; so does this check.
+    for line in text[:-1].split("\n") if text else []:
         if not LINE.fullmatch(line):
             raise ValueError("refusing an authorized keys line")
     return text
@@ -39,8 +41,8 @@ def write(path, content):
 
 
 def main():
-    raw = sys.stdin.buffer.read(4_000_101)
-    if len(raw) > 4_000_100:
+    raw = sys.stdin.buffer.read(16_000_101)
+    if len(raw) > 16_000_100:
         raise ValueError("request too large")
     request = json.loads(raw)
     op = request.pop("op", None) if isinstance(request, dict) else None
@@ -56,7 +58,7 @@ def main():
         changed = not KEYS.exists() or KEYS.read_text() != text
         if changed:
             write(KEYS, text)
-    return {"changed": changed, "sha256": hashlib.sha256(text.encode()).hexdigest(), "keys": len(text.splitlines())}
+    return {"changed": changed, "sha256": hashlib.sha256(text.encode()).hexdigest(), "keys": text.count("\n")}
 
 
 if __name__ == "__main__":

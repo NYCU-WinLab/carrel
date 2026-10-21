@@ -165,13 +165,18 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "ssh_key_add":
 		validateKeys([]any{a["key"]})
 		id := digest(strings.Fields(str(a["key"]))[1])[:16]
+		if e.S.Get("keys", fmt.Sprintf("%d-%s", n, id)) == nil && len(rowsOf[sshKey](e.S, "keys", n)) >= maxSavedKeys {
+			fail("quota_exceeded", fmt.Sprintf("A tenant saves at most %d keys", maxSavedKeys), D{"recovery": "revise_request"})
+		}
 		if !dry {
 			e.Put("keys", fmt.Sprintf("%d-%s", n, id), n, D{"id": id, "key": a["key"]})
+			e.syncJumpNow()
 		}
 		return D{"id": id, "dry_run": dry, "quota_after": e.Quota(t)}
 	case "ssh_key_remove":
 		if !dry {
 			e.S.Remove("keys", fmt.Sprintf("%d-%s", n, str(a["id"])))
+			e.syncJumpNow()
 		}
 		return D{"dry_run": dry, "quota_after": e.Quota(t)}
 	case "machine_list", "machine_get":

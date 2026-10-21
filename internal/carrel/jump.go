@@ -69,6 +69,17 @@ func jumpAuthorizedKeys(s *Store) string {
 
 func (e *Execution) jumpEnabled() bool { return boolean(e.P.Config["ssh_jump"]) }
 
+// maxSavedKeys bounds ssh_key_add, which also keeps the jump file small.
+const maxSavedKeys = 50
+
+// syncJumpNow sends a key change to the jump host at once instead of with
+// the next reconcile.
+func (e *Execution) syncJumpNow() {
+	if e.jumpEnabled() {
+		e.SyncJump(jumpAuthorizedKeys(e.S))
+	}
+}
+
 // SyncJump sends the jump host its keys. A jump host that cannot be reached
 // costs members only that path, so it does not fail the reconcile.
 func (e *Execution) SyncJump(keys string) any {

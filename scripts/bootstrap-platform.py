@@ -64,7 +64,7 @@ def ct_template_file(name, digest, site):
     return f"{storage}:vztmpl/{name}"
 
 
-def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
+def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12, nameserver="1.1.1.1", firewall=False):
     config = Path(f"/etc/pve/lxc/{vmid}.conf")
     if config.exists():
         if f"hostname: {name}\n" not in config.read_text() or "carrel-infra" not in config.read_text():
@@ -88,7 +88,7 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
         "--swap",
         "0",
         "--rootfs",
-        f"{storage}:12",
+        f"{storage}:{disk}",
         "--onboot",
         "1",
         "--startup",
@@ -98,9 +98,11 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
         "--net0",
         # The infra bridge runs at the tenant MTU; a 1500-byte CT NIC there
         # drops large replies to clients that reach it directly (PLAN 15.15).
-        f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth" + (",mtu=1450" if bridge == "vmbr98" else ""),
+        f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth"
+        + (",mtu=1450" if bridge == "vmbr98" or bridge.startswith("t") else "")
+        + (",firewall=1,rate=25" if firewall else ""),
         "--nameserver",
-        "1.1.1.1",
+        nameserver,
         "--ssh-public-keys",
         key,
     )
@@ -174,7 +176,39 @@ GatewayPorts no
 AllowTcpForwarding local
 LogLevel VERBOSE
 MaxStartups 10:30:100
+# Members share the campus NAT: one mistyped key must not lock out the lab.
+PerSourcePenaltyExemptList 140.113.0.0/16
 LoginGraceTime 20
+"""
+
+
+# CT 102's own firewall (issue #98): even with sshd broken into, it keeps
+# its address (ipfilter) and reaches only SSH of tenant machines, DNS and
+# package mirrors.
+JUMP_FIREWALL = """[OPTIONS]
+enable: 1
+ipfilter: 1
+macfilter: 1
+dhcp: 0
+ndp: 0
+radv: 0
+policy_in: DROP
+policy_out: DROP
+
+[IPSET ipfilter-net0]
+10.200.0.4
+
+[RULES]
+IN ACCEPT -p tcp -dport 22
+OUT ACCEPT -dest 10.200.0.0/16 -p tcp -dport 22
+OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53
+OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53
+OUT DROP -dest 10.0.0.0/8
+OUT DROP -dest 172.16.0.0/12
+OUT DROP -dest 192.168.0.0/16
+OUT DROP -dest 100.64.0.0/10
+OUT ACCEPT -p tcp -dport 80
+OUT ACCEPT -p tcp -dport 443
 """
 
 
@@ -296,7 +330,8 @@ iface vmbr98 inet static
     caddy(101)
     infra = [100, 101]
     if config.get("ssh_jump"):
-        ct(102, "carrel-jump", "10.200.0.4", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template)
+        write("/etc/pve/firewall/102.fw", JUMP_FIREWALL)
+        ct(102, "carrel-jump", "10.200.0.4", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template, firewall=True)
         packages(102, "jump")
         jump(102)
         infra.append(102)

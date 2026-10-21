@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -40,5 +41,17 @@ func TestAMachineWithoutAPublicPortConnectsThroughTheJumpHost(t *testing.T) {
 	withPort := e.PublicMachine(m, []portGrant{{VMID: 10100, Port: 22, Proto: "tcp", PublicPort: 20010}})
 	if withPort["ssh"] != "ssh -p 20010 user@carrel.winlab.tw" || withPort["ssh_jump"] == nil {
 		t.Fatal(withPort)
+	}
+}
+
+func TestSavedKeysAreBounded(t *testing.T) {
+	p, _ := fixture(t)
+	ctx, alice := context.Background(), person("alice", false)
+	for i := range maxSavedKeys + 1 {
+		key := fmt.Sprintf("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI%040d", i)
+		r := p.Execute(ctx, "ssh_key_add", D{"key": key}, alice)
+		if (i < maxSavedKeys) != (r["ok"] == true) {
+			t.Fatalf("key %d: %v", i, r)
+		}
 	}
 }
