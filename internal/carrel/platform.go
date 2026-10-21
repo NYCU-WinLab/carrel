@@ -116,7 +116,9 @@ func (e *Execution) Call(r D, target ...string) any {
 		// The files a start carries are not part of what it asks for.
 		identity := without(r, "machine", "cloud_init")
 		identity["vmid"] = obj(r["machine"])["vmid"]
-		r = merge(r, D{"request_id": digest(string(encoded([]any{e.Op["id"], e.Op["generation"], to, identity})))})
+		// The node's name, not its SSH alias: renaming an alias keeps the
+		// journal of an operation in flight (issue #45).
+		r = merge(r, D{"request_id": digest(string(encoded([]any{e.Op["id"], e.Op["generation"], e.P.nodeNameOf(to), identity})))})
 	}
 	ctx := e.Ctx
 	if e.Op != nil {
