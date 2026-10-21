@@ -331,3 +331,51 @@ def test_inventory_says_whether_the_node_routes_tenant_traffic(monkeypatch, tmp_
     # Before the first tenant there is no VRF yet: unknown, not a fault.
     vrf.rmdir()
     assert module.tenant_route() is None
+
+
+def test_vip_probe_touches_only_this_nodes_entries_of_registered_vips():
+    module = load("node-agent.py")
+    state = {"vips": [{"address": "10.200.3.251", "tenant_n": 3, "vmids": [1]}]}
+    targets = module.vip_targets(state)
+    assert targets == [{"address": "10.200.3.251", "dev": "t003"}]
+    with pytest.raises(ValueError):
+        module.vip_targets({"vips": [{"address": "10.200.3.12", "tenant_n": 3}]})
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return json.dumps(entries) if args[1] == "-j" else ""
+
+    for entries, probed in [
+        ([{"dst": "10.200.3.251", "lladdr": "02:ca:03:04:00:01", "state": ["STALE"]}], True),
+        ([{"dst": "10.200.3.251", "lladdr": "02:ca:03:04:00:01", "state": ["REACHABLE"]}], True),
+        (
+            [
+                {
+                    "dst": "10.200.3.251",
+                    "lladdr": "02:ca:03:04:00:01",
+                    "state": ["NOARP"],
+                    "flags": ["extern_learn"],
+                }
+            ],
+            False,
+        ),
+        ([{"dst": "10.200.3.251", "lladdr": "02:ca:03:04:00:01", "state": ["PROBE"]}], False),
+        ([{"dst": "10.200.3.251", "state": ["FAILED"]}], False),
+        ([], False),
+    ]:
+        calls.clear()
+        assert bool(module.vip_probe_once(targets, run=run)) == probed
+        if probed:
+            assert calls[-1] == (
+                "ip",
+                "neigh",
+                "change",
+                "10.200.3.251",
+                "dev",
+                "t003",
+                "lladdr",
+                "02:ca:03:04:00:01",
+                "nud",
+                "probe",
+            )

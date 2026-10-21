@@ -694,8 +694,64 @@ WantedBy=multi-user.target
         if write("/etc/systemd/system/carrel-ports.service", unit):
             run("systemctl", "daemon-reload")
             run("systemctl", "enable", "carrel-ports")
+    write(STATE / "vips.json", json.dumps(vip_targets(state)))
+    if write("/etc/systemd/system/carrel-vip-probe.service", VIP_PROBE_UNIT):
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     return {"changed": changed}
+
+
+# Virtual addresses across nodes (issue #96). A remote EVPN neighbour entry is
+# NOARP, so the kernel ignores the new holder's gratuitous ARP and FRR never
+# learns the move while the old node still advertises its own entry. That
+# entry stays STALE as long as nothing uses it. Probing it every second lets it
+# fail within seconds of the address leaving; FRR withdraws the route and the
+# new holder's next gratuitous ARP is learned (measured on B09, 2026-10-21).
+VIP_PROBE_UNIT = """[Unit]
+Description=Carrel virtual address probe
+After=frr.service
+[Service]
+ExecStart=/usr/local/lib/carrel/node-agent.py vip-probe
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def vip_targets(state):
+    out = []
+    for vip in state.get("vips", []):
+        n = integer(vip["tenant_n"], 1, 254)
+        address = ipaddress.IPv4Address(vip["address"])
+        if address not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 251 <= int(address) % 256 <= 254:
+            raise ValueError("invalid virtual address")
+        out.append({"address": str(address), "dev": f"t{n:03d}"})
+    return sorted(out, key=lambda v: v["address"])
+
+
+def vip_probe_once(targets, run=run):
+    probed = []
+    for v in targets:
+        for entry in json.loads(run("ip", "-j", "neigh", "show", v["address"], "dev", v["dev"]) or "[]"):
+            # Only this node's own entry: remote ones are FRR's.
+            if "extern_learn" in entry.get("flags", []) or "lladdr" not in entry:
+                continue
+            if set(entry.get("state", [])) & {"REACHABLE", "STALE", "DELAY"}:
+                run("ip", "neigh", "change", v["address"], "dev", v["dev"], "lladdr", entry["lladdr"], "nud", "probe")
+                probed.append(v["address"])
+    return probed
+
+
+def vip_probe():
+    while True:
+        try:
+            path = STATE / "vips.json"
+            vip_probe_once(json.loads(path.read_text()) if path.exists() else [])
+        except Exception as e:  # noqa: BLE001 - the loop outlives one bad round
+            print(f"vip-probe: {type(e).__name__}", file=sys.stderr)
+        time.sleep(1)
 
 
 def keys(values):
@@ -1170,6 +1226,9 @@ def main():
 
 
 if __name__ == "__main__":
+    # Only the systemd unit passes an argument; the SSH forced command cannot.
+    if sys.argv[1:] == ["vip-probe"]:
+        vip_probe()
     try:
         main()
     except Exception as e:
