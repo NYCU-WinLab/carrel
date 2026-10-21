@@ -1721,6 +1721,127 @@
       }
     },
     {
+      "name": "iso_import",
+      "description": "Download an installer ISO into this tenant's images, from a public http(s) URL with its SHA-256. carrel's fetch container downloads it (public addresses only, at most 20 GB and the tenant's remaining images_gb, under 2 MB/s for 60 seconds aborts, 3 hours at most), checks the checksum and stores it read-only on the site's shared storage, private to the tenant. One import per tenant and three per site run at once; more wait. Waits up to 55 seconds; follow a longer download with operation_get.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 4096,
+            "pattern": "^https?://"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "name",
+          "url",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "image_list",
+      "description": "List this tenant's imported images and ISOs with their state, size and checksum, and the images_gb used and allowed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "image_delete",
+      "description": "Delete an imported image or ISO and free its images_gb. confirm must equal its name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "confirm": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "quota_request",
       "description": "Request a new total quota limit, with a reason and optional expiry date. amount is the requested total limit and must exceed the current limit within fixed address limits. Reusing an idempotency_key with the same request returns that request.",
       "inputSchema": {
@@ -1738,7 +1859,8 @@
               "domains",
               "networks",
               "snapshots",
-              "snapshot_gb"
+              "snapshot_gb",
+              "images_gb"
             ]
           },
           "amount": {
@@ -2045,7 +2167,8 @@
               "domains",
               "networks",
               "snapshots",
-              "snapshot_gb"
+              "snapshot_gb",
+              "images_gb"
             ]
           },
           "amount": {
@@ -3338,6 +3461,9 @@
     "snapshot_list",
     "snapshot_delete",
     "snapshot_rollback",
+    "iso_import",
+    "image_list",
+    "image_delete",
     "quota_request",
     "request_list",
     "audit_log",
@@ -3386,6 +3512,8 @@
     "deployment_apply",
     "domain_add",
     "domain_remove",
+    "image_delete",
+    "iso_import",
     "machine_create",
     "machine_delete",
     "machine_migrate",
@@ -3420,6 +3548,7 @@
     "deployment_apply",
     "domain_add",
     "domain_remove",
+    "iso_import",
     "machine_create",
     "machine_delete",
     "machine_migrate",

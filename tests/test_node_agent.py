@@ -666,3 +666,20 @@ def test_fetch_status_reports_progress_and_results(monkeypatch):
     assert module.fetch_status(job) == {"state": "running", "received": 1048576}
     assert module.fetch_status(job)["state"] == "done"
     assert module.fetch_status(job)["state"] == "failed"
+
+
+def test_image_delete_removes_only_the_tenants_file(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    folder = tmp_path / "template" / "iso"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(module, "content_storage", lambda kind: "shared")
+    monkeypatch.setattr(module, "storage_entry", lambda s: {"type": "nfs", "path": str(tmp_path)})
+    name = "carrel-t003-netinst-abababababab.iso"
+    (folder / name).write_text("x")
+    with pytest.raises(ValueError):
+        module.image_delete({"volume": name, "kind": "iso", "tenant_n": 4})
+    for bad in ["../../etc/passwd", "carrel-t003-x.iso", name.replace(".iso", ".exe")]:
+        with pytest.raises(ValueError):
+            module.image_delete({"volume": bad, "kind": "iso", "tenant_n": 3})
+    assert module.image_delete({"volume": name, "kind": "iso", "tenant_n": 3}) == {"state": "deleted"}
+    assert not (folder / name).exists()

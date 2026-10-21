@@ -436,6 +436,10 @@ func goldenScenario(g *goldenRun) {
 	call("drain", "node_drain", D{"node": "carrel01"}, admin)
 	call("drain", "node_undrain", D{"node": "carrel01"}, admin)
 	call("drain", "node_drain", D{"node": "carrel01"}, alice)
+
+	call("images", "iso_import", D{"name": "netinst", "url": "https://example.com/x.iso", "sha256": strings.Repeat("a", 64)}, alice)
+	call("images", "image_list", D{}, alice)
+	call("images", "image_delete", D{"name": "netinst", "confirm": "netinst"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

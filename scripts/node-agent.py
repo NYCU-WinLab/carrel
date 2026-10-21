@@ -1220,7 +1220,20 @@ def fetch_store(req):
                 partial.unlink(missing_ok=True)
         fetch_clean(req)
     lock_path.unlink(missing_ok=True)
-    return {"state": "stored", "volume": f"{storage}:{kind}/{name}"}
+    return {"state": "stored", "volume": f"{storage}:{kind}/{name}", "size": final.stat().st_size}
+
+
+def image_delete(req):
+    # A tenant's stored image (PLAN 7.8); the name must carry that tenant.
+    name, kind = req["volume"], req["kind"]
+    match = VOLUME.fullmatch(name) if isinstance(name, str) else None
+    if not match or kind not in ("iso", "import") or int(match[1]) != integer(req["tenant_n"], 1, 254):
+        raise ValueError("invalid volume")
+    entry = storage_entry(content_storage(kind))
+    if entry is None or "path" not in entry:
+        raise ValueError("the image storage is not a directory storage")
+    (Path(entry["path"]) / ("template/iso" if kind == "iso" else "import") / name).unlink(missing_ok=True)
+    return {"state": "deleted"}
 
 
 def fetch_clean(req):
@@ -1546,11 +1559,11 @@ def main():
             out = migrate_finish(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
-        elif op in ("fetch_start", "fetch_status", "fetch_store", "fetch_clean"):
+        elif op in ("fetch_start", "fetch_status", "fetch_store", "fetch_clean", "image_delete"):
             if not first_exit_node():
                 raise ValueError("fetches run on the first exit node")
             out = {"fetch_start": fetch_start, "fetch_status": fetch_status, "fetch_store": fetch_store,
-                   "fetch_clean": fetch_clean}[op](req)
+                   "fetch_clean": fetch_clean, "image_delete": image_delete}[op](req)
         elif op == "cloud_init_read":
             m = req["machine"]
             owned(m)

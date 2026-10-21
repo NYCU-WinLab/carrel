@@ -113,7 +113,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 	return D{"dry_run": dry, "quota_after": e.Quota(t)}
 }
 func validateDimension(dim string) {
-	if _, ok := DefaultQuota[dim]; !ok || dim == "images_gb" {
+	if _, ok := DefaultQuota[dim]; !ok {
 		fail("invalid", "Quota dimension is not available")
 	}
 }

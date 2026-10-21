@@ -290,6 +290,7 @@ func (o *Operations) apply(id string) {
 			}
 			e.PreparePublication()
 			e.PerformMigration()
+			e.PerformImport()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
@@ -304,6 +305,9 @@ func (o *Operations) apply(id string) {
 				}
 				if op["tool"] == "machine_migrate" {
 					result = merge(result, e.FinishMigration(t))
+				}
+				if op["tool"] == "iso_import" {
+					result = merge(result, e.FinishImport())
 				}
 				if op["tool"] == "deployment_apply" {
 					e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))
