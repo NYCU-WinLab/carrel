@@ -66,8 +66,10 @@ func TestExtractRejectsEscapes(t *testing.T) {
 		"absolute link": {{name: "l", link: "/etc", kind: tar.TypeSymlink}},
 		"outside link":  {{name: "l", link: "../..", kind: tar.TypeSymlink}},
 		"chained links": {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "evil", link: "d/up/d/up/../../../evil", kind: tar.TypeSymlink}, {name: "evil", body: "x", kind: tar.TypeReg}},
-		// Issue #33: a link through a link, even when nothing writes through it.
-		"link through a link":  {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "x", link: "d/up/d/up", kind: tar.TypeSymlink}},
+		// Issue #33: a link that leaves through another link, even when
+		// nothing writes through it, in either order.
+		"link through a link":  {{name: "d/", kind: tar.TypeDir}, {name: "d/up", link: "..", kind: tar.TypeSymlink}, {name: "x", link: "d/up/d/up/../..", kind: tar.TypeSymlink}},
+		"link loop":            {{name: "a", link: "b", kind: tar.TypeSymlink}, {name: "b", link: "a", kind: tar.TypeSymlink}},
 		"entry through a link": {{name: "d", link: ".", kind: tar.TypeSymlink}, {name: "d/f", body: "x", kind: tar.TypeReg}},
 		"hard link":            {{name: "a", body: "x", kind: tar.TypeReg}, {name: "b", link: "a", kind: tar.TypeLink}},
 		// The outer link first, the link it goes through after (review of #134).
@@ -166,5 +168,25 @@ func TestRedeployKeepsTheLiveReleaseOfAnOlderAgent(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(live, "index.js")); string(b) != "live" {
 		t.Fatal("the live release was removed")
+	}
+	if _, err := os.Stat(filepath.Join(a.state, "r1")); err != nil {
+		t.Fatal("the live release was not marked", err)
+	}
+}
+
+// pnpm's layout: links through links that stay inside the release deploy.
+func TestExtractAcceptsLinksThroughLinksInside(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "release")
+	err := extract(archive(t,
+		entry{name: ".pnpm/ts@5/nm/ts/bin/", kind: tar.TypeDir},
+		entry{name: ".pnpm/ts@5/nm/ts/bin/tsc", body: "tsc", kind: tar.TypeReg},
+		entry{name: "nm/.bin/tsc", link: "../ts/bin/tsc", kind: tar.TypeSymlink},
+		entry{name: "nm/ts", link: "../.pnpm/ts@5/nm/ts", kind: tar.TypeSymlink},
+	), dir, os.Getuid(), os.Getgid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "nm", ".bin", "tsc")); string(b) != "tsc" {
+		t.Fatalf("got %q", b)
 	}
 }

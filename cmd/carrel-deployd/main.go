@@ -314,14 +314,19 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 		return err
 	}
 	defer root.Close()
-	// links are the links made so far; walked are the paths their targets
-	// go through. A new link may not sit on an earlier walk, so the check
-	// does not depend on the order of the entries.
-	links, walked := map[string]bool{}, map[string]bool{}
+	// links maps each link the archive made to its target. Once every
+	// entry is in, each is resolved through the others (issue #33), so the
+	// order of the entries does not matter.
+	links := map[string]string{}
 	var total int64
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
+			for link := range links {
+				if err := resolvesInside(link, links); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		if err != nil {
@@ -335,7 +340,7 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 			return fmt.Errorf("entry %q leaves the release", h.Name)
 		}
 		for d := filepath.Dir(name); d != "."; d = filepath.Dir(d) {
-			if links[d] {
+			if _, ok := links[d]; ok {
 				return fmt.Errorf("entry %q goes through a link", h.Name)
 			}
 		}
@@ -368,11 +373,8 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 			}
 			continue
 		case tar.TypeSymlink:
-			if walked[name] {
-				return fmt.Errorf("link %q sits on the path of an earlier link", h.Name)
-			}
-			if err := linkInside(name, h.Linkname, links, walked); err != nil {
-				return err
+			if h.Linkname == "" || filepath.IsAbs(h.Linkname) {
+				return fmt.Errorf("link %q points outside the release", h.Name)
 			}
 			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
 				return err
@@ -380,7 +382,7 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 			if err := root.Symlink(h.Linkname, name); err != nil {
 				return err
 			}
-			links[name] = true
+			links[name] = h.Linkname
 		case tar.TypeLink:
 			return fmt.Errorf("hard link %q: releases may not contain hard links", h.Name)
 		default:
@@ -392,31 +394,37 @@ func extractAt(r io.Reader, parent *os.Root, name string, uid, gid int) error {
 	}
 }
 
-// linkInside walks a link's target from the link's directory, one name at
-// a time: it may not climb out of the release or pass through another link.
-func linkInside(name, target string, links, walked map[string]bool) error {
-	if target == "" || filepath.IsAbs(target) {
-		return fmt.Errorf("link %q points outside the release", name)
-	}
+// resolvesInside follows a link name by name, through the other links of
+// the archive, as the kernel would: it may never climb out of the release.
+// Links that refer to each other in a loop are refused too.
+func resolvesInside(link string, links map[string]string) error {
 	at := []string{}
-	if d := filepath.Dir(name); d != "." {
+	if d := filepath.Dir(link); d != "." {
 		at = strings.Split(d, "/")
 	}
-	for _, part := range strings.Split(target, "/") {
+	pending := strings.Split(links[link], "/")
+	for hops := 0; len(pending) > 0; {
+		part := pending[0]
+		pending = pending[1:]
 		switch part {
 		case "", ".":
 		case "..":
 			if len(at) == 0 {
-				return fmt.Errorf("link %q points outside the release", name)
+				return fmt.Errorf("link %q points outside the release", link)
 			}
 			at = at[:len(at)-1]
 		default:
 			at = append(at, part)
-			path := strings.Join(at, "/")
-			if links[path] {
-				return fmt.Errorf("link %q resolves through another link", name)
+			target, isLink := links[strings.Join(at, "/")]
+			if !isLink {
+				continue
 			}
-			walked[path] = true
+			if hops++; hops > 40 {
+				return fmt.Errorf("link %q loops", link)
+			}
+			// Continue from that link's directory with its target first.
+			at = at[:len(at)-1]
+			pending = append(strings.Split(target, "/"), pending...)
 		}
 	}
 	return nil
