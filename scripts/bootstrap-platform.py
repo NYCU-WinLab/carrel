@@ -198,15 +198,20 @@ policy_out: DROP
 [IPSET ipfilter-net0]
 10.200.0.4
 
+[IPSET tenant-gateways]
+TENANT_GATEWAYS
+
 [RULES]
 IN ACCEPT -p tcp -dport 22
-OUT ACCEPT -dest 10.200.0.0/16 -p tcp -dport 22
 OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53
 OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53
+# Not the infra network, the fetch network or any tenant network's gateway
+# (the node itself, issue #125), on any port.
 OUT DROP -dest 10.200.0.0/24
 OUT DROP -dest 10.200.255.0/24
-# Declared ports of machines without SSH (issue #94); sshd's permitopen and
-# each guest's firewall decide which ones.
+OUT DROP -dest +guest/tenant-gateways
+# Tenant machines: SSH (issue #98) and the declared ports of machines without
+# SSH (issue #94); sshd's permitopen and each guest's firewall decide which.
 OUT ACCEPT -dest 10.200.0.0/16 -p tcp
 OUT DROP -dest 10.0.0.0/8
 OUT DROP -dest 172.16.0.0/12
@@ -214,7 +219,7 @@ OUT DROP -dest 192.168.0.0/16
 OUT DROP -dest 100.64.0.0/10
 OUT ACCEPT -p tcp -dport 80
 OUT ACCEPT -p tcp -dport 443
-"""
+""".replace("TENANT_GATEWAYS", "\n".join(f"10.200.{n}.1" for n in range(1, 255)))
 
 
 def jump(vmid):
@@ -279,10 +284,12 @@ PEER_SSH
  }
  chain postrouting {
   type nat hook postrouting priority srcnat; policy accept;
-  ip saddr 10.200.0.0/24 oifname "vmbr0" masquerade
+  ip saddr 10.200.0.0/24 oifname "MANAGEMENT" masquerade
  }
 }
 """
+    # The management interface, which carries the infra CTs out (issue #56).
+    rules = rules.replace("MANAGEMENT", config.get("management_interface", config["underlay_interface"]))
     rules = rules.replace("UNDERLAY", "\n".join("  " + rule for rule in underlay(config, host)))
     rules = rules.replace("PEER_SSH\n", "".join("  " + rule + "\n" for rule in peer_ssh(config, host)))
     write("/etc/carrel/infra.nft", rules)
@@ -309,12 +316,21 @@ WantedBy=multi-user.target
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--admin-key", required=True)
+    p.add_argument("--admin-key")
+    p.add_argument("--firewall", action="store_true",
+                   help="Only rewrite the infra firewalls, for example after a node joins the site (issue #48)")
     a = p.parse_args()
     assert os.geteuid() == 0
     host = run("hostname", "-s", capture=True)
     config = json.loads(SITE.read_text())
     assert host == config["exit_nodes"][0], "run on the first exit node of the site file"
+    if a.firewall:
+        infra_firewall(config, host)
+        if config.get("ssh_jump"):
+            write("/etc/pve/firewall/102.fw", JUMP_FIREWALL, 0o640)  # pmxcfs takes 0640 only
+        return
+    if not a.admin_key:
+        p.error("--admin-key is required")
     storage = config["storage"]
     run("apt-get", "update", "-qq")
     run("apt-get", "install", "-y", "dnsmasq-base")

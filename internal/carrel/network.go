@@ -390,7 +390,8 @@ func (e *Execution) Reconcile() D {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				failures[i+1] = attempt(func() { results[i+1] = e.Call(request, n.Target) })
+				// Not first: the first node already applied this pass's SDN.
+				failures[i+1] = attempt(func() { results[i+1] = e.Call(merge(request, D{"first": false}), n.Target) })
 			}()
 		}
 		wg.Wait()

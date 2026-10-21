@@ -129,3 +129,24 @@ def test_a_node_must_hold_its_site_address(monkeypatch):
     # An older host with the same name, elsewhere (issue #48).
     with pytest.raises(SystemExit, match="not carrel01"):
         module.check_underlay("vmbr0", "192.168.19.102", "carrel01")
+
+
+def test_the_jump_host_drops_infra_and_gateways_before_it_reaches_tenants():
+    # Issue #125: first match wins, so every drop comes before the tenant accept.
+    rules = load("bootstrap-platform.py").JUMP_FIREWALL.splitlines()
+    accept = rules.index("OUT ACCEPT -dest 10.200.0.0/16 -p tcp")
+    for drop in [
+        "OUT DROP -dest 10.200.0.0/24",
+        "OUT DROP -dest 10.200.255.0/24",
+        "OUT DROP -dest +guest/tenant-gateways",
+    ]:
+        assert rules.index(drop) < accept
+    assert rules.index("OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53") < rules.index(
+        "OUT DROP -dest 10.200.0.0/24"
+    )
+    assert not [
+        r
+        for r in rules[: rules.index("OUT DROP -dest 10.200.0.0/24")]
+        if r.startswith("OUT ACCEPT") and "53" not in r
+    ]
+    assert "10.200.254.1" in rules and "10.200.0.1" not in rules

@@ -862,3 +862,16 @@ def test_checksums_of_shared_storage_are_rate_limited(monkeypatch, tmp_path):
     assert module.sha256_limited(path) == hashlib.sha256(data).hexdigest()
     # 2 MiB at 2 MiB/s: about a second, never at disk speed.
     assert time.monotonic() - started >= 0.5
+
+
+def test_only_the_first_node_reloads_sdn_for_links_its_reload_brings(monkeypatch):
+    # Issue #48: one cluster-wide reload per pass, not one per node.
+    module = load("node-agent.py")
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    assert module.sdn_owed(lambda: True, first=True)
+    assert not module.sdn_owed(lambda: False, first=False)
+    # The first node's reload brings the links after a few seconds.
+    checks = iter([True, True, True, False])
+    assert not module.sdn_owed(lambda: next(checks), first=False)
+    # They never come: this node reloads after waiting.
+    assert module.sdn_owed(lambda: True, first=False, wait=3)

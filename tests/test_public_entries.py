@@ -42,3 +42,18 @@ def test_no_public_entries_keeps_the_host_fully_protected():
     lines = rules({"protected_addresses": [EDGE]})
     assert not any(line.startswith("OUT ACCEPT") and EDGE in line for line in lines)
     assert f"OUT DROP -dest {EDGE}" in lines
+
+
+def test_a_public_entry_must_be_a_protected_public_host():
+    # Issue #28: a private range, a wider prefix or an unlisted host is refused.
+    for entry in ["10.0.0.0/8", "140.113.194.0/24", "140.113.60.184/32", "192.168.19.101/32"]:
+        try:
+            rules(
+                {
+                    "protected_addresses": [EDGE, "192.168.19.101/32"],
+                    "public_entries": [{"address": entry, "port": 443}],
+                }
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {entry}")
