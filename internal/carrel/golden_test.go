@@ -425,6 +425,10 @@ func goldenScenario(g *goldenRun) {
 	call("delete", "machine_delete", D{"machine": "box", "confirm": "box", "dry_run": true}, alice)
 	call("delete", "machine_delete", D{"machine": "box", "confirm": "box"}, alice)
 	call("admin", "tenant_suspend", D{"tenant": "bob"}, admin)
+
+	call("vips", "vip_add", D{"name": "api", "machines": []any{"api", "db"}}, alice)
+	call("vips", "vip_list", D{}, alice)
+	call("vips", "vip_remove", D{"name": "api"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

@@ -215,6 +215,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `app_rollback` | `app`; switches back to the previous release |
 | | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
+| Virtual addresses | `vip_add`, `vip_list`, `vip_remove` | `name`, `machines` (section 6.3) |
 | Insight | `machine_metrics` | CPU, memory, disk and network from the hypervisor |
 | | `audit_log` | own calls only |
 | Skills | `skills_list` | name, description, version, verified date |
@@ -469,6 +470,17 @@ Every tenant machine gets the security group of its tenant:
    accepted above this drop: today only TCP 443 on the public address (`140.113.60.184`), the
    HTTPS gateway the internet already reaches, so tenants can use carrel and lab sites by their
    public names (the hairpin in section 6.4). Every other port on that address stays dropped.
+
+**Virtual addresses** (issue #96): a highly available service inside a tenant (Kubernetes
+control planes, a database pair) needs one address that moves between machines. `vip_add` keeps
+`.251` to `.254` of the tenant network for that, 4 per tenant, outside every machine address. The
+address joins the `ipfilter` set of each listed machine and nothing else changes: keepalived or
+kube-vip in the guests decides which machine holds it and announces the move with gratuitous ARP,
+and EVPN carries the new MAC to the other nodes. VRRP multicast is dropped with the rest of
+`224.0.0.0/4`, so keepalived runs with unicast peers. Inbound rules have no destination, so a
+holder accepts at the virtual address what it accepts at its own. Deleting a machine drops it from
+the holders and keeps the address. carrel neither balances load nor checks health; a load balancer
+object stays a later option.
 
 `ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports

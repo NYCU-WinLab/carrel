@@ -255,5 +255,9 @@ func (s *Store) Desired() D {
 			return o["state"] != "deleting" && !deleting[integer(o["vmid"])] && !addresses[str(o["target"])] && !addresses[strings.TrimSuffix(str(o["source"]), "/32")]
 		})
 	}
+	// Sent only when a tenant has one, so requests without any stay as they were.
+	if vips := filter(s.Objects("vips"), func(o D) bool { return o["state"] != "deleting" }); len(vips) > 0 {
+		state["vips"] = vips
+	}
 	return state
 }
