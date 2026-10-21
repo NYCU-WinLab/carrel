@@ -85,7 +85,18 @@ func (e *Execution) PerformMigration() {
 	bw := intAt(e.P.Config, "migration_bwlimit_kib", 51200)
 	e.Call(D{"op": "migrate_prepare", "machine": m, "cloud_init": e.cloudInitFiles(m)}, to.Target)
 	e.Call(D{"op": "migrate", "machine": m, "target": to.Name, "bwlimit": bw}, from.Target)
-	e.Call(D{"op": "migrate_finish", "machine": m, "bwlimit": bw}, to.Target)
+	// The machine runs on the target now: record it before the disk goes
+	// back to local storage, so a failure there leaves the record right.
+	func() {
+		e.P.writer.Lock()
+		defer e.P.writer.Unlock()
+		if current := e.S.Get("machines", str(plan["vmid"])); current != nil {
+			current["node"] = to.Name
+			e.Put("machines", current["vmid"], integer(current["tenant_n"]), current)
+			e.P.invalidateInventory()
+		}
+	}()
+	e.Call(D{"op": "migrate_finish", "machine": merge(m, D{"node": to.Name}), "bwlimit": bw}, to.Target)
 }
 
 // FinishMigration records the new node under the writer lock.
@@ -96,9 +107,6 @@ func (e *Execution) FinishMigration(t D) D {
 		fail("not_found", "The machine was deleted while moving")
 	}
 	from, _ := e.nodeNamed(str(plan["from"]))
-	m["node"] = plan["to"]
-	e.Put("machines", m["vmid"], integer(t["n"]), m)
-	e.P.invalidateInventory()
 	e.Reconcile()
 	// The files on the old node are a copy: best effort, collected again by
 	// the next move from there.

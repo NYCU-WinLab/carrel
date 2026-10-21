@@ -1894,7 +1894,7 @@
     },
     {
       "name": "machine_migrate",
-      "description": "Admin: move a machine to another node of the site, online when it runs (PLAN 7.10). A VM that is still a linked clone of its node's template moves its disk through the site's shared storage once; later moves copy the disk directly. The VM's stored cloud-init files go to the target first, so cloud-init does not run again. Refused while the machine has snapshots. Waits up to 55 seconds; a disk copy usually takes longer, so follow the operation with operation_get.",
+      "description": "Admin: move a machine to another node of the site (PLAN 7.10). A running VM moves online; a running CT restarts on the target. A VM that is still a linked clone of its node's template moves its disk through the site's shared storage once; later moves copy the disk directly. The VM's stored cloud-init files go to the target first, so cloud-init does not run again. Refused while the machine has snapshots. Waits up to 55 seconds; a disk copy usually takes longer, so follow the operation with operation_get.",
       "inputSchema": {
         "type": "object",
         "properties": {

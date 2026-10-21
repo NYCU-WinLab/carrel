@@ -454,6 +454,13 @@ def test_migrate_unlinks_a_linked_clone_through_shared_storage_and_is_idempotent
         51200,
         "--online",
     )
+    # A move that stopped after the disk reached the shared storage resumes
+    # with the migration, not a second disk move.
+    nodes.joinpath("carrel02", "qemu-server", "10100.conf").rename(conf)
+    cfg["scsi0"] = "shared:10100/vm-10100-disk-0.qcow2,size=10G"
+    calls.clear()
+    module.migrate({"machine": vm, "target": "carrel02"})
+    assert [c[:2] for c in calls] == [("qm", "status"), ("qm", "migrate")]
     # A retry after the move does nothing.
     calls.clear()
     assert module.migrate({"machine": vm, "target": "carrel02"}) == {"state": "moved"} and calls == []
@@ -484,3 +491,16 @@ def test_migrate_unlinks_a_linked_clone_through_shared_storage_and_is_idempotent
     monkeypatch.setattr(module, "NODE", "carrel02")
     with pytest.raises(ValueError):
         module.cloud_init_remove({"machine": vm})
+
+
+def test_delete_refuses_a_machine_that_moved_to_another_node(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    nodes = tmp_path / "nodes"
+    (nodes / "carrel02" / "qemu-server").mkdir(parents=True)
+    (nodes / "carrel02" / "qemu-server" / "10100.conf").write_text("x")
+    monkeypatch.setattr(module, "PVE_NODES", nodes)
+    vm = dict(MACHINE, vmid=10100, kind="vm", name="linked")
+    with pytest.raises(ValueError, match="another node"):
+        module.action({"machine": vm, "action": "delete", "confirm": "linked"})
+    (nodes / "carrel02" / "qemu-server" / "10100.conf").unlink()
+    assert module.action({"machine": vm, "action": "delete", "confirm": "linked"}) == {"state": "absent"}

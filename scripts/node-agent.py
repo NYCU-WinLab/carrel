@@ -970,6 +970,13 @@ def migrate_prepare(req):
     if m["kind"] == "vm":
         if not req.get("cloud_init"):
             raise ValueError("cloud-init files required to move a VM")
+        if where == NODE:
+            return {"state": "ready"}
+        # The VM has never booted here: a file left by an earlier VM with
+        # this VMID, or an older copy of this one, gives way to the stored bytes.
+        vmid = machine(m)
+        for kind in ("user", "network"):
+            (SNIPPETS / f"carrel-{vmid}-{kind}.json").unlink(missing_ok=True)
         restore_cloud_init(m, req["cloud_init"])
     return {"state": "ready"}
 
@@ -989,10 +996,11 @@ def migrate(req):
     bw = migration_bwlimit(req)
     if m["kind"] == "vm":
         running = "running" in run("qm", "status", vmid)
-        volume = cfg["scsi0"].split(",")[0]
-        if "/" in volume.partition(":")[2]:
+        storage, _, name = cfg["scsi0"].split(",")[0].partition(":")
+        if storage == storage_id() and name.startswith("base-"):
             # Proxmox refuses to migrate a linked clone on local storage: its
             # disk goes to the shared storage first, which also unlinks it.
+            # A retry finds it there already and goes straight to migrating.
             transit = content_storage("images")
             entry = storage_entry(transit)
             if entry is None or entry["type"] not in ("nfs", "cifs") or "images" not in entry.get("content", ""):
@@ -1221,6 +1229,9 @@ def power_action(m, cfg, op):
 def action(req):
     m = req["machine"]
     if req["action"] == "delete" and not any(Path(f"/etc/pve/{kind}/{machine(m)}.conf").exists() for kind in ("qemu-server", "lxc")):
+        # Absent here is not absent: a move may have left it on another node.
+        if any(PVE_NODES.glob(f"*/*/{machine(m)}.conf")):
+            raise ValueError("machine is on another node")
         return {"state": "absent"}
     cfg = owned(m, allow_provisioning=req["action"] == "delete")
     cmd = "qm" if m["kind"] == "vm" else "pct"
