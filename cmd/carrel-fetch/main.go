@@ -34,11 +34,12 @@ type job struct {
 }
 
 type result struct {
-	OK     bool   `json:"ok"`
-	Size   int64  `json:"size,omitempty"`
-	SHA256 string `json:"sha256,omitempty"`
-	Code   string `json:"code,omitempty"`
-	Error  string `json:"error,omitempty"`
+	OK          bool   `json:"ok"`
+	Size        int64  `json:"size,omitempty"`
+	VirtualSize int64  `json:"virtual_size,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Code        string `json:"code,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 const (
@@ -232,49 +233,53 @@ func fetch(j job) (result, error) {
 		os.Remove(j.Out)
 		return result{}, refusal{"checksum_mismatch", "the file does not match its SHA-256"}
 	}
+	r := result{OK: true, Size: n, SHA256: sum}
 	if j.Format != "iso" {
-		if err := checkImage(j.Out, j.Format); err != nil {
+		virtual, err := checkImage(j.Out, j.Format)
+		if err != nil {
 			os.Remove(j.Out)
 			return result{}, err
 		}
+		r.VirtualSize = virtual
 	}
-	return result{OK: true, Size: n, SHA256: sum}, nil
+	return r, nil
 }
 
 // checkImage refuses a disk image that names other files or claims another
 // format: a backing file could copy another tenant's disk into this one.
-func checkImage(path, format string) error {
+func checkImage(path, format string) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", "-f", format, path).Output()
 	if err != nil {
-		return refusal{"image_refused", "qemu-img cannot read the file as " + format}
+		return 0, refusal{"image_refused", "qemu-img cannot read the file as " + format}
 	}
 	var info map[string]any
 	if json.Unmarshal(out, &info) != nil {
-		return refusal{"image_refused", "qemu-img gave no answer"}
+		return 0, refusal{"image_refused", "qemu-img gave no answer"}
 	}
 	probe, err := exec.CommandContext(ctx, "qemu-img", "info", "--output=json", path).Output()
 	var probed map[string]any
 	if err != nil || json.Unmarshal(probe, &probed) != nil || probed["format"] != format {
-		return refusal{"image_refused", "the file is not " + format}
+		return 0, refusal{"image_refused", "the file is not " + format}
 	}
 	if info["backing-filename"] != nil || info["full-backing-filename"] != nil || info["backing-filename-format"] != nil {
-		return refusal{"image_refused", "images with a backing file are refused"}
+		return 0, refusal{"image_refused", "images with a backing file are refused"}
 	}
 	if specific, ok := info["format-specific"].(map[string]any); ok {
 		data, _ := specific["data"].(map[string]any)
 		if data["data-file"] != nil || data["encrypt"] != nil || data["encrypted"] == true {
-			return refusal{"image_refused", "images with a data file or encryption are refused"}
+			return 0, refusal{"image_refused", "images with a data file or encryption are refused"}
 		}
 	}
 	if info["encrypted"] == true {
-		return refusal{"image_refused", "encrypted images are refused"}
+		return 0, refusal{"image_refused", "encrypted images are refused"}
 	}
-	if size, _ := info["virtual-size"].(float64); size > maxVirtualGB*(1<<30) {
-		return refusal{"image_refused", "the virtual size is over 1000 GB"}
+	size, _ := info["virtual-size"].(float64)
+	if size <= 0 || size > maxVirtualGB*(1<<30) {
+		return 0, refusal{"image_refused", "the virtual size is missing or over 1000 GB"}
 	}
-	return nil
+	return int64(size), nil
 }
 
 func main() {

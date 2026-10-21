@@ -306,7 +306,7 @@ func (o *Operations) apply(id string) {
 				if op["tool"] == "machine_migrate" {
 					result = merge(result, e.FinishMigration(t))
 				}
-				if op["tool"] == "iso_import" {
+				if op["tool"] == "iso_import" || op["tool"] == "image_import" {
 					result = merge(result, e.FinishImport())
 				}
 				if op["tool"] == "deployment_apply" {

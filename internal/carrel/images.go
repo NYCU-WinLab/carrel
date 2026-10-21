@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -28,11 +29,16 @@ type imageRecord struct {
 	State       string `json:"state"`
 	TenantN     int    `json:"tenant_n"`
 	URL         string `json:"url"`
+	VirtualSize int64  `json:"virtual_size,omitempty"`
 	Volume      string `json:"volume,omitempty"`
 }
 
 func (r imageRecord) public() D {
-	return D{"name": r.Name, "kind": r.Kind, "sha256": r.SHA256, "size_bytes": r.Size, "state": r.State, "volume": orNil(r.Volume), "created_at": r.CreatedAt}
+	out := D{"name": r.Name, "kind": r.Kind, "sha256": r.SHA256, "size_bytes": r.Size, "state": r.State, "volume": orNil(r.Volume), "created_at": r.CreatedAt}
+	if r.VirtualSize > 0 {
+		out["virtual_size_bytes"] = r.VirtualSize
+	}
+	return out
 }
 
 func (r imageRecord) file() string {
@@ -123,6 +129,12 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 		fail("invalid", "This site has no image fetcher", D{"recovery": "revise_request"})
 	}
 	kind := "iso"
+	if tool == "image_import" {
+		kind = textAt(a, "format", "qcow2")
+		if kind != "qcow2" && kind != "raw" {
+			fail("invalid", "format is qcow2 or raw")
+		}
+	}
 	name, url, sum := str(a["name"]), str(a["url"]), str(a["sha256"])
 	if !labelPattern.MatchString(name) {
 		fail("invalid", "Name must be a lowercase label")
@@ -183,7 +195,7 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 // PerformImport waits for the download outside the writer lock, then stores
 // the file. A failure removes the record and the staged file.
 func (e *Execution) PerformImport() {
-	if e.Op["tool"] != "iso_import" || e.Op["import"] == nil {
+	if (e.Op["tool"] != "iso_import" && e.Op["tool"] != "image_import") || e.Op["import"] == nil {
 		return
 	}
 	id := str(obj(e.Op["import"])["id"])
@@ -210,6 +222,7 @@ func (e *Execution) PerformImport() {
 		e.P.Operations.Save(e.Op)
 	}()
 	misses := 0
+	virtual := int64(0)
 	for {
 		var status D
 		if f := attempt(func() { status = obj(e.Call(D{"op": "fetch_status", "job": r.Job}, target)) }); f != nil {
@@ -222,6 +235,7 @@ func (e *Execution) PerformImport() {
 			misses = 0
 		}
 		if status["state"] == "done" {
+			virtual = int64(num(obj(status["result"])["virtual_size"]))
 			break
 		}
 		if status["state"] == "failed" {
@@ -243,7 +257,7 @@ func (e *Execution) PerformImport() {
 	e.P.writer.Lock()
 	defer e.P.writer.Unlock()
 	if cur, ok := rowOf[imageRecord](e.S, "images", id); ok {
-		cur.State, cur.Volume = "ready", str(stored["volume"])
+		cur.State, cur.Volume, cur.VirtualSize = "ready", str(stored["volume"]), virtual
 		if s := int64(num(stored["size"])); s > 0 {
 			cur.Size = s
 		}
@@ -354,4 +368,27 @@ func lastDot(s string) int {
 		}
 	}
 	return 0
+}
+
+// ImportedMachineSpec is a managed VM whose boot disk is one of the
+// tenant's cloud images (image "tenant:<name>"). It needs cloud-init and
+// python3 in the image for keys, addresses and readiness reports.
+func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
+	name := strings.TrimPrefix(str(a["image"]), "tenant:")
+	r, ok := e.imageNamed(integer(t["n"]), name)
+	if !ok || r.Kind == "iso" || r.State != "ready" {
+		fail("not_found", "No ready cloud image with that name in this tenant; import one with image_import")
+	}
+	if textAt(a, "kind", "vm") != "vm" {
+		fail("invalid", "Only a VM boots a cloud image")
+	}
+	least := int((r.VirtualSize + GiB - 1) / GiB)
+	if a["disk_gb"] != nil && integer(a["disk_gb"]) < least {
+		fail("invalid", fmt.Sprintf("disk_gb must be at least the image's %d GiB", least), D{"recovery": "revise_request"})
+	}
+	if integer(m["disk_gb"]) < least {
+		m["disk_gb"] = least
+	}
+	m["image"], m["import_volume"], m["import_sha256"] = "tenant:"+r.Name, r.Volume, r.SHA256
+	return m
 }

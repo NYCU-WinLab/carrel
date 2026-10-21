@@ -160,3 +160,26 @@ func TestAMachineInstalledFromAnISO(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+func TestAVMBootsATenantCloudImage(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	tenant := p.Store.TenantN(1)
+	vol := "rs822rp1:import/carrel-t001-noble-cdcdcdcdcdcd.qcow2"
+	p.Store.Put("images", "img2", 1, decode(string(encoded(imageRecord{ID: "img2", TenantN: 1, Name: "noble", Kind: "qcow2", SHA256: strings.Repeat("cd", 32), Size: 600 << 20, VirtualSize: 12 << 30, State: "ready", Volume: vol}))))
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
+	m := e.MachineSpec(tenant, D{"name": "vm1", "image": "tenant:noble", "ssh_keys": []any{key}}, false)
+	if m["import_volume"] != vol || m["import_sha256"] != strings.Repeat("cd", 32) || integer(m["disk_gb"]) != 12 || m["image"] != "tenant:noble" {
+		t.Fatal(m)
+	}
+	if f := attempt(func() {
+		e.MachineSpec(tenant, D{"name": "vm2", "image": "tenant:noble", "disk_gb": 11, "ssh_keys": []any{key}}, false)
+	}); f == nil {
+		t.Fatal("a disk smaller than the image was accepted")
+	}
+	for _, bad := range []string{"tenant:missing", "tenant:netinst"} {
+		if f := attempt(func() { e.MachineSpec(tenant, D{"name": "vm3", "image": bad, "ssh_keys": []any{key}}, false) }); f == nil {
+			t.Fatal("accepted", bad)
+		}
+	}
+}
