@@ -120,6 +120,22 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 	}
 	call := func(step, tool string, a, who D) D { r := g.call(step, tool, a, who); flush(step); return r }
 	submit := func(step, tool string, a, who D) D { r := g.submit(step, tool, a, who); flush(step); return r }
+	// racy submits a job that the queue may or may not have picked up by the
+	// time the response is rendered (issue #115): those fields are masked.
+	racy := func(step, tool string, a, who D) D {
+		r := g.app.Call(context.Background(), tool, a, who)
+		shown := clone(r)
+		if op := obj(shown["operation"]); op != nil {
+			for _, k := range []string{"attempts", "phase", "state", "next_action", "poll_after_seconds", "updated_at"} {
+				if _, ok := op[k]; ok {
+					op[k] = "<racy>"
+				}
+			}
+		}
+		g.record(step, tool, shown)
+		flush(step)
+		return r
+	}
 	do := func(step string, f func()) { g.do(step, f); flush(step) }
 	rows := func(step string) {
 		for _, data := range g.p.Store.objectData("domains") {
@@ -293,7 +309,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 
 	// b: domain_remove waits behind an operation on the same machine.
 	g.p.Store.Put("operations", "busy", 1, D{"id": "busy", "tenant_n": 1, "tool": "machine_power", "state": "running", "phase": "waiting_for_guest", "machine_target": D{"vmid": web["vmid"]}})
-	r = submit("b", "domain_remove", D{"name": "act1.alice.winlab.tw", "wait_seconds": 0}, alice)
+	r = racy("b", "domain_remove", D{"name": "act1.alice.winlab.tw", "wait_seconds": 0}, alice)
 	wait("b", opOf(r), "waiting_for_machine_operation", "succeeded", "failed")
 	opRow("b", opOf(r))
 	g.p.Store.Remove("operations", "busy")
