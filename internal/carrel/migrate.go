@@ -111,5 +111,5 @@ func (e *Execution) FinishMigration(t D) D {
 	// The files on the old node are a copy: best effort, collected again by
 	// the next move from there.
 	_ = attempt(func() { e.Call(D{"op": "cloud_init_remove", "machine": m}, from.Target) })
-	return D{"machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "from": plan["from"], "to": plan["to"]}
+	return D{"machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "from": plan["from"], "to": plan["to"], "state": "moved"}
 }
