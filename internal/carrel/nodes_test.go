@@ -393,7 +393,8 @@ func TestPlacementSkipsANodeThatCannotRouteTenantTraffic(t *testing.T) {
 func TestNodeRefusalsAndNamesAreChecked(t *testing.T) {
 	outage := Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
 	full := Failure{D{"ok": false, "error": D{"code": "capacity_exhausted"}}}
-	if moreTelling(moreTelling(nil, full), outage) != any(full) || moreTelling(moreTelling(nil, outage), full) != any(full) {
+	code := func(f any) any { return obj(f.(Failure).Result["error"])["code"] }
+	if code(moreTelling(moreTelling(nil, full), outage)) != "capacity_exhausted" || code(moreTelling(moreTelling(nil, outage), full)) != "capacity_exhausted" {
 		t.Fatal("an outage hid a capacity refusal")
 	}
 	if checkInventoryNode(D{"node": "carrel02"}, nodeRef{"carrel01", "carrel-node"}) == nil {
