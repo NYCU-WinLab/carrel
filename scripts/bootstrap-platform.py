@@ -64,7 +64,7 @@ def ct_template_file(name, digest, site):
     return f"{storage}:vztmpl/{name}"
 
 
-def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
+def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12, nameserver="1.1.1.1", firewall=False):
     config = Path(f"/etc/pve/lxc/{vmid}.conf")
     if config.exists():
         if f"hostname: {name}\n" not in config.read_text() or "carrel-infra" not in config.read_text():
@@ -88,7 +88,7 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
         "--swap",
         "0",
         "--rootfs",
-        f"{storage}:12",
+        f"{storage}:{disk}",
         "--onboot",
         "1",
         "--startup",
@@ -98,9 +98,11 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template):
         "--net0",
         # The infra bridge runs at the tenant MTU; a 1500-byte CT NIC there
         # drops large replies to clients that reach it directly (PLAN 15.15).
-        f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth" + (",mtu=1450" if bridge == "vmbr98" else ""),
+        f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth"
+        + (",mtu=1450" if bridge == "vmbr98" or bridge.startswith("t") else "")
+        + (",firewall=1,rate=25" if firewall else ""),
         "--nameserver",
-        "1.1.1.1",
+        nameserver,
         "--ssh-public-keys",
         key,
     )
@@ -159,38 +161,84 @@ def caddy(vmid):
     run("pct", "exec", str(vmid), "--", "/usr/local/bin/caddy", "version")
 
 
+JUMP_SSHD = """# Managed by carrel (issue #98). The jump user forwards to port 22 of the
+# machines its key may open (per-key permitopen) and gets no session.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin forced-commands-only
+AuthorizedKeysFile .ssh/authorized_keys /etc/carrel-jump/%u
+PermitTTY no
+X11Forwarding no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+PermitTunnel no
+GatewayPorts no
+AllowTcpForwarding local
+LogLevel VERBOSE
+MaxStartups 10:30:100
+# Members share the campus NAT: one mistyped key must not lock out the lab.
+PerSourcePenaltyExemptList 140.113.0.0/16
+LoginGraceTime 20
+"""
+
+
+# CT 102's own firewall (issue #98): even with sshd broken into, it keeps
+# its address (ipfilter) and reaches only SSH of tenant machines, DNS and
+# package mirrors.
+JUMP_FIREWALL = """[OPTIONS]
+enable: 1
+ipfilter: 1
+macfilter: 1
+dhcp: 0
+ndp: 0
+radv: 0
+policy_in: DROP
+policy_out: DROP
+
+[IPSET ipfilter-net0]
+10.200.0.4
+
+[RULES]
+IN ACCEPT -p tcp -dport 22
+OUT ACCEPT -dest 10.200.0.0/16 -p tcp -dport 22
+OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53
+OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53
+OUT DROP -dest 10.0.0.0/8
+OUT DROP -dest 172.16.0.0/12
+OUT DROP -dest 192.168.0.0/16
+OUT DROP -dest 100.64.0.0/10
+OUT ACCEPT -p tcp -dport 80
+OUT ACCEPT -p tcp -dport 443
+"""
+
+
+def jump(vmid):
+    """The SSH jump host: one locked account, forwarding only."""
+    run("pct", "exec", str(vmid), "--", "sh", "-c",
+        "id jump >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent jump; "
+        "install -d -m 755 /etc/carrel-jump; touch /etc/carrel-jump/jump; chmod 644 /etc/carrel-jump/jump")
+    conf = Path("/tmp/carrel-jump-sshd.conf")
+    conf.write_text(JUMP_SSHD)
+    run("pct", "push", str(vmid), str(conf), "/etc/ssh/sshd_config.d/carrel-jump.conf", "--perms", "644")
+    run("pct", "exec", str(vmid), "--", "sshd", "-t")
+    # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
+    run("pct", "exec", str(vmid), "--", "systemctl", "try-restart", "ssh.service")
+
+
 def packages(vmid, role):
     run("pct", "exec", str(vmid), "--", "apt-get", "update", "-qq")
     wanted = ["ca-certificates", "curl"]
     if role == "control":
         wanted += ["openssh-client"]
+    elif role == "jump":
+        wanted += ["openssh-server", "python3"]
     else:
         wanted += ["caddy", "dnsmasq-base", "python3"]
     run("pct", "exec", str(vmid), "--", "apt-get", "install", "-y", *wanted)
 
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--admin-key", required=True)
-    a = p.parse_args()
-    assert os.geteuid() == 0
-    host = run("hostname", "-s", capture=True)
-    config = json.loads(SITE.read_text())
-    assert host == config["exit_nodes"][0], "run on the first exit node of the site file"
-    storage = config["storage"]
-    run("apt-get", "update", "-qq")
-    run("apt-get", "install", "-y", "dnsmasq-base")
-    bridge = """# Managed by carrel infrastructure bootstrap
-auto vmbr98
-iface vmbr98 inet static
-    address 10.200.0.1/24
-    bridge-ports none
-    bridge-stp off
-    bridge-fd 0
-    mtu 1450
-"""
-    if write("/etc/network/interfaces.d/carrel-infra", bridge):
-        run("ifup", "vmbr98")
+def infra_firewall(config, host):
+    """The infra bridge's isolation: what CT 100, 101 and 102 may reach."""
     rules = """add table inet carrel_infra
 flush table inet carrel_infra
 table inet carrel_infra {
@@ -203,7 +251,9 @@ UNDERLAY
  }
  chain forward {
   type filter hook forward priority -15; policy accept;
-  iifname "vmbr98" ip saddr != { 10.200.0.2, 10.200.0.3 } counter drop
+  iifname "vmbr98" ip saddr != { 10.200.0.2, 10.200.0.3, 10.200.0.4 } counter drop
+  iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 tcp dport != 22 drop
+  iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop
   iifname "vmbr98" meta nfproto ipv6 drop
   iifname "vmbr98" ct state established,related accept
   iifname "vmbr98" ip daddr 10.200.0.0/16 accept
@@ -215,6 +265,7 @@ PEER_SSH
   oifname "vmbr98" tcp dport 53 ip daddr 10.200.0.2 accept
   oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.3 tcp dport 8080 accept
   oifname "vmbr98" ct status dnat ip daddr 10.200.0.2 tcp dport { 80, 443 } accept
+  oifname "vmbr98" ct status dnat ip daddr 10.200.0.4 tcp dport 22 accept
   oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.2 tcp dport { 80, 443 } accept
   oifname "vmbr98" counter drop
  }
@@ -246,13 +297,45 @@ WantedBy=multi-user.target
     )
     run("systemctl", "daemon-reload")
     run("systemctl", "enable", "--now", "carrel-infra-firewall")
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--admin-key", required=True)
+    a = p.parse_args()
+    assert os.geteuid() == 0
+    host = run("hostname", "-s", capture=True)
+    config = json.loads(SITE.read_text())
+    assert host == config["exit_nodes"][0], "run on the first exit node of the site file"
+    storage = config["storage"]
+    run("apt-get", "update", "-qq")
+    run("apt-get", "install", "-y", "dnsmasq-base")
+    bridge = """# Managed by carrel infrastructure bootstrap
+auto vmbr98
+iface vmbr98 inet static
+    address 10.200.0.1/24
+    bridge-ports none
+    bridge-stp off
+    bridge-fd 0
+    mtu 1450
+"""
+    if write("/etc/network/interfaces.d/carrel-infra", bridge):
+        run("ifup", "vmbr98")
+    infra_firewall(config, host)
     template = ct_template_file(*DEBIAN_CT, config)
     ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, storage, template)
     ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template)
     packages(100, "control")
     packages(101, "gateway")
     caddy(101)
-    print(json.dumps({"node": host, "infra_cts": [100, 101]}))
+    infra = [100, 101]
+    if config.get("ssh_jump"):
+        write("/etc/pve/firewall/102.fw", JUMP_FIREWALL)
+        ct(102, "carrel-jump", "10.200.0.4", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template, firewall=True)
+        packages(102, "jump")
+        jump(102)
+        infra.append(102)
+    print(json.dumps({"node": host, "infra_cts": infra}))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@
     {"name": "carrel04", "address": "192.168.19.104"}
   ],
   "exit_nodes": ["carrel01"],
+  "ssh_jump": true,
   "public": {
     "address": "140.113.60.184/27",
     "gateway": "140.113.60.190",

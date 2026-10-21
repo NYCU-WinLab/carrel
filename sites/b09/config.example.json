@@ -4,15 +4,28 @@
   "database": "/var/lib/carrel/carrel.db",
   "public_address": "140.113.60.184",
   "nodes": [
-    {"name": "carrel01", "target": "carrel-node"},
-    {"name": "carrel02", "target": "carrel02"},
-    {"name": "carrel03", "target": "carrel03"},
-    {"name": "carrel04", "target": "carrel04"}
+    {
+      "name": "carrel01",
+      "target": "carrel-node"
+    },
+    {
+      "name": "carrel02",
+      "target": "carrel02"
+    },
+    {
+      "name": "carrel03",
+      "target": "carrel03"
+    },
+    {
+      "name": "carrel04",
+      "target": "carrel04"
+    }
   ],
   "cloudflare_zone": "<zone id of winlab.tw>",
   "cloudflare_token": "<DNS edit token for that zone>",
   "hosted_redirects": [
     "https://claude.ai/api/mcp/auth_callback",
     "https://chatgpt.com/connector_platform/oauth/callback"
-  ]
+  ],
+  "ssh_jump": true
 }

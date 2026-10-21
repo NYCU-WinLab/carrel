@@ -504,3 +504,43 @@ def test_delete_refuses_a_machine_that_moved_to_another_node(monkeypatch, tmp_pa
         module.action({"machine": vm, "action": "delete", "confirm": "linked"})
     (nodes / "carrel02" / "qemu-server" / "10100.conf").unlink()
     assert module.action({"machine": vm, "action": "delete", "confirm": "linked"}) == {"state": "absent"}
+
+
+def test_jump_sync_accepts_only_forwarding_lines_to_tenant_ssh():
+    module = load("jump-sync.py")
+    good = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22",permitopen="10.200.3.109:22" ssh-ed25519 AAAAC3Nz=='
+    assert module.check(good + "\n") == good + "\n"
+    for bad in [
+        good.replace("10.200.1.10:22", "10.200.0.3:22"),
+        good.replace("10.200.1.10:22", "10.200.1.10:8080"),
+        good.replace("10.200.1.10:22", "10.200.1.110:22"),
+        good.replace("restrict,", ""),
+        good.replace('command="/usr/sbin/nologin",', 'command="/bin/sh",'),
+        good.replace("permitopen", 'environment="X=1",permitopen', 1),
+        good + " comment",
+        good + "\nssh-ed25519 AAAA",
+    ]:
+        with pytest.raises(ValueError):
+            module.check(bad)
+
+
+def test_the_jump_host_reaches_port_22_of_every_machine(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    rules = module.guest_firewall(
+        dict(MACHINE), {"peers": [], "ports": [], "domains": []}, {"protected_addresses": []}
+    )
+    assert "IN ACCEPT -source 10.200.0.4 -p tcp -dport 22" in rules.splitlines()
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    (tmp_path / "site.json").write_text(json.dumps({"ssh_jump": True, "exit_nodes": ["x"]}))
+    assert "tcp dport 22 dnat to 10.200.0.4" in module.ports_nft({"ports": []}, "140.113.60.184")
+    (tmp_path / "site.json").write_text(json.dumps({"exit_nodes": ["x"]}))
+    assert "10.200.0.4" not in module.ports_nft({"ports": []}, "140.113.60.184")
+
+
+def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
+    module = load("jump-sync.py")
+    line = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22" ssh-ed25519 AAAA'
+    for bad in [line.replace("10.200.1.10", "10.200.١.10"), line + " " + line, line + "\x1c", line]:
+        with pytest.raises(ValueError):
+            module.check(bad)  # the last one lacks its final newline
+    assert module.check("") == ""
