@@ -638,6 +638,77 @@ to `29999`), and any port the nodes themselves use. A protocol that supports SRV
 weekly cap. They exist only in single-tenant zones, so they never spend the `winlab.tw` budget of
 section 6.4.
 
+### 6.11 Network model in AWS terms (issue #103, design only)
+
+carrel names its network objects after their AWS counterparts where one exists, and each tool
+description says what differs. Members and agents already know the AWS model, so a request such
+as "connect my machines to the lab network and route between my projects" needs no carrel
+vocabulary. carrel stays a lab platform on one cluster: no accounts, IAM, regions or zones.
+
+| AWS | carrel | Differs from AWS |
+|---|---|---|
+| VPC | a tenant's primary network, `10.200.N.0/24`, one EVPN VNet | one fixed CIDR per tenant, no secondary CIDRs |
+| Subnet | the primary network; `network_create` segments (6.8) | private segments are layer 2 only: no gateway, no routes |
+| Security group | `network_access` plus declared `connections` (6.3) | rules belong to the machine, not to a named group |
+| VPC peering | `peer_allow` | one port per grant, TCP or UDP, one direction |
+| Internet gateway and NAT gateway | the exit node: SNAT to the site address | shared by every tenant |
+| Elastic IP | public IP per machine (#91) | admin approval, from a site pool |
+| Load balancer | `domain_add` (HTTPS), `vip_add` (6.3) | no health checks, no L4 balancing |
+| Route table | none today | see below |
+| Transit gateway | planned | see below |
+| Site-to-site VPN, customer gateway | planned | WireGuard first |
+| Direct Connect | planned | a VLAN on a spare node port, admin provisioned |
+| Client VPN | planned | WireGuard, one endpoint per tenant |
+
+**Routing domains.** All tenants share one VRF (`vrf_tenants`, table 1001), and isolation comes
+from the guest firewall, not from routes (6.3). Every tenant prefix is unique inside
+`10.200.0.0/16`, so a shared table can carry them all. A VRF per tenant would mean one EVPN zone
+per tenant; Proxmox binds a VNet to its zone, so every tenant VNet would be recreated and every
+machine NIC moved. carrel keeps the shared VRF and models route tables as reachability: a route
+table lists which attachments may reach which, and carrel compiles that into firewall rules on the
+exit node and the guests, the way `peer_allow` already works. A real VRF becomes necessary only
+when a tenant must use addresses that overlap another tenant's, which carrel does not offer. If it
+ever does, the migration is one tenant at a time: create the tenant's zone and VNet, attach a
+second NIC on the new VNet to each machine, move the address, detach the old NIC. Each machine
+loses its connections once, for seconds.
+
+**Attachments.** A transit gateway is a tenant-owned object with attachments and one route table
+per attachment. Attachment kinds: a tenant network (the tenant's own, or another tenant's with
+that tenant's acceptance, like `peer_allow`), a client VPN, a site-to-site VPN, a dedicated link.
+A route table entry says "this attachment may reach that prefix through that attachment"; carrel
+refuses an entry whose prefix overlaps a tenant network it does not belong to. Traffic from every
+attachment still passes the destination machine's guest firewall: a VPN client is one more source
+the machine must accept, never a way around `restricted`.
+
+**Client VPN** (first attachment to build). WireGuard on the exit node, one interface per tenant
+(`wg-tNNN`) bound to `vrf_tenants`, with client addresses from `10.201.N.0/24`. The member generates
+the key pair and sends only the public key (`vpn_client_add`), so carrel never holds a client
+private key. A client reaches only its tenant's `/24`: the interface's input is filtered on the exit
+node, and tenant machines accept `10.201.N.0/24` as they accept their own network. The lab's
+NetBird mesh uses `100.64.0.0/10`, which tenants drop as the tailnet range (6.3); it can be added
+later as a routing peer per tenant, mapped to the same attachment.
+
+**Site-to-site VPN.** A customer gateway (remote public address, public key, the remote prefixes)
+and a connection to a tenant network or a transit gateway, WireGuard with static routes first,
+BGP over it later with FRR. Remote prefixes that overlap `10.200.0.0/16` or another attachment
+are refused; a lab network that does overlap needs 1:1 NAT (`netmap`) on the connection, which
+the connection object declares.
+
+**Dedicated links.** An admin connects a lab or campus network to a spare node port (the X540 and
+X710 ports are unused, 15.15) as a tagged VLAN with a BGP session, then offers it to tenants as an
+attachment. Members request it and admins approve it, like special domains (6.10). Cabling and
+which node holds it are open (13.14).
+
+**Order.** 1. This section. 2. Client VPN for one tenant, with a test that a client cannot reach
+another tenant. 3. Site-to-site VPN to a tenant network. 4. Transit gateway between tenant
+networks and VPNs. 5. Dedicated links. Steps 2 to 4 add quota dimensions (`vpn_clients`,
+`vpn_connections`, `transit_gateways`) and audit entries; every new endpoint lives on the exit
+node, so they follow the exit node failover of #89.
+
+**Open for decision**: whether VPN endpoints may live on a tenant gateway machine instead of the
+exit node (more isolation, one more machine per tenant); whether project tenants may attach other
+projects without an admin; whether the lab's NetBird gets a routing peer at all.
+
 ## 7. Machines
 
 ### 7.1 Images
@@ -1136,7 +1207,7 @@ old host.
 ### 11.2 Not doing in version 1
 
 - GPU passthrough or sharing.
-- VPN access into tenant networks (public SSH ports are the path).
+- VPN access into tenant networks (public SSH ports and the jump host are the path; design in 6.11).
 - IPv6 (open decision 13.6).
 - Machines spanning sites, live migration across sites.
 - A web UI, apart from the machine console page (section 7.8).
