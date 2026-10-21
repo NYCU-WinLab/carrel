@@ -1226,7 +1226,7 @@ def fetch_store(req):
             try:
                 with partial.open("wb") as out:
                     bounded(in_fetch(job, "data", limit), out, limit, 4 * 3600)
-                if run("sha256sum", partial, timeout=3600).split()[0] != digest:
+                if sha256_limited(partial) != digest:
                     raise ValueError("stored file does not match its checksum")
                 partial.chmod(0o444)
                 os.replace(partial, final)
@@ -1314,6 +1314,27 @@ def create_from_iso(m, exists, manifest, saved, marker):
     return {"state": "running", "vmid": vmid}
 
 
+# Reads of shared storage share the nodes' one link with corosync (PLAN
+# 7.8): checksums run at the migration limit, 50 MiB/s.
+HASH_RATE = 50 * 1024 * 1024
+HASH_CODE = """import hashlib, sys, time
+h, rate, start, done = hashlib.sha256(), int(sys.argv[2]), time.monotonic(), 0
+with open(sys.argv[1], "rb") as f:
+    while block := f.read(1 << 20):
+        h.update(block)
+        done += len(block)
+        ahead = done / rate - (time.monotonic() - start)
+        if ahead > 0:
+            time.sleep(ahead)
+print(h.hexdigest())
+"""
+
+
+def sha256_limited(path):
+    # In a child with a deadline: a hard NFS mount can block a read forever.
+    return run(sys.executable, "-I", "-c", HASH_CODE, str(path), str(HASH_RATE), timeout=3600).strip()
+
+
 def import_volume(m, volume, digest):
     # Only this tenant's images on the site's import storage, and only the
     # bytes the fetcher's checks accepted (the database's checksum).
@@ -1327,7 +1348,7 @@ def import_volume(m, volume, digest):
     if entry is None or "path" not in entry:
         raise ValueError("the image storage is not a directory storage")
     try:
-        found = run("sha256sum", Path(entry["path"]) / "import" / rest, timeout=3600).split()[0]
+        found = sha256_limited(Path(entry["path"]) / "import" / rest)
     except (CommandFailure, subprocess.TimeoutExpired) as e:
         raise StorageUnavailable(f"{rest} missing or its storage unreachable") from e
     if found != digest:

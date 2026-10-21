@@ -319,6 +319,9 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	image := textAt(a, "image", str(defaultImage["name"]))
 	tenantImage := strings.HasPrefix(image, "tenant:")
 	if tenantImage {
+		if kind != "vm" {
+			fail("invalid", "Only a VM boots a cloud image", D{"recovery": "revise_request"})
+		}
 		// Sized and set up like the minimal image; the disk comes from the import.
 		image = "debian-13-minimal"
 	}

@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -22,10 +23,16 @@ func TestAnISOImportFetchesStoresAndCounts(t *testing.T) {
 			if strings.Contains(str(r["url"]), "broken") {
 				state[str(r["job"])] = "failed"
 			}
+			if strings.Contains(str(r["url"]), "sized") {
+				state[str(r["job"])+"-virtual"] = float64(12 << 30)
+			}
 			return D{"state": "running"}, nil
 		case "fetch_status":
 			if state[str(r["job"])] == "failed" {
 				return D{"state": "failed", "result": D{"code": "checksum_mismatch", "error": "the file does not match its SHA-256"}}, nil
+			}
+			if state[str(r["job"])+"-virtual"] != nil {
+				return D{"state": "done", "received": 3000, "result": D{"virtual_size": state[str(r["job"])+"-virtual"]}}, nil
 			}
 			return D{"state": "done", "received": 3000}, nil
 		case "fetch_store":
@@ -57,16 +64,22 @@ func TestAnISOImportFetchesStoresAndCounts(t *testing.T) {
 	if obj(op["error"])["code"] != "checksum_mismatch" || state["cleaned"] != "fetch_clean" || len(p.Store.Objects("images", 1)) != 1 {
 		t.Fatal(op)
 	}
+	// A disk image keeps the virtual size the fetcher reported.
+	r = p.Execute(ctx, "image_import", D{"name": "sized", "url": "https://example.com/sized.qcow2", "sha256": sum}, alice)
+	op = awaitStateWithinMs(t, p, str(obj(r["operation"])["id"]), "succeeded")
+	if rec, ok := e2image(p, "sized"); !ok || rec.VirtualSize != 12<<30 || num(obj(obj(op["result"])["image"])["virtual_size_bytes"]) != 12<<30 {
+		t.Fatal(op)
+	}
 	// A disk image finished without a virtual size cannot be sized: refused.
 	r = p.Execute(ctx, "image_import", D{"name": "nosize", "url": "https://example.com/disk.qcow2", "sha256": sum}, alice)
 	op = awaitStateWithinMs(t, p, str(obj(r["operation"])["id"]), "failed")
-	if obj(op["error"])["code"] != "image_refused" || len(p.Store.Objects("images", 1)) != 1 {
+	if obj(op["error"])["code"] != "image_refused" || len(p.Store.Objects("images", 1)) != 2 {
 		t.Fatal(op)
 	}
 	if r := p.Execute(ctx, "image_delete", D{"name": "netinst", "confirm": "nope"}, alice); r["ok"] != false {
 		t.Fatal("deleted without confirmation")
 	}
-	if r := p.Execute(ctx, "image_delete", D{"name": "netinst", "confirm": "netinst"}, alice); r["ok"] != true || state["cleaned"] != "image_delete" || len(p.Store.Objects("images", 1)) != 0 {
+	if r := p.Execute(ctx, "image_delete", D{"name": "netinst", "confirm": "netinst"}, alice); r["ok"] != true || state["cleaned"] != "image_delete" || len(p.Store.Objects("images", 1)) != 1 {
 		t.Fatal(r)
 	}
 	// Without room in images_gb nothing starts.
@@ -186,9 +199,42 @@ func TestAVMBootsATenantCloudImage(t *testing.T) {
 	// An image without a virtual size (a fetcher that did not report it)
 	// cannot size its disk.
 	p.Store.Put("images", "img3", 1, decode(string(encoded(imageRecord{ID: "img3", TenantN: 1, Name: "nosize", Kind: "raw", SHA256: strings.Repeat("ef", 32), Size: 1 << 30, State: "ready", Volume: "rs822rp1:import/carrel-t001-nosize-efefefefefef.raw"}))))
+	// A CT cannot boot a cloud image: said plainly.
+	if f := attempt(func() {
+		e.MachineSpec(tenant, D{"name": "ct1", "kind": "ct", "image": "tenant:noble", "ssh_keys": []any{key}}, false)
+	}); f == nil || !strings.Contains(fmt.Sprint(f), "Only a VM boots a cloud image") {
+		t.Fatal("CT accepted or unclear", f)
+	}
+	// The image cannot go while a creation uses it: queued, or importing.
+	p.Store.Put("operations", "op1", 1, D{"id": "op1", "tenant_n": 1, "tool": "machine_create", "state": "queued", "args": D{"name": "q", "image": "tenant:noble"}})
+	if r := p.Execute(context.Background(), "image_delete", D{"name": "noble", "confirm": "noble"}, person("alice", false)); r["ok"] != false {
+		t.Fatal("deleted under a queued creation", r)
+	}
+	p.Store.Remove("operations", "op1")
+	p.Store.Put("machines", 10109, 1, D{"vmid": 10109, "tenant_n": 1, "name": "q", "state": "provisioning", "import_volume": vol})
+	if r := p.Execute(context.Background(), "image_delete", D{"name": "noble", "confirm": "noble"}, person("alice", false)); r["ok"] != false {
+		t.Fatal("deleted under a creation", r)
+	}
+	p.Store.Remove("machines", 10109)
 	for _, bad := range []string{"tenant:missing", "tenant:netinst", "tenant:nosize"} {
 		if f := attempt(func() { e.MachineSpec(tenant, D{"name": "vm3", "image": bad, "ssh_keys": []any{key}}, false) }); f == nil {
 			t.Fatal("accepted", bad)
 		}
+	}
+}
+
+func e2image(p *Platform, name string) (imageRecord, bool) {
+	return p.execution(context.Background()).imageNamed(1, name)
+}
+
+// The disk a cloud image raises counts against the tenant's disk quota.
+func TestACloudImageDiskCountsAgainstTheQuota(t *testing.T) {
+	p, _ := fixture(t)
+	vol := "rs822rp1:import/carrel-t001-big-cdcdcdcdcdcd.qcow2"
+	p.Store.Put("images", "img9", 1, decode(string(encoded(imageRecord{ID: "img9", TenantN: 1, Name: "big", Kind: "qcow2", SHA256: strings.Repeat("cd", 32), Size: 1 << 30, VirtualSize: 500 << 30, State: "ready", Volume: vol}))))
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
+	r := p.Execute(context.Background(), "machine_create", D{"name": "big", "image": "tenant:big", "ssh_keys": []any{key}, "dry_run": true}, person("alice", false))
+	if e := obj(r["error"]); e["code"] != "quota_exceeded" || e["dimension"] != "disk_gb" || num(e["used"]) != 500 {
+		t.Fatal("a 500 GiB image fit a 100 GiB quota", r)
 	}
 }

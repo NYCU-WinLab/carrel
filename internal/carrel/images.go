@@ -95,6 +95,14 @@ func (e *Execution) ImageAction(tool string, a, t D) D {
 			if m["iso"] == r.Name && m["iso_volume"] != nil {
 				fail("conflict", "Eject the ISO from "+str(m["name"])+" first (machine_media)", D{"recovery": "resolve_prerequisite"})
 			}
+			// A VM still being created imports its disk from the image.
+			if m["import_volume"] == r.Volume && m["state"] == "provisioning" {
+				fail("conflict", str(m["name"])+" is being created from this image; wait for it", D{"recovery": "resolve_prerequisite"})
+			}
+		}
+		// A queued creation names the image before it has a machine record.
+		if e.imageWanted(n, r.Name) {
+			fail("conflict", "A queued machine creation uses this image; wait for it", D{"recovery": "resolve_prerequisite"})
 		}
 		if boolean(a["dry_run"]) {
 			return D{"image": r.public(), "dry_run": true, "images_gb": e.imageUsage(t)}
@@ -106,6 +114,26 @@ func (e *Execution) ImageAction(tool string, a, t D) D {
 	}
 	fail("invalid", "Unknown image tool")
 	return nil
+}
+
+// imageWanted reports whether an active operation of the tenant creates
+// machines from the named image or ISO.
+func (e *Execution) imageWanted(n int, name string) bool {
+	for _, op := range e.S.ActiveOperations(n) {
+		args := obj(op["args"])
+		specs := []D{args}
+		if op["tool"] == "deployment_apply" {
+			specs = dicts(args["machines"])
+		} else if op["tool"] != "machine_create" {
+			continue
+		}
+		for _, a := range specs {
+			if a["image"] == "tenant:"+name || a["iso"] == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func imageStorageKind(kind string) string {
