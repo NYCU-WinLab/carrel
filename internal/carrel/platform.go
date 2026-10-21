@@ -49,6 +49,7 @@ type Platform struct {
 	Config             D
 	HTTP               *http.Client
 	writer             sync.Mutex
+	originRetry        backoff
 	certificates       sync.Mutex
 	registration       sync.Mutex
 	delivered          atomic.Value

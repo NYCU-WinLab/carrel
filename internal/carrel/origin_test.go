@@ -256,3 +256,29 @@ func TestRenewalIsDueWithAThirdOfTheLifetimeLeft(t *testing.T) {
 		t.Fatal("a missing certificate must be renewed")
 	}
 }
+
+// Issue #51: a failing origin issuance is retried later each time.
+func TestOriginRetriesBackOff(t *testing.T) {
+	var b backoff
+	calls := 0
+	failing := func() { calls++; fail("backend_unavailable", "acme down") }
+	start := time.Now()
+	for i, at := range []time.Duration{0, 5 * time.Minute, 10 * time.Minute, 25 * time.Minute, 30 * time.Minute} {
+		b.try(start.Add(at), failing)
+		if want := []int{1, 1, 2, 2, 3}[i]; calls != want {
+			t.Fatalf("at %v: %d attempts, want %d", at, calls, want)
+		}
+	}
+	if b.wait != 40*time.Minute {
+		t.Fatal(b.wait)
+	}
+	for range 20 {
+		b.try(b.next, failing)
+	}
+	if b.wait != 6*time.Hour {
+		t.Fatal("no cap", b.wait)
+	}
+	if b.try(b.next, func() {}) != nil || b.wait != 0 {
+		t.Fatal("a success did not reset")
+	}
+}

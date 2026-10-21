@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"time"
 )
 
 // carrel's own name on a site with its own public address (PLAN 15.15): the
@@ -59,7 +60,11 @@ func (e *Execution) EnsureOriginCertificate() D {
 func (e *Execution) MaintainOrigin() {
 	crt, _, ok := e.originFiles()
 	if !ok || renewalDue(crt) {
-		e.EnsureOriginCertificate()
+		// A failed issuance waits longer each time (issue #51): Let's
+		// Encrypt allows few failed validations per hostname and hour.
+		if f := e.P.originRetry.try(time.Now(), func() { e.EnsureOriginCertificate() }); f != nil {
+			panic(f)
+		}
 		return
 	}
 	if !e.gatewayHolds("_origin", crt) {
@@ -93,4 +98,25 @@ func originPair(crt, key string) D {
 func fingerprint(fullchain any) string {
 	sum := sha256.Sum256([]byte(str(fullchain)))
 	return hex.EncodeToString(sum[:])
+}
+
+// backoff spaces out retries of one failing action: 10 minutes after the
+// first failure, doubling to at most 6 hours; a success resets it.
+type backoff struct {
+	next time.Time
+	wait time.Duration
+}
+
+// try runs fn unless it is too soon, and returns what fn raised.
+func (b *backoff) try(now time.Time, fn func()) any {
+	if now.Before(b.next) {
+		return nil
+	}
+	if f := attempt(fn); f != nil {
+		b.wait = min(max(2*b.wait, 10*time.Minute), 6*time.Hour)
+		b.next = now.Add(b.wait)
+		return f
+	}
+	b.wait, b.next = 0, time.Time{}
+	return nil
 }
