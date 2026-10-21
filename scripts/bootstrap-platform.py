@@ -252,6 +252,7 @@ UNDERLAY
  chain forward {
   type filter hook forward priority -15; policy accept;
   iifname "vmbr98" ip saddr != { 10.200.0.2, 10.200.0.3, 10.200.0.4 } counter drop
+  iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.2 meta l4proto { tcp, udp } th dport 53 accept
   iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 tcp dport != 22 drop
   iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop
   iifname "vmbr98" meta nfproto ipv6 drop
