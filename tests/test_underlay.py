@@ -138,3 +138,24 @@ def reconcile_writes(monkeypatch, tmp_path, first):
     }
     module.reconcile(state)
     return written
+
+
+def test_the_jump_host_reaches_dns_and_tenant_ssh_only(monkeypatch):
+    module = load("bootstrap-platform.py")
+    written = {}
+    monkeypatch.setattr(
+        module, "write", lambda path, data, mode=0o644: written.__setitem__(path, data) or True
+    )
+    monkeypatch.setattr(module, "run", lambda *a, **k: None)
+    config = {"nodes": [{"name": "carrel01", "address": "192.168.19.101"}], "underlay_interface": "vmbr0"}
+    module.infra_firewall(config, "carrel01")
+    rules = [line.strip() for line in written["/etc/carrel/infra.nft"].splitlines()]
+    dns = rules.index(
+        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.2 meta l4proto { tcp, udp } th dport 53 accept'
+    )
+    assert dns < rules.index(
+        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 tcp dport != 22 drop'
+    )
+    assert dns < rules.index(
+        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop'
+    )
