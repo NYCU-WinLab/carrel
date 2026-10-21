@@ -809,22 +809,22 @@ key injection, the SSH check and graceful shutdown.
   cloud-init files stay on each node's `local` storage (7.10).
 - **Fetcher**: imports are downloaded by carrel, not by Proxmox's `download-url`, which runs from
   the node's own network (Proxmox guards it with the `Sys.AccessNetwork` privilege for that
-  reason). The fetcher runs on every node as a dedicated unprivileged user with no capabilities,
-  inside its own network namespace whose only interface sits on the fetch network (`N = 255`,
-  section 6.1), and inside a mount namespace without `/mnt/pve`. The export trusts any user id
-  from a node (NFSv3, `sec=sys`), so a fetcher that could see the mount could write to it. It
-  resolves the name once and pins that address; refuses private, loopback, link-local,
-  `100.64.0.0/10` and the site's own addresses; follows at most 3 redirects and checks each one
-  the same way; streams into its staging directory with a hard stop at the smaller of 20 GB and
-  the tenant's remaining `images_gb`; and verifies the checksum. The staging directory is a ZFS
-  dataset of the node's pool with a fixed `quota` (20 GB times the node's import slots), so a
-  server that lies about size cannot fill the pool.
-- **Rules on the host side**: the fetch network's rules sit on the host end of the fetcher's
-  interface, out of the fetcher's reach: the drops of section 6.3 (which cover the NAS), outbound
-  TCP 80 and 443 only, DNS to the infra resolver only, no traffic between fetchers on different
-  nodes, and a bandwidth cap (section 6.6). The host end is named `veth...`, because a Proxmox SDN
-  reload keeps only bridge ports named `tap`, `veth` or `fwpr`; the reconciler checks that it
-  stays attached.
+  reason). `carrel-fetch` (Go) runs in CT 103, an unprivileged container on the first exit node,
+  as the user `carrel-fetch`, one transient unit per job with a memory cap. The container sits on
+  the fetch network (`t255`, `10.200.255.10`, section 6.1), which tenants drop like any other
+  tenant's network, and it has no view of the shared storage: NFS is mounted only on the hosts.
+  `carrel-fetch` resolves the name once and dials the address it checked; refuses private,
+  loopback, link-local, `100.64.0.0/10`, documentation and the site's own addresses; allows only
+  `http` and `https` on ports 80 and 443, no credentials in the URL; follows at most 3 redirects
+  and checks each one the same way; stops at the smaller of 20 GB and the tenant's remaining
+  `images_gb`; and verifies the checksum. Its staging space is the container's 64 GB disk, so a
+  server that lies about size cannot fill a node. (Decided 2026-10-21 instead of a network
+  namespace per node: with the files on shared storage one fetch point is enough, and an
+  unprivileged container gives the same isolation with no plumbing of its own.)
+- **Rules on the host side**: the container's Proxmox firewall, written by node-agent, drops
+  everything inbound and, outbound, allows only DNS to the infra resolver and TCP 80 and 443 to
+  addresses outside the private ranges and the site's own; its NIC is capped at 25 MB/s. The
+  rules sit outside the container, out of the fetcher's reach.
 - **Limits**: one import per tenant and one per member, 3 per site at a time, so a member of
   several projects cannot take every slot; more return `queued` (section 4.2). A download that
   stays under 2 MB/s for 60 seconds, or runs longer than 3 hours, is aborted, so a slow server
@@ -834,11 +834,12 @@ key injection, the SSH check and graceful shutdown.
   argument (a `raw` file that probes as anything else included), or if it names a backing file or
   a qcow2 data file, is encrypted, or has a virtual size above 1000 GB. A backing file that points
   at another tenant's disk would otherwise copy that disk into the attacker's machine.
-- **Storing**: a root step on the node (node-agent), not the fetcher, checks the staged file
-  against the checksum in the database. It copies the file to the shared storage under a temporary
-  name that Proxmox does not list, reads it back and checks the checksum again, makes it read-only
-  (`0444`), renames it to its final name and removes the staged copy. Nothing goes through the
-  upload API, which spools to `/var/tmp` on the root file system first.
+- **Storing**: a root step on the node (node-agent `fetch_store`), not the fetcher, checks the
+  staged file against the checksum in the database. It pulls the file out with `pct pull`, which
+  resolves the path inside the container, so a symlink the fetcher plants cannot point at a host
+  file. It writes to a temporary name on the shared storage that Proxmox does not list, hashes it
+  again, makes it read-only (`0444`), renames it to its final name and removes the staged copy.
+  Nothing goes through the upload API, which spools to `/var/tmp` on the root file system first.
 - **Layout**: files use Proxmox's own directories: ISOs in `template/iso/` as `iso` content, cloud
   images in `import/` as `import` content, never `images`, because Proxmox applies its
   untrusted-image checks only to `import` volumes. Those checks still hold if a compromised

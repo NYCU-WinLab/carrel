@@ -232,6 +232,8 @@ def packages(vmid, role):
         wanted += ["openssh-client"]
     elif role == "jump":
         wanted += ["openssh-server", "python3"]
+    elif role == "fetch":
+        wanted += ["qemu-utils"]
     else:
         wanted += ["caddy", "dnsmasq-base", "python3"]
     run("pct", "exec", str(vmid), "--", "apt-get", "install", "-y", *wanted)
@@ -337,6 +339,16 @@ iface vmbr98 inet static
         packages(102, "jump")
         jump(102)
         infra.append(102)
+    if config.get("fetch"):
+        # The fetch container (PLAN 7.8) on the fetch network t255, which the
+        # node adapter creates on its first reconcile with fetch enabled.
+        ct(103, "carrel-fetch", "10.200.255.10", "t255", "10.200.255.1", 1024, a.admin_key, storage, template,
+           disk=64, nameserver="10.200.0.2", firewall=True)
+        packages(103, "fetch")
+        run("pct", "exec", "103", "--", "sh", "-c",
+            "id carrel-fetch >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin carrel-fetch; "
+            "install -d -m 700 -o carrel-fetch -g carrel-fetch /var/lib/carrel-fetch")
+        infra.append(103)
     print(json.dumps({"node": host, "infra_cts": infra}))
 
 

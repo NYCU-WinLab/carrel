@@ -12,6 +12,7 @@
   ],
   "exit_nodes": ["carrel01"],
   "ssh_jump": true,
+  "fetch": true,
   "public": {
     "address": "140.113.60.184/27",
     "gateway": "140.113.60.190",

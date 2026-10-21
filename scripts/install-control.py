@@ -281,6 +281,9 @@ def host(stage, version):
         push(stage / "carrel", "/usr/local/bin/carrel.next", "755")
         # Served to tenant machines at /apps/v1/carrel-deployd (PLAN 7.9).
         push(stage / "carrel-deployd", "/usr/local/lib/carrel/carrel-deployd", "755")
+        # The fetch container's downloader (PLAN 7.8), when the site has one.
+        if Path("/etc/pve/lxc/103.conf").exists():
+            run("pct", "push", "103", stage / "carrel-fetch", "/usr/local/bin/carrel-fetch", "--perms", "755")
         activated = True
         ct_command("activate")
         ct("systemctl", "daemon-reload")
