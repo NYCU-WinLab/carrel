@@ -76,6 +76,12 @@ func (e *Execution) PerformMigration() {
 	if !ok1 || !ok2 {
 		fail("conflict", "A node of this move is no longer configured")
 	}
+	func() {
+		e.P.writer.Lock()
+		defer e.P.writer.Unlock()
+		e.Op["phase"] = "moving_machine"
+		e.P.Operations.Save(e.Op)
+	}()
 	bw := intAt(e.P.Config, "migration_bwlimit_kib", 51200)
 	e.Call(D{"op": "migrate_prepare", "machine": m, "cloud_init": e.cloudInitFiles(m)}, to.Target)
 	e.Call(D{"op": "migrate", "machine": m, "target": to.Name, "bwlimit": bw}, from.Target)
