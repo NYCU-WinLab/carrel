@@ -695,11 +695,25 @@ refuses an entry whose prefix overlaps a tenant network it does not belong to. T
 attachment still passes the destination machine's guest firewall: a VPN client is one more source
 the machine must accept, never a way around `restricted`.
 
-**Client VPN** (first attachment to build). WireGuard on the exit node, one interface per tenant
-(`wg-tNNN`) bound to `vrf_tenants`, with client addresses from `10.201.N.0/24`. The member generates
-the key pair and sends only the public key (`vpn_client_add`), so carrel never holds a client
-private key. A client reaches only its tenant's `/24`: the interface's input is filtered on the exit
-node, and tenant machines accept `10.201.N.0/24` as they accept their own network. The lab's
+**Client VPN** (first attachment to build, issue #103). WireGuard on the first exit node, one
+interface per tenant (`wg-tNNN`) in `vrf_tenants`, listening on UDP `31000 + N` of the public
+address (below the ephemeral range), with client addresses from `10.201.N.0/24`. The member or
+agent generates the key pair and sends only the public key (`vpn_client_add`), so carrel never
+holds a client private key; the server keys stay on the exit node. A client reaches only its
+tenant's `/24`: `inet carrel_vpn` on the exit node passes `10.201.N.0/24 <-> 10.200.N.0/24` and drops
+every other packet of a `wg-t*` interface, the node itself included, and tenant machines with
+`network_access` `tenant` accept `10.201.N.0/24` as they accept their own network. Other nodes
+reach the clients through the VRF default route to the exit node; `wg-t*` joins conntrack zone 1
+like the other VRF ports.
+
+Agents use it on their own. The skill tells an agent to try the SSH jump host first (`ssh -L` for
+one or two TCP ports) and to open a client only for UDP, many ports or a browser on internal
+services. The agent runs `wg genkey`, calls `vpn_client_add` with the public key and a name for the
+session, writes the private key into the returned `config`, and brings it up: `wg-quick` when it may
+use root, or a userspace client such as wireproxy (WireGuard as a local SOCKS5 proxy) when it may
+not, which needs no prompt at all. A client expires after `hours` (default 8, at most 168), so a
+session an agent forgot ends by itself; adding the same name again renews it. A tenant keeps at
+most 8 clients. The lab's
 NetBird mesh uses `100.64.0.0/10`, which tenants drop as the tailnet range (6.3); it can be added
 later as a routing peer per tenant, mapped to the same attachment.
 

@@ -232,6 +232,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.NetworkAction(tool, a, t)
 	case "domain_add", "domain_list", "domain_remove":
 		return e.DomainAction(tool, a, t)
+	case "vpn_client_add", "vpn_client_list", "vpn_client_remove":
+		return e.VPNAction(tool, a, t)
 	case "iso_import", "image_import":
 		return e.PlanImport(tool, a, t)
 	case "image_list", "image_delete":

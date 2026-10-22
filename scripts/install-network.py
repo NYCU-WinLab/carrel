@@ -75,6 +75,8 @@ table inet carrel_public {{
   type filter hook input priority -30; policy accept;
   iifname "{interface}" ct state established,related accept
   iifname "{interface}" meta nfproto ipv4 icmp type echo-request limit rate 10/second accept
+  # The tenants' client VPN endpoints (PLAN 6.11): WireGuard on 31000 + N.
+  iifname "{interface}" udp dport 31001-31254 accept
   iifname "{interface}" counter drop
  }}
  chain forward {{
@@ -187,7 +189,7 @@ def main():
     # PVE's SDN regeneration hook requires dnsmasq@.service; carrel's private
     # network DHCP also runs dnsmasq, in its own namespace.
     run("systemctl", "mask", "dnsmasq.service")
-    run("apt-get", "install", "-y", "dnsmasq")
+    run("apt-get", "install", "-y", "dnsmasq", "wireguard-tools")
     run("systemctl", "enable", "--now", "frr")
     # A change made before a failed run is still owed its apply (issue #48):
     # the marker survives the failure, and the rerun applies.
