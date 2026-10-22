@@ -126,14 +126,6 @@ func (f *fakeNetBox) matches(o D, q map[string][]string) bool {
 	for k, v := range q {
 		switch {
 		case k == "limit" || k == "offset":
-		case k == "tag":
-			found := false
-			for _, t := range dicts(o["tags"]) {
-				found = found || t["slug"] == v[0]
-			}
-			if !found {
-				return false
-			}
 		case strings.HasSuffix(k, "_id"):
 			field := strings.TrimSuffix(k, "_id")
 			if str(nbScalar(o[field])) != v[0] && strconv.Itoa(integer(nbScalar(o[field]))) != v[0] {
@@ -160,10 +152,10 @@ func (f *fakeNetBox) reset() {
 	f.writes = nil
 }
 
-func netboxPlatform(t *testing.T, marker D) (*Platform, *fakeNetBox, *httptest.Server) {
+func netboxPlatform(t *testing.T) (*Platform, *fakeNetBox, *httptest.Server) {
 	p, _ := fixture(t)
 	f, srv := newFakeNetBox(t)
-	p.Config["netbox"] = D{"enabled": true, "url": srv.URL, "token": "nbt_secret", "cluster": "carrel", "marker": marker}
+	p.Config["netbox"] = D{"enabled": true, "url": srv.URL, "token": "nbt_secret", "cluster": "carrel", "owner": "carrel"}
 	return p, f, srv
 }
 
@@ -207,8 +199,8 @@ func TestNetBoxStaysOffUnlessConfigured(t *testing.T) {
 	}
 }
 
-func TestNetBoxSyncCreatesMarkedObjects(t *testing.T) {
-	p, f, _ := netboxPlatform(t, D{"type": "tag", "value": "carrel"})
+func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
@@ -274,10 +266,10 @@ func TestNetBoxSyncCreatesMarkedObjects(t *testing.T) {
 	if lab == nil || lab["vrf"] != nil || find(prefixes, func(v D) bool { return v["prefix"] == "192.168.50.0/24" }) != nil {
 		t.Fatal(lab, prefixes)
 	}
-	// Every object that can carry the marker has it from the first write.
+	// Every object that can carry the owner has it from the first write.
 	for _, path := range []string{"ipam/vrfs/", "ipam/prefixes/", "ipam/ip-addresses/", "virtualization/interfaces/", "virtualization/virtual-machines/", "ipam/services/", "ipam/fhrp-groups/"} {
 		for _, o := range f.all(path) {
-			if len(dicts(o["tags"])) != 1 || dicts(o["tags"])[0]["slug"] != "carrel" {
+			if obj(o["owner"])["name"] != "carrel" {
 				t.Fatal(path, o)
 			}
 		}
@@ -291,7 +283,7 @@ func TestNetBoxSyncCreatesMarkedObjects(t *testing.T) {
 }
 
 func TestNetBoxSyncIsIdempotentAndFollowsChanges(t *testing.T) {
-	p, f, _ := netboxPlatform(t, D{"type": "tag", "value": "carrel"})
+	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	syncNetBox(t, p)
 	f.reset()
@@ -317,7 +309,7 @@ func TestNetBoxSyncIsIdempotentAndFollowsChanges(t *testing.T) {
 }
 
 func TestNetBoxSyncDeletesDependentsFirst(t *testing.T) {
-	p, f, _ := netboxPlatform(t, D{"type": "tag", "value": "carrel"})
+	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	syncNetBox(t, p)
 	for _, id := range []string{"10100", "10101"} {
@@ -340,7 +332,7 @@ func TestNetBoxSyncDeletesDependentsFirst(t *testing.T) {
 }
 
 func TestNetBoxSyncLeavesForeignObjectsAlone(t *testing.T) {
-	p, f, _ := netboxPlatform(t, D{"type": "tag", "value": "carrel"})
+	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	foreign := D{"id": 50, "name": "web.alice", "cluster": D{"id": 1}}
 	other := D{"id": 51, "name": "hand-made", "cluster": D{"id": 1}}
@@ -350,7 +342,7 @@ func TestNetBoxSyncLeavesForeignObjectsAlone(t *testing.T) {
 		t.Fatal(r.Errors)
 	}
 	vms := f.all("virtualization/virtual-machines/")
-	if find(vms, func(v D) bool { return v["id"] == 50 }) == nil || find(vms, func(v D) bool { return v["id"] == 51 }) == nil || obj(foreign)["tags"] != nil {
+	if find(vms, func(v D) bool { return v["id"] == 50 }) == nil || find(vms, func(v D) bool { return v["id"] == 51 }) == nil || obj(foreign)["owner"] != nil {
 		t.Fatal("a foreign virtual machine was touched", vms)
 	}
 	// The other machine synced; the failure shows on the one that failed.
@@ -365,7 +357,7 @@ func TestNetBoxSyncLeavesForeignObjectsAlone(t *testing.T) {
 }
 
 func TestNetBoxFailedMachineKeepsItsObjects(t *testing.T) {
-	p, f, _ := netboxPlatform(t, D{"type": "tag", "value": "carrel"})
+	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	syncNetBox(t, p)
 	// The custom field disappears: updating a machine now fails.
@@ -384,27 +376,22 @@ func TestNetBoxFailedMachineKeepsItsObjects(t *testing.T) {
 	}
 }
 
-func TestNetBoxOwnerMarker(t *testing.T) {
-	p, f, _ := netboxPlatform(t, D{"type": "owner", "value": "carrel"})
+func TestNetBoxNeedsAnExistingOwner(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
-	if r := syncNetBox(t, p); len(r.Errors) > 0 {
-		t.Fatal(r.Errors)
+	f.objects["users/owners/"] = nil
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "owner carrel does not exist") || len(f.writes) != 0 {
+		t.Fatal(r.Errors, f.writes)
 	}
-	for _, path := range []string{"ipam/vrfs/", "ipam/prefixes/", "ipam/ip-addresses/", "virtualization/interfaces/", "virtualization/virtual-machines/", "ipam/services/", "ipam/fhrp-groups/"} {
-		for _, o := range f.all(path) {
-			if obj(o["owner"])["name"] != "carrel" {
-				t.Fatal(path, o)
-			}
-		}
-	}
-	f.reset()
-	if r := syncNetBox(t, p); r.Writes != 0 || len(r.Errors) > 0 {
-		t.Fatal(r, f.writes)
+	delete(obj(p.Config["netbox"]), "owner")
+	if _, ok, err := p.netboxConfig(); ok || err == nil {
+		t.Fatal("a section without an owner was accepted")
 	}
 }
 
 func TestNetBoxOutageNeverBreaksMachineOperations(t *testing.T) {
-	p, f, srv := netboxPlatform(t, D{"type": "tag", "value": "carrel"})
+	p, f, srv := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	srv.Close()
 	r := syncNetBox(t, p)

@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,8 +32,6 @@ const (
 	nbSettle       = 2 * time.Second
 )
 
-var nbMarkerValue = regexp.MustCompile(`^[-\w]{1,100}$`)
-
 type nbConfig struct {
 	URL       string
 	Token     string
@@ -47,9 +44,8 @@ type nbConfig struct {
 }
 
 // nbMarker is the ownership mark every created object carries: the `owner`
-// field of NetBox 4.5+, or a tag.
+// field of NetBox 4.5+. Operators scope the token's permissions with it.
 type nbMarker struct {
-	Kind  string
 	Value string
 	owner int
 }
@@ -61,7 +57,6 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 	if !boolean(section["enabled"]) {
 		return nbConfig{}, false, nil
 	}
-	marker := obj(section["marker"])
 	c := nbConfig{
 		URL:       strings.TrimRight(str(section["url"]), "/"),
 		Token:     str(section["token"]),
@@ -70,7 +65,7 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		VRF:       textAt(section, "vrf", "carrel"),
 		VMIDField: textAt(section, "vmid_field", "vmid"),
 		Public:    str(p.Config["public_address"]),
-		Marker:    nbMarker{Kind: textAt(marker, "type", "tag"), Value: textAt(marker, "value", "carrel")},
+		Marker:    nbMarker{Value: str(section["owner"])},
 	}
 	switch {
 	case !strings.HasPrefix(c.URL, "http://") && !strings.HasPrefix(c.URL, "https://"):
@@ -79,10 +74,8 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		return c, false, fmt.Errorf("netbox needs token or token_file")
 	case c.Cluster == "":
 		return c, false, fmt.Errorf("netbox.cluster is required")
-	case c.Marker.Kind != "tag" && c.Marker.Kind != "owner":
-		return c, false, fmt.Errorf("netbox.marker.type must be tag or owner")
-	case !nbMarkerValue.MatchString(c.Marker.Value):
-		return c, false, fmt.Errorf("netbox.marker.value is invalid")
+	case c.Marker.Value == "" || len(c.Marker.Value) > 100:
+		return c, false, fmt.Errorf("netbox.owner is required (an existing NetBox owner, at most 100 characters)")
 	}
 	return c, true, nil
 }
@@ -218,55 +211,31 @@ func (c *nbClient) ensure(path string, have, want D) D {
 	return have
 }
 
-func (m nbMarker) fields() D {
-	if m.Kind == "owner" {
-		return D{"owner": D{"name": m.Value}}
-	}
-	return D{"tags": []D{{"name": m.Value, "slug": m.Value}}}
-}
+func (m nbMarker) fields() D { return D{"owner": D{"name": m.Value}} }
 
 // marked reports whether carrel created the object. A listing is filtered
 // server side as well; this check keeps a foreign object out even when the
 // server ignores a filter.
 func (c *nbClient) marked(o D) bool {
-	if c.marker.Kind == "owner" {
-		return integer(obj(o["owner"])["id"]) == c.marker.owner && c.marker.owner != 0
-	}
-	for _, t := range dicts(o["tags"]) {
-		if t["slug"] == c.marker.Value {
-			return true
-		}
-	}
-	return false
+	return c.marker.owner != 0 && integer(obj(o["owner"])["id"]) == c.marker.owner
 }
 
 func (c *nbClient) markedList(path string, extra url.Values) []D {
-	q := url.Values{}
+	q := url.Values{"owner_id": {strconv.Itoa(c.marker.owner)}}
 	for k, v := range extra {
 		q[k] = v
-	}
-	if c.marker.Kind == "owner" {
-		q.Set("owner_id", strconv.Itoa(c.marker.owner))
-	} else {
-		q.Set("tag", c.marker.Value)
 	}
 	return filter(c.list(path, q), c.marked)
 }
 
-// prepare makes the marker usable: a tag is created when missing; an owner is
-// created by the NetBox operator, since an owner needs a group.
+// prepare resolves the owner. The NetBox operator creates it, since an owner
+// needs a group.
 func (c *nbClient) prepare() {
-	if c.marker.Kind == "owner" {
-		found := c.list("users/owners/", url.Values{"name": {c.marker.Value}})
-		if len(found) == 0 {
-			panic(nbError{Msg: "NetBox owner " + c.marker.Value + " does not exist; the NetBox operator creates it"})
-		}
-		c.marker.owner = integer(found[0]["id"])
-		return
+	found := c.list("users/owners/", url.Values{"name": {c.marker.Value}})
+	if len(found) == 0 {
+		panic(nbError{Msg: "NetBox owner " + c.marker.Value + " does not exist; the NetBox operator creates it"})
 	}
-	if len(c.list("extras/tags/", url.Values{"slug": {c.marker.Value}})) == 0 {
-		c.do("POST", "extras/tags/", nil, D{"name": c.marker.Value, "slug": c.marker.Value})
-	}
+	c.marker.owner = integer(found[0]["id"])
 }
 
 // nbSame reports whether have already holds every field of want. Nested

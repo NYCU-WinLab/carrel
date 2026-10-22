@@ -64,7 +64,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-19 | Public ingress uses `140.113.60.184/27` on VLAN 60 at the exit node. CT 207 and the WireGuard hop through the old PVE retire for carrel |
 | 2026-10-19 | No QDevice: every place it could run fails together with B09 |
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
-| 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the ownership marker is set at creation (section 9.4, issue #141) |
+| 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the `owner` is set at creation (section 9.4, issue #141) |
 
 ### 1.6 Current core and deferred work
 
@@ -1124,7 +1124,7 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `url` | NetBox base URL |
 | `token` or `token_file` | API token. `token_file` is read again on every pass, so rotation needs no restart. Never logged or put in an error; a value with a space is sent as the header as is, `nbt_` gets `Bearer`, anything else `Token` |
 | `cluster` | NetBox cluster (name) that holds the virtual machines. It must exist; the NetBox operator owns it |
-| `marker` | `{"type": "tag" or "owner", "value": "..."}`, default tag `carrel`. Use a different marker for each carrel installation that shares a NetBox |
+| `owner` | name of the NetBox owner (NetBox 4.5+) every created object carries. It must exist; the NetBox operator creates it, since an owner needs a group. Use a different owner for each carrel installation that shares a NetBox |
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
 | `vrf` | name of the shared VRF, default `carrel`; a private network's VRF is `<vrf>-<tenant slug>-<network name>` |
 
@@ -1145,13 +1145,13 @@ The tenant segment `10.200.N.0/24`, machine addresses and virtual addresses are 
 platform and unique across tenants, so they share one VRF. Only a private network can overlap
 another tenant's CIDR (a member may choose it, and only managed networks are checked, and only
 within the tenant), so each managed private network gets a VRF of its own. A `raw_l2` network has no addressing carrel manages, so it gets no prefix, VRF or address, only the interface that attaches to it. Carrel creates every
-VRF with the marker and deletes it when nothing needs it. A VRF of the same name that carrel did not
+VRF with the owner and deletes it when nothing needs it. A VRF of the same name that carrel did not
 create is an error, not something to adopt. Dedicated public IPs are not mapped yet
 (the feature does not exist); they would add an IP from the public pool with `nat_inside`.
 
 Behavior:
 
-1. A pass derives the wanted objects from the database, lists the objects that carry the marker,
+1. A pass derives the wanted objects from the database, lists the objects that carry the owner,
    and creates, patches (only fields that differ) or deletes the difference. A pass over an
    unchanged database sends no write. Passes run every 5 minutes (drift repair, backfill of
    machines that existed before the feature was enabled) and 2 seconds after any operation
@@ -1166,11 +1166,11 @@ Behavior:
    `netbox_sync`). A pass-level failure is in the site status and the audit log.
 5. A machine rename is not supported, so it is not synced either.
 
-Least privilege. Every object carries the marker from its creation request, and only marked objects
+Least privilege. Every object carries the owner from its creation request, and only objects with that owner
 are listed, patched or deleted. NetBox cannot constrain what a binding points at, so carrel only
 binds to objects it created in the same pass or earlier (the VM, interface, group and IP), plus the
-configured cluster. FHRP memberships cannot carry a marker; they are deleted only when their group
-is carrel's. Permissions the token needs, each constrained to the marker where NetBox allows:
+configured cluster. FHRP memberships cannot carry an owner; they are deleted only when their group
+is carrel's. Permissions the token needs, each constrained to the owner where NetBox allows:
 
 | Object | view | add | change | delete |
 |---|---|---|---|---|
@@ -1179,8 +1179,7 @@ is carrel's. Permissions the token needs, each constrained to the marker where N
 | ipam.fhrpgroup | yes | yes | yes | yes |
 | ipam.fhrpgroupassignment | yes | yes | no | yes |
 | virtualization.cluster | yes | no | no | no |
-| extras.tag (tag marker only) | yes | yes | no | no |
-| users.owner (owner marker only) | yes | no | no | no |
+| users.owner | yes | no | no | no |
 
 ## 10. Maintenance
 
