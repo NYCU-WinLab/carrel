@@ -3098,6 +3098,11 @@
                   "minLength": 1,
                   "maxLength": 32
                 },
+                "vip": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$",
+                  "description": "An existing virtual address (vip_add) instead of a machine. Give exactly one of machine and vip."
+                },
                 "protocol": {
                   "enum": [
                     "https",
@@ -3116,7 +3121,6 @@
                 }
               },
               "required": [
-                "machine",
                 "protocol",
                 "port"
               ],
@@ -3455,6 +3459,11 @@
                   "minLength": 1,
                   "maxLength": 32
                 },
+                "vip": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$",
+                  "description": "An existing virtual address (vip_add) instead of a machine. Give exactly one of machine and vip."
+                },
                 "protocol": {
                   "enum": [
                     "https",
@@ -3473,7 +3482,6 @@
                 }
               },
               "required": [
-                "machine",
                 "protocol",
                 "port"
               ],

@@ -49,6 +49,17 @@ func publishVIPScenario(g *goldenRun) {
 	call("x", "deployment_plan", D{"machines": []any{D{"name": "fresh2"}}, "publications": []any{D{"machine": "fresh2", "protocol": "https", "port": 443, "sub": "k8s"}}}, alice)
 	call("x", "machine_delete", D{"machine": "fresh", "confirm": "fresh"}, alice)
 
+	// A deployment publishes at the address too (issue #151): reused when it
+	// is already published there, new otherwise, never at an address without
+	// holders, and never both or neither target.
+	call("y", "deployment_plan", D{"publications": []any{D{"vip": "api", "protocol": "tcp", "port": 6443}, D{"vip": "api", "protocol": "udp", "port": 5353}, D{"vip": "api", "protocol": "https", "port": 443, "sub": "k8s"}}}, alice)
+	call("y", "deployment_apply", D{"publications": []any{D{"vip": "api", "protocol": "tcp", "port": 6443}, D{"vip": "api", "protocol": "udp", "port": 5353}, D{"vip": "api", "protocol": "https", "port": 8443, "sub": "ingress"}}}, alice)
+	call("y", "deployment_plan", D{"publications": []any{D{"vip": "empty", "protocol": "tcp", "port": 80}}}, alice)
+	call("y", "deployment_plan", D{"publications": []any{D{"machine": "cp1", "vip": "api", "protocol": "tcp", "port": 80}}}, alice)
+	call("y", "deployment_plan", D{"publications": []any{D{"vip": "api", "protocol": "tcp", "port": 80}, D{"machine": "api", "protocol": "tcp", "port": 80}}}, alice)
+	call("y", "port_list", D{}, alice)
+	call("y", "domain_remove", D{"name": "ingress.alice.winlab.tw"}, alice)
+
 	// The address stays while something points at it.
 	call("r", "vip_remove", D{"name": "api"}, alice)
 	call("r", "vip_add", D{"name": "api", "machines": []any{"cp2"}}, alice)

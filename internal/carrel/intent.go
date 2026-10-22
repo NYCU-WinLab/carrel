@@ -34,9 +34,27 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 	}
 	seen = map[string]bool{}
 	for _, r := range dicts(a["publications"]) {
-		m := machine(r["machine"])
+		// A machine, or a virtual address that one of its holders answers for (issue #151).
+		if (r["machine"] == nil) == (r["vip"] == nil) {
+			fail("invalid", "A publication names exactly one of machine and vip", D{"recovery": "revise_request"})
+		}
+		var m D
+		var vip vipRecord
+		target := ""
+		if r["vip"] != nil {
+			vip = e.VIP(t, r["vip"])
+			target = "vip:" + vip.Name
+		} else {
+			m = machine(r["machine"])
+			target = str(m["name"])
+		}
 		proto, port := str(r["protocol"]), integer(r["port"])
-		pub := D{"machine": m["name"], "protocol": proto, "port": port}
+		pub := D{"protocol": proto, "port": port}
+		if vip.ID != "" {
+			pub["vip"] = vip.Name
+		} else {
+			pub["machine"] = m["name"]
+		}
 		key := ""
 		if proto == "https" {
 			if str(r["sub"]) == "" {
@@ -45,22 +63,22 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			name := str(r["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
 			key = "https:" + name
 			old, found := domainNamed(e.domains(integer(t["n"])), name)
-			// A new machine has no vmid yet: never the vmid 0 of a virtual address's domain.
-			if found && (old.VIP != "" || old.VMID != integer(m["vmid"]) || old.TargetPort != port || old.State != "ready") {
+			if found && (!at(m, vip, old.VMID, old.VIP) || old.TargetPort != port || old.State != "ready") {
 				fail("conflict", "Domain already belongs to another or incomplete publication", D{"name": name})
 			}
 			pub = merge(pub, D{"sub": r["sub"], "url": "https://" + name, "reused": found})
 			if !found {
+				requireHolder(vip)
 				delta["domains"] = num(delta["domains"]) + 1
 			}
 		} else {
 			if r["sub"] != nil {
 				fail("invalid", "sub is only valid for HTTPS")
 			}
-			key = string(encoded([]any{m["name"], proto, port}))
+			key = string(encoded([]any{target, proto, port}))
 			found := false
 			for _, p := range e.ports(integer(t["n"])) {
-				if p.VIP == "" && p.VMID == integer(m["vmid"]) && p.Port == port && p.Proto == proto {
+				if at(m, vip, p.VMID, p.VIP) && p.Port == port && p.Proto == proto {
 					found = true
 					if p.State == "deleting" {
 						fail("conflict", "Finish removing this port before reusing it", D{"recovery": "finish_cleanup"})
@@ -68,9 +86,10 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 					break
 				}
 			}
-			reused := found || (m["vmid"] == nil && proto == "tcp" && port == 22)
+			reused := found || (vip.ID == "" && m["vmid"] == nil && proto == "tcp" && port == 22)
 			pub["reused"] = reused
 			if !reused {
+				requireHolder(vip)
 				delta["public_ports"] = num(delta["public_ports"]) + 1
 			}
 		}
@@ -212,7 +231,17 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 		add("peers", D{"id": randomID()[:16], "tenant_n": n, "source": str(source["ip"]) + "/32", "target": target["ip"], "port": c["port"], "proto": c["protocol"], "from_machine": source["name"], "machine": target["name"]})
 	}
 	for _, p := range dicts(plan["publications"]) {
-		m := machine(p["machine"])
+		var m D
+		var vip vipRecord
+		if p["vip"] != nil {
+			vip = e.VIP(t, p["vip"])
+			// The address must still be this one when the deployment resumes.
+			if ref := []any{"vips", vip.ID, orNil(vip.OperationID)}; !contains(references, ref) {
+				references = append(references, ref)
+			}
+		} else {
+			m = machine(p["machine"])
+		}
 		kind := "ports"
 		if p["protocol"] == "https" {
 			kind = "domains"
@@ -221,14 +250,14 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			var reference []any
 			if kind == "domains" {
 				for _, g := range e.domains(n) {
-					if g.VIP == "" && g.VMID == integer(m["vmid"]) && g.Name == str(p["sub"])+"."+str(t["slug"])+".winlab.tw" {
+					if at(m, vip, g.VMID, g.VIP) && g.Name == str(p["sub"])+"."+str(t["slug"])+".winlab.tw" {
 						reference = []any{kind, g.ID, orNil(g.OperationID)}
 						break
 					}
 				}
 			} else {
 				for _, g := range e.ports(n) {
-					if g.VIP == "" && g.VMID == integer(m["vmid"]) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
+					if at(m, vip, g.VMID, g.VIP) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
 						reference = []any{kind, g.ID, orNil(g.OperationID)}
 						break
 					}
@@ -240,11 +269,16 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			references = append(references, reference)
 			continue
 		}
+		var vmid, ip any = m["vmid"], m["ip"]
+		target := D{}
+		if vip.ID != "" {
+			vmid, ip, target = 0, vip.Address, D{"vip": vip.ID}
+		}
 		if kind == "domains" {
-			add(kind, D{"id": randomID()[:16], "tenant_n": n, "vmid": m["vmid"], "slug": t["slug"], "sub": p["sub"], "name": str(p["sub"]) + "." + str(t["slug"]) + ".winlab.tw", "target_port": p["port"], "state": "queued", "ready_at": time.Now().Unix()})
+			add(kind, merge(D{"id": randomID()[:16], "tenant_n": n, "vmid": vmid, "slug": t["slug"], "sub": p["sub"], "name": str(p["sub"]) + "." + str(t["slug"]) + ".winlab.tw", "target_port": p["port"], "state": "queued", "ready_at": time.Now().Unix()}, target))
 		} else {
 			port := e.AllocatePort(t)
-			add(kind, D{"id": fmt.Sprintf("%d-%d-%s", n, port, str(p["protocol"])), "tenant_n": n, "vmid": m["vmid"], "ip": m["ip"], "public_port": port, "port": p["port"], "proto": p["protocol"]})
+			add(kind, merge(D{"id": fmt.Sprintf("%d-%d-%s", n, port, str(p["protocol"])), "tenant_n": n, "vmid": vmid, "ip": ip, "public_port": port, "port": p["port"], "proto": p["protocol"]}, target))
 		}
 	}
 	return created, bindings, references
@@ -376,23 +410,32 @@ func (e *Execution) PublishDeployment(t, a, w D) {
 func (e *Execution) AccessResult(t, a D) D {
 	endpoints := []D{}
 	for _, p := range dicts(a["publications"]) {
-		m := e.Machine(t, p["machine"])
+		var m D
+		var vip vipRecord
+		who := D{}
+		if p["vip"] != nil {
+			vip = e.VIP(t, p["vip"])
+			who["vip"] = vip.Name
+		} else {
+			m = e.Machine(t, p["machine"])
+			who["machine"] = m["name"]
+		}
 		if p["protocol"] == "https" {
 			name := str(p["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
 			var state any
 			if d, ok := domainNamed(e.domains(integer(t["n"])), name); ok {
 				state = d.State
 			}
-			endpoints = append(endpoints, D{"machine": m["name"], "url": "https://" + name, "state": state, "verification": "routing_configured"})
+			endpoints = append(endpoints, merge(who, D{"url": "https://" + name, "state": state, "verification": "routing_configured"}))
 		} else {
 			var public, protocol any
 			for _, g := range e.ports(integer(t["n"])) {
-				if g.VMID == integer(m["vmid"]) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
+				if at(m, vip, g.VMID, g.VIP) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
 					public, protocol = g.PublicPort, g.Proto
 					break
 				}
 			}
-			endpoints = append(endpoints, D{"machine": m["name"], "host": "carrel.winlab.tw", "port": public, "protocol": protocol, "verification": "routing_configured"})
+			endpoints = append(endpoints, merge(who, D{"host": "carrel.winlab.tw", "port": public, "protocol": protocol, "verification": "routing_configured"}))
 		}
 	}
 	return D{"connections": arr(a["connections"]), "endpoints": endpoints}

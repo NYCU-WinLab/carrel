@@ -163,16 +163,32 @@ func (e *Execution) publishTarget(t, a D) (vmid int, ip string, vip vipRecord) {
 		m := e.Machine(t, a["machine"])
 		return integer(m["vmid"]), str(m["ip"]), vip
 	}
+	vip = e.VIP(t, a["vip"])
+	return 0, vip.Address, vip
+}
+
+// VIP finds one of the tenant's virtual addresses by name or id.
+func (e *Execution) VIP(t D, ref any) vipRecord {
 	for _, v := range e.vips(integer(t["n"])) {
-		if v.Name == a["vip"] || v.ID == a["vip"] {
+		if v.Name == ref || v.ID == ref {
 			if v.State == "deleting" {
 				fail("conflict", "This virtual address is being removed", D{"recovery": "revise_request"})
 			}
-			return 0, v.Address, v
+			return v
 		}
 	}
 	fail("not_found", "Virtual address not found in this tenant")
-	return
+	return vipRecord{}
+}
+
+// at reports whether a grant with this vmid and virtual address points
+// where m or vip does. A planned machine has no vmid yet, which reads as 0,
+// the vmid of every grant at a virtual address.
+func at(m D, vip vipRecord, vmid int, address string) bool {
+	if vip.ID != "" {
+		return address == vip.ID
+	}
+	return address == "" && m["vmid"] != nil && vmid == integer(m["vmid"])
 }
 
 // requireHolder refuses a new publication at a virtual address no machine
