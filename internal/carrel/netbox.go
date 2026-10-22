@@ -290,8 +290,8 @@ type nbAddress struct {
 }
 
 type nbIface struct {
-	name, description, vrf string
-	addresses              []nbAddress
+	name, description, vrf, mac string
+	addresses                   []nbAddress
 }
 
 type nbService struct {
@@ -302,6 +302,7 @@ type nbService struct {
 type nbMachine struct {
 	vmid, tenantN                       int
 	name, tenant, kind, status, comment string
+	image, node, onBoot                 string
 	cpu                                 float64
 	memoryMB, diskMB                    int
 	primary                             nbAddress
@@ -332,6 +333,25 @@ func nbStatus(m D) string {
 		return "planned"
 	}
 	return "offline"
+}
+
+// nbOnBoot mirrors the Proxmox onboot flag: a running machine comes back at
+// boot, a stopped one stays off.
+func nbOnBoot(m D) string {
+	if m["power_state"] == "running" {
+		return "on"
+	}
+	return "off"
+}
+
+// nbSlug turns an image name into a NetBox slug.
+func nbSlug(name string) string {
+	return strings.Trim(strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(name)), "-")
 }
 
 func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
@@ -368,15 +388,16 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		for _, m := range machines {
 			vmid := integer(m["vmid"])
 			nm := nbMachine{vmid: vmid, tenantN: n, name: str(m["name"]) + "." + slug, tenant: slug, kind: str(m["kind"]), status: nbStatus(m),
+				image: str(m["image"]), node: str(m["node"]), onBoot: nbOnBoot(m),
 				cpu: num(m["cpu"]), memoryMB: integer(m["memory_mb"]), diskMB: integer(m["disk_gb"]) * 1024}
 			nm.comment = fmt.Sprintf("carrel %s, tenant %s, proxmox vmid %d", nm.kind, slug, vmid)
 			key := fmt.Sprintf("%d/eth0", vmid)
 			primary := nbAddress{tn.vrf, str(m["ip"]) + "/24", "carrel address of " + nm.name, key}
 			nm.primary = primary
-			nm.ifaces = append(nm.ifaces, nbIface{name: "eth0", vrf: tn.vrf, description: "carrel primary NIC, mac " + str(m["mac"]), addresses: []nbAddress{primary}})
+			nm.ifaces = append(nm.ifaces, nbIface{name: "eth0", vrf: tn.vrf, mac: str(m["mac"]), description: "carrel primary NIC", addresses: []nbAddress{primary}})
 			for _, nic := range dicts(m["nics"]) {
 				network := str(nic["network"])
-				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), vrf: netVRF[network], description: fmt.Sprintf("carrel network %s (%s), mac %s", names[network], nic["mode"], nic["mac"])}
+				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), vrf: netVRF[network], mac: str(nic["mac"]), description: fmt.Sprintf("carrel network %s (%s)", names[network], nic["mode"])}
 				if ip := str(nic["ip"]); ip != "" {
 					iface.addresses = append(iface.addresses, nbAddress{netVRF[network], fmt.Sprintf("%s/%d", ip, integer(nic["prefix"])), "carrel address of " + nm.name, fmt.Sprintf("%d/%s", vmid, iface.name)})
 				}
@@ -439,6 +460,9 @@ func vipsAsD(xs []vipRecord) []any {
 // nbState is what the pass found in NetBox and what it kept.
 type nbState struct {
 	vrfs, prefixes, ips, ifaces, vms, services, groups, assignments []D
+	platforms, macs, disks                                          []D
+	devices                                                         map[string]int // lower-case node name -> NetBox device id
+	platformIDs                                                     map[string]int // image -> NetBox platform id
 	keep                                                            map[string]map[int]bool
 }
 
@@ -497,7 +521,7 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 		panic(nbError{Msg: "NetBox cluster " + cfg.Cluster + " does not exist"})
 	}
 	clusterID := integer(cluster[0]["id"])
-	s := &nbState{keep: map[string]map[int]bool{}}
+	s := &nbState{keep: map[string]map[int]bool{}, devices: map[string]int{}, platformIDs: map[string]int{}}
 	s.vrfs = c.markedList("ipam/vrfs/", nil)
 	s.prefixes = c.markedList("ipam/prefixes/", nil)
 	s.ips = c.markedList("ipam/ip-addresses/", nil)
@@ -506,6 +530,14 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 	s.services = c.markedList("ipam/services/", nil)
 	s.groups = c.markedList("ipam/fhrp-groups/", nil)
 	s.assignments = c.list("ipam/fhrp-group-assignments/", nil)
+	s.platforms = c.markedList("dcim/platforms/", nil)
+	s.macs = c.markedList("dcim/mac-addresses/", nil)
+	s.disks = c.markedList("virtualization/virtual-disks/", nil)
+	// The cluster's devices are the hypervisor nodes. They belong to the NetBox
+	// operator: carrel only points a machine at the one it runs on.
+	for _, d := range c.list("dcim/devices/", url.Values{"cluster_id": {strconv.Itoa(clusterID)}}) {
+		s.devices[strings.ToLower(str(d["name"]))] = integer(d["id"])
+	}
 
 	wanted := e.netboxWanted(cfg)
 	synced := map[int]string{} // vmid -> error, "" for a clean machine
@@ -612,11 +644,29 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 	if have == nil && len(c.list("virtualization/virtual-machines/", url.Values{"name": {m.name}, "cluster_id": {strconv.Itoa(clusterID)}})) > 0 {
 		panic(nbError{Msg: "a NetBox virtual machine named " + m.name + " exists but carrel did not create it"})
 	}
-	want := D{"name": m.name, "cluster": clusterID, "status": m.status, "vcpus": m.cpu, "memory": m.memoryMB, "disk": m.diskMB, "description": m.comment, "custom_fields": D{cfg.VMIDField: m.vmid}}
+	// A machine without a platform or device in NetBox is recorded without one.
+	var platform, device any
+	if m.image != "" {
+		platform = e.netboxPlatform(c, s, m.image)
+	}
+	if id, ok := s.devices[strings.ToLower(m.node)]; ok {
+		device = id
+	}
+	// The disk size comes from the virtual disk below; NetBox sums it into the machine.
+	want := D{"name": m.name, "cluster": clusterID, "status": m.status, "vcpus": m.cpu, "memory": m.memoryMB, "start_on_boot": m.onBoot, "platform": platform, "device": device, "description": m.comment, "custom_fields": D{cfg.VMIDField: m.vmid}}
 	vm := c.ensure("virtualization/virtual-machines/", have, want)
 	vmID := integer(vm["id"])
 	s.kept("vms", vmID)
 	vmNB[m.vmid] = vmID
+	if m.diskMB > 0 {
+		name := "scsi0"
+		if m.kind == "ct" {
+			name = "rootfs"
+		}
+		haveDisk := one(s.disks, func(o D) bool { return o["name"] == name && refID(o["virtual_machine"]) == vmID })
+		disk := c.ensure("virtualization/virtual-disks/", haveDisk, D{"virtual_machine": vmID, "name": name, "size": m.diskMB, "description": "carrel root disk"})
+		s.kept("disks", integer(disk["id"]))
+	}
 	var primaryID int
 	for _, f := range m.ifaces {
 		haveIface := one(s.ifaces, func(o D) bool { return o["name"] == f.name && refID(o["virtual_machine"]) == vmID })
@@ -628,6 +678,15 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 		ifaceID := integer(iface["id"])
 		s.kept("ifaces", ifaceID)
 		ifaceNB[fmt.Sprintf("%d/%s", m.vmid, f.name)] = ifaceID
+		if f.mac != "" {
+			mac := strings.ToUpper(f.mac)
+			haveMAC := one(s.macs, func(o D) bool {
+				return strings.EqualFold(str(o["mac_address"]), mac) && o["assigned_object_type"] == nbIfaceType && integer(o["assigned_object_id"]) == ifaceID
+			})
+			got := c.ensure("dcim/mac-addresses/", haveMAC, D{"mac_address": mac, "assigned_object_type": nbIfaceType, "assigned_object_id": ifaceID})
+			s.kept("macs", integer(got["id"]))
+			c.ensure("virtualization/interfaces/", iface, D{"primary_mac_address": integer(got["id"])})
+		}
 		for _, a := range f.addresses {
 			vrfID := vrfIDs[a.vrf]
 			haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
@@ -646,6 +705,28 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 		svc := c.ensure("ipam/services/", haveSvc, D{"parent_object_type": nbVMType, "parent_object_id": vmID, "name": sv.name, "port_mappings": []string{fmt.Sprintf("%s/%d", sv.protocol, sv.port)}, "description": sv.description})
 		s.kept("services", integer(svc["id"]))
 	}
+}
+
+// netboxPlatform makes sure the NetBox platform of an image exists, once per
+// pass. carrel creates and owns these; an unowned platform of the same name is
+// not touched.
+func (e *Execution) netboxPlatform(c *nbClient, s *nbState, image string) int {
+	if id, ok := s.platformIDs[image]; ok {
+		return id
+	}
+	have := one(s.platforms, func(o D) bool { return o["name"] == image })
+	if have == nil && len(c.list("dcim/platforms/", url.Values{"name": {image}})) > 0 {
+		panic(nbError{Msg: "a NetBox platform named " + image + " exists but carrel did not create it"})
+	}
+	created := have == nil
+	got := c.ensure("dcim/platforms/", have, D{"name": image, "slug": nbSlug(image), "description": "carrel image"})
+	if created {
+		s.platforms = append(s.platforms, got)
+	}
+	id := integer(got["id"])
+	s.kept("platforms", id)
+	s.platformIDs[image] = id
+	return id
 }
 
 func (e *Execution) netboxVIP(c *nbClient, s *nbState, v nbVIP, vrfID int, ifaceNB map[string]int) {
@@ -681,9 +762,16 @@ func (e *Execution) netboxProtectMachine(s *nbState, name string) {
 	}
 	id := integer(vm["id"])
 	s.kept("vms", id)
+	if platform := refID(vm["platform"]); platform != 0 {
+		s.kept("platforms", platform)
+	}
+	s.protect("disks", s.disks, func(o D) bool { return refID(o["virtual_machine"]) == id })
 	ifaces := filter(s.ifaces, func(o D) bool { return refID(o["virtual_machine"]) == id })
 	for _, f := range ifaces {
 		s.kept("ifaces", integer(f["id"]))
+		s.protect("macs", s.macs, func(o D) bool {
+			return o["assigned_object_type"] == nbIfaceType && integer(o["assigned_object_id"]) == integer(f["id"])
+		})
 		s.protect("ips", s.ips, func(o D) bool {
 			return o["assigned_object_type"] == nbIfaceType && integer(o["assigned_object_id"]) == integer(f["id"])
 		})
@@ -722,8 +810,11 @@ func (e *Execution) netboxPrune(c *nbClient, s *nbState, fail func(string, any) 
 		// A membership cannot carry the marker; it is ours when its group is.
 		{"assignments", "ipam/fhrp-group-assignments/", filter(s.assignments, func(o D) bool { return ours[refID(o["group"])] })},
 		{"ips", "ipam/ip-addresses/", s.ips},
+		{"macs", "dcim/mac-addresses/", s.macs},
 		{"ifaces", "virtualization/interfaces/", s.ifaces},
+		{"disks", "virtualization/virtual-disks/", s.disks},
 		{"vms", "virtualization/virtual-machines/", s.vms},
+		{"platforms", "dcim/platforms/", s.platforms},
 		{"groups", "ipam/fhrp-groups/", s.groups},
 		{"prefixes", "ipam/prefixes/", s.prefixes},
 		{"vrfs", "ipam/vrfs/", s.vrfs},

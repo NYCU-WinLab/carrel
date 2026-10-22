@@ -24,13 +24,14 @@ type fakeNetBox struct {
 	fields  map[string]bool
 }
 
-var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true}
-var nbChoices = map[string]bool{"status": true, "role": true}
+var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true}
+var nbChoices = map[string]bool{"status": true, "role": true, "start_on_boot": true}
 
 func newFakeNetBox(t *testing.T) (*fakeNetBox, *httptest.Server) {
 	f := &fakeNetBox{objects: map[string][]D{}, next: 100, fields: map[string]bool{"vmid": true}}
 	f.objects["virtualization/clusters/"] = []D{{"id": 1, "name": "carrel"}}
 	f.objects["users/owners/"] = []D{{"id": 7, "name": "carrel"}}
+	f.objects["dcim/devices/"] = []D{{"id": 3, "name": "Carrel01", "cluster": D{"id": 1}}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -213,11 +214,31 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 		t.Fatal(vms)
 	}
 	web := find(vms, func(v D) bool { return v["name"] == "web.alice" })
-	if web == nil || obj(web["custom_fields"])["vmid"] != float64(10100) || obj(web["status"])["value"] != "active" || web["vcpus"] != float64(2) || web["disk"] != float64(20480) || obj(web["primary_ip4"])["id"] == nil {
+	if web == nil || obj(web["custom_fields"])["vmid"] != float64(10100) || obj(web["status"])["value"] != "active" || web["vcpus"] != float64(2) || web["disk"] != nil || obj(web["start_on_boot"])["value"] != "on" || integer(obj(web["device"])["id"]) != 3 || obj(web["primary_ip4"])["id"] == nil {
 		t.Fatal(web)
 	}
-	if db := find(vms, func(v D) bool { return v["name"] == "db.alice" }); obj(db["status"])["value"] != "offline" || obj(db["custom_fields"])["vmid"] != float64(10101) {
+	if db := find(vms, func(v D) bool { return v["name"] == "db.alice" }); obj(db["status"])["value"] != "offline" || obj(db["custom_fields"])["vmid"] != float64(10101) || obj(db["start_on_boot"])["value"] != "off" || db["platform"] != nil || db["device"] != nil {
 		t.Fatal(db)
+	}
+	// The platform is carrel's own, named after the image.
+	platforms := f.all("dcim/platforms/")
+	if len(platforms) != 1 || platforms[0]["name"] != "debian-13" || platforms[0]["slug"] != "debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
+		t.Fatal(platforms, web["platform"])
+	}
+	// Each machine's disk is a virtual disk, in MiB.
+	disks := f.all("virtualization/virtual-disks/")
+	root, rootfs := find(disks, func(v D) bool { return v["name"] == "scsi0" }), find(disks, func(v D) bool { return v["name"] == "rootfs" })
+	if len(disks) != 2 || root == nil || rootfs == nil || root["size"] != float64(20480) || rootfs["size"] != float64(10240) || integer(obj(root["virtual_machine"])["id"]) != integer(web["id"]) {
+		t.Fatal(disks)
+	}
+	// A MAC address is an object of its own and the interface's primary one.
+	macs := f.all("dcim/mac-addresses/")
+	eth0 := find(f.all("virtualization/interfaces/"), func(v D) bool {
+		return v["name"] == "eth0" && integer(obj(v["virtual_machine"])["id"]) == integer(web["id"])
+	})
+	mac := find(macs, func(v D) bool { return v["mac_address"] == "02:CA:01:00:00:01" })
+	if len(macs) != 4 || mac == nil || integer(mac["assigned_object_id"]) != integer(eth0["id"]) || integer(obj(eth0["primary_mac_address"])["id"]) != integer(mac["id"]) {
+		t.Fatal(macs, eth0)
 	}
 	// The tenant segment shares one VRF; a private network has its own.
 	vrfs := f.all("ipam/vrfs/")
@@ -267,7 +288,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 		t.Fatal(lab, prefixes)
 	}
 	// Every object that can carry the owner has it from the first write.
-	for _, path := range []string{"ipam/vrfs/", "ipam/prefixes/", "ipam/ip-addresses/", "virtualization/interfaces/", "virtualization/virtual-machines/", "ipam/services/", "ipam/fhrp-groups/"} {
+	for _, path := range []string{"ipam/vrfs/", "ipam/prefixes/", "ipam/ip-addresses/", "virtualization/interfaces/", "virtualization/virtual-machines/", "ipam/services/", "ipam/fhrp-groups/", "dcim/platforms/", "dcim/mac-addresses/", "virtualization/virtual-disks/"} {
 		for _, o := range f.all(path) {
 			if obj(o["owner"])["name"] != "carrel" {
 				t.Fatal(path, o)
