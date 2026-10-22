@@ -1170,7 +1170,9 @@ Least privilege. Every object carries the owner from its creation request, and o
 are listed, patched or deleted. NetBox cannot constrain what a binding points at, so carrel only
 binds to objects it created in the same pass or earlier (the VM, interface, group and IP), plus the
 configured cluster. FHRP memberships cannot carry an owner; they are deleted only when their group
-is carrel's. Permissions the token needs, each constrained to the owner where NetBox allows:
+is carrel's. The owner belongs to the sync alone: a pass deletes every object with that owner it does
+not want, so nobody gives the owner to an object by hand, and the owner's object count is 0 before
+the first pass. Permissions the token needs, each constrained to the owner where NetBox allows:
 
 | Object | view | add | change | delete |
 |---|---|---|---|---|

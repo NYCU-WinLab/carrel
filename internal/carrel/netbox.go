@@ -229,13 +229,14 @@ func (c *nbClient) markedList(path string, extra url.Values) []D {
 }
 
 // prepare resolves the owner. The NetBox operator creates it, since an owner
-// needs a group.
+// needs a group. The name is compared here too: a server that ignored the
+// filter must not hand carrel someone else's owner to prune.
 func (c *nbClient) prepare() {
-	found := c.list("users/owners/", url.Values{"name": {c.marker.Value}})
-	if len(found) == 0 {
+	found := find(c.list("users/owners/", url.Values{"name": {c.marker.Value}}), func(o D) bool { return o["name"] == c.marker.Value })
+	if found == nil {
 		panic(nbError{Msg: "NetBox owner " + c.marker.Value + " does not exist; the NetBox operator creates it"})
 	}
-	c.marker.owner = integer(found[0]["id"])
+	c.marker.owner = integer(found["id"])
 }
 
 // nbSame reports whether have already holds every field of want. Nested
