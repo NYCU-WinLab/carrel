@@ -156,6 +156,7 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 					return D{"port": e.PublicGrant("ports", p.D(), n), "quota_after": e.Quota(t)}
 				}
 			}
+			requireHolder(vip)
 			delta = D{"public_ports": 1}
 			e.Quota(t, delta)
 			public := e.AllocatePort(t)

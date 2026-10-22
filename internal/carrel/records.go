@@ -168,14 +168,19 @@ func (e *Execution) publishTarget(t, a D) (vmid int, ip string, vip vipRecord) {
 			if v.State == "deleting" {
 				fail("conflict", "This virtual address is being removed", D{"recovery": "revise_request"})
 			}
-			if len(v.VMIDs) == 0 {
-				fail("invalid", "Add a machine to the virtual address with vip_add first", D{"recovery": "resolve_prerequisite"})
-			}
 			return 0, v.Address, v
 		}
 	}
 	fail("not_found", "Virtual address not found in this tenant")
 	return
+}
+
+// requireHolder refuses a new publication at a virtual address no machine
+// may hold. An existing one is kept: its holders can come back.
+func requireHolder(vip vipRecord) {
+	if vip.ID != "" && len(vip.VMIDs) == 0 {
+		fail("invalid", "Add a machine to the virtual address with vip_add first", D{"recovery": "resolve_prerequisite"})
+	}
 }
 
 // vipHosts are the host numbers kept for virtual addresses, above every

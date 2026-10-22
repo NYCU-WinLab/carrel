@@ -42,6 +42,13 @@ func publishVIPScenario(g *goldenRun) {
 	call("d", "domain_add", D{"machine": "cp1", "sub": "k8s", "target_port": 443}, alice)
 	call("d", "domain_list", D{}, alice)
 
+	// A new machine in a deployment is no match for the address's vmid 0:
+	// its port is new, and the address's domain name is taken.
+	call("x", "deployment_plan", D{"machines": []any{D{"name": "fresh"}}, "publications": []any{D{"machine": "fresh", "protocol": "tcp", "port": 6443}}}, alice)
+	call("x", "deployment_apply", D{"machines": []any{D{"name": "fresh"}}, "publications": []any{D{"machine": "fresh", "protocol": "tcp", "port": 6443}}}, alice)
+	call("x", "deployment_plan", D{"machines": []any{D{"name": "fresh2"}}, "publications": []any{D{"machine": "fresh2", "protocol": "https", "port": 443, "sub": "k8s"}}}, alice)
+	call("x", "machine_delete", D{"machine": "fresh", "confirm": "fresh"}, alice)
+
 	// The address stays while something points at it.
 	call("r", "vip_remove", D{"name": "api"}, alice)
 	call("r", "vip_add", D{"name": "api", "machines": []any{"cp2"}}, alice)

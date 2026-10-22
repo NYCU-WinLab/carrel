@@ -164,6 +164,7 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 		}
 		delta = D{"domains": 0}
 		if !found {
+			requireHolder(vip)
 			delta["domains"] = 1
 			e.Quota(t, delta)
 			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Sub: str(a["sub"]), Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
