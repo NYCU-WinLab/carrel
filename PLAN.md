@@ -1182,6 +1182,10 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | virtualization.virtualmachine, vminterface | yes | yes | yes | yes |
 | ipam.ipaddress, prefix, vrf, service | yes | yes | yes | yes |
 | ipam.fhrpgroup | yes | yes | yes | yes |
+| dcim.platform | yes | yes | yes | yes |
+| dcim.macaddress | yes | yes | yes | yes |
+| virtualization.virtualdisk | yes | yes | yes | yes |
+| dcim.device | yes | no | no | no |
 | ipam.fhrpgroupassignment | yes | yes | no | yes |
 | virtualization.cluster | yes | no | no | no |
 | users.owner | yes | no | no | no |
