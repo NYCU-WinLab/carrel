@@ -144,7 +144,9 @@ func (r *recorder) guests(ctx context.Context) {
 				for _, nic := range dicts(m["nics"]) {
 					interfaces = append(interfaces, D{"mac": nic["mac"], "ip": nic["ip"], "mtu": 1450})
 				}
-				r.p.Store.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"boot_id": "boot-" + key, "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked", "interfaces": interfaces})
+				// With its vmid, as GuestReport writes it, so deleting the machine
+				// removes it and a reused vmid never reads it as fresh.
+				r.p.Store.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"vmid": m["vmid"], "boot_id": "boot-" + key, "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked", "interfaces": interfaces})
 				r.p.notifyReport(integer(m["vmid"]))
 			}
 		}
