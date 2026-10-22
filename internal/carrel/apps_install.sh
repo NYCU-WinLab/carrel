@@ -1,7 +1,9 @@
 #!/bin/sh
-# Installs carrel-deployd for one app (PLAN 7.9). Run by the machine owner,
-# with the agent token on standard input, so it never shows in ps (issue #33):
-#   f=$(mktemp) && curl -fsSL @ORIGIN@/apps/v1/install.sh -o "$f" && printf '%s\n' TOKEN | sudo sh "$f" --app NAME --port N --user USER --start CMD; rm -f "$f"
+# Installs carrel-deployd for one app (PLAN 7.9). Run by the machine owner:
+#   f=$(mktemp) && curl -fsSL @ORIGIN@/apps/v1/install.sh -o "$f" && sudo sh "$f" --app NAME --port N --user USER --start CMD; rm -f "$f"
+# The agent token comes on standard input, never in a command line that ps or
+# a shell history keeps (issue #33): piped through ssh from the client
+# (printf '%s\n' TOKEN | ssh host '<line>'), or pasted at the prompt.
 # CARREL_APP_TOKEN in the environment still works for older install lines.
 set -eu
 
@@ -17,10 +19,19 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 if [ -z "${CARREL_APP_TOKEN:-}" ]; then
+	[ -t 0 ] && printf 'carrel agent token: ' >&2
 	IFS= read -r CARREL_APP_TOKEN || true
 fi
-# Also keeps the token from breaking out of the JSON below.
-echo "${CARREL_APP_TOKEN:-}" | grep -Eq '^cdt_[A-Za-z0-9_-]+$' || { echo "the agent token is required on standard input" >&2; exit 1; }
+# A token pasted from Windows ends in CR.
+CARREL_APP_TOKEN=$(printf '%s' "${CARREL_APP_TOKEN:-}" | tr -d '\r')
+# One line of the token's alphabet only: it also cannot break out of the JSON below.
+case "$CARREL_APP_TOKEN" in
+cdt_*) ;;
+*) echo "the agent token (cdt_...) is required on standard input" >&2; exit 1 ;;
+esac
+case "${CARREL_APP_TOKEN#cdt_}" in
+"" | *[!A-Za-z0-9_-]*) echo "the agent token (cdt_...) is malformed" >&2; exit 1 ;;
+esac
 echo "$app" | grep -Eq '^[a-z][a-z0-9-]{0,31}$' || { echo "invalid --app" >&2; exit 1; }
 echo "$port" | grep -Eq '^[0-9]{1,5}$' || { echo "invalid --port" >&2; exit 1; }
 [ -n "$start" ] || { echo "--start is required" >&2; exit 1; }

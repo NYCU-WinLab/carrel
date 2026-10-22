@@ -37,7 +37,15 @@ def test_the_agent_token_comes_on_standard_input(tmp_path):
 def test_a_missing_or_malformed_token_stops_before_anything_is_installed(tmp_path):
     for stdin in ("", "\n", 'cdt_x", "app": "other\n', "notatoken\n"):
         p = run(tmp_path, stdin)
-        assert p.returncode == 1 and "agent token is required" in p.stderr and "curl-reached" not in p.stderr
+        assert p.returncode == 1 and "agent token (cdt_...) is" in p.stderr and "curl-reached" not in p.stderr
+
+
+def test_a_token_pasted_from_windows_or_with_a_second_line_is_handled(tmp_path):
+    # CR is dropped; read takes one line, so a second line cannot reach the JSON.
+    assert "curl-reached" in run(tmp_path, TOKEN + "\r\n").stderr
+    assert "curl-reached" in run(tmp_path, TOKEN + '\n","origin":"http://evil\n').stderr
+    p = run(tmp_path, "", {"CARREL_APP_TOKEN": TOKEN + '\n","origin":"http://evil'})
+    assert p.returncode == 1 and "malformed" in p.stderr
 
 
 def test_older_install_lines_still_pass_the_token_in_the_environment(tmp_path):
