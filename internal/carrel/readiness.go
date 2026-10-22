@@ -46,7 +46,11 @@ func readinessState(m D) {
 		return
 	}
 	if unmanaged(m) {
-		// No guest reports: SSH is only a hint for these machines.
+		// No guest reports: SSH is only a hint for these machines. One with
+		// service ports keeps the state its port probe gave it.
+		if len(servicePortsOf(m)) > 0 && m["state"] == "ready" {
+			return
+		}
 		if m["power_state"] == "running" || m["state"] == "readiness_unknown" {
 			m["state"] = bootState(m)
 		}
@@ -75,6 +79,10 @@ func (e *Execution) ObserveSSH(m D) {
 		r["service_status"] = "unavailable"
 		if ready {
 			r["service_status"] = "verified"
+			if contains([]string{"initializing", "needs_owner_fix"}, m["state"]) {
+				m["state"] = "ready"
+				delete(m, "reason")
+			}
 		} else if m["state"] == "ready" {
 			m["state"] = "initializing"
 		}

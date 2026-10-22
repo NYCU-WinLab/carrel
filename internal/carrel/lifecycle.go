@@ -166,6 +166,10 @@ func (p *Platform) notifyReport(vmid int) {
 	p.reports[vmid] = make(chan struct{})
 }
 func (e *Execution) WaitReady(original D, previousBoot string) {
+	if len(servicePortsOf(original)) > 0 {
+		e.waitServicePort(original)
+		return
+	}
 	id := str(original["vmid"])
 	e.P.writer.Lock()
 	deadline := e.readinessDeadline(id, "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
@@ -274,6 +278,62 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		checks = last.Checks
 	}
 	fail("guest_not_ready", "Timed out waiting for guest initialization and health checks", D{"machine": original["name"], "checks": checks, "failed_step": optional(last.FailedStep)})
+}
+
+// waitServicePort waits until the first declared port of a machine without
+// SSH answers (issue #125): until then the machine is initializing.
+func (e *Execution) waitServicePort(original D) {
+	id := str(original["vmid"])
+	e.P.writer.Lock()
+	deadline := e.readinessDeadline(id, "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
+	e.P.writer.Unlock()
+	identity := machineIdentity(original)
+	probe := probeServicePort
+	if e.P.serviceProbe != nil {
+		probe = e.P.serviceProbe
+	}
+	settle := func(state, reason string) {
+		e.P.writer.Lock()
+		defer e.P.writer.Unlock()
+		m := e.S.Get("machines", id)
+		if m == nil || !equal(machineIdentity(m), identity) {
+			fail("conflict", "Machine allocation changed while waiting for readiness")
+		}
+		e.RequireActive(integer(m["tenant_n"]))
+		r := obj(m["readiness"])
+		r["service_port"], r["service_checked_at"], r["service_status"] = servicePortsOf(m)[0], now(), "verified"
+		if state != "ready" {
+			r["service_status"] = "unavailable"
+		}
+		m["readiness"], m["state"] = r, state
+		delete(m, "reason")
+		if reason != "" {
+			m["reason"] = reason
+		}
+		e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
+	}
+	for now() < deadline {
+		must(e.Ctx.Err())
+		m := e.S.Get("machines", id)
+		if m == nil || !equal(machineIdentity(m), identity) {
+			fail("conflict", "Machine allocation changed while waiting for readiness")
+		}
+		e.RequireActive(integer(m["tenant_n"]))
+		if probe(e.Ctx, m) {
+			settle("ready", "")
+			return
+		}
+		timer := time.NewTimer(time.Duration(intAt(e.P.Config, "guest_poll_interval", 3)) * time.Second)
+		select {
+		case <-e.Ctx.Done():
+			timer.Stop()
+			must(e.Ctx.Err())
+		case <-timer.C:
+		}
+	}
+	reason := fmt.Sprintf("Port %d did not answer; check the machine configuration on the console", servicePortsOf(original)[0])
+	settle("needs_owner_fix", reason)
+	fail("guest_not_ready", reason, D{"machine": original["name"]})
 }
 
 // probeServicePort connects to the first declared port of a machine
