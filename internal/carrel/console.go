@@ -223,14 +223,19 @@ func (h consoleHandler) view(w http.ResponseWriter, r *http.Request) {
 	name := html.EscapeString(str(m["name"]))
 	head := `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>` + name + ` · Carrel</title><style>html,body{margin:0;height:100%;background:#111;color:#eee;font:14px system-ui}#bar{height:32px;line-height:32px;padding:0 12px}#screen{height:calc(100% - 32px)}</style>`
 	if unmanaged(m) {
-		fmt.Fprintf(w, `%s</head><body><div id="bar">%s</div><div id="screen"></div><script type="module" nonce="%s">
+		integrity := map[string]string{}
+		for path, sum := range novncIntegrity {
+			integrity[novnc+path] = sum
+		}
+		imports, _ := json.Marshal(map[string]any{"integrity": integrity})
+		fmt.Fprintf(w, `%s<script type="importmap" nonce="%s">%s</script></head><body><div id="bar">%s</div><div id="screen"></div><script type="module" nonce="%s">
 import RFB from "%s/core/rfb.js";
 const config = %s;
 const bar = document.getElementById("bar");
 const rfb = new RFB(document.getElementById("screen"), "wss://" + location.host + "/console/ws", {wsProtocols: ["binary"], credentials: {password: config.ticket}});
 rfb.scaleViewport = true;
 rfb.addEventListener("disconnect", () => { bar.textContent = config.name + "：已中斷，重新整理可再連線"; });
-</script></body></html>`, head, name, nonce, novnc, data)
+</script></body></html>`, head, nonce, imports, name, nonce, novnc, data)
 		return
 	}
 	fmt.Fprintf(w, `%s<link rel="stylesheet" href="%s/css/xterm.css" integrity="%s" crossorigin="anonymous"></head><body><div id="bar">%s：序列埠主控台，看開機訊息與救援用；登入要有密碼的帳號，SSH 金鑰在這裡不能用。一次只能開一個分頁。</div><div id="screen"></div><script src="%s/lib/xterm.js" integrity="%s" crossorigin="anonymous" nonce="%s"></script><script nonce="%s">
