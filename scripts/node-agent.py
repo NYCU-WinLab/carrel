@@ -567,9 +567,11 @@ def vpn_apply(tenants):
         key = VPN_KEYS / f"t{n:03d}.key"
         if not key.exists():
             VPN_KEYS.mkdir(mode=0o700, parents=True, exist_ok=True)
-            # Created 0600, never readable in between.
+            # The key first, then a file created 0600: a failed genkey leaves
+            # no empty key behind, and the file is never readable in between.
+            private = run("wg", "genkey")
             with os.fdopen(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
-                f.write(run("wg", "genkey") + "\n")
+                f.write(private + "\n")
         private = key.read_text().strip()
         if not Path(f"/sys/class/net/{dev}").exists():
             run("ip", "link", "add", dev, "type", "wireguard")
