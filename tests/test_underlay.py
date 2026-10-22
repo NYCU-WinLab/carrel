@@ -159,6 +159,10 @@ def test_the_jump_host_reaches_dns_and_tenant_tcp_only(monkeypatch):
     # Talos ports too, not SSH only (issue #125); never the infra or fetch network.
     assert dns < infra < rules.index('iifname "vmbr98" ip daddr 10.200.0.0/16 accept')
     assert not [r for r in rules if "10.200.0.4" in r and "dport != 22" in r]
+    assert rules.index(
+        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop'
+    ) < rules.index('iifname "vmbr98" ip daddr 10.200.0.0/16 accept')
+    assert 'iifname "xvrfp_tenants" ip saddr 10.200.0.4 counter drop' in rules
     assert dns < rules.index(
         'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop'
     )

@@ -265,6 +265,9 @@ table inet carrel_infra {
   iifname "vmbr98" ct state established,related accept
   iifname "vmbr98" ip saddr 10.200.0.3 tcp dport 22 accept
   iifname "vmbr98" counter drop
+  # CT 102 reaches a tenant gateway (the node, 10.200.N.1) through the VRF,
+  # not vmbr98: drop it here too, below its own firewall.
+  iifname "xvrfp_tenants" ip saddr 10.200.0.4 counter drop
 UNDERLAY
  }
  chain forward {
