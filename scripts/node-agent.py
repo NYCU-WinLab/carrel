@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import ssl
 import subprocess
@@ -510,25 +511,30 @@ def vpn_clients(state):
 
 def vpn_nft(tenants):
     """A client reaches its own tenant's network and nothing else: not another
-    tenant, not the infra or fetch network, not the node, not the internet."""
-    rules = []
+    tenant, not the infra or fetch network, not the node, not the internet.
+
+    Inbound is filtered in prerouting: once a packet enters the VRF, the
+    forward and input hooks see vrf_tenants as its interface, not wg-tNNN.
+    Outbound, the forward hook does see the wg-tNNN it leaves through."""
+    ingress, egress = [], []
     for n in sorted(tenants):
         dev = f"wg-t{n:03d}"
-        rules.append(f'iifname "{dev}" ip saddr 10.201.{n}.0/24 ip daddr 10.200.{n}.0/24 accept')
-        rules.append(f'oifname "{dev}" ip saddr 10.200.{n}.0/24 ip daddr 10.201.{n}.0/24 accept')
-    body = "\n".join("  " + r for r in rules)
+        # The node's own gateway address is in that /24 too: not for clients.
+        ingress.append(f'iifname "{dev}" ip daddr 10.200.{n}.1 counter drop')
+        ingress.append(f'iifname "{dev}" ip saddr 10.201.{n}.0/24 ip daddr 10.200.{n}.0/24 accept')
+        egress.append(f'oifname "{dev}" ip saddr 10.200.{n}.0/24 ip daddr 10.201.{n}.0/24 accept')
     return f"""add table inet carrel_vpn
 flush table inet carrel_vpn
 table inet carrel_vpn {{
+ chain prerouting {{
+  type filter hook prerouting priority -150; policy accept;
+{chr(10).join("  " + r for r in ingress)}
+  iifname "wg-t*" counter drop
+ }}
  chain forward {{
   type filter hook forward priority -25; policy accept;
-{body}
-  iifname "wg-t*" counter drop
+{chr(10).join("  " + r for r in egress)}
   oifname "wg-t*" counter drop
- }}
- chain input {{
-  type filter hook input priority -25; policy accept;
-  iifname "wg-t*" counter drop
  }}
 }}
 """
@@ -537,16 +543,33 @@ table inet carrel_vpn {{
 def vpn(state):
     """Bring each tenant's WireGuard interface to the desired peers; returns
     the public key and port of each, which the control plane hands to clients.
-    The private keys stay in VPN_KEYS on this node."""
+    The private keys stay in VPN_KEYS on this node. A failure here stays here:
+    the rest of the reconciliation, every other tenant's included, goes on."""
     if not public_ingress():
         return {}
-    tenants = vpn_clients(state)
+    try:
+        return vpn_apply(vpn_clients(state))
+    except Exception as e:  # noqa: BLE001 - reported to the control plane
+        return {"error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def vpn_apply(tenants):
+    # The filter goes first, so no interface is ever up without it.
+    rules = vpn_nft(tenants)
+    write("/etc/carrel/vpn.nft", rules)
+    run("nft", "-c", "-f", "/etc/carrel/vpn.nft")
+    run("nft", "-f", "/etc/carrel/vpn.nft")
+    if tenants and not shutil.which("wg"):
+        raise CommandFailure("wireguard-tools is not installed on the exit node")
     out = {}
     for n, peers in sorted(tenants.items()):
         dev = f"wg-t{n:03d}"
         key = VPN_KEYS / f"t{n:03d}.key"
         if not key.exists():
-            write(key, run("wg", "genkey") + "\n", 0o600)
+            VPN_KEYS.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Created 0600, never readable in between.
+            with os.fdopen(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+                f.write(run("wg", "genkey") + "\n")
         private = key.read_text().strip()
         if not Path(f"/sys/class/net/{dev}").exists():
             run("ip", "link", "add", dev, "type", "wireguard")
@@ -564,10 +587,6 @@ def vpn(state):
         if re.fullmatch(r"wg-t\d{3}", link.name) and int(link.name[4:]) not in tenants:
             run("ip", "link", "del", link.name)
             (VPN_KEYS / f"{link.name}.conf").unlink(missing_ok=True)
-    rules = vpn_nft(tenants)
-    write("/etc/carrel/vpn.nft", rules)
-    run("nft", "-c", "-f", "/etc/carrel/vpn.nft")
-    run("nft", "-f", "/etc/carrel/vpn.nft")
     return out
 
 

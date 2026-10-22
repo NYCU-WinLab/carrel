@@ -934,9 +934,16 @@ def test_a_vpn_client_reaches_only_its_tenant():
     tenants = module.vpn_clients(state)
     assert tenants == {1: [(VPN_KEY, "10.201.1.2")]}
     rules = module.vpn_nft(tenants).splitlines()
-    accept = rules.index('  iifname "wg-t001" ip saddr 10.201.1.0/24 ip daddr 10.200.1.0/24 accept')
-    assert accept < rules.index('  iifname "wg-t*" counter drop')
-    assert '  iifname "wg-t*" counter drop' in rules[rules.index(" chain input {") :]
+    # Inbound in prerouting: in the VRF, forward and input see vrf_tenants.
+    prerouting = rules[rules.index(" chain prerouting {") : rules.index(" chain forward {")]
+    accept = prerouting.index('  iifname "wg-t001" ip saddr 10.201.1.0/24 ip daddr 10.200.1.0/24 accept')
+    assert accept < prerouting.index('  iifname "wg-t*" counter drop')
+    assert prerouting.index('  iifname "wg-t001" ip daddr 10.200.1.1 counter drop') < accept
+    forward = rules[rules.index(" chain forward {") :]
+    assert forward.index(
+        '  oifname "wg-t001" ip saddr 10.200.1.0/24 ip daddr 10.201.1.0/24 accept'
+    ) < forward.index('  oifname "wg-t*" counter drop')
+    assert not [r for r in forward if r.strip().startswith("iifname")]
     assert not [r for r in rules if "10.200.2." in r]
     # Another tenant's range, the gateway address or a bad key never get in.
     for bad in (
@@ -964,3 +971,21 @@ def test_the_exit_node_accepts_the_vpn_ports_and_nothing_else_new():
     rules = load("install-network.py").public_nft("vmbr0.60", "140.113.60.184").splitlines()
     vpn = rules.index('  iifname "vmbr0.60" udp dport 31001-31254 accept')
     assert vpn < rules.index('  iifname "vmbr0.60" counter drop')
+
+
+def test_a_vpn_failure_stays_out_of_the_reconciliation(monkeypatch):
+    # Review of #157: without wireguard-tools, one client must not fail every
+    # tenant's reconcile; the filter still goes in first.
+    module = load("node-agent.py")
+    applied = []
+    monkeypatch.setattr(module, "public_ingress", lambda: "140.113.60.184")
+    monkeypatch.setattr(module, "write", lambda *a, **k: True)
+    monkeypatch.setattr(module, "run", lambda *a, **k: applied.append(a) or "")
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+    state = {
+        "tenants": [{"n": 1}],
+        "vpn_clients": [{"tenant_n": 1, "address": "10.201.1.2", "public_key": VPN_KEY}],
+    }
+    out = module.vpn(state)
+    assert "wireguard-tools" in out["error"] and ("nft", "-f", "/etc/carrel/vpn.nft") in applied
+    assert not [a for a in applied if a[0] in ("ip", "wg")]

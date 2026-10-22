@@ -124,9 +124,10 @@ func (e *Execution) VPNAction(tool string, a, t D) D {
 	}
 	e.Put("vpn_clients", client.ID, n, client)
 	result := e.Reconcile()
-	server := obj(obj(obj(result["node"])["vpn"])[str(n)])
+	tunnels := obj(obj(result["node"])["vpn"])
+	server := obj(tunnels[str(n)])
 	if server["public_key"] == nil {
-		fail("backend_unavailable", "The exit node did not report the tenant's VPN interface", D{"component": "carrel-node", "recovery": "retry_infrastructure"})
+		fail("backend_unavailable", "The exit node did not bring up the tenant's VPN interface", D{"component": "carrel-node", "backend_code": "vpn_unavailable", "detail": tunnels["error"], "recovery": "retry_infrastructure"})
 	}
 	e.Put("vpn_servers", n, n, vpnServer{ID: str(n), TenantN: n, Port: integer(server["port"]), PublicKey: str(server["public_key"])})
 	return D{"vpn_client": e.publicVPNClient(client, t), "dry_run": false}
@@ -141,7 +142,9 @@ func (e *Execution) publicVPNClient(c vpnClient, t D) D {
 		out["expires_at"] = time.Unix(int64(c.ExpiresAt), 0).UTC().Format(time.RFC3339)
 	}
 	if s, ok := rowOf[vpnServer](e.S, "vpn_servers", str(n)); ok && c.State == "ready" {
-		endpoint := fmt.Sprintf("%s:%d", originHost(e.P.Config), s.Port)
+		// The address, not the origin's name: that name may one day sit
+		// behind a proxy that carries no UDP.
+		endpoint := fmt.Sprintf("%s:%d", str(e.P.Config["public_address"]), s.Port)
 		out["endpoint"], out["server_public_key"] = endpoint, s.PublicKey
 		out["config"] = fmt.Sprintf("[Interface]\nPrivateKey = <the private key of %s>\nAddress = %s/32\nMTU = %d\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = 10.200.%d.0/24\nPersistentKeepalive = 25\n",
 			c.Name, c.Address, vpnClientMTU, s.PublicKey, endpoint, n)
