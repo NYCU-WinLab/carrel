@@ -390,6 +390,18 @@ func TestNetBoxNeedsAnExistingOwner(t *testing.T) {
 	}
 }
 
+func TestNetBoxOwnerMatchesByName(t *testing.T) {
+	// A server that ignores ?name= returns whatever owners it has.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(D{"count": 1, "results": []D{{"id": 9, "name": "someone-else"}}})
+	}))
+	t.Cleanup(srv.Close)
+	c := &nbClient{base: srv.URL, http: srv.Client(), ctx: context.Background(), marker: nbMarker{Value: "carrel"}}
+	if err := attempt(c.prepare); err == nil || c.marker.owner != 0 {
+		t.Fatal(err, c.marker.owner)
+	}
+}
+
 func TestNetBoxOutageNeverBreaksMachineOperations(t *testing.T) {
 	p, f, srv := netboxPlatform(t)
 	seedNetBoxWorld(p)
