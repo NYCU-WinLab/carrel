@@ -140,7 +140,7 @@ def reconcile_writes(monkeypatch, tmp_path, first):
     return written
 
 
-def test_the_jump_host_reaches_dns_and_tenant_ssh_only(monkeypatch):
+def test_the_jump_host_reaches_dns_and_tenant_tcp_only(monkeypatch):
     module = load("bootstrap-platform.py")
     written = {}
     monkeypatch.setattr(
@@ -153,9 +153,16 @@ def test_the_jump_host_reaches_dns_and_tenant_ssh_only(monkeypatch):
     dns = rules.index(
         'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.2 meta l4proto { tcp, udp } th dport 53 accept'
     )
-    assert dns < rules.index(
-        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 tcp dport != 22 drop'
+    infra = rules.index(
+        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr { 10.200.0.0/24, 10.200.255.0/24 } drop'
     )
+    # Talos ports too, not SSH only (issue #125); never the infra or fetch network.
+    assert dns < infra < rules.index('iifname "vmbr98" ip daddr 10.200.0.0/16 accept')
+    assert not [r for r in rules if "10.200.0.4" in r and "dport != 22" in r]
+    assert rules.index(
+        'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop'
+    ) < rules.index('iifname "vmbr98" ip daddr 10.200.0.0/16 accept')
+    assert 'iifname "xvrfp_tenants" ip saddr 10.200.0.4 counter drop' in rules
     assert dns < rules.index(
         'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop'
     )
