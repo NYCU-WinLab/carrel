@@ -354,6 +354,14 @@ func nbSlug(name string) string {
 	}, strings.ToLower(name)), "-")
 }
 
+// nbTitle is the platform name of an image: the image with its first letter capitalized.
+func nbTitle(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
 func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 	out := []nbTenant{}
 	live := func(o D) bool { return o["state"] != "deleting" }
@@ -708,18 +716,19 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 }
 
 // netboxPlatform makes sure the NetBox platform of an image exists, once per
-// pass. carrel creates and owns these; an unowned platform of the same name is
-// not touched.
+// pass. carrel creates and owns these, keyed by slug so a rename of the name
+// follows; an unowned platform with the same slug or name is not touched.
 func (e *Execution) netboxPlatform(c *nbClient, s *nbState, image string) int {
 	if id, ok := s.platformIDs[image]; ok {
 		return id
 	}
-	have := one(s.platforms, func(o D) bool { return o["name"] == image })
-	if have == nil && len(c.list("dcim/platforms/", url.Values{"name": {image}})) > 0 {
-		panic(nbError{Msg: "a NetBox platform named " + image + " exists but carrel did not create it"})
+	slug, name := nbSlug(image), nbTitle(image)
+	have := one(s.platforms, func(o D) bool { return o["slug"] == slug })
+	if have == nil && (len(c.list("dcim/platforms/", url.Values{"slug": {slug}})) > 0 || len(c.list("dcim/platforms/", url.Values{"name": {name}})) > 0) {
+		panic(nbError{Msg: "a NetBox platform named " + name + " exists but carrel did not create it"})
 	}
 	created := have == nil
-	got := c.ensure("dcim/platforms/", have, D{"name": image, "slug": nbSlug(image), "description": "carrel image"})
+	got := c.ensure("dcim/platforms/", have, D{"name": name, "slug": slug, "description": "carrel image " + image})
 	if created {
 		s.platforms = append(s.platforms, got)
 	}

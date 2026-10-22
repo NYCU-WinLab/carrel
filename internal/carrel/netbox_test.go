@@ -222,7 +222,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The platform is carrel's own, named after the image.
 	platforms := f.all("dcim/platforms/")
-	if len(platforms) != 1 || platforms[0]["name"] != "debian-13" || platforms[0]["slug"] != "debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
+	if len(platforms) != 1 || platforms[0]["name"] != "Debian-13" || platforms[0]["slug"] != "debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
 		t.Fatal(platforms, web["platform"])
 	}
 	// Each machine's disk is a virtual disk, in MiB.

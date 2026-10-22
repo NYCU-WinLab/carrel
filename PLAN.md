@@ -1133,7 +1133,7 @@ Mapping:
 | carrel | NetBox |
 |---|---|
 | machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU and memory (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; `start_on_boot` is `on` for a running machine and `off` otherwise, like Proxmox `onboot`; the description says VM or CT; the VMID goes into `vmid_field`; the device is the cluster device named like the Proxmox node, none when there is no such device |
-| image | platform named after the image (`debian-13`, `tenant:<name>`, `iso:<name>`), created and deleted by carrel; a platform of that name that carrel did not create is an error |
+| image | platform named after the image with a capital first letter (`Debian-13`, `Tenant:<name>`, `Iso:<name>`) and the lower-case image as slug, created and deleted by carrel; a platform with that slug or name that carrel did not create is an error |
 | machine disk | virtual disk `scsi0` (VM) or `rootfs` (CT) in MiB; NetBox sums it into the machine's disk |
 | NIC MAC | MAC address object assigned to the interface and set as its primary MAC |
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
