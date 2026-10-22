@@ -477,6 +477,22 @@ warning. `/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
 
+### NetBox sync
+
+carrel can push machines, networks, addresses, published ports and virtual addresses to NetBox. It
+is off unless `config.json` has a `netbox` section with `"enabled": true`, `url`, a `token` or
+`token_file`, the NetBox `cluster` name and an `owner` (NetBox 4.5+):
+
+```json
+"netbox": {"enabled": true, "url": "https://netbox.example", "token_file": "/etc/carrel/netbox-token",
+           "cluster": "carrel", "owner": "carrel", "vmid_field": "vmid"}
+```
+
+The NetBox operator creates the cluster, the owner and an integer custom field (default `vmid`) on virtual
+machines first. Every object carrel creates carries the owner, and carrel changes only objects with
+that owner, so scope the token's permissions with it. PLAN 9.4 has the mapping and the permissions.
+`machine_get` shows `netbox.last_synced` and `netbox.last_error` for each machine.
+
 ## License
 
 Private to NYCU WinLab.

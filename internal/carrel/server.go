@@ -223,6 +223,7 @@ func (p *Platform) Start() {
 	p.wg.Add(1)
 	go p.Operations.Loop()
 	p.Operations.Recover()
+	p.startNetBox()
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()

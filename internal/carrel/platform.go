@@ -53,6 +53,7 @@ type Platform struct {
 	certificates       sync.Mutex
 	registration       sync.Mutex
 	delivered          atomic.Value
+	netboxKick         chan struct{}
 	inventoryMu        sync.Mutex
 	inventories        map[string]*ObservationCache
 	Operations         *Operations
@@ -81,7 +82,7 @@ type Execution struct {
 
 func NewPlatform(s *Store, b Backend, c D) *Platform {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}}
+	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, netboxKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)
 	return p
 }
@@ -449,6 +450,9 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": "unfiltered_experiment_networks", "allowed_connections": allowed}
 	if unmanaged(m) && len(servicePortsOf(m)) == 0 {
 		safe["install"] = installInfo(m)
+	}
+	if status := e.netboxStatus(m["vmid"]); status != nil {
+		safe["netbox"] = status
 	}
 	nics := []D{}
 	for _, nic := range dicts(m["nics"]) {

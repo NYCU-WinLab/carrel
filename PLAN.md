@@ -64,6 +64,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-19 | Public ingress uses `140.113.60.184/27` on VLAN 60 at the exit node. CT 207 and the WireGuard hop through the old PVE retire for carrel |
 | 2026-10-19 | No QDevice: every place it could run fails together with B09 |
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
+| 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the `owner` is set at creation (section 9.4, issue #141) |
 
 ### 1.6 Current core and deferred work
 
@@ -1107,6 +1108,78 @@ sensorium only answers queries, so a scheduled job queries it and sends alerts b
 
 An external heartbeat covers the case where the whole site is down: carrel pings an outside
 service, and silence is the alert.
+
+### 9.4 NetBox inventory sync
+
+Opt-in (issue #141). With `netbox.enabled` carrel pushes what it already knows to a NetBox instance,
+so the inventory and IP allocation there do not go stale. The database stays the only source of
+truth and NetBox is a derived copy, like the firewall or the DNS records: nobody edits what carrel
+created.
+
+Configuration, in `config.json` (omitted or `enabled` false means no sync, no goroutine, no
+`netbox` field in `machine_get`):
+
+| Key | Meaning |
+|---|---|
+| `url` | NetBox base URL |
+| `token` or `token_file` | API token. `token_file` is read again on every pass, so rotation needs no restart. Never logged or put in an error; a value with a space is sent as the header as is, `nbt_` gets `Bearer`, anything else `Token` |
+| `cluster` | NetBox cluster (name) that holds the virtual machines. It must exist; the NetBox operator owns it |
+| `owner` | name of the NetBox owner (NetBox 4.5+) every created object carries. It must exist; the NetBox operator creates it, since an owner needs a group. Use a different owner for each carrel installation that shares a NetBox |
+| `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
+| `vrf` | name of the shared VRF, default `carrel`; a private network's VRF is `<vrf>-<tenant slug>-<network name>` |
+
+Mapping:
+
+| carrel | NetBox |
+|---|---|
+| machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU, memory and disk (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; the description says VM or CT; the VMID goes into `vmid_field` |
+| primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
+| machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4 |
+| tenant segment `10.200.N.0/24` | prefix in the shared VRF |
+| managed private network CIDR | prefix in that network's own VRF |
+| `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
+| published port, HTTPS route | service on the VM with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
+| virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
+
+The tenant segment `10.200.N.0/24`, machine addresses and virtual addresses are allocated by the
+platform and unique across tenants, so they share one VRF. Only a private network can overlap
+another tenant's CIDR (a member may choose it, and only managed networks are checked, and only
+within the tenant), so each managed private network gets a VRF of its own. A `raw_l2` network has no addressing carrel manages, so it gets no prefix, VRF or address, only the interface that attaches to it. Carrel creates every
+VRF with the owner and deletes it when nothing needs it. A VRF of the same name that carrel did not
+create is an error, not something to adopt. Dedicated public IPs are not mapped yet
+(the feature does not exist); they would add an IP from the public pool with `nat_inside`.
+
+Behavior:
+
+1. A pass derives the wanted objects from the database, lists the objects that carry the owner,
+   and creates, patches (only fields that differ) or deletes the difference. A pass over an
+   unchanged database sends no write. Passes run every 5 minutes (drift repair, backfill of
+   machines that existed before the feature was enabled) and 2 seconds after any operation
+   changes, merged into one. There is no dry run.
+2. Deletion goes dependents first: services, memberships, IPs, interfaces, VMs, groups, prefixes,
+   VRFs, because NetBox refuses to delete a referenced object.
+3. The pass takes no part in `writer` and no machine operation waits for it. Failures retry with
+   backoff (15 seconds up to 5 minutes) and the next pass catches up.
+4. A machine that fails (a foreign VM with its name, a missing custom field, a rejected value)
+   keeps every object it already has in NetBox, the other machines still sync, and the error shows
+   in `machine_get` as `netbox: {last_synced, last_error}` and once in the audit log (tool
+   `netbox_sync`). A pass-level failure is in the site status and the audit log.
+5. A machine rename is not supported, so it is not synced either.
+
+Least privilege. Every object carries the owner from its creation request, and only objects with that owner
+are listed, patched or deleted. NetBox cannot constrain what a binding points at, so carrel only
+binds to objects it created in the same pass or earlier (the VM, interface, group and IP), plus the
+configured cluster. FHRP memberships cannot carry an owner; they are deleted only when their group
+is carrel's. Permissions the token needs, each constrained to the owner where NetBox allows:
+
+| Object | view | add | change | delete |
+|---|---|---|---|---|
+| virtualization.virtualmachine, vminterface | yes | yes | yes | yes |
+| ipam.ipaddress, prefix, vrf, service | yes | yes | yes | yes |
+| ipam.fhrpgroup | yes | yes | yes | yes |
+| ipam.fhrpgroupassignment | yes | yes | no | yes |
+| virtualization.cluster | yes | no | no | no |
+| users.owner | yes | no | no | no |
 
 ## 10. Maintenance
 
