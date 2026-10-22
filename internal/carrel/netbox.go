@@ -386,7 +386,8 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		names, netVRF := map[string]string{}, map[string]string{}
 		for _, nw := range networks {
 			names[str(nw["id"])] = str(nw["name"])
-			if cidr := str(nw["cidr"]); cidr != "" {
+			// A raw_l2 segment has no carrel-managed addressing: only the attachment is recorded.
+			if cidr := str(nw["cidr"]); cidr != "" && nw["mode"] == "managed" {
 				if p, err := netip.ParsePrefix(cidr); err == nil {
 					netVRF[str(nw["id"])] = fmt.Sprintf("%s-%s-%s", c.VRF, slug, nw["name"])
 					used[netVRF[str(nw["id"])]] = true
@@ -405,7 +406,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 			nm.ifaces = append(nm.ifaces, nbIface{name: "eth0", vrf: tn.vrf, description: "carrel primary NIC, mac " + str(m["mac"]), addresses: []nbAddress{primary}})
 			for _, nic := range dicts(m["nics"]) {
 				network := str(nic["network"])
-				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), vrf: netVRF[network], description: "carrel network " + names[str(nic["network"])] + ", mac " + str(nic["mac"])}
+				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), vrf: netVRF[network], description: fmt.Sprintf("carrel network %s (%s), mac %s", names[network], nic["mode"], nic["mac"])}
 				if ip := str(nic["ip"]); ip != "" {
 					iface.addresses = append(iface.addresses, nbAddress{netVRF[network], fmt.Sprintf("%s/%d", ip, integer(nic["prefix"])), "carrel address of " + nm.name, fmt.Sprintf("%d/%s", vmid, iface.name)})
 				}

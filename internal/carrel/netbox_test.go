@@ -183,6 +183,10 @@ func seedNetBoxWorld(p *Platform) {
 	p.Store.Put("machines", 10100, 1, web)
 	p.Store.Put("machines", 10101, 1, D{"name": "db", "vmid": 10101, "tenant_n": 1, "kind": "ct", "cpu": 1, "memory_mb": 1024, "disk_gb": 10, "state": "ready", "power_state": "stopped", "ip": "10.200.1.11", "mac": "02:ca:01:01:00:01", "nics": []D{}})
 	p.Store.Put("networks", "p00101", 1, D{"id": "p00101", "tenant_n": 1, "serial": 1, "name": "back", "mode": "managed", "cidr": "10.64.0.0/25"})
+	p.Store.Put("networks", "p00102", 1, D{"id": "p00102", "tenant_n": 1, "serial": 2, "name": "lab", "mode": "raw_l2", "cidr": "192.168.50.0/24"})
+	db := p.Store.Get("machines", "10101")
+	db["nics"] = []D{{"index": 1, "network": "p00102", "mode": "raw_l2", "mac": "02:cc:01:01:01:01"}}
+	p.Store.Put("machines", 10101, 1, db)
 	p.Store.Put("ports", "a", 1, D{"id": "a", "tenant_n": 1, "vmid": 10100, "ip": "10.200.1.10", "port": 22, "proto": "tcp", "public_port": 20010})
 	p.Store.Put("domains", "d", 1, D{"id": "d", "tenant_n": 1, "vmid": 10100, "name": "app.alice.winlab.tw", "sub": "app", "slug": "alice", "target_port": 8080, "state": "ready"})
 	p.Store.Put("vips", "v", 1, D{"id": "v", "tenant_n": 1, "name": "ha", "address": "10.200.1.251", "vmids": []int{10100, 10101}})
@@ -250,7 +254,7 @@ func TestNetBoxSyncCreatesMarkedObjects(t *testing.T) {
 	if len(ips) != 4 || vip == nil || obj(vip["role"])["value"] != "vip" || vip["assigned_object_type"] != nbGroupType {
 		t.Fatal(ips)
 	}
-	if len(f.all("virtualization/interfaces/")) != 3 {
+	if len(f.all("virtualization/interfaces/")) != 4 {
 		t.Fatal(f.all("virtualization/interfaces/"))
 	}
 	services := f.all("ipam/services/")
@@ -264,6 +268,11 @@ func TestNetBoxSyncCreatesMarkedObjects(t *testing.T) {
 	}
 	if len(f.all("ipam/fhrp-group-assignments/")) != 2 {
 		t.Fatal(f.all("ipam/fhrp-group-assignments/"))
+	}
+	// A raw_l2 segment records only the attachment: no prefix, VRF or address.
+	lab := find(f.all("virtualization/interfaces/"), func(v D) bool { return strings.Contains(str(v["description"]), "(raw_l2)") })
+	if lab == nil || lab["vrf"] != nil || find(prefixes, func(v D) bool { return v["prefix"] == "192.168.50.0/24" }) != nil {
+		t.Fatal(lab, prefixes)
 	}
 	// Every object that can carry the marker has it from the first write.
 	for _, path := range []string{"ipam/vrfs/", "ipam/prefixes/", "ipam/ip-addresses/", "virtualization/interfaces/", "virtualization/virtual-machines/", "ipam/services/", "ipam/fhrp-groups/"} {
@@ -316,6 +325,7 @@ func TestNetBoxSyncDeletesDependentsFirst(t *testing.T) {
 	}
 	p.Store.Remove("vips", "v")
 	p.Store.Remove("networks", "p00101")
+	p.Store.Remove("networks", "p00102")
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
 	}
@@ -369,7 +379,7 @@ func TestNetBoxFailedMachineKeepsItsObjects(t *testing.T) {
 	if r := syncNetBox(t, p); len(r.Errors) == 0 {
 		t.Fatal("no error")
 	}
-	if len(f.all("virtualization/virtual-machines/")) != 2 || len(f.all("virtualization/interfaces/")) != 3 || len(f.all("ipam/services/")) != 2 {
+	if len(f.all("virtualization/virtual-machines/")) != 2 || len(f.all("virtualization/interfaces/")) != 4 || len(f.all("ipam/services/")) != 2 {
 		t.Fatal("a machine that could not sync lost objects")
 	}
 }

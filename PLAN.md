@@ -1136,14 +1136,15 @@ Mapping:
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
 | machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4 |
 | tenant segment `10.200.N.0/24` | prefix in the shared VRF |
-| private network CIDR | prefix in that network's own VRF |
+| managed private network CIDR | prefix in that network's own VRF |
+| `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
 | published port, HTTPS route | service on the VM with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
 
 The tenant segment `10.200.N.0/24`, machine addresses and virtual addresses are allocated by the
 platform and unique across tenants, so they share one VRF. Only a private network can overlap
 another tenant's CIDR (a member may choose it, and only managed networks are checked, and only
-within the tenant), so each private network with a CIDR gets a VRF of its own. Carrel creates every
+within the tenant), so each managed private network gets a VRF of its own. A `raw_l2` network has no addressing carrel manages, so it gets no prefix, VRF or address, only the interface that attaches to it. Carrel creates every
 VRF with the marker and deletes it when nothing needs it. A VRF of the same name that carrel did not
 create is an error, not something to adopt. Dedicated public IPs are not mapped yet
 (the feature does not exist); they would add an IP from the public pool with `nat_inside`.
