@@ -313,6 +313,8 @@ type nbVIP struct {
 	name, tenant, vrf, address string
 	groupID                    int
 	vmids                      []int
+	// Public ports and domains at the address (issue #146).
+	services []nbService
 }
 
 type nbTenant struct {
@@ -382,16 +384,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 				}
 				nm.ifaces = append(nm.ifaces, iface)
 			}
-			for _, p := range ports {
-				if integer(p["vmid"]) == vmid {
-					nm.services = append(nm.services, nbService{fmt.Sprintf("public-%s-%d", p["proto"], integer(p["public_port"])), str(p["proto"]), fmt.Sprintf("public %s:%d/%s", c.Public, integer(p["public_port"]), p["proto"]), integer(p["port"])})
-				}
-			}
-			for _, d := range domains {
-				if integer(d["vmid"]) == vmid {
-					nm.services = append(nm.services, nbService{"https://" + str(d["name"]), "tcp", "https route " + str(d["name"]), integer(d["target_port"])})
-				}
-			}
+			nm.services = nbServices(c, ports, domains, func(g D) bool { return g["vip"] == nil && integer(g["vmid"]) == vmid })
 			tn.machines = append(tn.machines, nm)
 		}
 		for _, v := range vips {
@@ -401,6 +394,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 			for _, id := range arr(v["vmids"]) {
 				vip.vmids = append(vip.vmids, integer(id))
 			}
+			vip.services = nbServices(c, ports, domains, func(g D) bool { return g["vip"] == v["id"] })
 			tn.vips = append(tn.vips, vip)
 		}
 		for name := range used {
@@ -410,6 +404,31 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		out = append(out, tn)
 	}
 	return out
+}
+
+// nbServices lists the public ports and domains that pick selects.
+func nbServices(c nbConfig, ports, domains []D, pick func(D) bool) []nbService {
+	out := []nbService{}
+	for _, p := range filter(ports, pick) {
+		out = append(out, nbService{fmt.Sprintf("public-%s-%d", p["proto"], integer(p["public_port"])), str(p["proto"]), fmt.Sprintf("public %s:%d/%s", c.Public, integer(p["public_port"]), p["proto"]), integer(p["port"])})
+	}
+	for _, d := range filter(domains, pick) {
+		out = append(out, nbService{"https://" + str(d["name"]), "tcp", "https route " + str(d["name"]), integer(d["target_port"])})
+	}
+	return out
+}
+
+// netboxServices keeps the services of one parent, a machine or a virtual
+// address's FHRP group. The parent's type is part of its identity: a VM and
+// a group can share an id.
+func netboxServices(c *nbClient, s *nbState, services []nbService, parentType string, parentID int) {
+	for _, sv := range services {
+		have := one(s.services, func(o D) bool {
+			return o["name"] == sv.name && o["parent_object_type"] == parentType && integer(o["parent_object_id"]) == parentID
+		})
+		svc := c.ensure("ipam/services/", have, D{"parent_object_type": parentType, "parent_object_id": parentID, "name": sv.name, "port_mappings": []string{fmt.Sprintf("%s/%d", sv.protocol, sv.port)}, "description": sv.description})
+		s.kept("services", integer(svc["id"]))
+	}
 }
 
 func portsAsD(xs []portGrant) []any {
@@ -641,11 +660,7 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 	if primaryID != 0 {
 		c.ensure("virtualization/virtual-machines/", vm, D{"primary_ip4": primaryID})
 	}
-	for _, sv := range m.services {
-		haveSvc := one(s.services, func(o D) bool { return o["name"] == sv.name && integer(o["parent_object_id"]) == vmID })
-		svc := c.ensure("ipam/services/", haveSvc, D{"parent_object_type": nbVMType, "parent_object_id": vmID, "name": sv.name, "port_mappings": []string{fmt.Sprintf("%s/%d", sv.protocol, sv.port)}, "description": sv.description})
-		s.kept("services", integer(svc["id"]))
-	}
+	netboxServices(c, s, m.services, nbVMType, vmID)
 }
 
 func (e *Execution) netboxVIP(c *nbClient, s *nbState, v nbVIP, vrfID int, ifaceNB map[string]int) {
@@ -670,6 +685,7 @@ func (e *Execution) netboxVIP(c *nbClient, s *nbState, v nbVIP, vrfID int, iface
 		}
 		s.kept("assignments", integer(member["id"]))
 	}
+	netboxServices(c, s, v.services, nbGroupType, groupID)
 }
 
 // netboxProtectMachine keeps what NetBox holds for a machine that could not be
@@ -691,7 +707,9 @@ func (e *Execution) netboxProtectMachine(s *nbState, name string) {
 			return o["interface_type"] == nbIfaceType && integer(o["interface_id"]) == integer(f["id"])
 		})
 	}
-	s.protect("services", s.services, func(o D) bool { return integer(o["parent_object_id"]) == id })
+	s.protect("services", s.services, func(o D) bool {
+		return o["parent_object_type"] == nbVMType && integer(o["parent_object_id"]) == id
+	})
 }
 
 func (e *Execution) netboxProtectVIP(s *nbState, v nbVIP) {
@@ -705,6 +723,9 @@ func (e *Execution) netboxProtectVIP(s *nbState, v nbVIP) {
 		return o["assigned_object_type"] == nbGroupType && integer(o["assigned_object_id"]) == id
 	})
 	s.protect("assignments", s.assignments, func(o D) bool { return refID(o["group"]) == id })
+	s.protect("services", s.services, func(o D) bool {
+		return o["parent_object_type"] == nbGroupType && integer(o["parent_object_id"]) == id
+	})
 }
 
 // netboxPrune deletes what carrel created and no longer wants, dependents

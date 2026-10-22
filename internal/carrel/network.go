@@ -144,9 +144,9 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 	case "port_open", "port_close":
 		var grant, delta D
 		if tool == "port_open" {
-			m := e.Machine(t, a["machine"])
+			vmid, ip, vip := e.publishTarget(t, a)
 			for _, p := range e.ports(n) {
-				if p.VMID == integer(m["vmid"]) && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] {
+				if p.VMID == vmid && p.VIP == vip.ID && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] {
 					if p.State == "deleting" {
 						fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
 					}
@@ -159,13 +159,18 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			delta = D{"public_ports": 1}
 			e.Quota(t, delta)
 			public := e.AllocatePort(t)
-			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: integer(m["vmid"]), IP: str(m["ip"]), PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"])}
+			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: vmid, VIP: vip.ID, IP: ip, PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"])}
 			grant = opened.D()
 			if !dry {
 				e.Put("ports", opened.ID, n, opened)
 				e.Reconcile()
 			} else {
-				grant = D{"machine": m["name"], "port": a["port"], "proto": a["proto"], "state": "planned"}
+				grant = D{"port": a["port"], "proto": a["proto"], "state": "planned"}
+				if vip.ID != "" {
+					grant["vip"] = vip.ID
+				} else {
+					grant["machine"] = e.Machine(t, a["machine"])["name"]
+				}
 			}
 		} else {
 			var closing portGrant
@@ -302,6 +307,17 @@ func (e *Execution) VIPAction(tool string, a, t D) D {
 	} else {
 		if !found {
 			fail("not_found", "Virtual address not found")
+		}
+		// A public port or domain at the address would point nowhere (issue #146).
+		for _, p := range e.ports(n) {
+			if p.VIP == vip.ID {
+				fail("conflict", fmt.Sprintf("Public port %d targets this address; close it with port_close first", p.PublicPort), D{"recovery": "resolve_prerequisite"})
+			}
+		}
+		for _, d := range e.domains(n) {
+			if d.VIP == vip.ID {
+				fail("conflict", d.Name+" targets this address; remove it with domain_remove first", D{"recovery": "resolve_prerequisite"})
+			}
 		}
 		vip.State = "deleted"
 	}

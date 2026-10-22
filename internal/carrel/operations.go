@@ -446,7 +446,7 @@ func (e *Execution) BindMachine(t D) bool {
 	return false
 }
 func (e *Execution) BindObject(t D) bool {
-	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "snapshot_delete": {"snapshots", "name", "name"}, "snapshot_rollback": {"snapshots", "name", "name"}}
+	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "port_open": {"vips", "vip", "name"}, "domain_add": {"vips", "vip", "name"}, "snapshot_delete": {"snapshots", "name", "name"}, "snapshot_rollback": {"snapshots", "name", "name"}}
 	op, a := e.Op, obj(e.Op["args"])
 	spec, ok := selectors[str(op["tool"])]
 	if !ok {
@@ -458,7 +458,7 @@ func (e *Execution) BindObject(t D) bool {
 	if len(bound) > 0 {
 		o := find(objects, func(o D) bool { return o["id"] == bound["id"] })
 		if o == nil {
-			if op["tool"] != "snapshot_rollback" && op["tool"] != "machine_nic_attach" {
+			if !contains([]string{"snapshot_rollback", "machine_nic_attach", "port_open", "domain_add"}, op["tool"]) {
 				return true
 			}
 			fail("not_found", "The operation's original resource no longer exists")

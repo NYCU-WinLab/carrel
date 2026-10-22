@@ -67,26 +67,44 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		machines[integer(m["vmid"])] = m
 		fmt.Fprintf(&hosts, "%s %s.%s.internal\n", str(m["ip"]), str(m["name"]), slugs[integer(m["tenant_n"])])
 	}
+	// Virtual addresses a domain may point at (issue #146).
+	vips := map[string]D{}
+	for _, v := range dicts(state["vips"]) {
+		vips[str(v["id"])] = v
+	}
 	type route struct {
-		domain, machine D
-		port            int
+		domain  D
+		address string
+		port    int
 	}
 	routes := map[string][]route{}
 	for _, d := range dicts(state["domains"]) {
 		if d["state"] != "ready" {
 			continue
 		}
-		m := machines[integer(d["vmid"])]
-		slug := slugs[integer(m["tenant_n"])]
+		var target D
+		if d["vip"] != nil {
+			target = vips[str(d["vip"])]
+		} else {
+			target = machines[integer(d["vmid"])]
+		}
+		if target == nil || (d["vip"] != nil && integer(target["tenant_n"]) != integer(d["tenant_n"])) {
+			fail("conflict", "Invalid tenant domain")
+		}
+		address := str(target["ip"])
+		if d["vip"] != nil {
+			address = str(target["address"])
+		}
+		slug := slugs[integer(target["tenant_n"])]
 		sub := str(d["sub"])
-		if m == nil || (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+".winlab.tw" {
+		if (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+".winlab.tw" {
 			fail("conflict", "Invalid tenant domain")
 		}
 		port := integer(d["target_port"])
 		if port < 1 || port > 65535 {
 			fail("conflict", "Invalid tenant domain port")
 		}
-		routes[slug] = append(routes[slug], route{d, m, port})
+		routes[slug] = append(routes[slug], route{d, address, port})
 	}
 	byName := map[string]D{}
 	for _, b := range bundles {
@@ -134,7 +152,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		lines = append(lines, "https://*."+slug+".winlab.tw {", " tls "+gatewayCerts+"/"+slug+"/fullchain.pem "+gatewayCerts+"/"+slug+"/privkey.pem")
 		fallback := "  respond 404"
 		for _, r := range routes[slug] {
-			upstream := fmt.Sprintf("  reverse_proxy %s:%d", str(r.machine["ip"]), r.port)
+			upstream := fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
 			if r.domain["sub"] == "*" {
 				// Caddy runs a handle without a matcher after every named
 				// one, so a domain of its own always wins over the catch-all.

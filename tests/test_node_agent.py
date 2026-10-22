@@ -313,6 +313,46 @@ def test_a_virtual_address_joins_only_its_holders_ipfilter_set():
             module.guest_firewall(holder, dict(state, vips=[dict(vip, **bad)]), {"protected_addresses": []})
 
 
+def test_a_port_or_domain_at_a_virtual_address_opens_on_every_holder():
+    # Issue #146: the public entry follows the address, so each machine that
+    # may hold it admits the port, and no other machine does.
+    module = load("node-agent.py")
+    cp1 = dict(MACHINE, name="cp1", vmid=10100, host=10, ip="10.200.1.10", tenant_n=1)
+    cp2 = dict(MACHINE, name="cp2", vmid=10101, host=11, ip="10.200.1.11", tenant_n=1)
+    worker = dict(MACHINE, name="worker", vmid=10102, host=12, ip="10.200.1.12", tenant_n=1)
+    vip = {"id": "v1", "name": "api", "address": "10.200.1.251", "tenant_n": 1, "vmids": [10100, 10101]}
+    port = {
+        "tenant_n": 1,
+        "vmid": 0,
+        "vip": "v1",
+        "ip": "10.200.1.251",
+        "public_port": 20010,
+        "port": 6443,
+        "proto": "tcp",
+    }
+    domain = {"tenant_n": 1, "vmid": 0, "vip": "v1", "target_port": 3000}
+    state = {"peers": [], "ports": [port], "domains": [domain], "vips": [vip]}
+    for m in (cp1, cp2):
+        rules = module.guest_firewall(m, state, {"protected_addresses": []}).splitlines()
+        assert "IN ACCEPT -p tcp -dport 6443" in rules
+        assert "IN ACCEPT -source 10.200.0.2 -p tcp -dport 3000" in rules
+    rules = module.guest_firewall(worker, state, {"protected_addresses": []}).splitlines()
+    assert "IN ACCEPT -p tcp -dport 6443" not in rules
+    assert "IN ACCEPT -source 10.200.0.2 -p tcp -dport 3000" not in rules
+    # A grant of another tenant naming the same id opens nothing.
+    foreign = dict(state, ports=[dict(port, tenant_n=2)], domains=[])
+    assert "-dport 6443" not in module.guest_firewall(cp1, foreign, {"protected_addresses": []})
+    # The exit node DNATs to the virtual address, and only to .251 to .254.
+    assert "tcp dport 20010 dnat to 10.200.1.251:6443" in module.ports_nft(
+        {"ports": [port]}, "140.113.60.184"
+    )
+    for bad in ({"ip": "10.200.1.10"}, {"ip": "10.200.2.251"}):
+        with pytest.raises(ValueError):
+            module.ports_nft({"ports": [dict(port, **bad)]}, "140.113.60.184")
+    with pytest.raises(ValueError):
+        module.ports_nft({"ports": [dict(port, vip=None)]}, "140.113.60.184")
+
+
 @pytest.mark.parametrize(
     "routes,ready",
     [

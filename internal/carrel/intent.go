@@ -369,7 +369,7 @@ func (e *Execution) PublishDeployment(t, a, w D) {
 		e.Op["phase"] = "publishing"
 		e.Op["current_resource"] = d.Name
 		e.P.Operations.Save(e.Op)
-		e.DomainAction("domain_add", D{"machine": str(d.VMID), "sub": d.Sub, "target_port": d.TargetPort}, t)
+		e.DomainAction("domain_add", merge(d.target(), D{"sub": d.Sub, "target_port": d.TargetPort}), t)
 	}
 }
 func (e *Execution) AccessResult(t, a D) D {

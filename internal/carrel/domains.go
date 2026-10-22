@@ -153,23 +153,28 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 	}
 	var domain, delta D
 	if tool == "domain_add" {
-		m := e.Machine(t, a["machine"])
+		vmid, _, vip := e.publishTarget(t, a)
 		name := str(a["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
 		record, found := domainNamed(domains, name)
 		if found && record.State == "deleting" {
 			fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
 		}
-		if found && (record.VMID != integer(m["vmid"]) || float64(record.TargetPort) != num(a["target_port"])) {
+		if found && (record.VMID != vmid || record.VIP != vip.ID || float64(record.TargetPort) != num(a["target_port"])) {
 			fail("conflict", "Domain already targets a different service; remove it explicitly first", D{"recovery": "revise_request"})
 		}
 		delta = D{"domains": 0}
 		if !found {
 			delta["domains"] = 1
 			e.Quota(t, delta)
-			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: integer(m["vmid"]), Sub: str(a["sub"]), Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
+			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Sub: str(a["sub"]), Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
 		}
 		if dry {
-			domain = D{"name": name, "machine": m["name"], "target_port": a["target_port"], "state": "planned"}
+			domain = D{"name": name, "target_port": a["target_port"], "state": "planned"}
+			if vip.ID != "" {
+				domain["vip"] = vip.ID
+			} else {
+				domain["machine"] = e.Machine(t, a["machine"])["name"]
+			}
 		} else {
 			if e.Op != nil && e.Op["tool"] == "domain_add" {
 				owner := e.Op["id"]
