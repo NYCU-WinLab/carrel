@@ -109,10 +109,11 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		app["agent_token"] = digest(token)
 		e.Put("apps", app["id"], n, app)
 		r["app"] = e.PublicApp(app)
-		r["install"] = e.appInstall(t, app, token)
+		r["install"] = e.appInstall(t, app)
+		r["agent_token"] = token
 		r["workflow"] = e.appWorkflow(t, app)
 		r["next_steps"] = []string{
-			"Run install on the machine over SSH; it needs sudo.",
+			"Run install on the machine over SSH with the agent token on its standard input, from the client: printf '%s\\n' <agent_token> | ssh <machine> <install, quoted for the remote shell>. The token then appears in no command line on the machine. Run by hand, install asks for the token instead. It needs sudo.",
 			"Commit workflow to .github/workflows/carrel.yml on the linked branch and adjust the build step.",
 			"Write runtime secrets to /srv/apps/" + name + "/env on the machine; they never pass through carrel.",
 			"Publish the port with domain_add when the app should answer on HTTPS.",
@@ -171,9 +172,11 @@ func (e *Execution) removeApps(apps []D) {
 	}
 }
 
-func (e *Execution) appInstall(t D, app D, token string) string {
-	return fmt.Sprintf("curl -fsSL %s/apps/v1/install.sh | sudo CARREL_APP_TOKEN=%s sh -s -- --app %s --port %d --user \"$USER\" --start %s",
-		e.P.appOrigin(), token, app["name"], integer(app["port"]), shellQuote(str(app["start"])))
+func (e *Execution) appInstall(t D, app D) string {
+	// No token here: it goes in on standard input, so no command line on the
+	// machine carries it (issue #33).
+	return fmt.Sprintf("f=$(mktemp) && curl -fsSL %s/apps/v1/install.sh -o \"$f\" && sudo sh \"$f\" --app %s --port %d --user \"$USER\" --start %s; rm -f \"$f\"",
+		e.P.appOrigin(), app["name"], integer(app["port"]), shellQuote(str(app["start"])))
 }
 
 func (e *Execution) appWorkflow(t D, app D) string {

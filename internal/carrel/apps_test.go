@@ -50,11 +50,12 @@ func appFixture(t *testing.T) (*Platform, *App, string) {
 	}
 	r := a.Call(context.Background(), "app_link", D{"machine": "web", "name": "site", "repo": "Alice/Site", "start": "python3 -m http.server $PORT", "port": 8000}, person("alice", false))
 	assertOK(t, r)
-	token := regexp.MustCompile(`CARREL_APP_TOKEN=(cdt_[A-Za-z0-9_-]+)`).FindStringSubmatch(str(r["install"]))
-	if token == nil {
-		t.Fatalf("install line has no token: %s", r["install"])
+	// The token comes apart from the install line, which must not carry it (issue #33).
+	token := str(r["agent_token"])
+	if !regexp.MustCompile(`^cdt_[A-Za-z0-9_-]{43}$`).MatchString(token) || strings.Contains(str(r["install"]), token) {
+		t.Fatalf("token %q, install line %s", token, r["install"])
 	}
-	return p, a, token[1]
+	return p, a, token
 }
 
 func do(t *testing.T, a *App, method, path, token string, body io.Reader) (int, D) {
