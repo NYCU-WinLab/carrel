@@ -499,7 +499,8 @@ A public port or domain can target a virtual address instead of a machine (issue
 forwards, to the address, and every holder admits the port, so the public entry follows the
 address. A virtual address without holders cannot be published, and `vip_remove` refuses while a
 port or domain targets it. In NetBox such a service belongs to the address's FHRP group.
-Deployment publications still name machines only.
+A deployment publication takes `vip` the same way (issue #151); the deployment records the
+address's identity, so a retry after the address was replaced is refused.
 
 `ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports
