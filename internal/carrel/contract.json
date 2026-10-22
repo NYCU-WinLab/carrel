@@ -2543,7 +2543,7 @@
     },
     {
       "name": "app_link",
-      "description": "Bind a GitHub repository branch to a machine so every push deploys (PLAN 7.9). GitHub Actions builds; carrel stores the release; carrel-deployd in the machine switches it and rolls back on a failed health check. Returns install (run once on the machine over SSH with sudo; contains the app's agent token, shown only here) and workflow (commit to .github/workflows/carrel.yml). Runtime secrets go in /srv/apps/<name>/env on the machine. Publish the port separately with domain_add.",
+      "description": "Bind a GitHub repository branch to a machine so every push deploys (PLAN 7.9). GitHub Actions builds; carrel stores the release; carrel-deployd in the machine switches it and rolls back on a failed health check. Returns install (run once on the machine over SSH with sudo) and agent_token (shown only here), which install reads on standard input: pipe it from the client, printf '%s\\n' <agent_token> | ssh <machine> <install>, so it appears in no command line on the machine and workflow (commit to .github/workflows/carrel.yml). Runtime secrets go in /srv/apps/<name>/env on the machine. Publish the port separately with domain_add.",
       "inputSchema": {
         "type": "object",
         "properties": {

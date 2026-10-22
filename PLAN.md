@@ -951,9 +951,10 @@ stays a pet machine: the member can still SSH in and change anything, and carrel
 **Flow**
 
 1. The member's agent calls `app_link` with the machine, repository, branch, start command and
-   port. carrel returns an install line and a workflow snippet. A public name is a separate
-   `domain_add` to the same port.
-2. The agent runs the install line on the machine over its own SSH. It installs `carrel-deployd`
+   port. carrel returns an install line, the app's agent token and a workflow snippet. A public
+   name is a separate `domain_add` to the same port.
+2. The agent runs the install line on the machine over its own SSH, with the token piped into it
+   from the client, so no command line on the machine carries the token (issue #33). It installs `carrel-deployd`
    (a small static binary run by systemd) with a token scoped to this one app, and writes the start
    command into a local file that carrel cannot change. carrel has no other way into the machine
    (section 7.7).
