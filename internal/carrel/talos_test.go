@@ -43,9 +43,38 @@ func TestAVMFromAnImageWithPortsHasNoSSH(t *testing.T) {
 		}
 	}
 
-	m = merge(m, D{"vmid": 10101, "tenant_n": 1, "ip": "10.200.1.11", "state": "ready", "power_state": "running", "node": "carrel01"})
+	// Booting, it initializes until its first port answers (issue #125).
+	if bootState(m) != "initializing" {
+		t.Fatal(bootState(m))
+	}
+	m = merge(m, D{"vmid": 10101, "tenant_n": 1, "ip": "10.200.1.11", "state": "initializing", "power_state": "running", "node": "carrel01", "allocation_id": "a1"})
 	p.Store.Put("machines", 10101, 1, m)
-	pub := e.PublicMachine(m, nil)
+	probes := 0
+	p.serviceProbe = func(_ context.Context, m D) bool { probes++; return false }
+	if f := attempt(func() { e.WaitReady(m, "") }); f == nil || probes == 0 {
+		t.Fatal("ready without an answer on the port", f)
+	}
+	if got := p.Store.Get("machines", "10101"); got["state"] != "needs_owner_fix" || !strings.Contains(str(got["reason"]), "Port 50000") {
+		t.Fatal(got)
+	}
+	// A later answer, seen by machine_get, makes it ready.
+	pub := e.PublicMachine(p.Store.Get("machines", "10101"), nil)
+	p.serviceProbe = func(_ context.Context, m D) bool { return true }
+	e.ObserveSSH(pub)
+	if pub["state"] != "ready" || pub["reason"] != nil {
+		t.Fatal(pub)
+	}
+	p.Store.Put("machines", 10101, 1, m)
+	e.WaitReady(m, "")
+	if got := p.Store.Get("machines", "10101"); got["state"] != "ready" || obj(got["readiness"])["service_status"] != "verified" || got["reason"] != nil {
+		t.Fatal(got)
+	}
+	// machine_list shows the stored state; nothing turns it back to booting.
+	m = p.Store.Get("machines", "10101")
+	if pub := e.PublicMachine(m, nil); pub["state"] != "ready" {
+		t.Fatal(pub)
+	}
+	pub = e.PublicMachine(m, nil)
 	if pub["user_data"] != nil || pub["ssh"] != nil || pub["ssh_jump"] != nil || pub["tunnel"] != "ssh -N -L 50000:10.200.1.11:50000 -L 6443:10.200.1.11:6443 jump@carrel.winlab.tw" {
 		t.Fatal(pub)
 	}

@@ -360,10 +360,11 @@ func (e *Execution) ISOMachineSpec(t, a D) D {
 func unmanaged(m D) bool { return m["guest_management"] != nil && integer(m["guest_management"]) == 0 }
 
 // bootState is the state a machine takes when it boots: a managed guest
-// initializes until it reports; one installed from an ISO is installing
-// while the ISO is in, and ready once it is out.
+// initializes until it reports, one with service ports until its first port
+// answers; one installed from an ISO is installing while the ISO is in, and
+// ready once it is out.
 func bootState(m D) string {
-	if !unmanaged(m) {
+	if !unmanaged(m) || len(servicePortsOf(m)) > 0 {
 		return "initializing"
 	}
 	if m["iso_volume"] != nil {
