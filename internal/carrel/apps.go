@@ -172,7 +172,9 @@ func (e *Execution) removeApps(apps []D) {
 }
 
 func (e *Execution) appInstall(t D, app D, token string) string {
-	return fmt.Sprintf("curl -fsSL %s/apps/v1/install.sh | sudo CARREL_APP_TOKEN=%s sh -s -- --app %s --port %d --user \"$USER\" --start %s",
+	// The token goes in on standard input: printf is a shell builtin, so it
+	// never shows in ps (issue #33).
+	return fmt.Sprintf("f=$(mktemp) && curl -fsSL %s/apps/v1/install.sh -o \"$f\" && printf '%%s\\n' %s | sudo sh \"$f\" --app %s --port %d --user \"$USER\" --start %s; rm -f \"$f\"",
 		e.P.appOrigin(), token, app["name"], integer(app["port"]), shellQuote(str(app["start"])))
 }
 

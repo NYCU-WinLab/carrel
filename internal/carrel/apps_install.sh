@@ -1,6 +1,8 @@
 #!/bin/sh
-# Installs carrel-deployd for one app (PLAN 7.9). Run by the machine owner:
-#   curl -fsSL @ORIGIN@/apps/v1/install.sh | sudo CARREL_APP_TOKEN=... sh -s -- --app NAME --port N --user USER --start CMD
+# Installs carrel-deployd for one app (PLAN 7.9). Run by the machine owner,
+# with the agent token on standard input, so it never shows in ps (issue #33):
+#   f=$(mktemp) && curl -fsSL @ORIGIN@/apps/v1/install.sh -o "$f" && printf '%s\n' TOKEN | sudo sh "$f" --app NAME --port N --user USER --start CMD; rm -f "$f"
+# CARREL_APP_TOKEN in the environment still works for older install lines.
 set -eu
 
 app="" port="" user="" start=""
@@ -14,7 +16,11 @@ while [ $# -gt 0 ]; do
 	esac
 done
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
-[ -n "${CARREL_APP_TOKEN:-}" ] || { echo "CARREL_APP_TOKEN is required" >&2; exit 1; }
+if [ -z "${CARREL_APP_TOKEN:-}" ]; then
+	IFS= read -r CARREL_APP_TOKEN || true
+fi
+# Also keeps the token from breaking out of the JSON below.
+echo "${CARREL_APP_TOKEN:-}" | grep -Eq '^cdt_[A-Za-z0-9_-]+$' || { echo "the agent token is required on standard input" >&2; exit 1; }
 echo "$app" | grep -Eq '^[a-z][a-z0-9-]{0,31}$' || { echo "invalid --app" >&2; exit 1; }
 echo "$port" | grep -Eq '^[0-9]{1,5}$' || { echo "invalid --port" >&2; exit 1; }
 [ -n "$start" ] || { echo "--start is required" >&2; exit 1; }

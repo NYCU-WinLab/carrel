@@ -50,7 +50,7 @@ func appFixture(t *testing.T) (*Platform, *App, string) {
 	}
 	r := a.Call(context.Background(), "app_link", D{"machine": "web", "name": "site", "repo": "Alice/Site", "start": "python3 -m http.server $PORT", "port": 8000}, person("alice", false))
 	assertOK(t, r)
-	token := regexp.MustCompile(`CARREL_APP_TOKEN=(cdt_[A-Za-z0-9_-]+)`).FindStringSubmatch(str(r["install"]))
+	token := regexp.MustCompile(`printf '%s\\n' (cdt_[A-Za-z0-9_-]+) \| sudo sh "\$f"`).FindStringSubmatch(str(r["install"]))
 	if token == nil {
 		t.Fatalf("install line has no token: %s", r["install"])
 	}
