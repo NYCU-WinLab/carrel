@@ -1080,7 +1080,7 @@
     },
     {
       "name": "port_open",
-      "description": "Publish a guest TCP/UDP port and return its public endpoint. HTTPS websites should use domain_add or deployment publications.",
+      "description": "Publish a guest TCP/UDP port and return its public endpoint. HTTPS websites should use domain_add or deployment publications. With vip, every machine that may hold the virtual address admits the port.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1099,6 +1099,11 @@
               "tcp",
               "udp"
             ]
+          },
+          "vip": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "A virtual address of this tenant (vip_add) instead of a machine: the entry follows whichever holder has the address. Give exactly one of machine and vip."
           },
           "tenant": {
             "type": "string",
@@ -1133,7 +1138,6 @@
           }
         },
         "required": [
-          "machine",
           "port",
           "proto"
         ],
@@ -1221,7 +1225,7 @@
     },
     {
       "name": "domain_add",
-      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through.",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1238,6 +1242,11 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 65535
+          },
+          "vip": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "A virtual address of this tenant (vip_add) instead of a machine: the entry follows whichever holder has the address. Give exactly one of machine and vip."
           },
           "tenant": {
             "type": "string",
@@ -1272,7 +1281,6 @@
           }
         },
         "required": [
-          "machine",
           "sub",
           "target_port"
         ],
@@ -1588,7 +1596,7 @@
     },
     {
       "name": "vip_remove",
-      "description": "Release a virtual address; its machines can no longer use it.",
+      "description": "Release a virtual address; its machines can no longer use it. Close its public ports and remove its domains first.",
       "inputSchema": {
         "type": "object",
         "properties": {

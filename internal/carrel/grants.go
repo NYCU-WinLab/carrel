@@ -13,6 +13,14 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 			g["machine"] = m["name"]
 		}
 	}
+	if g["vip"] != nil {
+		// Members name a virtual address; its id stays internal.
+		for _, v := range e.vips(n) {
+			if v.ID == g["vip"] {
+				g["vip"] = v.Name
+			}
+		}
+	}
 	switch kind {
 	case "ports":
 		if g["public_port"] != nil {
@@ -68,9 +76,9 @@ func (e *Execution) PublicGrants(kind string, n int) []D {
 func grantSummary(kind string, g D) D {
 	switch kind {
 	case "ports":
-		return pick(g, "id", "machine", "public_port", "port", "proto", "endpoint", "state", "verification")
+		return pick(g, "id", "machine", "vip", "public_port", "port", "proto", "endpoint", "state", "verification")
 	case "domains":
-		return pick(g, "name", "machine", "sub", "target_port", "url", "state", "ready_at", "verification")
+		return pick(g, "name", "machine", "vip", "sub", "target_port", "url", "state", "ready_at", "verification")
 	case "peers":
 		return pick(g, "id", "machine", "from_tenant", "from_machine", "source", "port", "proto", "state")
 	case "networks":

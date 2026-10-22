@@ -45,7 +45,8 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			name := str(r["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
 			key = "https:" + name
 			old, found := domainNamed(e.domains(integer(t["n"])), name)
-			if found && (old.VMID != integer(m["vmid"]) || old.TargetPort != port || old.State != "ready") {
+			// A new machine has no vmid yet: never the vmid 0 of a virtual address's domain.
+			if found && (old.VIP != "" || old.VMID != integer(m["vmid"]) || old.TargetPort != port || old.State != "ready") {
 				fail("conflict", "Domain already belongs to another or incomplete publication", D{"name": name})
 			}
 			pub = merge(pub, D{"sub": r["sub"], "url": "https://" + name, "reused": found})
@@ -59,7 +60,7 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			key = string(encoded([]any{m["name"], proto, port}))
 			found := false
 			for _, p := range e.ports(integer(t["n"])) {
-				if p.VMID == integer(m["vmid"]) && p.Port == port && p.Proto == proto {
+				if p.VIP == "" && p.VMID == integer(m["vmid"]) && p.Port == port && p.Proto == proto {
 					found = true
 					if p.State == "deleting" {
 						fail("conflict", "Finish removing this port before reusing it", D{"recovery": "finish_cleanup"})
@@ -220,14 +221,14 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			var reference []any
 			if kind == "domains" {
 				for _, g := range e.domains(n) {
-					if g.VMID == integer(m["vmid"]) && g.Name == str(p["sub"])+"."+str(t["slug"])+".winlab.tw" {
+					if g.VIP == "" && g.VMID == integer(m["vmid"]) && g.Name == str(p["sub"])+"."+str(t["slug"])+".winlab.tw" {
 						reference = []any{kind, g.ID, orNil(g.OperationID)}
 						break
 					}
 				}
 			} else {
 				for _, g := range e.ports(n) {
-					if g.VMID == integer(m["vmid"]) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
+					if g.VIP == "" && g.VMID == integer(m["vmid"]) && float64(g.Port) == num(p["port"]) && g.Proto == p["protocol"] {
 						reference = []any{kind, g.ID, orNil(g.OperationID)}
 						break
 					}
@@ -369,7 +370,7 @@ func (e *Execution) PublishDeployment(t, a, w D) {
 		e.Op["phase"] = "publishing"
 		e.Op["current_resource"] = d.Name
 		e.P.Operations.Save(e.Op)
-		e.DomainAction("domain_add", D{"machine": str(d.VMID), "sub": d.Sub, "target_port": d.TargetPort}, t)
+		e.DomainAction("domain_add", merge(d.target(), D{"sub": d.Sub, "target_port": d.TargetPort}), t)
 	}
 }
 func (e *Execution) AccessResult(t, a D) D {

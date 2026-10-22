@@ -64,7 +64,8 @@ func recentIssuance(s *Store) []certificateRecord {
 	return out
 }
 
-// portGrant forwards a public port on the exit node to a machine.
+// portGrant forwards a public port on the exit node to a machine, or to a
+// virtual address (VIP holds its id, VMID is 0, IP its address; issue #146).
 type portGrant struct {
 	ID          string `json:"id"`
 	IP          string `json:"ip"`
@@ -74,6 +75,7 @@ type portGrant struct {
 	PublicPort  int    `json:"public_port"`
 	State       string `json:"state,omitempty"`
 	TenantN     int    `json:"tenant_n"`
+	VIP         string `json:"vip,omitempty"`
 	VMID        int    `json:"vmid"`
 }
 
@@ -104,7 +106,8 @@ func (e *Execution) peers(n ...int) []peerGrant { return rowsOf[peerGrant](e.S, 
 // protocol reads grants written before proto was recorded as TCP.
 func (g peerGrant) protocol() string { return or(g.Proto, "tcp") }
 
-// domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port.
+// domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port, or
+// to a port of a virtual address (VIP holds its id, VMID is 0; issue #146).
 type domainRecord struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
@@ -115,10 +118,19 @@ type domainRecord struct {
 	Sub         string  `json:"sub"`
 	TargetPort  int     `json:"target_port"`
 	TenantN     int     `json:"tenant_n"`
+	VIP         string  `json:"vip,omitempty"`
 	VMID        int     `json:"vmid"`
 }
 
 func (d domainRecord) D() D { return decode(string(encoded(d))) }
+
+// target is the domain_add argument that names the domain's target again.
+func (d domainRecord) target() D {
+	if d.VIP != "" {
+		return D{"vip": d.VIP}
+	}
+	return D{"machine": str(d.VMID)}
+}
 
 func (e *Execution) domains(n int) []domainRecord {
 	return rowsOf[domainRecord](e.S, "domains", n)
@@ -139,6 +151,37 @@ type vipRecord struct {
 func (v vipRecord) D() D { return decode(string(encoded(v))) }
 
 func (e *Execution) vips(n int) []vipRecord { return rowsOf[vipRecord](e.S, "vips", n) }
+
+// publishTarget resolves where a public port or domain points: a machine,
+// or a virtual address that one of its holders answers for (issue #146).
+// Exactly one of machine and vip is given.
+func (e *Execution) publishTarget(t, a D) (vmid int, ip string, vip vipRecord) {
+	if (a["machine"] == nil) == (a["vip"] == nil) {
+		fail("invalid", "Give exactly one of machine and vip", D{"recovery": "revise_request"})
+	}
+	if a["machine"] != nil {
+		m := e.Machine(t, a["machine"])
+		return integer(m["vmid"]), str(m["ip"]), vip
+	}
+	for _, v := range e.vips(integer(t["n"])) {
+		if v.Name == a["vip"] || v.ID == a["vip"] {
+			if v.State == "deleting" {
+				fail("conflict", "This virtual address is being removed", D{"recovery": "revise_request"})
+			}
+			return 0, v.Address, v
+		}
+	}
+	fail("not_found", "Virtual address not found in this tenant")
+	return
+}
+
+// requireHolder refuses a new publication at a virtual address no machine
+// may hold. An existing one is kept: its holders can come back.
+func requireHolder(vip vipRecord) {
+	if vip.ID != "" && len(vip.VMIDs) == 0 {
+		fail("invalid", "Add a machine to the virtual address with vip_add first", D{"recovery": "resolve_prerequisite"})
+	}
+}
 
 // vipHosts are the host numbers kept for virtual addresses, above every
 // machine address (10 + slot, at most 100 machines per tenant).

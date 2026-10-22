@@ -494,6 +494,13 @@ holder accepts at the virtual address what it accepts at its own. Deleting a mac
 the holders and keeps the address. carrel neither balances load nor checks health; a load balancer
 object stays a later option.
 
+A public port or domain can target a virtual address instead of a machine (issue #146):
+`port_open` and `domain_add` take `vip` in place of `machine`. The exit node DNATs, or the gateway
+forwards, to the address, and every holder admits the port, so the public entry follows the
+address. A virtual address without holders cannot be published, and `vip_remove` refuses while a
+port or domain targets it. In NetBox such a service belongs to the address's FHRP group.
+Deployment publications still name machines only.
+
 `ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports
 (`8006`, `3128`, SSH) listen only on the admin network, never on tenant VNets. Private network
@@ -1138,7 +1145,7 @@ Mapping:
 | tenant segment `10.200.N.0/24` | prefix in the shared VRF |
 | managed private network CIDR | prefix in that network's own VRF |
 | `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
-| published port, HTTPS route | service on the VM with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
+| published port, HTTPS route | service on the VM, or on the FHRP group when it targets a virtual address, with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
 
 The tenant segment `10.200.N.0/24`, machine addresses and virtual addresses are allocated by the

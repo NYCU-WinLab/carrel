@@ -182,6 +182,18 @@ def vip_addresses(m, state):
     return sorted(out)
 
 
+def targets(grant, m, state):
+    """Whether a public port or domain reaches this machine: it names the
+    machine, or a virtual address this machine may hold (issue #146), so
+    every holder admits it at the address that moves."""
+    if grant.get("vip"):
+        return any(
+            v["id"] == grant["vip"] and v["tenant_n"] == m["tenant_n"] == grant["tenant_n"] and m["vmid"] in v["vmids"]
+            for v in state.get("vips", [])
+        )
+    return grant["vmid"] == m["vmid"]
+
+
 def guest_firewall(m, state, config):
     # These rules cover net0 only: experiment NICs run with firewall=0, so a
     # restricted machine's private NICs stay unfiltered (issue #75).
@@ -259,7 +271,7 @@ def guest_firewall(m, state, config):
         rules.append(f"OUT DROP -dest {ipaddress.ip_network(block, strict=False)}")
     rules += ["OUT DROP -p tcp -dport 25"]
     for grant in state["ports"]:
-        if grant["vmid"] == m["vmid"]:
+        if targets(grant, m, state):
             port = integer(grant["port"], 1, 65535)
             proto = grant["proto"]
             if proto not in ("tcp", "udp"):
@@ -267,7 +279,7 @@ def guest_firewall(m, state, config):
             # The exit node DNATs only, so the client's address arrives.
             rules.append(f"IN ACCEPT -p {proto} -dport {port}")
     for domain in state.get("domains", []):
-        if domain["vmid"] == m["vmid"]:
+        if targets(domain, m, state):
             port = integer(domain["target_port"], 1, 65535)
             rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
     # Reachability probes only, from the authenticated control plane, and
@@ -438,7 +450,9 @@ def ports_nft(state, address):
         if g["proto"] not in ("tcp", "udp") or (g["proto"], public) in seen:
             raise ValueError("invalid port grant")
         ip = ipaddress.IPv4Address(g["ip"])
-        if ip not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 10 <= int(str(ip).rsplit(".", 1)[1]) <= 109:
+        # A machine address, or a virtual address of the tenant (issue #146).
+        hosts = range(251, 255) if g.get("vip") else range(10, 110)
+        if ip not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or int(str(ip).rsplit(".", 1)[1]) not in hosts:
             raise ValueError("port grant outside tenant network")
         seen.add((g["proto"], public))
         rules.append(f"ip daddr {address} {g['proto']} dport {public} dnat to {ip}:{port}")

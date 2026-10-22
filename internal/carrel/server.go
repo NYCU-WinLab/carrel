@@ -290,7 +290,7 @@ func (e *Execution) MaintainDomains() {
 					}
 					d.State = "configuring"
 					e.Put("domains", d.ID, n, d)
-					e.DomainAction("domain_add", D{"machine": str(d.VMID), "sub": d.Sub, "target_port": d.TargetPort}, t)
+					e.DomainAction("domain_add", merge(d.target(), D{"sub": d.Sub, "target_port": d.TargetPort}), t)
 				}()
 			}
 			e.RenewCertificate(t)
