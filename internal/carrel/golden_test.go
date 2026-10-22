@@ -121,6 +121,16 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 		return D{"status": state}, nil
 	case "metrics":
 		return []D{{"time": 1, "cpu": 0.25, "mem": 512, "maxmem": 1024}}, nil
+	case "reconcile":
+		// The exit node reports each tenant's VPN interface, as node-agent does.
+		vpn := D{}
+		for _, c := range dicts(obj(req["state"])["vpn_clients"]) {
+			n := integer(c["tenant_n"])
+			vpn[str(n)] = D{"public_key": fmt.Sprintf("%043d=", n), "port": 31000 + n}
+		}
+		if len(vpn) > 0 && req["first"] == nil {
+			return D{"changed": []any{}, "vpn": vpn}, nil
+		}
 	}
 	return r.fakeBackend.Call(ctx, req, target)
 }
@@ -446,6 +456,18 @@ func goldenScenario(g *goldenRun) {
 	call("images", "machine_media", D{"machine": "api", "action": "eject"}, alice)
 
 	call("console", "machine_console_url", D{"machine": "api", "dry_run": true}, alice)
+
+	// Client VPN (issue #103): the key pair stays with the client.
+	vpnKey := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
+	call("vpn", "vpn_client_add", D{"name": "laptop", "public_key": vpnKey, "dry_run": true}, alice)
+	call("vpn", "vpn_client_add", D{"name": "laptop", "public_key": vpnKey, "hours": 2}, alice)
+	call("vpn", "vpn_client_add", D{"name": "agent", "public_key": vpnKey}, alice)
+	call("vpn", "vpn_client_add", D{"name": "bad", "public_key": "not-a-key"}, alice)
+	call("vpn", "vpn_client_add", D{"name": "long", "public_key": vpnKey, "hours": 200}, alice)
+	call("vpn", "vpn_client_list", D{}, alice)
+	call("vpn", "vpn_client_list", D{}, bob)
+	call("vpn", "vpn_client_remove", D{"name": "laptop"}, alice)
+	call("vpn", "vpn_client_remove", D{"name": "laptop"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

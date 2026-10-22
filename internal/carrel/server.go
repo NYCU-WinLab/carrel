@@ -233,6 +233,7 @@ func (p *Platform) Start() {
 				e := p.execution(p.ctx)
 				if len(e.S.Tenants()) > 0 {
 					e.ExpireGrants()
+					e.ExpireVPNClients()
 					e.Reconcile()
 				}
 				e.S.PurgeOAuth()

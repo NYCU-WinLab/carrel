@@ -1648,6 +1648,147 @@
       }
     },
     {
+      "name": "vpn_client_add",
+      "description": "Connect a device or an agent to the tenant's network over WireGuard, for traffic SSH port forwarding does not cover: UDP, many ports, a browser on internal services. Generate the key pair on the client (wg genkey | tee key | wg pubkey) and send only the public key; carrel never sees the private key. The result's config is a WireGuard configuration: put the private key in it, then bring it up with wg-quick (needs root) or, without root, a userspace client such as wireproxy (WireGuard as a local SOCKS5 proxy). The client gets an address in 10.201.N.0/24 and reaches the tenant's machines with network_access tenant, nothing else. It expires after hours (default 8, at most 168); adding the same name again renews it. One TCP port is simpler with the SSH jump host (ssh -L). At most 8 clients per tenant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "A name for the device or agent session, such as laptop or agent-build."
+          },
+          "public_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$",
+            "description": "The client's WireGuard public key (wg pubkey)."
+          },
+          "hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 168,
+            "default": 8,
+            "description": "How long the client stays connected before it is removed."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "name",
+          "public_key"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "vpn_client_list",
+      "description": "List the tenant's VPN clients with their addresses, expiry and WireGuard configuration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "vpn_client_remove",
+      "description": "Disconnect a VPN client now, before it expires.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "A name for the device or agent session, such as laptop or agent-build."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "snapshot_create",
       "description": "Create a disk snapshot. Reserves its worst-case size in the separate snapshot_gb quota, not disk_gb. Actual retained blocks are reported separately when available.",
       "inputSchema": {
@@ -3687,6 +3828,9 @@
     "vip_add",
     "vip_list",
     "vip_remove",
+    "vpn_client_add",
+    "vpn_client_list",
+    "vpn_client_remove",
     "snapshot_create",
     "snapshot_list",
     "snapshot_delete",
@@ -3776,7 +3920,9 @@
     "ssh_key_remove",
     "tenant_suspend",
     "vip_add",
-    "vip_remove"
+    "vip_remove",
+    "vpn_client_add",
+    "vpn_client_remove"
   ],
   "async_tools": [
     "deployment_apply",
@@ -3804,7 +3950,9 @@
     "snapshot_rollback",
     "tenant_suspend",
     "vip_add",
-    "vip_remove"
+    "vip_remove",
+    "vpn_client_add",
+    "vpn_client_remove"
   ],
   "images": [
     {

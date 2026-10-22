@@ -273,5 +273,9 @@ func (s *Store) Desired() D {
 	if vips := filter(s.Objects("vips"), func(o D) bool { return o["state"] != "deleting" }); len(vips) > 0 {
 		state["vips"] = vips
 	}
+	// The same for VPN clients; an expired one is gone before its record.
+	if clients := filter(s.Objects("vpn_clients"), func(o D) bool { return o["state"] != "deleting" && num(o["expires_at"]) > now() }); len(clients) > 0 {
+		state["vpn_clients"] = clients
+	}
 	return state
 }
