@@ -40,7 +40,7 @@ type nbConfig struct {
 	Token     string
 	TokenFile string
 	Cluster   string
-	VRFPrefix string
+	VRF       string
 	VMIDField string
 	Public    string
 	Marker    nbMarker
@@ -67,7 +67,7 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		Token:     str(section["token"]),
 		TokenFile: str(section["token_file"]),
 		Cluster:   str(section["cluster"]),
-		VRFPrefix: textAt(section, "vrf_prefix", "carrel-"),
+		VRF:       textAt(section, "vrf", "carrel"),
 		VMIDField: textAt(section, "vmid_field", "vmid"),
 		Public:    str(p.Config["public_address"]),
 		Marker:    nbMarker{Kind: textAt(marker, "type", "tag"), Value: textAt(marker, "value", "carrel")},
@@ -320,8 +320,8 @@ type nbAddress struct {
 }
 
 type nbIface struct {
-	name, description string
-	addresses         []nbAddress
+	name, description, vrf string
+	addresses              []nbAddress
 }
 
 type nbService struct {
@@ -347,7 +347,8 @@ type nbVIP struct {
 
 type nbTenant struct {
 	n        int
-	vrf      string
+	vrf      string // the shared VRF of the tenant segment
+	vrfs     []string
 	prefixes []nbPrefix
 	machines []nbMachine
 	vips     []nbVIP
@@ -376,14 +377,20 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 {
 			continue
 		}
-		tn := nbTenant{n: n, vrf: c.VRFPrefix + slug}
+		tn := nbTenant{n: n, vrf: c.VRF}
+		used := map[string]bool{tn.vrf: true}
 		tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, fmt.Sprintf("10.200.%d.0/24", n), "carrel tenant " + slug})
-		names := map[string]string{}
+		// Only a private network can overlap another tenant's CIDR, so each one
+		// that has addresses gets a VRF of its own; the tenant segment is unique
+		// platform-wide and shares one.
+		names, netVRF := map[string]string{}, map[string]string{}
 		for _, nw := range networks {
 			names[str(nw["id"])] = str(nw["name"])
 			if cidr := str(nw["cidr"]); cidr != "" {
 				if p, err := netip.ParsePrefix(cidr); err == nil {
-					tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, p.Masked().String(), fmt.Sprintf("carrel network %s (tenant %s)", nw["name"], slug)})
+					netVRF[str(nw["id"])] = fmt.Sprintf("%s-%s-%s", c.VRF, slug, nw["name"])
+					used[netVRF[str(nw["id"])]] = true
+					tn.prefixes = append(tn.prefixes, nbPrefix{netVRF[str(nw["id"])], p.Masked().String(), fmt.Sprintf("carrel network %s (tenant %s)", nw["name"], slug)})
 				}
 			}
 		}
@@ -395,11 +402,12 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 			key := fmt.Sprintf("%d/eth0", vmid)
 			primary := nbAddress{tn.vrf, str(m["ip"]) + "/24", "carrel address of " + nm.name, key}
 			nm.primary = primary
-			nm.ifaces = append(nm.ifaces, nbIface{name: "eth0", description: "carrel primary NIC, mac " + str(m["mac"]), addresses: []nbAddress{primary}})
+			nm.ifaces = append(nm.ifaces, nbIface{name: "eth0", vrf: tn.vrf, description: "carrel primary NIC, mac " + str(m["mac"]), addresses: []nbAddress{primary}})
 			for _, nic := range dicts(m["nics"]) {
-				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), description: "carrel network " + names[str(nic["network"])] + ", mac " + str(nic["mac"])}
+				network := str(nic["network"])
+				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), vrf: netVRF[network], description: "carrel network " + names[str(nic["network"])] + ", mac " + str(nic["mac"])}
 				if ip := str(nic["ip"]); ip != "" {
-					iface.addresses = append(iface.addresses, nbAddress{tn.vrf, fmt.Sprintf("%s/%d", ip, integer(nic["prefix"])), "carrel address of " + nm.name, fmt.Sprintf("%d/%s", vmid, iface.name)})
+					iface.addresses = append(iface.addresses, nbAddress{netVRF[network], fmt.Sprintf("%s/%d", ip, integer(nic["prefix"])), "carrel address of " + nm.name, fmt.Sprintf("%d/%s", vmid, iface.name)})
 				}
 				nm.ifaces = append(nm.ifaces, iface)
 			}
@@ -424,6 +432,10 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 			}
 			tn.vips = append(tn.vips, vip)
 		}
+		for name := range used {
+			tn.vrfs = append(tn.vrfs, name)
+		}
+		sort.Strings(tn.vrfs)
 		out = append(out, tn)
 	}
 	return out
@@ -539,10 +551,21 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 				}
 			}
 			// Everything of the tenant stays as it is until the next pass.
-			if v := one(s.vrfs, func(v D) bool { return v["name"] == t.vrf }); v != nil {
-				s.kept("vrfs", integer(v["id"]))
-				s.protect("prefixes", s.prefixes, func(o D) bool { return refID(o["vrf"]) == integer(v["id"]) })
-				s.protect("ips", s.ips, func(o D) bool { return refID(o["vrf"]) == integer(v["id"]) })
+			for _, name := range t.vrfs {
+				v := one(s.vrfs, func(v D) bool { return v["name"] == name })
+				if v == nil {
+					continue
+				}
+				id := integer(v["id"])
+				s.kept("vrfs", id)
+				if name != t.vrf {
+					// A private network's VRF holds only this tenant's objects.
+					s.protect("prefixes", s.prefixes, func(o D) bool { return refID(o["vrf"]) == id })
+					s.protect("ips", s.ips, func(o D) bool { return refID(o["vrf"]) == id })
+				}
+			}
+			for _, p := range t.prefixes {
+				s.protect("prefixes", s.prefixes, func(o D) bool { return o["prefix"] == p.prefix })
 			}
 			for _, m := range t.machines {
 				e.netboxProtectMachine(s, m.name)
@@ -577,35 +600,43 @@ func (e *Execution) netboxMachines(wanted []nbTenant) []nbMachine {
 // addresses. A failing machine is recorded and skipped; a failing VRF or prefix
 // fails the tenant.
 func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID int, cfg nbConfig, synced map[int]string, tenantOf map[int]int, vmNB map[int]int, ifaceNB map[string]int, fail func(string, any) string) {
-	vrf := one(s.vrfs, func(v D) bool { return v["name"] == t.vrf })
-	if vrf == nil && len(c.list("ipam/vrfs/", url.Values{"name": {t.vrf}})) > 0 {
-		panic(nbError{Msg: "NetBox VRF " + t.vrf + " exists but carrel did not create it"})
+	vrfIDs := map[string]int{}
+	for _, name := range t.vrfs {
+		vrf := one(s.vrfs, func(v D) bool { return v["name"] == name })
+		if vrf == nil && len(c.list("ipam/vrfs/", url.Values{"name": {name}})) > 0 {
+			panic(nbError{Msg: "NetBox VRF " + name + " exists but carrel did not create it"})
+		}
+		created := vrf == nil
+		vrf = c.ensure("ipam/vrfs/", vrf, D{"name": name, "description": "carrel"})
+		if created {
+			s.vrfs = append(s.vrfs, vrf)
+		}
+		vrfIDs[name] = integer(vrf["id"])
+		s.kept("vrfs", vrfIDs[name])
 	}
-	vrf = c.ensure("ipam/vrfs/", vrf, D{"name": t.vrf, "description": fmt.Sprintf("carrel tenant %d", t.n)})
-	vrfID := integer(vrf["id"])
-	s.kept("vrfs", vrfID)
 	for _, p := range t.prefixes {
+		vrfID := vrfIDs[p.vrf]
 		have := one(s.prefixes, func(o D) bool { return o["prefix"] == p.prefix && refID(o["vrf"]) == vrfID })
 		got := c.ensure("ipam/prefixes/", have, D{"prefix": p.prefix, "vrf": vrfID, "status": "active", "description": p.description})
 		s.kept("prefixes", integer(got["id"]))
 	}
 	for _, m := range t.machines {
 		tenantOf[m.vmid] = t.n
-		if err := attempt(func() { e.netboxMachine(c, s, m, vrfID, clusterID, cfg, vmNB, ifaceNB) }); err != nil {
+		if err := attempt(func() { e.netboxMachine(c, s, m, vrfIDs, clusterID, cfg, vmNB, ifaceNB) }); err != nil {
 			synced[m.vmid] = fail("machine "+m.name, err)
 		} else {
 			synced[m.vmid] = ""
 		}
 	}
 	for _, v := range t.vips {
-		if err := attempt(func() { e.netboxVIP(c, s, v, vrfID, ifaceNB) }); err != nil {
+		if err := attempt(func() { e.netboxVIP(c, s, v, vrfIDs[v.vrf], ifaceNB) }); err != nil {
 			fail("virtual address "+v.name, err)
 			e.netboxProtectVIP(s, v)
 		}
 	}
 }
 
-func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfID, clusterID int, cfg nbConfig, vmNB map[int]int, ifaceNB map[string]int) {
+func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs map[string]int, clusterID int, cfg nbConfig, vmNB map[int]int, ifaceNB map[string]int) {
 	have := one(s.vms, func(o D) bool { return o["name"] == m.name })
 	if have == nil && len(c.list("virtualization/virtual-machines/", url.Values{"name": {m.name}, "cluster_id": {strconv.Itoa(clusterID)}})) > 0 {
 		panic(nbError{Msg: "a NetBox virtual machine named " + m.name + " exists but carrel did not create it"})
@@ -618,11 +649,16 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfID, c
 	var primaryID int
 	for _, f := range m.ifaces {
 		haveIface := one(s.ifaces, func(o D) bool { return o["name"] == f.name && refID(o["virtual_machine"]) == vmID })
-		iface := c.ensure("virtualization/interfaces/", haveIface, D{"virtual_machine": vmID, "name": f.name, "enabled": true, "vrf": vrfID, "description": f.description})
+		var ifaceVRF any
+		if f.vrf != "" {
+			ifaceVRF = vrfIDs[f.vrf]
+		}
+		iface := c.ensure("virtualization/interfaces/", haveIface, D{"virtual_machine": vmID, "name": f.name, "enabled": true, "vrf": ifaceVRF, "description": f.description})
 		ifaceID := integer(iface["id"])
 		s.kept("ifaces", ifaceID)
 		ifaceNB[fmt.Sprintf("%d/%s", m.vmid, f.name)] = ifaceID
 		for _, a := range f.addresses {
+			vrfID := vrfIDs[a.vrf]
 			haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
 			ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "assigned_object_type": nbIfaceType, "assigned_object_id": ifaceID, "description": a.description})
 			s.kept("ips", integer(ip["id"]))

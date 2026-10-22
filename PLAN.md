@@ -64,7 +64,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-19 | Public ingress uses `140.113.60.184/27` on VLAN 60 at the exit node. CT 207 and the WireGuard hop through the old PVE retire for carrel |
 | 2026-10-19 | No QDevice: every place it could run fails together with B09 |
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
-| 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One VRF per tenant, owned by carrel; the ownership marker is set at creation (section 9.4, issue #141) |
+| 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the ownership marker is set at creation (section 9.4, issue #141) |
 
 ### 1.6 Current core and deferred work
 
@@ -1126,7 +1126,7 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `cluster` | NetBox cluster (name) that holds the virtual machines. It must exist; the NetBox operator owns it |
 | `marker` | `{"type": "tag" or "owner", "value": "..."}`, default tag `carrel`. Use a different marker for each carrel installation that shares a NetBox |
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
-| `vrf_prefix` | a tenant's VRF is `<vrf_prefix><tenant slug>`, default `carrel-` |
+| `vrf` | name of the shared VRF, default `carrel`; a private network's VRF is `<vrf>-<tenant slug>-<network name>` |
 
 Mapping:
 
@@ -1134,14 +1134,18 @@ Mapping:
 |---|---|
 | machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU, memory and disk (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; the description says VM or CT; the VMID goes into `vmid_field` |
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
-| machine address, managed NIC address | IP address on its interface, in the tenant's VRF; the machine address is the primary IPv4 |
-| tenant segment `10.200.N.0/24`, private network CIDR | prefix in the tenant's VRF |
+| machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4 |
+| tenant segment `10.200.N.0/24` | prefix in the shared VRF |
+| private network CIDR | prefix in that network's own VRF |
 | published port, HTTPS route | service on the VM with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
 
-A tenant gets one VRF because private network CIDRs may overlap across tenants. Carrel creates it
-with the marker and deletes it when the tenant has no more objects. A VRF of the same name that
-carrel did not create is an error, not something to adopt. Dedicated public IPs are not mapped yet
+The tenant segment `10.200.N.0/24`, machine addresses and virtual addresses are allocated by the
+platform and unique across tenants, so they share one VRF. Only a private network can overlap
+another tenant's CIDR (a member may choose it, and only managed networks are checked, and only
+within the tenant), so each private network with a CIDR gets a VRF of its own. Carrel creates every
+VRF with the marker and deletes it when nothing needs it. A VRF of the same name that carrel did not
+create is an error, not something to adopt. Dedicated public IPs are not mapped yet
 (the feature does not exist); they would add an IP from the public pool with `nat_inside`.
 
 Behavior:

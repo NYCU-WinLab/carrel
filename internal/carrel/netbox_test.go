@@ -223,9 +223,23 @@ func TestNetBoxSyncCreatesMarkedObjects(t *testing.T) {
 	if db := find(vms, func(v D) bool { return v["name"] == "db.alice" }); obj(db["status"])["value"] != "offline" || obj(db["custom_fields"])["vmid"] != float64(10101) {
 		t.Fatal(db)
 	}
+	// The tenant segment shares one VRF; a private network has its own.
 	vrfs := f.all("ipam/vrfs/")
-	if len(vrfs) != 1 || vrfs[0]["name"] != "carrel-alice" {
+	shared, private := find(vrfs, func(v D) bool { return v["name"] == "carrel" }), find(vrfs, func(v D) bool { return v["name"] == "carrel-alice-back" })
+	if len(vrfs) != 2 || shared == nil || private == nil {
 		t.Fatal(vrfs)
+	}
+	for _, ip := range f.all("ipam/ip-addresses/") {
+		want := shared["id"]
+		if ip["address"] == "10.64.0.10/25" {
+			want = private["id"]
+		}
+		if integer(obj(ip["vrf"])["id"]) != integer(want) {
+			t.Fatal("address in the wrong VRF", ip)
+		}
+	}
+	if p := find(f.all("ipam/prefixes/"), func(v D) bool { return v["prefix"] == "10.64.0.0/25" }); integer(obj(p["vrf"])["id"]) != integer(private["id"]) {
+		t.Fatal(p)
 	}
 	prefixes := f.all("ipam/prefixes/")
 	if len(prefixes) != 2 || find(prefixes, func(v D) bool { return v["prefix"] == "10.64.0.0/25" }) == nil || find(prefixes, func(v D) bool { return v["prefix"] == "10.200.1.0/24" }) == nil {
