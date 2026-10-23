@@ -260,18 +260,39 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		lines = append(lines, " handle {", fallback, " }", "}")
 	}
+	if delegated {
+		// Caddy asks again when it loads a certificate it holds, so the
+		// gateway answers names agreed to before itself and asks the control
+		// plane only for new ones: a restart while the control plane is down
+		// keeps delegated sites up (#166). A name agreed to since the last
+		// reconcile is still asked for.
+		lines[1] += "\n on_demand_tls {\n  ask http://" + askAddress + "/gateway/ask\n }"
+		var known []string
+		for _, n := range dicts(state["delegated_names"]) {
+			// A delegated grant's one route is its catch-all (covers).
+			if g, ok := grants[str(n["grant"])]; ok && g.Kind == "delegated" && len(grantRoutes[g.ID]) > 0 && zonePattern.MatchString(str(n["id"])) {
+				known = append(known, "domain="+str(n["id"]))
+			}
+		}
+		sort.Strings(known)
+		lines = append(lines, "http://"+askAddress+" {", " bind 127.0.0.1")
+		if len(known) > 0 {
+			lines = append(lines, " @known query "+strings.Join(known, " "), " handle @known {", "  respond 200", " }")
+		}
+		lines = append(lines, " handle {", "  reverse_proxy "+controlAddress, " }", "}")
+	}
 	// Last, for any other name: Caddy keeps certificates it obtained on
 	// demand after their site is gone, and without this site a request for
 	// such a name gets an empty 200 (#166).
 	lines = append(lines, "https:// {", " respond 404", "}")
-	if delegated {
-		lines[1] += "\n on_demand_tls {\n  ask http://" + controlAddress + "/gateway/ask\n }"
-	}
 	return strings.Join(lines, "\n") + "\n", hosts.String(), certificates
 }
 
 // controlAddress is where the gateway reaches the control plane.
 const controlAddress = "10.200.0.3:8080"
+
+// askAddress is the gateway's own answer to Caddy's on-demand question.
+const askAddress = "127.0.0.1:2020"
 
 // SyncGateway sends the gateway its configuration and returns the
 // fingerprints of the pairs it now holds.

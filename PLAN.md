@@ -671,8 +671,12 @@ grants have no certificate and no gateway site.
 Delegated names are built too. `domain_request` with `kind: delegated` asks for `*.<base>` in a
 zone open to the tenant alone; `domain_add` publishes its catch-all. The grant's wildcard A record
 is written at once, and the gateway serves `*.<base>` and `*.*.<base>` with `tls { on_demand }`;
-the global `on_demand_tls` asks `http://10.200.0.3:8080/gateway/ask`, a path the public origin does
-not forward, answered only to the gateway's address. carrel agrees to a name once its route is
+the global `on_demand_tls` asks the gateway's own `http://127.0.0.1:2020/gateway/ask`. It answers
+names carrel agreed to at the last reconcile itself, since Caddy asks again when it loads a
+certificate it holds, so a gateway restart while the control plane is down keeps delegated sites
+up; it passes any other name to `http://10.200.0.3:8080/gateway/ask`, a path the public origin does
+not forward, answered only to the gateway's address. A second ask for a name whose tenant is being
+asked waits for that answer. carrel agrees to a name once its route is
 ready, the tenant is active, the grant has issued fewer than 20 new names in 7 days, and the
 route's target answers `GET /.well-known/carrel/ask?domain=<name>` with 200 (the control plane
 reaches it: the guest firewall admits `10.200.0.3` to a delegated route's port). A name agreed to

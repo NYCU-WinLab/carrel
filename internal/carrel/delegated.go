@@ -31,6 +31,9 @@ const (
 	delegatedAsksPerMinute  = 30
 	delegatedRefusalSeconds = 60
 	delegatedRefusalsKept   = 10000
+	// delegatedWaitSeconds bounds how long a second ask for a name waits
+	// for the first; the tenant has 3 s to answer.
+	delegatedWaitSeconds = 5
 )
 
 // askLimiter holds the recent tenant questions per grant and the recent
@@ -126,8 +129,26 @@ func (e *Execution) delegatedGrantFor(name string) (domainGrant, bool) {
 }
 
 // AskDelegated decides whether the gateway may obtain a certificate for name.
+// Another handshake may be asking the tenant for the same name: this one
+// waits for that answer instead of failing, and checks everything again
+// once it is in (#166).
 func (e *Execution) AskDelegated(name string) (bool, string) {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	deadline := now() + delegatedWaitSeconds
+	for {
+		ok, why := e.askDelegated(name)
+		if why != "in_progress" || now() >= deadline {
+			return ok, why
+		}
+		select {
+		case <-e.Ctx.Done():
+			return false, "in_progress"
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+func (e *Execution) askDelegated(name string) (bool, string) {
 	if len(name) > 253 || !zonePattern.MatchString(name) {
 		return false, "invalid_name"
 	}
@@ -160,8 +181,11 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	if address == "" {
 		return false, "no_target"
 	}
-	// A name agreed to before skips the limit, so renewals always pass.
-	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); (!seen || n.Pending || n.Grant != g.ID) && !e.P.delegatedAsks.allow(g.ID) {
+	// A name agreed to before skips the limit, so renewals always pass, and
+	// so does a name another ask is putting to the tenant: that one counted.
+	n, seen := rowOf[delegatedName](e.S, "delegated_names", name)
+	asking := seen && n.Grant == g.ID && n.Pending && now()-float64(n.FirstAt) < 60
+	if (!seen || n.Grant != g.ID || (n.Pending && !asking)) && !e.P.delegatedAsks.allow(g.ID) {
 		return false, "rate_limited"
 	}
 	// The place in the budget is taken before the tenant is asked, under a
@@ -178,6 +202,9 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	}
 	if !agreed {
 		e.S.Remove("delegated_names", name)
+		// Before the lock is released, so an ask waiting for this one
+		// sees the refusal instead of asking the tenant again.
+		e.P.delegatedAsks.refuse(name)
 		return false, "tenant_refused"
 	}
 	n.Pending = false
@@ -191,7 +218,16 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 func (e *Execution) reserveDelegated(g domainGrant, name string) (bool, string) {
 	e.P.delegated.Lock()
 	defer e.P.delegated.Unlock()
-	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); seen {
+	n, seen := rowOf[delegatedName](e.S, "delegated_names", name)
+	if !seen {
+		// Under the lock that a refusing ask holds while it records the
+		// refusal: an ask that waited for it gets that answer and does not
+		// put the question to the tenant again.
+		if why, refused := e.P.delegatedAsks.refusal(name); refused {
+			return false, why
+		}
+	}
+	if seen {
 		switch {
 		case n.Grant != g.ID:
 			// Left by a released grant: this one has not agreed yet.
@@ -262,7 +298,7 @@ func (a *App) askRoute(mux *http.ServeMux, p *Platform) {
 		err := attempt(func() { ok, why = p.execution(r.Context()).AskDelegated(name) })
 		// A pending name may still be agreed to, and a limited one is
 		// asked again once the grant has room: neither is remembered.
-		if err == nil && !ok && why != "in_progress" && why != "rate_limited" && len(name) <= 253 {
+		if err == nil && !ok && why != "in_progress" && why != "rate_limited" && why != "refused_recently" && len(name) <= 253 {
 			p.delegatedAsks.refuse(name)
 		}
 		if err != nil || !ok {
