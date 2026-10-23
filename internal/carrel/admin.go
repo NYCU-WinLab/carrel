@@ -41,7 +41,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		}
 		r := e.Reconcile()
 		e.RefreshStorage()
-		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit()}
+		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit(), "disk_volumes_collected": e.CollectDiskVolumes()}
 	case "zone_add", "zone_list", "zone_remove":
 		return e.ZoneAction(tool, a, w)
 	case "domain_proxy":

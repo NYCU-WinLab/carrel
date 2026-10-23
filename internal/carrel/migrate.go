@@ -124,6 +124,20 @@ func (e *Execution) PerformMigration() {
 		}
 	}()
 	e.Call(D{"op": "migrate_finish", "machine": merge(m, D{"node": to.Name}), "bwlimit": bw}, to.Target)
+	// The disk may come back under another volume name (issue #175): the
+	// old one is dropped, so a failed read leaves the config key in NetBox
+	// and reconcile_run collects the volume later.
+	var volume any
+	attempt(func() {
+		volume = obj(e.Call(D{"op": "disk_volume", "machine": merge(m, D{"node": to.Name})}, to.Target))["disk_volume"]
+	})
+	e.P.writer.Lock()
+	defer e.P.writer.Unlock()
+	if current := e.S.Get("machines", str(plan["vmid"])); current != nil {
+		delete(current, "disk_volume")
+		keepDiskVolume(current, volume)
+		e.Put("machines", current["vmid"], integer(current["tenant_n"]), current)
+	}
 }
 
 // FinishMigration records the new node under the writer lock.

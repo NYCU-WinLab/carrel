@@ -439,7 +439,7 @@ func (e *Execution) AllocatePort(t D) int {
 	return 0
 }
 func (e *Execution) PublicMachine(m D, ports []portGrant) D {
-	safe := without(m, "ssh_keys", "runcmd", "user_data", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node")
+	safe := without(m, "ssh_keys", "runcmd", "user_data", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node", "disk_volume")
 	report := e.S.guestReport(m["vmid"])
 	if m["kind"] == "ct" && m["state"] == "ready" {
 		report.InitializationStatus, report.ApplicationStatus = "complete", "not_checked"

@@ -307,7 +307,7 @@ type nbService struct {
 type nbMachine struct {
 	vmid, tenantN                       int
 	name, tenant, kind, status, comment string
-	image, node, onBoot                 string
+	image, node, onBoot, diskVolume     string
 	cpu                                 float64
 	memoryMB, diskMB                    int
 	primary                             nbAddress
@@ -410,7 +410,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		for _, m := range machines {
 			vmid := integer(m["vmid"])
 			nm := nbMachine{vmid: vmid, tenantN: n, name: str(m["name"]) + "." + slug, tenant: slug, kind: str(m["kind"]), status: nbStatus(m),
-				image: str(m["image"]), node: str(m["node"]), onBoot: nbOnBoot(m),
+				image: str(m["image"]), node: str(m["node"]), onBoot: nbOnBoot(m), diskVolume: str(m["disk_volume"]),
 				cpu: num(m["cpu"]), memoryMB: integer(m["memory_mb"]), diskMB: integer(m["disk_gb"]) * 1024}
 			nm.comment = fmt.Sprintf("carrel %s, tenant %s, proxmox vmid %d", nm.kind, slug, vmid)
 			key := fmt.Sprintf("%d/eth0", vmid)
@@ -707,11 +707,17 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 	s.kept("vms", vmID)
 	vmNB[m.vmid] = vmID
 	if m.diskMB > 0 {
-		name := "scsi0"
-		if m.kind == "ct" {
-			name = "rootfs"
+		// The disk is named by its Proxmox volume once a node reported it
+		// (issue #175), else by its config key. A machine has one root
+		// disk, found by its machine, so a new name patches it.
+		name := m.diskVolume
+		if name == "" {
+			name = "scsi0"
+			if m.kind == "ct" {
+				name = "rootfs"
+			}
 		}
-		haveDisk := one(s.disks, func(o D) bool { return o["name"] == name && refID(o["virtual_machine"]) == vmID })
+		haveDisk := one(s.disks, func(o D) bool { return refID(o["virtual_machine"]) == vmID })
 		disk := c.ensure("virtualization/virtual-disks/", haveDisk, D{"virtual_machine": vmID, "name": name, "size": m.diskMB, "description": "carrel root disk"})
 		s.kept("disks", integer(disk["id"]))
 	}

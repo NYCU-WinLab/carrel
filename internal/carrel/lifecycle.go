@@ -139,7 +139,9 @@ func (e *Execution) Provision(m D, reconciled bool) {
 		if !reconciled {
 			e.Reconcile()
 		}
-		e.keepCloudInit(m, obj(e.Call(D{"op": "create", "machine": m}))["cloud_init"])
+		created := obj(e.Call(D{"op": "create", "machine": m}))
+		e.keepCloudInit(m, created["cloud_init"])
+		keepDiskVolume(m, created["disk_volume"])
 		m["state"] = bootState(m)
 		e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	})
@@ -430,6 +432,34 @@ func (e *Execution) cloudInitFiles(m D) D {
 		return nil
 	}
 	return D{"user": r.User, "network": r.Network}
+}
+
+// keepDiskVolume records the root disk's Proxmox volume a node reported, the
+// name NetBox shows for the disk (issue #175).
+func keepDiskVolume(m D, volume any) {
+	if v := str(volume); matches(`^[a-zA-Z][a-zA-Z0-9_.-]*:[a-zA-Z0-9_./-]+$`, v) {
+		m["disk_volume"] = v
+	}
+}
+
+// CollectDiskVolumes reads the root disk volume of machines created before
+// carrel recorded it.
+func (e *Execution) CollectDiskVolumes() int {
+	added := 0
+	for _, m := range e.S.Objects("machines") {
+		if m["disk_volume"] != nil || m["state"] == "deleting" || m["state"] == "provisioning" {
+			continue
+		}
+		var volume any
+		if attempt(func() { volume = obj(e.Call(D{"op": "disk_volume", "machine": m}))["disk_volume"] }) != nil {
+			continue
+		}
+		if keepDiskVolume(m, volume); m["disk_volume"] != nil {
+			e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
+			added++
+		}
+	}
+	return added
 }
 
 // CollectCloudInit reads the files of VMs created before carrel kept them.
