@@ -290,6 +290,10 @@ def guest_firewall(m, state, config):
         if targets(domain, m, state):
             port = integer(domain["target_port"], 1, 65535)
             rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
+            if domain.get("delegated"):
+                # The control plane asks the target before the gateway
+                # obtains a certificate for a delegated name (PLAN 6.10).
+                rules.append(f"IN ACCEPT -source 10.200.0.3 -p tcp -dport {port}")
     # Reachability probes only, from the authenticated control plane, and
     # the jump host forwarding members to their machines (issue #98): SSH,
     # or the declared ports of a machine without it (issue #94).

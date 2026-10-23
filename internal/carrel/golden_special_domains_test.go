@@ -7,6 +7,7 @@ package carrel
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -158,6 +159,39 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("z", "domain_add", D{"machine": "web", "name": "www.lab.example", "target_port": 8080}, alice)
 	call("z", "zone_remove", D{"name": "lab.example", "confirm": "lab.example"}, admin)
 	rows("z")
+	// dl: a delegated name in alice's own zone. The gateway asks before it
+	// obtains each certificate (delegated.go).
+	call("dl", "domain_request", D{"name": "*.apps.winlab.tw", "kind": "delegated", "reason": "not a zone of one tenant"}, alice)
+	call("dl", "domain_request", D{"name": "*.d.lab.example", "kind": "delegated", "reason": "not open to bob"}, bob)
+	dl := call("dl", "domain_request", D{"name": "*.d.lab.example", "kind": "delegated", "reason": "an ingress controller"}, alice)
+	call("dl", "request_approve", D{"id": requestID(dl)}, admin)
+	ask := func(step, name string) {
+		ok, why := g.p.execution(bg).AskDelegated(name)
+		g.lines = append(g.lines, fmt.Sprintf("%s ask %s %v %s", step, name, ok, why))
+	}
+	g.p.tenantAsk = func(address string, port int, name string) bool {
+		g.lines = append(g.lines, fmt.Sprintf("dl tenant ask %s:%d %s", address, port, name))
+		return name != "refused.d.lab.example"
+	}
+	ask("dl", "x.d.lab.example")
+	call("dl", "domain_add", D{"machine": "web", "name": "x.d.lab.example", "target_port": 8443}, alice)
+	call("dl", "domain_add", D{"machine": "web", "name": "*.d.lab.example", "target_port": 8443}, alice)
+	ask("dl", "x.d.lab.example")
+	ask("dl", "x.d.lab.example")
+	ask("dl", "a.b.d.lab.example")
+	ask("dl", "a.b.c.d.lab.example")
+	ask("dl", "refused.d.lab.example")
+	ask("dl", "x.other.example")
+	ask("dl", "Bad_Name.d.lab.example")
+	for i := range 20 {
+		ok, _ := g.p.execution(bg).AskDelegated(fmt.Sprintf("n%d.d.lab.example", i))
+		if !ok && i < 17 {
+			g.lines = append(g.lines, fmt.Sprintf("dl budget ended early at %d", i))
+		}
+	}
+	ask("dl", "late.d.lab.example")
+	ask("dl", "x.d.lab.example")
+	rows("dl")
 	// p: a special port and an SRV record that names it.
 	call("p", "port_request", D{"public_port": 25565, "reason": "minecraft", "dry_run": true}, alice)
 	mc := call("p", "port_request", D{"public_port": 25565, "reason": "minecraft"}, alice)

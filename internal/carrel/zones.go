@@ -113,6 +113,16 @@ func (e *Execution) zoneOpen(zone string, n int) bool {
 	return false
 }
 
+// zoneOnlyFor reports whether zone is open to tenant n and no other.
+func (e *Execution) zoneOnlyFor(zone string, n int) bool {
+	for _, z := range e.zones() {
+		if z.Name == zone {
+			return len(z.Tenants) == 1 && z.Tenants[0] == n
+		}
+	}
+	return false
+}
+
 // publicZone is a zone as zone_list shows it: no id beyond Cloudflare's, no
 // token.
 func (e *Execution) publicZone(z zoneRecord) D {
@@ -228,6 +238,12 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	z := zoneRecord{ID: str(found[0]["id"]), Name: name, Tenants: tenants, AddedBy: str(w["sub"]), AddedAt: time.Now().Unix()}
 	if !matches(`^[0-9a-f]{32}$`, z.ID) {
 		fail("conflict", "Cloudflare returned an unexpected zone id")
+	}
+	// A delegated grant needs the zone to stay its tenant's alone.
+	for _, g := range e.grants() {
+		if g.zone() == name && g.Kind == "delegated" && (len(tenants) != 1 || tenants[0] != g.TenantN) {
+			fail("conflict", "A delegated name in this zone needs it to stay open to its tenant alone: "+g.Name, D{"recovery": "resolve_prerequisite"})
+		}
 	}
 	if old != nil && str(old["id"]) != z.ID {
 		for _, g := range e.grants() {
