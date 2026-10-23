@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -200,8 +201,8 @@ func (e *Execution) PublicIPAction(tool string, a, t D) D {
 	if b.ID == "" {
 		fail("not_found", "The tenant holds no such public address; file public_ip_request first", D{"recovery": "resolve_prerequisite"})
 	}
-	if b.State == "deleting" {
-		fail("conflict", "This public address is being released", D{"recovery": "finish_cleanup"})
+	if b.State == "deleting" && tool != "public_ip_release" {
+		fail("conflict", "This public address is being released; release it again to finish", D{"recovery": "finish_cleanup"})
 	}
 	if tool == "public_ip_release" {
 		if !dry {
@@ -231,6 +232,11 @@ func (e *Execution) PublicIPAction(tool string, a, t D) D {
 		if h.ID != b.ID && h.VMID == integer(m["vmid"]) {
 			fail("conflict", "The machine already has public address "+h.Address+"; release it or bind it elsewhere first", D{"recovery": "revise_request"})
 		}
+	}
+	// NetBox may take an address back from carrel (PLAN 6.12): a binding
+	// that stands keeps working, but no new one is made.
+	if !slices.Contains(e.publicPool(), b.Address) {
+		fail("conflict", "NetBox no longer assigns "+b.Address+" to carrel; release it", D{"recovery": "revise_request"})
 	}
 	// Binding again moves the address or changes its ports.
 	b.VMID, b.Ports, b.BoundAt = integer(m["vmid"]), publicPorts(a["ports"]), now()

@@ -809,8 +809,11 @@ address to the machine's primary address, and SNAT of the machine's traffic leav
 interface to the bound address (that chain runs before `carrel_public`, whose rule SNATs every
 other tenant to the shared address). The exit node holds each bound address on its public
 interface as a deprecated /32, so it answers ARP but never picks it as the source of its own
-connections; it records the addresses it added in `/etc/carrel/public-ips.json` and removes only
-those, and `carrel-ports.service` puts them back at boot. The guest needs no change, the shared
+connections; it records the addresses it added, and each one's machine, in
+`/etc/carrel/public-ips.json` before it adds them and removes only those, checking that the
+interface no longer holds one. An address that leaves or moves to another machine loses its
+tracked connections (`conntrack -D`, every zone), since a NAT mapping outlives its rule.
+`carrel-ports.service` puts the addresses back at boot. The guest needs no change, the shared
 VRF stays (6.11), and no anti-spoofing rules are needed. Routing the public address into the
 guest (a second NIC or an extra address on `net0`) is not offered. carrel's own machines cannot
 reach a bound address (the DNAT matches only the uplink), as there is no hairpin for it.
@@ -825,7 +828,7 @@ carrel. A site without NetBox sync, or with no such range, offers no public IPs.
 ranges on each NetBox pass (a failed read keeps the last pool) and records each bound address as
 an IP address it owns, with the length of its range, whose `nat_inside` is the machine's primary
 address, so NetBox shows which machine holds it. A range that shrinks under a held address keeps
-it and hands out no new one from outside the range. On B09 the range is `140.113.60.163` to `.165`
+its binding working, but the address cannot be bound again and is not handed out once released. On B09 the range is `140.113.60.163` to `.165`
 (2026-10-23).
 
 **Objects and tools.** Like special ports, approval grants and the member applies.
@@ -833,7 +836,8 @@ it and hands out no new one from outside the range. On B09 the range is `140.113
 `request_approve`, which takes the first free address of the pool for the tenant, or
 `request_reject`. `public_ip_bind` (machine, optional address, ports) points a held address at a
 machine of the tenant; binding again moves it or changes its ports. A machine holds at most one.
-`public_ip_release` returns the address to the pool. `public_ip_list` shows the tenant's
+`public_ip_release` returns the address to the pool; a release whose
+reconcile failed is finished by releasing again. `public_ip_list` shows the tenant's
 addresses and the free count, `machine_get` shows a machine's bound address, and `catalog_get`
 shows whether the site offers them and how many are free. Deleting a machine unbinds its address
 and the tenant keeps it, so a later machine with the same VMID inherits nothing. A suspended

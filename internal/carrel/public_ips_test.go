@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,30 @@ func publicIPScenario(g *goldenRun) {
 		if b.Address == "203.0.113.10" && b.VMID != 0 {
 			g.t.Fatalf("a deleted machine's binding survived: %+v", b)
 		}
+	}
+}
+
+// A release whose reconcile failed is finished by releasing again, and an
+// address NetBox no longer assigns to carrel is not bound again (#91).
+func TestPublicIPReleaseRetriesAndPoolRevocation(t *testing.T) {
+	p, _ := fixture(t)
+	ctx := context.Background()
+	p.Store.SitePut("public_pool", "netbox", D{"ranges": []any{D{"start": "203.0.113.10/24", "end": "203.0.113.10/24"}}})
+	seedMachine(p, "web", 10100)
+	p.Store.Put("public_ips", "b", 1, publicIP{ID: "b", TenantN: 1, Address: "203.0.113.10", RequestID: "r", State: "deleting"}.D())
+	t1 := p.Store.TenantN(1)
+	e := p.execution(ctx)
+	if f := attempt(func() { e.PublicIPAction("public_ip_bind", D{"machine": "web"}, t1) }); f == nil {
+		t.Fatal("bound an address being released")
+	}
+	e.PublicIPAction("public_ip_release", D{}, t1)
+	if len(e.publicIPs()) != 0 {
+		t.Fatal("a second release did not finish", e.publicIPs())
+	}
+	p.Store.Put("public_ips", "c", 1, publicIP{ID: "c", TenantN: 1, Address: "203.0.113.10", RequestID: "r"}.D())
+	p.Store.SitePut("public_pool", "netbox", D{"ranges": []any{}})
+	f := attempt(func() { e.PublicIPAction("public_ip_bind", D{"machine": "web"}, t1) })
+	if f == nil || !strings.Contains(describe(f), "no longer assigns") {
+		t.Fatal("bound an address NetBox took back", f)
 	}
 }

@@ -130,13 +130,48 @@ def test_all_ports_admit_every_internet_source():
 
 def test_addresses_are_held_deprecated_and_only_its_own_removed(tmp_path, monkeypatch):
     module = load()
-    calls = []
-    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a))
+    calls, held = [], set()
+
+    def run(*a, **k):
+        calls.append(a)
+        if a[:3] == ("ip", "address", "replace"):
+            held.add(a[3].split("/")[0])
+        if a[:3] == ("ip", "address", "del"):
+            held.discard(a[3].split("/")[0])
+        if a[:3] == ("ip", "-4", "-j"):
+            return json.dumps([{"addr_info": [{"local": x} for x in held]}])
+        return ""
+
+    flushed = []
+    monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module, "conntrack_flush", flushed.append)
     monkeypatch.setattr(module, "PUBLIC_IPS", tmp_path / "public-ips.json")
-    module.public_addresses(["140.113.60.163", "140.113.60.164"])
+    module.public_addresses({"140.113.60.163": "10.200.3.11", "140.113.60.164": "10.200.3.12"})
     assert ("ip", "address", "replace", "140.113.60.163/32", "dev", "vmbr0.60", "preferred_lft", "0") in calls
+    assert flushed == []
     calls.clear()
-    module.public_addresses(["140.113.60.164"])
+    # .163 leaves, .164 moves to another machine: both lose their connections.
+    module.public_addresses({"140.113.60.164": "10.200.3.13"})
     assert ("ip", "address", "del", "140.113.60.163/32", "dev", "vmbr0.60") in calls
-    assert not [c for c in calls if c[2] == "del" and "164" in c[3]]
-    assert json.loads((tmp_path / "public-ips.json").read_text()) == ["140.113.60.164"]
+    assert not [c for c in calls if c[:3] == ("ip", "address", "del") and "164" in c[3]]
+    assert flushed == ["140.113.60.163", "140.113.60.164"]
+    assert json.loads((tmp_path / "public-ips.json").read_text()) == {"140.113.60.164": "10.200.3.13"}
+
+
+def test_a_failed_removal_keeps_the_address_tracked(tmp_path, monkeypatch):
+    module = load()
+
+    def run(*a, **k):
+        if a[:3] == ("ip", "address", "del"):
+            raise module.CommandFailure("busy")
+        if a[:3] == ("ip", "-4", "-j"):
+            return json.dumps([{"addr_info": [{"local": "140.113.60.163"}]}])
+        return ""
+
+    monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module, "conntrack_flush", lambda a: None)
+    monkeypatch.setattr(module, "PUBLIC_IPS", tmp_path / "public-ips.json")
+    (tmp_path / "public-ips.json").write_text(json.dumps({"140.113.60.163": "10.200.3.11"}))
+    with pytest.raises(module.CommandFailure):
+        module.public_addresses({})
+    assert "140.113.60.163" in json.loads((tmp_path / "public-ips.json").read_text())

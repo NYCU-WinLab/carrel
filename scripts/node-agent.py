@@ -522,20 +522,43 @@ def public_ports(ports):
     return out
 
 
-def public_addresses(publics):
-    """Hold the bound addresses on the public interface, deprecated so the
-    node never picks one as the source of its own connections."""
+def public_addresses(bindings):
+    """Hold the bound addresses on the public interface, deprecated so the node
+    never picks one as the source of its own connections. bindings maps each
+    address to its machine's address. An address that leaves, or moves to
+    another machine, loses its tracked connections too: a NAT mapping outlives
+    the rules that made it."""
     iface = public_interface()
-    old = set(json.loads(PUBLIC_IPS.read_text())) if PUBLIC_IPS.exists() else set()
-    for a in sorted(publics):
-        str(ipaddress.IPv4Address(a))
-        run("ip", "address", "replace", f"{a}/32", "dev", iface, "preferred_lft", "0")
-    for a in sorted(old - set(publics)):
-        try:
+    old = json.loads(PUBLIC_IPS.read_text()) if PUBLIC_IPS.exists() else {}
+    if isinstance(old, list):
+        old = dict.fromkeys(old, "")
+    # Tracked before they are added, so an address added before a failure
+    # is still removed later.
+    write(PUBLIC_IPS, json.dumps(dict(sorted({**old, **bindings}.items()))))
+    for a in sorted(bindings):
+        run("ip", "address", "replace", f"{ipaddress.IPv4Address(a)}/32", "dev", iface, "preferred_lft", "0")
+    for a in sorted(set(old) - set(bindings)):
+        if a in held_addresses(iface):
             run("ip", "address", "del", f"{ipaddress.IPv4Address(a)}/32", "dev", iface)
-        except CommandFailure:
-            pass  # already gone
-    write(PUBLIC_IPS, json.dumps(sorted(publics)))
+    for a in sorted(old):
+        if bindings.get(a) != old[a]:
+            conntrack_flush(a)
+    write(PUBLIC_IPS, json.dumps(dict(sorted(bindings.items()))))
+
+
+def held_addresses(iface):
+    return {i["local"] for x in json.loads(run("ip", "-4", "-j", "address", "show", "dev", iface)) for i in x.get("addr_info", [])}
+
+
+def conntrack_flush(address):
+    """Forget the connections of a public address in every zone: those that
+    arrived for it (DNAT) and those that left from it (SNAT)."""
+    ipaddress.IPv4Address(address)
+    for selector in ("--orig-dst", "--reply-dst"):
+        p = subprocess.run(["conntrack", "-D", selector, address], capture_output=True, text=True, timeout=60)
+        # conntrack exits 1 when nothing matched.
+        if p.returncode and "flow entries have been deleted" not in p.stderr:
+            raise CommandFailure(f"conntrack -D failed: {p.stderr[-300:]}")
 
 
 # The public port blocks of tenants 1 to 254 (20000 + 10n to 20009 + 10n).
@@ -1025,7 +1048,7 @@ table inet carrel_conntrack {{
         run("nft", "-f", "/etc/carrel/ports.nft")
         # The rules first: an address held without them reaches only the
         # node, whose public input drops it.
-        public_addresses([public for public, _, _ in bindings])
+        public_addresses({public: m["ip"] for public, m, _ in bindings})
         unit = """[Unit]
 Description=Carrel public port forwarding
 After=carrel-public.service
@@ -2122,7 +2145,7 @@ if __name__ == "__main__":
         vip_probe()
     if sys.argv[1:] == ["public-ips"]:
         # At boot, after carrel-ports: the addresses the last reconcile held.
-        public_addresses(json.loads(PUBLIC_IPS.read_text()) if PUBLIC_IPS.exists() else [])
+        public_addresses(json.loads(PUBLIC_IPS.read_text()) if PUBLIC_IPS.exists() else {})
         sys.exit(0)
     try:
         main()
