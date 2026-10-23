@@ -31,6 +31,9 @@ const (
 	delegatedAsksPerMinute  = 30
 	delegatedRefusalSeconds = 60
 	delegatedRefusalsKept   = 10000
+	// delegatedWaitSeconds bounds how long a second ask for a name waits
+	// for the first; the tenant has 3 s to answer.
+	delegatedWaitSeconds = 5
 )
 
 // askLimiter holds the recent tenant questions per grant and the recent
@@ -166,7 +169,21 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	}
 	// The place in the budget is taken before the tenant is asked, under a
 	// lock of its own, so concurrent asks cannot pass it together.
-	if ok, why := e.reserveDelegated(g, name); !ok || why == "known" {
+	ok, why := e.reserveDelegated(g, name)
+	// Another handshake is asking the tenant for this name: wait for its
+	// answer instead of failing this one (#166).
+	for deadline := now() + delegatedWaitSeconds; why == "in_progress" && now() < deadline; {
+		select {
+		case <-e.Ctx.Done():
+			return false, "in_progress"
+		case <-time.After(200 * time.Millisecond):
+		}
+		if reason, refused := e.P.delegatedAsks.refusal(name); refused {
+			return false, reason
+		}
+		ok, why = e.reserveDelegated(g, name)
+	}
+	if !ok || why == "known" {
 		return ok, why
 	}
 	agreed := e.tenantAgrees(address, route.TargetPort, name)
@@ -178,6 +195,9 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	}
 	if !agreed {
 		e.S.Remove("delegated_names", name)
+		// Before the lock is released, so an ask waiting for this one
+		// sees the refusal instead of asking the tenant again.
+		e.P.delegatedAsks.refuse(name)
 		return false, "tenant_refused"
 	}
 	n.Pending = false

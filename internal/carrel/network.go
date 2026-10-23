@@ -394,6 +394,16 @@ func (e *Execution) Reconcile() D {
 	if grants := e.S.Objects("domain_grants"); len(grants) > 0 {
 		state["domain_grants"] = grants
 	}
+	// Delegated names agreed to, which the gateway answers itself.
+	var agreed []any
+	for _, n := range rowsOf[delegatedName](e.S, "delegated_names") {
+		if t := e.S.TenantN(n.TenantN); !n.Pending && t != nil && t["status"] == "active" {
+			agreed = append(agreed, D{"id": n.ID, "grant": n.Grant})
+		}
+	}
+	if len(agreed) > 0 {
+		state["delegated_names"] = agreed
+	}
 	machines := []D{}
 	for _, m := range dicts(state["machines"]) {
 		machines = append(machines, without(m, "ssh_keys", "runcmd", "user_data"))
@@ -406,7 +416,7 @@ func (e *Execution) Reconcile() D {
 		// The fetch network and its container's firewall (PLAN 7.8).
 		state["fetch"] = true
 	}
-	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants")}
+	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants", "delegated_names")}
 	nodes := e.P.Nodes()
 	result := D{"node": e.Call(request, nodes[0].Target)}
 	// The gateway goes after the first node, whose guest firewalls admit it,

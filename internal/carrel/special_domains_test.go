@@ -267,6 +267,65 @@ func TestDelegatedAsksAreBounded(t *testing.T) {
 	}
 }
 
+// A second ask for a name whose tenant is being asked waits for that answer
+// instead of failing, and the tenant is asked once (#166).
+func TestDelegatedConcurrentAsksShareAnswer(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config["zone_dir"] = t.TempDir()
+	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
+	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
+	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})
+	p.Store.Put("domains", "dg0", 1, D{"id": "dg0", "tenant_n": 1, "vmid": 10100, "grant": "g0", "name": "*.a.lab.example", "slug": "alice", "target_port": 8443, "state": "ready", "ready_at": 1})
+	for _, agree := range []bool{true, false} {
+		p.delegatedAsks = askLimiter{}
+		var asked atomic.Int32
+		p.tenantAsk = func(string, int, string) bool { asked.Add(1); time.Sleep(500 * time.Millisecond); return agree }
+		name := fmt.Sprintf("shop%v.a.lab.example", agree)
+		var wg sync.WaitGroup
+		answers := make([]bool, 2)
+		for i := range answers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				time.Sleep(time.Duration(i) * 100 * time.Millisecond)
+				answers[i], _ = p.execution(context.Background()).AskDelegated(name)
+			}()
+		}
+		wg.Wait()
+		if asked.Load() != 1 || answers[0] != agree || answers[1] != agree {
+			t.Fatalf("agree=%v: tenant asked %d times, answers %v", agree, asked.Load(), answers)
+		}
+	}
+}
+
+// The gateway answers delegated names agreed to before itself, so a restart
+// while the control plane is down keeps their sites (#166).
+func TestGatewayAnswersKnownDelegatedNames(t *testing.T) {
+	grant := D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example"}
+	state := D{
+		"tenants":       []any{D{"n": 1, "slug": "alice"}},
+		"machines":      []any{D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"}},
+		"domains":       []any{D{"id": "dg0", "tenant_n": 1, "vmid": 10100, "grant": "g0", "name": "*.a.lab.example", "target_port": 8443, "state": "ready"}},
+		"domain_grants": []any{grant},
+		"delegated_names": []any{
+			D{"id": "shop.a.lab.example", "grant": "g0"},
+			D{"id": "old.a.lab.example", "grant": "gone"},
+		},
+	}
+	caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", nil, nil)
+	for _, want := range []string{
+		"ask http://127.0.0.1:2020/gateway/ask",
+		"http://127.0.0.1:2020 {\n bind 127.0.0.1\n @known query domain=shop.a.lab.example\n handle @known {\n  respond 200\n }\n handle {\n  reverse_proxy 10.200.0.3:8080\n }\n}",
+	} {
+		if !strings.Contains(caddy, want) {
+			t.Fatalf("missing %q in\n%s", want, caddy)
+		}
+	}
+	if strings.Contains(caddy, "old.a.lab.example") {
+		t.Fatalf("a released grant's name is answered:\n%s", caddy)
+	}
+}
+
 // A rename waits for every operation that may still reach the machine: a
 // deployment's bindings, its machines, or a queued job naming it.
 func TestRenameRefusesAMachineAnOperationHolds(t *testing.T) {
