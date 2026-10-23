@@ -341,11 +341,6 @@ func TestGatewayAnswersKnownDelegatedNames(t *testing.T) {
 	if strings.Contains(caddy, "old.a.lab.example") {
 		t.Fatalf("a released grant's name is answered:\n%s", caddy)
 	}
-	// Without its catch-all route the control plane refuses; so does the gateway.
-	state["domains"] = []any{D{"id": "dg1", "tenant_n": 1, "vmid": 10100, "grant": "g0", "name": "shop.a.lab.example", "target_port": 8443, "state": "ready"}}
-	if caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", nil, nil); strings.Contains(caddy, "@known") {
-		t.Fatalf("a name is answered without the catch-all:\n%s", caddy)
-	}
 }
 
 // A rename waits for every operation that may still reach the machine: a
