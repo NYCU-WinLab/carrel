@@ -239,7 +239,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The platform is carrel's own, named after the image.
 	platforms := f.all("dcim/platforms/")
-	if len(platforms) != 1 || platforms[0]["name"] != "Debian 13" || platforms[0]["slug"] != "carrel-catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
+	if len(platforms) != 1 || platforms[0]["name"] != "Carrel: Debian 13" || platforms[0]["slug"] != "carrel-catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
 		t.Fatal(platforms, web["platform"])
 	}
 	// Each machine's disk is a virtual disk, in MiB.
@@ -606,7 +606,7 @@ func TestNetBoxTenantImagesAreNotSharedAcrossTenants(t *testing.T) {
 	for _, o := range f.all("dcim/platforms/") {
 		names = append(names, str(o["name"]))
 	}
-	if len(names) != 2 || !slices.Contains(names, "Alice image base") || !slices.Contains(names, "Bob image base") {
+	if len(names) != 2 || !slices.Contains(names, "Carrel: Alice/base") || !slices.Contains(names, "Carrel: Bob/base") {
 		t.Fatal(names)
 	}
 }
@@ -674,7 +674,7 @@ func TestNetBoxPlatformFromBeforeThePrefixIsRenamedInPlace(t *testing.T) {
 		t.Fatal(r.Errors)
 	}
 	got := f.all("dcim/platforms/")
-	if len(got) != 1 || got[0]["name"] != "Debian 13" || got[0]["slug"] != "carrel-catalog-debian-13" || integer(got[0]["id"]) != id {
+	if len(got) != 1 || got[0]["name"] != "Carrel: Debian 13" || got[0]["slug"] != "carrel-catalog-debian-13" || integer(got[0]["id"]) != id {
 		t.Fatal("the old platform was not renamed in place", got)
 	}
 	f.reset()
@@ -686,7 +686,7 @@ func TestNetBoxPlatformFromBeforeThePrefixIsRenamedInPlace(t *testing.T) {
 func TestNetBoxPlatformNameTakenByHandFailsOnlyThatImage(t *testing.T) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
-	f.objects["dcim/platforms/"] = []D{{"id": 900, "name": "Debian 13", "slug": "debian-13"}}
+	f.objects["dcim/platforms/"] = []D{{"id": 900, "name": "Carrel: Debian 13", "slug": "debian-13"}}
 	r := syncNetBox(t, p)
 	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "web") {
 		t.Fatal(r.Errors)

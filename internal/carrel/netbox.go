@@ -776,13 +776,14 @@ func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string
 	if id, ok := s.platformIDs[label]; ok {
 		return id
 	}
-	// The name is for people. The slug keeps the label apart and carries the
-	// carrel- prefix, so it cannot meet a platform made by hand; a platform
-	// from before the prefix is found by its old slug and renamed in place.
+	// Name and slug both start with carrel, so neither can meet a platform made
+	// by hand. A tenant's image and ISO names share one namespace, so the name
+	// needs no kind. A platform from before the prefix is found by its old slug
+	// and renamed in place.
 	old := nbSlug(label)
-	slug, name := "carrel-"+old, nbTitle(strings.ReplaceAll(image, "-", " "))
-	if kind, rest, ok := strings.Cut(image, ":"); ok {
-		name = nbTitle(tenant) + " " + map[string]string{"tenant": "image", "iso": "ISO"}[kind] + " " + rest
+	slug, name := "carrel-"+old, "Carrel: "+nbTitle(strings.ReplaceAll(image, "-", " "))
+	if _, rest, ok := strings.Cut(image, ":"); ok {
+		name = "Carrel: " + nbTitle(tenant) + "/" + rest
 	}
 	have := one(s.platforms, func(o D) bool { return o["slug"] == slug })
 	if have == nil {
