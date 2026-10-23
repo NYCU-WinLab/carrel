@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -222,7 +223,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The platform is carrel's own, named after the image.
 	platforms := f.all("dcim/platforms/")
-	if len(platforms) != 1 || platforms[0]["name"] != "Debian-13" || platforms[0]["slug"] != "debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
+	if len(platforms) != 1 || platforms[0]["name"] != "Catalog:debian-13" || platforms[0]["slug"] != "catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
 		t.Fatal(platforms, web["platform"])
 	}
 	// Each machine's disk is a virtual disk, in MiB.
@@ -342,7 +343,7 @@ func TestNetBoxSyncDeletesDependentsFirst(t *testing.T) {
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
 	}
-	for _, path := range []string{"virtualization/virtual-machines/", "virtualization/interfaces/", "ipam/ip-addresses/", "ipam/services/", "ipam/fhrp-groups/", "ipam/fhrp-group-assignments/", "ipam/prefixes/", "ipam/vrfs/"} {
+	for _, path := range []string{"virtualization/virtual-machines/", "virtualization/interfaces/", "ipam/ip-addresses/", "ipam/services/", "ipam/fhrp-groups/", "ipam/fhrp-group-assignments/", "ipam/prefixes/", "ipam/vrfs/", "dcim/platforms/", "dcim/mac-addresses/", "virtualization/virtual-disks/"} {
 		if left := f.all(path); len(left) != 0 {
 			t.Fatal(path, left)
 		}
@@ -381,6 +382,14 @@ func TestNetBoxFailedMachineKeepsItsObjects(t *testing.T) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	syncNetBox(t, p)
+	kept := func() []int {
+		var n []int
+		for _, path := range []string{"virtualization/virtual-machines/", "virtualization/interfaces/", "ipam/services/", "dcim/platforms/", "dcim/mac-addresses/", "virtualization/virtual-disks/"} {
+			n = append(n, len(f.all(path)))
+		}
+		return n
+	}
+	before := kept()
 	// The custom field disappears: updating a machine now fails.
 	f.mu.Lock()
 	f.fields = map[string]bool{}
@@ -392,8 +401,8 @@ func TestNetBoxFailedMachineKeepsItsObjects(t *testing.T) {
 	if r := syncNetBox(t, p); len(r.Errors) == 0 {
 		t.Fatal("no error")
 	}
-	if len(f.all("virtualization/virtual-machines/")) != 2 || len(f.all("virtualization/interfaces/")) != 4 || len(f.all("ipam/services/")) != 2 {
-		t.Fatal("a machine that could not sync lost objects")
+	if after := kept(); fmt.Sprint(after) != fmt.Sprint(before) || before[0] != 2 || before[1] != 4 || before[2] != 2 {
+		t.Fatal("a machine that could not sync lost objects", before, after)
 	}
 }
 
@@ -452,5 +461,91 @@ func TestNetBoxKickNeverBlocks(t *testing.T) {
 	p, _ := fixture(t)
 	for range 5 {
 		p.NetBoxKick()
+	}
+}
+
+func TestNetBoxDeviceMatchesTheConfiguredField(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.objects["dcim/devices/"] = []D{{"id": 3, "name": "serverQ10", "cluster": D{"id": 1}, "custom_fields": D{"hostname": "carrel01"}}}
+	device := func() any {
+		vm := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" })
+		return vm["device"]
+	}
+	syncNetBox(t, p)
+	if device() != nil {
+		t.Fatal("a device matched by name although its name is not the node", device())
+	}
+	obj(p.Config["netbox"])["device_field"] = "hostname"
+	syncNetBox(t, p)
+	if integer(obj(device())["id"]) != 3 {
+		t.Fatal(device())
+	}
+}
+
+func TestNetBoxStartOnBootFollowsTheOwner(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	// A guest that shut itself down was not stopped by its owner: onboot stays 1.
+	web := p.Store.Get("machines", "10100")
+	web["power_state"], web["onboot"] = "stopped", true
+	p.Store.Put("machines", 10100, 1, web)
+	syncNetBox(t, p)
+	vm := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" })
+	if obj(vm["start_on_boot"])["value"] != "on" {
+		t.Fatal(vm["start_on_boot"])
+	}
+	// An owner stop clears it, whatever the machine observes afterwards.
+	web["onboot"] = false
+	p.Store.Put("machines", 10100, 1, web)
+	syncNetBox(t, p)
+	vm = find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" })
+	if obj(vm["start_on_boot"])["value"] != "off" {
+		t.Fatal(vm["start_on_boot"])
+	}
+}
+
+func TestNetBoxImagesWithSimilarNamesKeepTheirOwnPlatform(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	web, db := p.Store.Get("machines", "10100"), p.Store.Get("machines", "10101")
+	web["image"], db["image"] = "tenant:x", "tenant-x"
+	p.Store.Put("machines", 10100, 1, web)
+	p.Store.Put("machines", 10101, 1, db)
+	syncNetBox(t, p)
+	f.reset()
+	platforms := f.all("dcim/platforms/")
+	slugs := map[any]bool{}
+	for _, o := range platforms {
+		slugs[o["slug"]] = true
+	}
+	if len(platforms) != 2 || len(slugs) != 2 {
+		t.Fatal(platforms)
+	}
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || r.Writes != 0 {
+		t.Fatal("platforms were rewritten", r, f.writes)
+	}
+}
+
+func TestNetBoxTenantImagesAreNotSharedAcrossTenants(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	bob := p.Store.Tenant("user:bob")
+	web := p.Store.Get("machines", "10100")
+	web["image"] = "tenant:base"
+	p.Store.Put("machines", 10100, 1, web)
+	other := seedMachine(p, "app", 20100)
+	p.Store.Remove("machines", "20100")
+	other["tenant_n"], other["image"] = bob["n"], "tenant:base"
+	p.Store.Put("machines", 20100, integer(bob["n"]), other)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	names := []string{}
+	for _, o := range f.all("dcim/platforms/") {
+		names = append(names, str(o["name"]))
+	}
+	if len(names) != 2 || names[0] == names[1] {
+		t.Fatal(names)
 	}
 }

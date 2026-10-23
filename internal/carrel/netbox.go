@@ -39,8 +39,11 @@ type nbConfig struct {
 	Cluster   string
 	VRF       string
 	VMIDField string
-	Public    string
-	Marker    nbMarker
+	// DeviceField names the custom field of a NetBox device that holds the
+	// Proxmox node name; empty matches the device name.
+	DeviceField string
+	Public      string
+	Marker      nbMarker
 }
 
 // nbMarker is the ownership mark every created object carries: the `owner`
@@ -58,14 +61,15 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		return nbConfig{}, false, nil
 	}
 	c := nbConfig{
-		URL:       strings.TrimRight(str(section["url"]), "/"),
-		Token:     str(section["token"]),
-		TokenFile: str(section["token_file"]),
-		Cluster:   str(section["cluster"]),
-		VRF:       textAt(section, "vrf", "carrel"),
-		VMIDField: textAt(section, "vmid_field", "vmid"),
-		Public:    str(p.Config["public_address"]),
-		Marker:    nbMarker{Value: str(section["owner"])},
+		URL:         strings.TrimRight(str(section["url"]), "/"),
+		Token:       str(section["token"]),
+		TokenFile:   str(section["token_file"]),
+		Cluster:     str(section["cluster"]),
+		VRF:         textAt(section, "vrf", "carrel"),
+		VMIDField:   textAt(section, "vmid_field", "vmid"),
+		DeviceField: str(section["device_field"]),
+		Public:      str(p.Config["public_address"]),
+		Marker:      nbMarker{Value: str(section["owner"])},
 	}
 	switch {
 	case !strings.HasPrefix(c.URL, "http://") && !strings.HasPrefix(c.URL, "https://"):
@@ -335,9 +339,16 @@ func nbStatus(m D) string {
 	return "offline"
 }
 
-// nbOnBoot mirrors the Proxmox onboot flag: a running machine comes back at
-// boot, a stopped one stays off.
+// nbOnBoot mirrors the Proxmox onboot flag, which follows the owner's last
+// power action, not what the guest does by itself. A machine without a recorded
+// action falls back to its observed power state.
 func nbOnBoot(m D) string {
+	if m["onboot"] != nil {
+		if boolean(m["onboot"]) {
+			return "on"
+		}
+		return "off"
+	}
 	if m["power_state"] == "running" {
 		return "on"
 	}
@@ -544,7 +555,11 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 	// The cluster's devices are the hypervisor nodes. They belong to the NetBox
 	// operator: carrel only points a machine at the one it runs on.
 	for _, d := range c.list("dcim/devices/", url.Values{"cluster_id": {strconv.Itoa(clusterID)}}) {
-		s.devices[strings.ToLower(str(d["name"]))] = integer(d["id"])
+		node := str(d["name"])
+		if cfg.DeviceField != "" {
+			node = str(obj(d["custom_fields"])[cfg.DeviceField])
+		}
+		s.devices[strings.ToLower(node)] = integer(d["id"])
 	}
 
 	wanted := e.netboxWanted(cfg)
@@ -655,7 +670,7 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 	// A machine without a platform or device in NetBox is recorded without one.
 	var platform, device any
 	if m.image != "" {
-		platform = e.netboxPlatform(c, s, m.image)
+		platform = e.netboxPlatform(c, s, m.tenant, m.image)
 	}
 	if id, ok := s.devices[strings.ToLower(m.node)]; ok {
 		device = id
@@ -718,23 +733,30 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 // netboxPlatform makes sure the NetBox platform of an image exists, once per
 // pass. carrel creates and owns these, keyed by slug so a rename of the name
 // follows; an unowned platform with the same slug or name is not touched.
-func (e *Execution) netboxPlatform(c *nbClient, s *nbState, image string) int {
-	if id, ok := s.platformIDs[image]; ok {
+func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string) int {
+	// Tenant and ISO images ("tenant:" or "iso:" prefix) belong to one tenant, so
+	// each tenant gets its own platform; catalog images are shared and get
+	// "catalog:" so no catalog name can share a slug with them.
+	label := tenant + "/" + image
+	if !strings.Contains(image, ":") {
+		label = "catalog:" + image
+	}
+	if id, ok := s.platformIDs[label]; ok {
 		return id
 	}
-	slug, name := nbSlug(image), nbTitle(image)
+	slug, name := nbSlug(label), nbTitle(label)
 	have := one(s.platforms, func(o D) bool { return o["slug"] == slug })
 	if have == nil && (len(c.list("dcim/platforms/", url.Values{"slug": {slug}})) > 0 || len(c.list("dcim/platforms/", url.Values{"name": {name}})) > 0) {
 		panic(nbError{Msg: "a NetBox platform named " + name + " exists but carrel did not create it"})
 	}
 	created := have == nil
-	got := c.ensure("dcim/platforms/", have, D{"name": name, "slug": slug, "description": "carrel image " + image})
+	got := c.ensure("dcim/platforms/", have, D{"name": name, "slug": slug, "description": "carrel image " + image + " (" + label + ")"})
 	if created {
 		s.platforms = append(s.platforms, got)
 	}
 	id := integer(got["id"])
 	s.kept("platforms", id)
-	s.platformIDs[image] = id
+	s.platformIDs[label] = id
 	return id
 }
 

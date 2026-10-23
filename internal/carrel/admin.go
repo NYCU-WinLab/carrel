@@ -102,7 +102,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		if !dry {
 			for _, m := range e.S.Objects("machines", integer(t["n"])) {
 				e.Call(D{"op": "action", "machine": m, "action": "stop"})
-				m = merge(m, D{"state": "stopped", "power_state": "stopped", "ssh_ready": false})
+				m = merge(m, D{"state": "stopped", "power_state": "stopped", "onboot": false, "ssh_ready": false})
 				e.Put("machines", m["vmid"], integer(t["n"]), m)
 				e.P.notifyReport(integer(m["vmid"]))
 			}
