@@ -160,12 +160,12 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	if address == "" {
 		return false, "no_target"
 	}
-	// The place in the budget is taken before the tenant is asked, under a
-	// lock of its own, so concurrent asks cannot pass it together.
 	// A name agreed to before skips the limit, so renewals always pass.
 	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); (!seen || n.Pending || n.Grant != g.ID) && !e.P.delegatedAsks.allow(g.ID) {
 		return false, "rate_limited"
 	}
+	// The place in the budget is taken before the tenant is asked, under a
+	// lock of its own, so concurrent asks cannot pass it together.
 	if ok, why := e.reserveDelegated(g, name); !ok || why == "known" {
 		return ok, why
 	}
