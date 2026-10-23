@@ -28,6 +28,8 @@ type statefulDNS struct {
 	n       int
 	list    bool
 	zones   []D
+	// failPatches makes the next PATCH requests fail as a 502 would.
+	failPatches int
 }
 
 func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
@@ -49,6 +51,13 @@ func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
 			}
 			result = found
 			_ = json.NewEncoder(w).Encode(D{"success": true, "result": result})
+			return
+		}
+		if r.Method == "PATCH" && f.failPatches > 0 {
+			f.failPatches--
+			f.log = append(f.log, "PATCH "+r.URL.Path+" failed 502")
+			w.WriteHeader(502)
+			_ = json.NewEncoder(w).Encode(D{"success": false})
 			return
 		}
 		switch r.Method {

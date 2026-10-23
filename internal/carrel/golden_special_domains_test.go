@@ -147,9 +147,20 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("x", "domain_proxy", D{"name": "api.lab.winlab.tw", "proxied": true}, admin)
 	call("x", "domain_proxy", D{"name": "*.lab.winlab.tw", "proxied": true}, admin)
 	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true, "dry_run": true}, admin)
+	// Cloudflare fails the first write: nothing stays proxied, and neither a
+	// retry nor maintenance turns it on without the check.
+	dns.mu.Lock()
+	dns.failPatches = 1
+	dns.mu.Unlock()
+	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true}, admin)
+	rows("x")
+	do("x", func() { g.p.execution(bg).MaintainGrants() })
+	records("x")
+	// The check fails once, as Flexible mode would: the record goes back.
 	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true}, admin)
 	records("x")
 	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true}, admin)
+	do("x", func() { g.p.execution(bg).MaintainGrants() })
 	records("x")
 	call("x", "domain_list", D{}, alice)
 	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": false}, admin)

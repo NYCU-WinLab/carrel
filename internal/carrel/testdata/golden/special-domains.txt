@@ -75,20 +75,32 @@ x adapter carrel-node {"op":"inventory"}
 x mcp {"error":{"code":"invalid","message":"Only a name one label under its zone can be proxied: Cloudflare's edge certificate covers no more","recovery":"revise_request"},"ok":false}
 x mcp {"error":{"code":"invalid","message":"Only an exact name can be proxied","recovery":"revise_request"},"ok":false}
 x mcp {"domain":{"name":"video.winlab.tw","proxied":true},"dry_run":true,"ok":true}
+x mcp {"error":{"backend_code":"dns_request_failed","code":"backend_unavailable","component":"cloudflare","http_status":502,"message":"Cloudflare DNS operation failed","recovery":"retry_infrastructure"},"ok":false}
+x dns PATCH /zones/test/dns_records/old1 failed 502
+x dns PATCH /zones/test/dns_records/old1 {"proxied":false,"ttl":120}
+x domain_grants {"granted_at":"<time:int>","id":"4c0e071832d52769","kind":"wildcard","name":"*.lab.winlab.tw","request_id":"5dee4dd60ff8d0ba","tenant_n":2}
+x domain_grants {"adopt":true,"granted_at":"<time:int>","id":"c40a1c0d550b860f","kind":"exact","name":"video.winlab.tw","request_id":"e318b27a145c857b","tenant_n":1}
+x domain_grants {"granted_at":"<time:int>","id":"ca7d4acf1f2de5ce","kind":"exact","name":"api.lab.winlab.tw","request_id":"5924513516a59934","tenant_n":2}
+x domains {"grant":"ca7d4acf1f2de5ce","id":"138abfa25f5da3df","name":"api.lab.winlab.tw","operation_id":"d27a8d9a8d38c7a37c922450a7a1961f","ready_at":"<time:int>","slug":"bob","state":"ready","sub":"","target_port":8080,"tenant_n":2,"vmid":10200}
+x domains {"grant":"c40a1c0d550b860f","id":"9b2804334c63482d","name":"video.winlab.tw","operation_id":"8d85f8467240628a94819b26bee26e3a","ready_at":"<time:int>","slug":"alice","state":"ready","sub":"","target_port":3000,"tenant_n":1,"vmid":10100}
+x domains {"grant":"4c0e071832d52769","id":"af5a10978634ae4f","name":"*.lab.winlab.tw","operation_id":"0b5000b73a53f0916c93c68f4b9b6ba8","ready_at":"<time:int>","slug":"bob","state":"ready","sub":"","target_port":80,"tenant_n":2,"vmid":10200}
+x record video.winlab.tw [{"comment":"carrel:b09:grant:c40a1c0d550b860f","content":"140.113.60.184","id":"old1","name":"video.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
+x record *.lab.winlab.tw [{"comment":"carrel:b09:grant:4c0e071832d52769","content":"140.113.60.184","id":"r1","name":"*.lab.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
+x record x.taken.winlab.tw [{"content":"140.113.194.230","id":"old2","name":"x.taken.winlab.tw","type":"A"}]
 x mcp {"error":{"code":"conflict","message":"Through Cloudflare the name did not reach the gateway (a redirect to itself, as Flexible mode makes); the proxy is off again. Set the zone's SSL mode to Full (strict) first","recovery":"resolve_prerequisite"},"ok":false}
-x dns PATCH /zones/test/dns_records/old1 {"content":"140.113.60.184","proxied":true,"ttl":1}
-x dns PATCH /zones/test/dns_records/old1 {"content":"140.113.60.184","proxied":false,"ttl":120}
+x dns PATCH /zones/test/dns_records/old1 {"proxied":true,"ttl":1}
+x dns PATCH /zones/test/dns_records/old1 {"proxied":false,"ttl":120}
 x record video.winlab.tw [{"comment":"carrel:b09:grant:c40a1c0d550b860f","content":"140.113.60.184","id":"old1","name":"video.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
 x record *.lab.winlab.tw [{"comment":"carrel:b09:grant:4c0e071832d52769","content":"140.113.60.184","id":"r1","name":"*.lab.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
 x record x.taken.winlab.tw [{"content":"140.113.194.230","id":"old2","name":"x.taken.winlab.tw","type":"A"}]
 x mcp {"domain":{"name":"video.winlab.tw","proxied":true},"dry_run":false,"ok":true}
-x dns PATCH /zones/test/dns_records/old1 {"content":"140.113.60.184","proxied":true,"ttl":1}
+x dns PATCH /zones/test/dns_records/old1 {"proxied":true,"ttl":1}
 x record video.winlab.tw [{"comment":"carrel:b09:grant:c40a1c0d550b860f","content":"140.113.60.184","id":"old1","name":"video.winlab.tw","proxied":true,"ttl":1,"type":"A"}]
 x record *.lab.winlab.tw [{"comment":"carrel:b09:grant:4c0e071832d52769","content":"140.113.60.184","id":"r1","name":"*.lab.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
 x record x.taken.winlab.tw [{"content":"140.113.194.230","id":"old2","name":"x.taken.winlab.tw","type":"A"}]
 x mcp {"domains":[{"machine":"web","name":"video.winlab.tw","ready_at":"<time:int>","state":"ready","sub":"","target_port":3000,"url":"https://video.winlab.tw","verification":"routing_configured"}],"ok":true,"special_domains":[{"kind":"exact","name":"video.winlab.tw","proxied":true,"state":"in_use"}]}
 x mcp {"domain":{"name":"video.winlab.tw","proxied":false},"dry_run":false,"ok":true}
-x dns PATCH /zones/test/dns_records/old1 {"content":"140.113.60.184","proxied":false,"ttl":120}
+x dns PATCH /zones/test/dns_records/old1 {"proxied":false,"ttl":120}
 x record video.winlab.tw [{"comment":"carrel:b09:grant:c40a1c0d550b860f","content":"140.113.60.184","id":"old1","name":"video.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
 x record *.lab.winlab.tw [{"comment":"carrel:b09:grant:4c0e071832d52769","content":"140.113.60.184","id":"r1","name":"*.lab.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
 x record x.taken.winlab.tw [{"content":"140.113.194.230","id":"old2","name":"x.taken.winlab.tw","type":"A"}]
@@ -374,7 +386,7 @@ db audit id=<id> at=<at> actor=alice tenant=null tool=domain_proxy args={"name":
 db audit id=<id> at=<at> actor=root tenant=null tool=domain_proxy args={"name":"api.lab.winlab.tw","proxied":true} outcome=invalid
 db audit id=<id> at=<at> actor=root tenant=null tool=domain_proxy args={"name":"*.lab.winlab.tw","proxied":true} outcome=invalid
 db audit id=<id> at=<at> actor=root tenant=null tool=domain_proxy args={"dry_run":true,"name":"video.winlab.tw","proxied":true} outcome=ok
-db audit id=<id> at=<at> actor=root tenant=1 tool=domain_proxied args={"grant":"c40a1c0d550b860f","name":"video.winlab.tw","proxied":true} outcome=ok
+db audit id=<id> at=<at> actor=root tenant=null tool=domain_proxy args={"name":"video.winlab.tw","proxied":true} outcome=backend_unavailable
 db audit id=<id> at=<at> actor=root tenant=null tool=domain_proxy args={"name":"video.winlab.tw","proxied":true} outcome=conflict
 db audit id=<id> at=<at> actor=root tenant=1 tool=domain_proxied args={"grant":"c40a1c0d550b860f","name":"video.winlab.tw","proxied":true} outcome=ok
 db audit id=<id> at=<at> actor=root tenant=null tool=domain_proxy args={"name":"video.winlab.tw","proxied":true} outcome=ok

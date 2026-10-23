@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -13,10 +14,12 @@ import (
 // domain one label under its zone, since Cloudflare's free edge certificate
 // covers only one label. Cloudflare then connects to the gateway with the
 // name as SNI, and the grant's own certificate answers. carrel cannot read a
-// zone's SSL mode with a DNS token, so it checks the result instead: after
-// the switch it asks the name through Cloudflare, and an answer that never
-// reached the gateway (a 52x, or the loop Flexible mode makes with the
-// gateway's redirect to HTTPS) turns the proxy off again.
+// zone's SSL mode with a DNS token, so it checks the result instead: the
+// record turns proxied first, carrel asks the name through Cloudflare, and
+// only an answer from Cloudflare that reached the gateway keeps it. Anything
+// else, a failed write included, puts the record back; the grant records
+// proxied only after the check passed, so maintenance never turns on what
+// the check did not see work.
 
 // DomainProxy turns the Cloudflare proxy of a grant on or off.
 func (e *Execution) DomainProxy(a, w D) D {
@@ -38,31 +41,72 @@ func (e *Execution) DomainProxy(a, w D) D {
 	if rest, ok := strings.CutSuffix(name, "."+g.zone()); !ok || strings.Contains(rest, ".") {
 		fail("invalid", "Only a name one label under its zone can be proxied: Cloudflare's edge certificate covers no more", D{"recovery": "revise_request"})
 	}
-	if dry || g.Proxied == want {
+	z := e.zoneNamed(g.zone())
+	record := e.gatewayRecord(z, g)
+	if record == nil {
+		fail("conflict", "The name does not point at the gateway yet; publish it with domain_add first", D{"recovery": "resolve_prerequisite"})
+	}
+	// The record in DNS, not the stored flag, says whether there is work.
+	if dry || (boolean(record["proxied"]) == want && g.Proxied == want) {
 		return D{"domain": D{"name": name, "proxied": want}, "dry_run": dry}
 	}
-	set := func(on bool) {
-		current, ok := rowOf[domainGrant](e.S, "domain_grants", g.ID)
-		if !ok {
-			fail("conflict", "The grant was released meanwhile")
-		}
-		current.Proxied = on
-		e.S.Put("domain_grants", current.ID, current.TenantN, current.D())
-		e.GrantRecord(current, false)
+	if !want {
+		e.storeProxied(g, false)
+		e.patchProxied(z, record, false)
+		e.S.Log(str(w["sub"]), g.TenantN, "domain_proxied", D{"grant": g.ID, "name": name, "proxied": false}, "ok")
+		return D{"domain": D{"name": name, "proxied": false}, "dry_run": false}
 	}
-	set(want)
-	e.S.Log(str(w["sub"]), g.TenantN, "domain_proxied", D{"grant": g.ID, "name": name, "proxied": want}, "ok")
-	if want {
-		if why := e.probeProxied(name); why != "" {
-			set(false)
-			fail("conflict", "Through Cloudflare the name did not reach the gateway ("+why+"); the proxy is off again. Set the zone's SSL mode to Full (strict) first", D{"recovery": "resolve_prerequisite"})
+	kept := false
+	defer func() {
+		if !kept {
+			// A fresh context: the caller may have gone, the record must not
+			// stay proxied.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			back := *e
+			back.Ctx = ctx
+			_ = attempt(func() { back.patchProxied(z, record, false) })
+		}
+	}()
+	e.patchProxied(z, record, true)
+	if why := e.probeProxied(name); why != "" {
+		fail("conflict", "Through Cloudflare the name did not reach the gateway ("+why+"); the proxy is off again. Set the zone's SSL mode to Full (strict) first", D{"recovery": "resolve_prerequisite"})
+	}
+	e.storeProxied(g, true)
+	kept = true
+	e.S.Log(str(w["sub"]), g.TenantN, "domain_proxied", D{"grant": g.ID, "name": name, "proxied": true}, "ok")
+	return D{"domain": D{"name": name, "proxied": true}, "dry_run": false}
+}
+
+// gatewayRecord is the grant's own A record once it points at the site.
+func (e *Execution) gatewayRecord(z zoneAccess, g domainGrant) D {
+	for _, r := range dicts(e.cfIn(z, "GET", "?name="+url.QueryEscape(g.Name), nil)["result"]) {
+		if r["comment"] == g.owner() && r["type"] == "A" && r["content"] == e.P.Config["public_address"] {
+			return r
 		}
 	}
-	return D{"domain": D{"name": name, "proxied": want}, "dry_run": false}
+	return nil
+}
+
+func (e *Execution) patchProxied(z zoneAccess, record D, on bool) {
+	ttl := 120
+	if on {
+		ttl = 1
+	}
+	e.cfIn(z, "PATCH", "/"+str(record["id"]), D{"proxied": on, "ttl": ttl})
+}
+
+func (e *Execution) storeProxied(g domainGrant, on bool) {
+	current, ok := rowOf[domainGrant](e.S, "domain_grants", g.ID)
+	if !ok {
+		fail("conflict", "The grant was released meanwhile")
+	}
+	current.Proxied = on
+	e.S.Put("domain_grants", current.ID, current.TenantN, current.D())
 }
 
 // probeProxied asks https://name through Cloudflare and says why it failed,
-// or "" when the gateway answered.
+// or "" when Cloudflare answered from the gateway.
 func (e *Execution) probeProxied(name string) string {
 	if e.P.proxyProbe != nil {
 		return e.P.proxyProbe(name)
@@ -103,8 +147,17 @@ func (e *Execution) probeProxied(name string) string {
 		return "no answer from Cloudflare"
 	}
 	resp.Body.Close()
+	// Only Cloudflare's edge sets cf-ray: an old host the name still points
+	// at proves nothing.
+	if resp.Header.Get("Cf-Ray") == "" {
+		return "the answer did not come from Cloudflare"
+	}
 	if resp.StatusCode >= 520 && resp.StatusCode <= 530 {
 		return "Cloudflare answered " + resp.Status
+	}
+	// Cloudflare's own refusals carry cf-mitigated; the gateway sent none.
+	if resp.Header.Get("Cf-Mitigated") != "" {
+		return "Cloudflare answered with a challenge"
 	}
 	// The gateway's own redirect, back to the very URL asked for; an app's
 	// redirect elsewhere on the name is an answer.
