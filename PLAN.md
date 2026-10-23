@@ -793,6 +793,45 @@ node, so they follow the exit node failover of #89.
 exit node (more isolation, one more machine per tenant); whether project tenants may attach other
 projects without an admin; whether the lab's NetBird gets a routing peer at all.
 
+### 6.12 Public IP per machine (issue #91, design only)
+
+The Elastic IP of 6.11. A member requests a dedicated public IPv4 address for one machine; once
+approved, the machine is reachable on any port of that address and its outbound traffic leaves
+from it. Other machines keep the shared address.
+
+**1:1 NAT, as in AWS.** An AWS instance never holds its Elastic IP: the instance keeps its private
+address and the internet gateway translates one to the other. carrel does the same on the exit
+node: DNAT of inbound traffic for the bound address to the machine's primary address, and SNAT of
+the machine's outbound traffic to the bound address. The guest needs no change, the shared VRF
+stays (6.11), and no anti-spoofing rules are needed. Routing the public address into the guest
+(a second NIC or an extra address on `net0`) is not offered.
+
+**Address pool.** The pool is site configuration (`config.json`), not a constant in the code: a
+list of addresses or prefixes the lab network team has assigned to carrel. A site with no pool
+offers no public IPs. The control plane takes a free address from the pool, never one of the
+exit node's own addresses or the shared address.
+
+**Objects and tools.** A binding belongs to one machine and one tenant. `public_ip_request`
+(machine, reason) creates a request like `quota_request`; an administrator answers it with
+`request_approve` or `request_reject`. `public_ip_release` and machine deletion return the address.
+A new quota dimension `public_ips` (default 0) counts what a tenant holds. `machine_get` shows the
+bound address; `catalog_get` shows whether the site has a pool and how many addresses are free. A
+rejected or pending request changes nothing on the network. A binding survives restarts, resizes
+and snapshots.
+
+**Filtering.** Traffic to a bound address still passes the guest firewall. It follows the
+machine's `network_access` plus an explicit list of allowed ports or "all", chosen by the member;
+the default is SSH only. Egress limits and abuse handling of 6.6 apply to the bound address too.
+
+**Exit node.** The NAT rules live on the exit node, so each bound address follows the exit node
+failover of #89: the address moves with the active node.
+
+**Order.** Independent of the attachments in 6.11: it needs neither a route table nor a
+VRF, so it can be built beside the client VPN once a pool is configured.
+
+**Left open**: who approves and for how long (`until`, automatic removal of expired bindings), and
+whether carrel creates a DNS name for a bound address.
+
 ## 7. Machines
 
 ### 7.1 Images
