@@ -204,3 +204,33 @@ func TestDelegatedBudgetHoldsUnderConcurrentAsks(t *testing.T) {
 		t.Fatalf("refusals kept places: %d", len(rows))
 	}
 }
+
+// A rename waits for every operation that may still reach the machine: a
+// deployment's bindings, its machines, or a queued job naming it.
+func TestRenameRefusesAMachineAnOperationHolds(t *testing.T) {
+	p, _ := fixture(t)
+	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10", "kind": "vm", "state": "ready"})
+	tenant := p.Store.TenantN(1)
+	try := func(op D) any {
+		p.Store.Exec("DELETE FROM objects WHERE kind='operations'")
+		p.Store.Put("operations", "op1", 1, merge(D{"id": "op1", "tenant_n": 1, "state": "running"}, op))
+		return attempt(func() {
+			p.execution(context.Background()).RenameMachine(D{"machine": "web", "name": "site", "confirm": "web", "dry_run": true}, tenant)
+		})
+	}
+	for _, op := range []D{
+		{"tool": "deployment_apply", "deployment": D{"bindings": D{"10100": "x"}}},
+		{"tool": "deployment_apply", "deployment": D{"machines": []any{10100}}},
+		{"tool": "machine_power", "machine_target": D{"vmid": 10100}},
+		{"tool": "machine_delete", "state": "queued", "args": D{"machine": "web"}},
+		{"tool": "deployment_apply", "state": "queued", "args": D{"publications": []any{D{"machine": "web"}}}},
+		{"tool": "deployment_apply", "state": "queued", "args": D{"connections": []any{D{"from": "db", "to": "web"}}}},
+	} {
+		if err := try(op); err == nil {
+			t.Errorf("renamed while %v", op)
+		}
+	}
+	if err := try(D{"tool": "machine_power", "machine_target": D{"vmid": 10101}}); err != nil {
+		t.Fatalf("refused for another machine's operation: %v", err)
+	}
+}

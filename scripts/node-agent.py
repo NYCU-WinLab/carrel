@@ -1859,6 +1859,14 @@ def action(req):
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-user.json").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-network.json").unlink(missing_ok=True)
         (STATE / f"create-{vmid}.json").unlink(missing_ok=True)
+    elif op == "rename":
+        # The VM's name, or the CT's hostname, follows the record. Ownership
+        # rests on the tags, not the name.
+        name = label(req["name"])
+        if cmd == "qm":
+            run("qm", "set", vmid, "--name", name)
+        else:
+            run("pct", "set", vmid, "--hostname", name)
     elif op == "resize":
         cpu = integer(req["cpu"], 1, 64)
         mem = integer(req["memory_mb"], 512, 131072)
