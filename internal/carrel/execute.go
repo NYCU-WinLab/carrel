@@ -246,6 +246,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.QuotaRequest(a, w, t)
 	case "domain_request":
 		return e.DomainRequest(a, w, t)
+	case "port_request":
+		return e.PortRequest(a, w, t)
 	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink":
 		return e.AppTool(tool, a, t)
 	}

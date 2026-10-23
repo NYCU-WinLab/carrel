@@ -654,8 +654,18 @@ certificate, grant; the request reads `released`). An adopted name is not restor
 the old records were replaced on purpose, and only the log keeps them. Labels of grants are
 reserved against new tenant slugs; a pending request reserves nothing, and a tenant has at most
 3 pending domain requests. `domain_add` prefers an exact grant of the name over a wildcard that
-covers it. Still to build: `port_request` and `srv`, `delegated`, and the
-Cloudflare proxy switch.
+covers it.
+
+Special ports and SRV records are built too. `port_request` takes `public_port`, `proto` and
+`reason`; an approval stores a `port_grants` row, and `port_open` with `public_port` forwards that
+port instead of one from the tenant's block (the grant row carries `special`, and the exit node
+accepts such a port only outside the never-granted list below). A port grant that forwards nothing
+is released after 30 days. `domain_request` with `kind: srv` asks for `_service._tcp.<name>` or
+`_service._udp.<name>`; `domain_add` under that grant needs an open public port to the target with
+the grant's protocol and writes an SRV record that names `carrel.winlab.tw` and that public port.
+The maintenance pass follows the port and removes the record once no port forwards there; SRV
+grants have no certificate and no gateway site. Still to build: `delegated` and the Cloudflare
+proxy switch.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
 the tenants the zone is open to. Built: `zone_add` checks that the token sees exactly that zone
@@ -672,7 +682,8 @@ Cloudflare proxy for an HTTP special domain one label under its zone; Cloudflare
 covers only one label, so a proxied `x.afc.winlab.tw` would fail.
 
 **Ports that are never granted**: 22, 25, 53, 80, 443, 111, 3128, 8006, the tenant blocks (`20000`
-to `29999`), and any port the nodes themselves use. A protocol that supports SRV records gets an
+to `22549`: 10 ports for each of 254 tenants), the client VPN ports (`31000` to `31254`), and any
+port the nodes themselves use. A protocol that supports SRV records gets an
 `srv` domain on its normal tenant port instead of a scarce well-known port.
 
 **Certificate budget**: `delegated` names mint certificates on demand, so each such grant carries a

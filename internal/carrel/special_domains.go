@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -102,13 +103,20 @@ var specialLabel = `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`
 // with the zones.
 func validSpecialName(kind, name string) {
 	rest := name
-	if kind == "wildcard" {
+	if kind == "srv" {
+		// _service._proto.<name>, as RFC 2782 names it.
+		m := regexp.MustCompile(`^_[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?\._(tcp|udp)\.(.+)$`).FindStringSubmatch(name)
+		if m == nil {
+			fail("invalid", "An srv name is _service._tcp.<name> or _service._udp.<name>", D{"recovery": "revise_request"})
+		}
+		rest = m[3]
+	} else if kind == "wildcard" {
 		var ok bool
 		if rest, ok = strings.CutPrefix(name, "*."); !ok {
 			fail("invalid", "A wildcard name starts with *.", D{"recovery": "revise_request"})
 		}
 	} else if kind != "exact" {
-		fail("invalid", "kind is exact or wildcard", D{"recovery": "revise_request"})
+		fail("invalid", "kind is exact, wildcard or srv", D{"recovery": "revise_request"})
 	}
 	if len(name) > 253 || !matches(`^(`+specialLabel+`\.)+[a-z]{2,63}$`, rest) {
 		fail("invalid", "Name must be lowercase DNS labels", D{"recovery": "revise_request"})
@@ -157,7 +165,7 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 	}
 	// Neither the zone's wildcard nor, in the site's zone, its apex: a
 	// certificate for either would cover every name in the zone.
-	if strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || zone == specialZone) {
+	if (strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || zone == specialZone)) || (kind == "srv" && srvBase(name) == specialZone) {
 		fail("invalid", "Request a name under the zone, not the zone itself", D{"recovery": "revise_request"})
 	}
 	if zone != specialZone {
@@ -176,7 +184,7 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 		if integer(other["n"]) != integer(t["n"]) {
 			fail("conflict", "This name is under another tenant's domain", D{"recovery": "revise_request"})
 		}
-		if name != owner {
+		if name != owner && kind != "srv" {
 			fail("invalid", "Names under "+owner+" need no request; use domain_add with sub", D{"recovery": "revise_request"})
 		}
 	}
@@ -218,7 +226,7 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 			// A wildcard never covers a name that belongs to someone else.
 			fail("conflict", "The wildcard would cover an existing name: "+recorded, D{"recovery": "revise_request"})
 		}
-		if recorded == name && addressRecord(r) {
+		if recorded == name && (addressRecord(r) && kind != "srv" || r["type"] == "SRV" && kind == "srv") {
 			existing = true
 		}
 	}
@@ -300,6 +308,10 @@ func (e *Execution) approveDomain(tool string, a, w, r, t D) D {
 // EnsureGrantCertificate issues or renews the grant's certificate. A first
 // issuance waits while the 7-day budget is used up.
 func (e *Execution) EnsureGrantCertificate(g domainGrant) D {
+	if g.Kind == "srv" {
+		// An SRV record names a public port; there is nothing to encrypt.
+		return D{"state": "ready"}
+	}
 	e.P.certificates.Lock()
 	defer e.P.certificates.Unlock()
 	if e.P.certificatePrepare != nil {
@@ -338,6 +350,10 @@ func (e *Execution) grantCertificateHeld(g domainGrant) bool {
 // certificate, or removes the record carrel wrote. Address records someone
 // else wrote are replaced only for a grant approved with adopt.
 func (e *Execution) GrantRecord(g domainGrant, remove bool) {
+	if g.Kind == "srv" {
+		e.srvRecord(g, remove)
+		return
+	}
 	z := e.zoneNamed(g.zone())
 	records := dicts(e.cfIn(z, "GET", "?name="+url.QueryEscape(g.Name), nil)["result"])
 	ours, foreign := []D{}, []D{}
@@ -430,7 +446,7 @@ func (e *Execution) MaintainGrants() {
 				e.releaseGrant(g, "unused")
 				return
 			}
-			if _, _, held := e.livePair(g.lineage()); held {
+			if _, _, held := e.livePair(g.lineage()); held || g.Kind == "srv" {
 				e.GrantRecord(g, false)
 			}
 		})
@@ -487,7 +503,7 @@ func (e *Execution) grantBundles(domains []D) []D {
 	}
 	out := []D{}
 	for _, g := range e.grants() {
-		if !wanted[g.ID] {
+		if !wanted[g.ID] || g.Kind == "srv" {
 			continue
 		}
 		crt, key, ok := e.livePair(g.lineage())
@@ -497,4 +513,81 @@ func (e *Execution) grantBundles(domains []D) []D {
 		out = append(out, merge(D{"slug": g.lineage(), "grant": g.ID, "name": g.Name}, originPair(crt, key)))
 	}
 	return out
+}
+
+// srvBase is the name an SRV record is about: _mc._tcp.mc.winlab.tw ->
+// mc.winlab.tw.
+func srvBase(name string) string {
+	parts := strings.SplitN(name, ".", 3)
+	if len(parts) < 3 {
+		return name
+	}
+	return parts[2]
+}
+
+// srvProto is the protocol an SRV name gives.
+func srvProto(name string) string {
+	if strings.Contains(name, "._udp.") {
+		return "udp"
+	}
+	return "tcp"
+}
+
+// openPortFor finds the tenant's open public port that forwards to the
+// target of a domain row or request.
+func (e *Execution) openPortFor(n, vmid int, vip string, port int, proto string) (portGrant, bool) {
+	for _, p := range e.ports(n) {
+		if p.State != "deleting" && p.VMID == vmid && p.VIP == vip && p.Port == port && p.Proto == proto {
+			return p, true
+		}
+	}
+	return portGrant{}, false
+}
+
+// srvRecord points an SRV grant at the public port that forwards to its
+// domain's target, on carrel's own host name, or removes the record carrel
+// wrote once no port forwards there.
+func (e *Execution) srvRecord(g domainGrant, remove bool) {
+	z := e.zoneNamed(g.zone())
+	records := dicts(e.cfIn(z, "GET", "?name="+url.QueryEscape(g.Name), nil)["result"])
+	ours, foreign := []D{}, []D{}
+	for _, r := range records {
+		if r["comment"] == g.owner() {
+			ours = append(ours, r)
+		} else if r["type"] == "SRV" {
+			foreign = append(foreign, r)
+		}
+	}
+	port := 0
+	if live := e.grantDomains(g); len(live) > 0 {
+		if p, ok := e.openPortFor(g.TenantN, live[0].VMID, live[0].VIP, live[0].TargetPort, srvProto(g.Name)); ok {
+			port = p.PublicPort
+		}
+	}
+	if remove || port == 0 {
+		for _, r := range ours {
+			e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
+		}
+		return
+	}
+	if len(foreign) > 0 && !g.Adopt {
+		fail("conflict", "Refusing DNS record owned outside carrel")
+	}
+	for _, r := range foreign {
+		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
+		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", r["content"], "type", "SRV")
+	}
+	data := D{"priority": 0, "weight": 0, "port": port, "target": originHost(e.P.Config)}
+	for i, r := range ours {
+		if i == 0 {
+			if current := obj(r["data"]); integer(current["port"]) != port || current["target"] != data["target"] {
+				e.cfIn(z, "PATCH", "/"+str(r["id"]), D{"data": data})
+			}
+			continue
+		}
+		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
+	}
+	if len(ours) == 0 {
+		e.cfIn(z, "POST", "", D{"type": "SRV", "name": g.Name, "data": data, "ttl": 120, "proxied": false, "comment": g.owner()})
+	}
 }

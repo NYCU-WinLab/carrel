@@ -149,6 +149,33 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("z", "domain_add", D{"machine": "web", "name": "www.lab.example", "target_port": 8080}, alice)
 	call("z", "zone_remove", D{"name": "lab.example", "confirm": "lab.example"}, admin)
 	rows("z")
+	// p: a special port and an SRV record that names it.
+	call("p", "port_request", D{"public_port": 25565, "reason": "minecraft", "dry_run": true}, alice)
+	mc := call("p", "port_request", D{"public_port": 25565, "reason": "minecraft"}, alice)
+	call("p", "port_request", D{"public_port": 25565, "reason": "mine too"}, bob)
+	call("p", "port_request", D{"public_port": 25565, "proto": "udp", "reason": "another protocol"}, bob)
+	for _, port := range []int{22, 443, 20030, 31001} {
+		call("p", "port_request", D{"public_port": port, "reason": "never granted"}, bob)
+	}
+	call("p", "request_approve", D{"id": requestID(mc), "adopt": true}, admin)
+	call("p", "request_approve", D{"id": requestID(mc)}, admin)
+	call("p", "port_list", D{}, alice)
+	call("p", "port_open", D{"machine": "bweb", "port": 25565, "proto": "tcp", "public_port": 25565}, bob)
+	opened := call("p", "port_open", D{"machine": "web", "port": 25565, "proto": "tcp", "public_port": 25565}, alice)
+	call("p", "port_open", D{"machine": "web", "port": 25566, "proto": "tcp", "public_port": 25565}, alice)
+	srv := call("p", "domain_request", D{"name": "_minecraft._tcp.mc.winlab.tw", "kind": "srv", "reason": "minecraft"}, alice)
+	call("p", "domain_request", D{"name": "_minecraft._tcp.winlab.tw", "kind": "srv", "reason": "the zone apex"}, alice)
+	call("p", "request_approve", D{"id": requestID(srv)}, admin)
+	call("p", "domain_add", D{"machine": "web", "name": "_minecraft._tcp.mc.winlab.tw", "target_port": 25566}, alice)
+	call("p", "domain_add", D{"machine": "web", "name": "_minecraft._tcp.mc.winlab.tw", "target_port": 25565}, alice)
+	do("p", func() { g.p.execution(bg).MaintainGrants() })
+	do("p", func() { g.p.execution(bg).MaintainSpecialPorts() })
+	call("p", "port_list", D{}, alice)
+	call("p", "port_close", D{"id": obj(obj(obj(opened["operation"])["result"])["port"])["id"]}, alice)
+	do("p", func() { g.p.execution(bg).MaintainGrants() })
+	do("p", func() { g.p.execution(bg).MaintainSpecialPorts() })
+	call("p", "port_list", D{}, alice)
+	rows("p")
 	// m: maintenance keeps records in place; a removed domain leaves the
 	// grant unused; an unused grant is released after 30 days.
 	do("m", func() { g.p.execution(bg).MaintainGrants() })

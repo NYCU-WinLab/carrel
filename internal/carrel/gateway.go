@@ -82,9 +82,15 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 	routes := map[string][]route{}
 	// Special domain grants (PLAN 6.10) and the routes under each.
 	grants := map[string]domainGrant{}
+	srv := map[string]bool{}
 	for _, raw := range dicts(state["domain_grants"]) {
 		var g domainGrant
 		must(json.Unmarshal(encoded(raw), &g))
+		if g.Kind == "srv" {
+			// An SRV record points at a public port, not at the gateway.
+			srv[g.ID] = true
+			continue
+		}
 		if !grantPattern.MatchString(g.Name) || (g.Kind != "exact" && g.Kind != "wildcard") || (g.Kind == "wildcard") != strings.HasPrefix(g.Name, "*.") || under(g.Name, origin) {
 			fail("conflict", "Invalid special domain grant")
 		}
@@ -116,6 +122,9 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		slug := slugs[integer(target["tenant_n"])]
 		if id := str(d["grant"]); id != "" {
+			if srv[id] {
+				continue
+			}
 			g, ok := grants[id]
 			if !ok || g.TenantN != integer(d["tenant_n"]) || integer(target["tenant_n"]) != g.TenantN || !g.covers(str(d["name"])) {
 				fail("conflict", "Invalid special domain")
