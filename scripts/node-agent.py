@@ -261,6 +261,11 @@ def guest_firewall(m, state, config):
         # them by the public address too, like anyone on the internet.
         for proto in ("tcp", "udp"):
             rules.append(f"OUT ACCEPT -dest {dest} -p {proto} -dport {TENANT_PORTS}")
+        # Special ports are public too (PLAN 6.10).
+        for g in state["ports"]:
+            public = integer(g["public_port"], 1, 65535)
+            if g.get("special") and grantable(public) and g["proto"] in ("tcp", "udp"):
+                rules.append(f"OUT ACCEPT -dest {dest} -p {g['proto']} -dport {public}")
     for block in [
         "10.0.0.0/8",
         "172.16.0.0/12",
@@ -438,6 +443,15 @@ def public_ingress():
 # The public port blocks of tenants 1 to 254 (20000 + 10n to 20009 + 10n).
 TENANT_PORTS = "20010:22549"
 
+# Public ports never granted to a tenant as a special port (PLAN 6.10);
+# internal/carrel/special_ports.go keeps the same list.
+NEVER_PORTS = {22, 25, 53, 80, 111, 443, 3128, 8006}
+
+
+def grantable(public):
+    """A special public port: none of the site's own, no tenant block, no client VPN port."""
+    return public not in NEVER_PORTS and not 20000 <= public <= 22549 and not VPN_PORT_BASE <= public <= VPN_PORT_BASE + 254
+
 
 def ports_nft(state, address):
     """DNAT the public address: HTTP(S) to the infra gateway, granted ports to machines."""
@@ -448,7 +462,13 @@ def ports_nft(state, address):
     seen = set()
     for g in state["ports"]:
         n = integer(g["tenant_n"], 1, 254)
-        public = integer(g["public_port"], 20000 + n * 10, 20009 + n * 10)
+        if g.get("special"):
+            # A port granted through port_request, outside every block.
+            public = integer(g["public_port"], 1, 65535)
+            if not grantable(public):
+                raise ValueError("special port grant on a reserved port")
+        else:
+            public = integer(g["public_port"], 20000 + n * 10, 20009 + n * 10)
         port = integer(g["port"], 1, 65535)
         if g["proto"] not in ("tcp", "udp") or (g["proto"], public) in seen:
             raise ValueError("invalid port grant")

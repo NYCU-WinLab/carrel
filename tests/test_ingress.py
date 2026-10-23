@@ -89,6 +89,19 @@ def test_ports_refuse_grants_outside_the_tenant(change):
         load("node-agent.py").ports_nft({"ports": [{**GRANT, **change}]}, "140.113.60.184")
 
 
+def test_special_ports_forward_outside_the_block_but_never_reserved_ones():
+    module = load("node-agent.py")
+    special = {**GRANT, "public_port": 25565, "port": 25565, "special": True}
+    nft = module.ports_nft({"ports": [special]}, "140.113.60.184")
+    assert "ip daddr 140.113.60.184 tcp dport 25565 dnat to 10.200.3.10:25565" in nft
+    for public in (22, 80, 443, 25, 20030, 22549, 31003):
+        with pytest.raises(ValueError):
+            module.ports_nft({"ports": [{**special, "public_port": public}]}, "140.113.60.184")
+    # Without the flag, a port outside the block is refused as before.
+    with pytest.raises(ValueError):
+        module.ports_nft({"ports": [{**special, "special": False}]}, "140.113.60.184")
+
+
 def test_ports_refuse_a_duplicate_public_port():
     with pytest.raises(ValueError):
         load("node-agent.py").ports_nft({"ports": [GRANT, {**GRANT, "port": 80}]}, "140.113.60.184")

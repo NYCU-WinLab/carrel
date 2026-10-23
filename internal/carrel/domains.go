@@ -178,7 +178,12 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 		name, grant := str(a["sub"])+"."+str(t["slug"])+".winlab.tw", ""
 		if a["name"] != nil {
 			name = strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
-			grant = e.grantCovering(n, name).ID
+			g := e.grantCovering(n, name)
+			grant = g.ID
+			// An SRV record names the public port that forwards to the target.
+			if _, open := e.openPortFor(n, vmid, vip.ID, integer(a["target_port"]), srvProto(name)); g.Kind == "srv" && !open {
+				fail("invalid", "Open a public port to this target with port_open first; the SRV record names it", D{"recovery": "resolve_prerequisite"})
+			}
 		}
 		record, found := domainNamed(domains, name)
 		if found && record.State == "deleting" {

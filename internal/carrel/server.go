@@ -248,6 +248,7 @@ func (p *Platform) Start() {
 			}
 			p.execution(p.ctx).MaintainDomains()
 			p.execution(p.ctx).MaintainGrants()
+			p.execution(p.ctx).MaintainSpecialPorts()
 			if err := attempt(func() { p.execution(p.ctx).MaintainOrigin() }); err != nil {
 				failure := obj(failureResult(err)["error"])
 				slog.Error("origin_maintenance_failed", "type", "maintenance", "code", failure["code"], "backend_code", failure["backend_code"])

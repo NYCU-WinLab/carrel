@@ -1080,7 +1080,7 @@
     },
     {
       "name": "port_open",
-      "description": "Publish a guest TCP/UDP port and return its public endpoint. HTTPS websites should use domain_add or deployment publications. With vip, every machine that may hold the virtual address admits the port.",
+      "description": "Publish a guest TCP/UDP port and return its public endpoint. HTTPS websites should use domain_add or deployment publications. With vip, every machine that may hold the virtual address admits the port. With public_port, the special port the tenant was granted is used instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1099,6 +1099,12 @@
               "tcp",
               "udp"
             ]
+          },
+          "public_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "A special port the tenant was granted (port_request) instead of one assigned from the tenant's block."
           },
           "vip": {
             "type": "string",
@@ -1151,7 +1157,7 @@
     },
     {
       "name": "port_list",
-      "description": "List public port grants.",
+      "description": "List public port grants. Also lists your special port grants with the date an unused grant is released.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1225,7 +1231,7 @@
     },
     {
       "name": "domain_add",
-      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address.",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1242,7 +1248,7 @@
             "type": "string",
             "minLength": 4,
             "maxLength": 253,
-            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$",
+            "pattern": "^(\\*\\.|_[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?\\._(tcp|udp)\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$",
             "description": "A name under one of the tenant's special domain grants, instead of sub."
           },
           "target_port": {
@@ -2276,7 +2282,7 @@
     },
     {
       "name": "domain_request",
-      "description": "Request a special domain outside your own *.<tenant>.winlab.tw subtree, such as video.winlab.tw (kind exact) or *.lab.winlab.tw (kind wildcard), with a reason. The name must be in a zone carrel manages and that is open to the tenant: winlab.tw, or a zone an admin added with zone_add. An admin approves it; the approved name becomes a grant of the tenant, shown by domain_list, and domain_add with name publishes it. A grant without domains is released after 30 days. Names under another tenant, platform names and names that overlap another grant are refused. Reusing an idempotency_key with the same request returns that request.",
+      "description": "Request a special domain outside your own *.<tenant>.winlab.tw subtree, such as video.winlab.tw (kind exact) or *.lab.winlab.tw (kind wildcard), or _minecraft._tcp.mc.winlab.tw (kind srv), with a reason. The name must be in a zone carrel manages and that is open to the tenant: winlab.tw, or a zone an admin added with zone_add. An admin approves it; the approved name becomes a grant of the tenant, shown by domain_list, and domain_add with name publishes it. A grant without domains is released after 30 days. Names under another tenant, platform names and names that overlap another grant are refused. Reusing an idempotency_key with the same request returns that request.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2284,16 +2290,17 @@
             "type": "string",
             "minLength": 4,
             "maxLength": 253,
-            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+            "pattern": "^(\\*\\.|_[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?\\._(tcp|udp)\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
           },
           "kind": {
             "type": "string",
             "enum": [
               "exact",
-              "wildcard"
+              "wildcard",
+              "srv"
             ],
             "default": "exact",
-            "description": "exact: the name itself. wildcard: *.<base>, every name one label under base."
+            "description": "exact: the name itself. wildcard: *.<base>, every name one label under base. srv: _service._tcp.<name> or _service._udp.<name>, an SRV record that names a public port of the tenant."
           },
           "reason": {
             "type": "string",
@@ -2329,8 +2336,60 @@
       }
     },
     {
+      "name": "port_request",
+      "description": "Request a special public port outside your own port block, such as TCP 25565, with a reason. An admin approves it; the approved port becomes a grant of the tenant, shown by port_list, and port_open with public_port forwards it to a machine. Ports 22, 25, 53, 80, 111, 443, 3128, 8006, the tenant blocks 20000 to 22549 and the client VPN ports 31000 to 31254 are never granted. A grant that forwards nothing is released after 30 days. Reusing an idempotency_key with the same request returns that request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "public_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "proto": {
+            "type": "string",
+            "enum": [
+              "tcp",
+              "udp"
+            ],
+            "default": "tcp"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 2000
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "public_port",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "request_list",
-      "description": "List your quota and special domain requests and decisions.",
+      "description": "List your quota, special domain and special port requests and decisions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2676,7 +2735,7 @@
     },
     {
       "name": "request_approve",
-      "description": "Admin: approve a pending quota or special domain request. A domain request is checked again; a name that already has address records needs adopt, which replaces them once carrel serves the name.",
+      "description": "Admin: approve a pending quota, special domain or special port request. A domain or port request is checked again; a name that already has address records needs adopt, which replaces them once carrel serves the name.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2715,7 +2774,7 @@
     },
     {
       "name": "request_reject",
-      "description": "Admin: reject a pending quota or special domain request.",
+      "description": "Admin: reject a pending quota, special domain or special port request.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4002,6 +4061,7 @@
     "image_delete",
     "quota_request",
     "domain_request",
+    "port_request",
     "request_list",
     "audit_log",
     "tenant_list",
@@ -4077,6 +4137,7 @@
     "peer_revoke",
     "port_close",
     "port_open",
+    "port_request",
     "quota_request",
     "quota_set",
     "reconcile_run",
@@ -4223,5 +4284,5 @@
     },
     "existing_machine_access": true
   },
-  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is the complete preview. Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
+  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is the complete preview. Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
 }

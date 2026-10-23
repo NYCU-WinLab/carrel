@@ -71,6 +71,8 @@ func recentIssuance(s *Store) []certificateRecord {
 
 // portGrant forwards a public port on the exit node to a machine, or to a
 // virtual address (VIP holds its id, VMID is 0, IP its address; issue #146).
+// Special marks a public port outside the tenant's block, granted through
+// port_request (PLAN 6.10).
 type portGrant struct {
 	ID          string `json:"id"`
 	IP          string `json:"ip"`
@@ -78,6 +80,7 @@ type portGrant struct {
 	Port        int    `json:"port"`
 	Proto       string `json:"proto"`
 	PublicPort  int    `json:"public_port"`
+	Special     bool   `json:"special,omitempty"`
 	State       string `json:"state,omitempty"`
 	TenantN     int    `json:"tenant_n"`
 	VIP         string `json:"vip,omitempty"`

@@ -14,7 +14,11 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 	case "network_list":
 		return D{"networks": e.S.Objects("networks", n)}
 	case "port_list":
-		return D{"ports": e.PublicGrants("ports", n)}
+		r := D{"ports": e.PublicGrants("ports", n)}
+		if grants := e.publicSpecialPorts(n); len(grants) > 0 {
+			r["special_ports"] = grants
+		}
+		return r
 	case "peer_list":
 		return D{"peers": e.PublicGrants("peers", n)}
 	case "vip_list":
@@ -145,8 +149,17 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 		var grant, delta D
 		if tool == "port_open" {
 			vmid, ip, vip := e.publishTarget(t, a)
+			// public_port asks for a special port the tenant was granted.
+			special := a["public_port"] != nil
+			var reserved specialPort
+			if special {
+				reserved = e.specialPortFor(n, integer(a["public_port"]), str(a["proto"]))
+			}
 			for _, p := range e.ports(n) {
-				if p.VMID == vmid && p.VIP == vip.ID && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] {
+				if special && p.PublicPort == reserved.PublicPort && p.Proto == reserved.Proto && (p.VMID != vmid || p.VIP != vip.ID || float64(p.Port) != num(a["port"])) {
+					fail("conflict", "This special port already forwards to another target; close it with port_close first", D{"recovery": "resolve_prerequisite"})
+				}
+				if p.VMID == vmid && p.VIP == vip.ID && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] && p.Special == special && (!special || p.PublicPort == reserved.PublicPort) {
 					if p.State == "deleting" {
 						fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
 					}
@@ -159,8 +172,11 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 			requireHolder(vip)
 			delta = D{"public_ports": 1}
 			e.Quota(t, delta)
-			public := e.AllocatePort(t)
-			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: vmid, VIP: vip.ID, IP: ip, PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"])}
+			public := reserved.PublicPort
+			if !special {
+				public = e.AllocatePort(t)
+			}
+			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: vmid, VIP: vip.ID, IP: ip, PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"]), Special: special}
 			grant = opened.D()
 			if !dry {
 				e.Put("ports", opened.ID, n, opened)
