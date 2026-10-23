@@ -291,6 +291,7 @@ type nbPrefix struct{ vrf, prefix, description string }
 type nbAddress struct {
 	vrf, address, description string
 	iface                     string // key of the interface it is bound to
+	dns                       string // the infra resolver's name, for the machine address
 }
 
 type nbIface struct {
@@ -413,14 +414,14 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 				cpu: num(m["cpu"]), memoryMB: integer(m["memory_mb"]), diskMB: integer(m["disk_gb"]) * 1024}
 			nm.comment = fmt.Sprintf("carrel %s, tenant %s, proxmox vmid %d", nm.kind, slug, vmid)
 			key := fmt.Sprintf("%d/eth0", vmid)
-			primary := nbAddress{tn.vrf, str(m["ip"]) + "/24", "carrel address of " + nm.name, key}
+			primary := nbAddress{tn.vrf, str(m["ip"]) + "/24", "carrel address of " + nm.name, key, nm.name + ".internal"}
 			nm.primary = primary
 			nm.ifaces = append(nm.ifaces, nbIface{name: "eth0", vrf: tn.vrf, mac: str(m["mac"]), description: "carrel primary NIC", addresses: []nbAddress{primary}})
 			for _, nic := range dicts(m["nics"]) {
 				network := str(nic["network"])
 				iface := nbIface{name: fmt.Sprintf("eth%d", integer(nic["index"])), vrf: netVRF[network], mac: str(nic["mac"]), description: fmt.Sprintf("carrel network %s (%s)", names[network], nic["mode"])}
 				if ip := str(nic["ip"]); ip != "" {
-					iface.addresses = append(iface.addresses, nbAddress{netVRF[network], fmt.Sprintf("%s/%d", ip, integer(nic["prefix"])), "carrel address of " + nm.name, fmt.Sprintf("%d/%s", vmid, iface.name)})
+					iface.addresses = append(iface.addresses, nbAddress{netVRF[network], fmt.Sprintf("%s/%d", ip, integer(nic["prefix"])), "carrel address of " + nm.name, fmt.Sprintf("%d/%s", vmid, iface.name), ""})
 				}
 				nm.ifaces = append(nm.ifaces, iface)
 			}
@@ -737,7 +738,7 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 		for _, a := range f.addresses {
 			vrfID := vrfIDs[a.vrf]
 			haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
-			ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "assigned_object_type": nbIfaceType, "assigned_object_id": ifaceID, "description": a.description})
+			ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "assigned_object_type": nbIfaceType, "assigned_object_id": ifaceID, "description": a.description, "dns_name": a.dns})
 			s.kept("ips", integer(ip["id"]))
 			if a.address == m.primary.address {
 				primaryID = integer(ip["id"])
