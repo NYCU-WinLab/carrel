@@ -1,6 +1,9 @@
 package carrel
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 func (e *Execution) Admin(tool string, a, w D) D {
 	dry := boolean(a["dry_run"])
@@ -125,8 +128,11 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			e.S.Exec("UPDATE tenants SET status='suspended' WHERE n=?", t["n"])
 			e.P.invalidateInventory()
 			// The gateway answers delegated names it knows itself (#166):
-			// it must forget the suspended tenant's names now.
-			e.Reconcile()
+			// it must forget the suspended tenant's names now. The suspension
+			// stands if it is unreachable; the maintenance pass retries.
+			if err := attempt(func() { e.Reconcile() }); err != nil {
+				slog.Warn("suspend_reconcile_failed", "tenant", t["n"], "error", describe(err))
+			}
 		}
 	}
 	return D{"dry_run": dry, "quota_after": e.Quota(t)}
