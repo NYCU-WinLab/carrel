@@ -2903,6 +2903,39 @@
       }
     },
     {
+      "name": "domain_proxy",
+      "description": "Admin: turn the Cloudflare proxy of an exact special domain on or off. Only a name one label under its zone, since Cloudflare's free edge certificate covers no more. carrel then asks the name through Cloudflare and turns the proxy off again if the answer never reached the gateway, as when the zone's SSL mode is not Full (strict).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 253,
+            "pattern": "^(\\*\\.|_[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?\\._(tcp|udp)\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+          },
+          "proxied": {
+            "type": "boolean"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name",
+          "proxied"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "app_link",
       "description": "Bind a GitHub repository branch to a machine so every push deploys (PLAN 7.9). GitHub Actions builds; carrel stores the release; carrel-deployd in the machine switches it and rolls back on a failed health check. Returns install (run once on the machine over SSH with sudo) and agent_token (shown only here), which install reads on standard input: pipe it from the client, printf '%s\\n' <agent_token> | ssh <machine> <install>, so it appears in no command line on the machine and workflow (commit to .github/workflows/carrel.yml). Runtime secrets go in /srv/apps/<name>/env on the machine. Publish the port separately with domain_add.",
       "inputSchema": {
@@ -4079,6 +4112,7 @@
     "zone_add",
     "zone_list",
     "zone_remove",
+    "domain_proxy",
     "app_link",
     "app_list",
     "app_get",
@@ -4091,6 +4125,7 @@
     "operation_retry"
   ],
   "admin_tools": [
+    "domain_proxy",
     "machine_migrate",
     "node_drain",
     "node_list",
@@ -4114,6 +4149,7 @@
     "app_unlink",
     "deployment_apply",
     "domain_add",
+    "domain_proxy",
     "domain_remove",
     "domain_request",
     "image_delete",

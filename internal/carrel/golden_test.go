@@ -407,6 +407,7 @@ func goldenScenario(g *goldenRun) {
 	call("admin", "zone_list", D{}, admin)
 	call("admin", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef"}, admin)
 	call("admin", "zone_remove", D{"name": "lab.example", "confirm": "lab.example"}, admin)
+	call("admin", "domain_proxy", D{"name": "lab.winlab.tw", "proxied": true}, admin)
 	call("admin", "tenant_list", D{}, admin)
 	call("admin", "node_list", D{}, admin)
 	call("admin", "usage_report", D{}, admin)
