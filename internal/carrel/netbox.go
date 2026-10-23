@@ -776,26 +776,20 @@ func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string
 	if id, ok := s.platformIDs[label]; ok {
 		return id
 	}
-	// The name is for people; the slug keeps the label apart.
-	slug, name := nbSlug(label), nbTitle(strings.ReplaceAll(image, "-", " "))
+	// The name is for people. The slug keeps the label apart and carries the
+	// carrel- prefix, so it cannot meet a platform made by hand; a platform
+	// from before the prefix is found by its old slug and renamed in place.
+	old := nbSlug(label)
+	slug, name := "carrel-"+old, nbTitle(strings.ReplaceAll(image, "-", " "))
 	if kind, rest, ok := strings.Cut(image, ":"); ok {
 		name = nbTitle(tenant) + " " + map[string]string{"tenant": "image", "iso": "ISO"}[kind] + " " + rest
 	}
 	have := one(s.platforms, func(o D) bool { return o["slug"] == slug })
+	if have == nil {
+		have = one(s.platforms, func(o D) bool { return o["slug"] == old })
+	}
 	if have == nil && len(c.list("dcim/platforms/", url.Values{"slug": {slug}})) > 0 {
 		panic(nbError{Msg: "a NetBox platform with slug " + slug + " exists but carrel did not create it"})
-	}
-	// NetBox keeps platform names unique. A name another platform already holds,
-	// by hand or from another image, must not stop the machines of this image:
-	// a platform keeps the name it has, a new one gets its slug added.
-	if have == nil || str(have["name"]) != name {
-		if len(c.list("dcim/platforms/", url.Values{"name": {name}})) > 0 {
-			if have == nil {
-				name += " (" + slug + ")"
-			} else {
-				name = str(have["name"])
-			}
-		}
 	}
 	created := have == nil
 	description := "Carrel image " + image
