@@ -27,6 +27,7 @@ type statefulDNS struct {
 	log     []string
 	n       int
 	list    bool
+	zones   []D
 }
 
 func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
@@ -37,6 +38,19 @@ func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		result := any(D{})
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/zones"):
+			// Zone lookup by name, as zone_add asks with the new token.
+			found := []D{}
+			for _, z := range f.zones {
+				if z["name"] == r.URL.Query().Get("name") && r.Header.Get("Authorization") == "Bearer "+str(z["token"]) {
+					found = append(found, pick(z, "id", "name"))
+				}
+			}
+			result = found
+			_ = json.NewEncoder(w).Encode(D{"success": true, "result": result})
+			return
+		}
 		switch r.Method {
 		case "GET":
 			if rs := f.records[r.URL.Query().Get("name")]; rs != nil {
@@ -57,7 +71,9 @@ func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
 			}
 		case "POST":
 			f.n++
-			f.records[str(body["name"])] = []D{merge(body, D{"id": fmt.Sprintf("r%d", f.n)})}
+			created := merge(body, D{"id": fmt.Sprintf("r%d", f.n)})
+			f.records[str(body["name"])] = []D{created}
+			result = created
 		case "DELETE":
 			for k, rs := range f.records {
 				if len(rs) > 0 && rs[0]["id"] == id {

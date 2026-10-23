@@ -194,6 +194,9 @@ func (e *Execution) Register(w D, name string, overview bool) []D {
 	// tenant's wildcard would cover it (PLAN 6.10). A pending request does
 	// not; its approval checks the slugs again.
 	for _, g := range e.grants() {
+		if g.zone() != specialZone {
+			continue
+		}
 		labels := relativeLabels(g.Name)
 		reserved[labels[len(labels)-1]] = true
 	}

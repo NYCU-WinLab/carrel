@@ -29,7 +29,7 @@ const gatewayCerts = "/etc/caddy/carrel-certs"
 var (
 	labelPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	originPattern = regexp.MustCompile(`^([a-z0-9-]+\.)+winlab\.tw$`)
-	grantPattern  = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+winlab\.tw$`)
+	grantPattern  = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 )
 
 // checkedPair returns the PEM pair if it covers host, has not expired and its

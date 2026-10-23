@@ -16,15 +16,26 @@ type Waiting struct {
 	ReadyAt float64
 }
 
+// CF reads or writes a DNS record of the site's own zone.
 func (e *Execution) CF(method, path string, body any) D {
+	return e.cfIn(e.siteZone(), method, path, body)
+}
+
+// cfIn reads or writes a DNS record of zone z.
+func (e *Execution) cfIn(z zoneAccess, method, path string, body any) D {
+	return e.cloudflare(z.Token, method, "/zones/"+z.ID+"/dns_records"+path, body)
+}
+
+// cloudflare calls the Cloudflare API with token.
+func (e *Execution) cloudflare(token, method, path string, body any) D {
 	base := textAt(e.P.Config, "cloudflare_api", "https://api.cloudflare.com/client/v4")
 	var data io.Reader
 	if body != nil {
 		data = bytes.NewReader(encoded(body))
 	}
-	req, err := http.NewRequestWithContext(e.Ctx, method, base+"/zones/"+str(e.P.Config["cloudflare_zone"])+"/dns_records"+path, data)
+	req, err := http.NewRequestWithContext(e.Ctx, method, base+path, data)
 	must(err)
-	req.Header.Set("Authorization", "Bearer "+str(e.P.Config["cloudflare_token"]))
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e.P.HTTP.Do(req)
 	if err != nil {

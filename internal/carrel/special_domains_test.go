@@ -102,3 +102,35 @@ func TestGrantRecordAdoptsOnlyWhenAllowed(t *testing.T) {
 		t.Fatal(dns.records[g.Name])
 	}
 }
+
+// A name belongs to the longest managed zone it sits in; the site's zone
+// always counts, others only once added. ACME challenges and grant records
+// go to that zone.
+func TestZoneOfPicksTheLongestManagedZone(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config["zone_dir"] = t.TempDir()
+	e := p.execution(context.Background())
+	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
+	p.Store.SitePut("zone", "deep.lab2.example", D{"id": "fedcba9876543210fedcba9876543210", "name": "deep.lab2.example"})
+	for name, want := range map[string]string{
+		"video.winlab.tw":       "winlab.tw",
+		"*.x.winlab.tw":         "winlab.tw",
+		"www.lab.example":       "lab.example",
+		"lab.example":           "lab.example",
+		"a.deep.lab2.example":   "deep.lab2.example",
+		"other.lab2.example":    "",
+		"winlab.tw.lab.example": "lab.example",
+	} {
+		got, ok := e.zoneOf(name)
+		if got != want || ok != (want != "") {
+			t.Errorf("%s: %q %v", name, got, ok)
+		}
+	}
+	if !e.zoneOpen("lab.example", 1) || e.zoneOpen("lab.example", 2) || !e.zoneOpen("deep.lab2.example", 2) || !e.zoneOpen("winlab.tw", 2) {
+		t.Fatal("zone openness")
+	}
+	// Without its token file a zone cannot be used.
+	if err := attempt(func() { e.zoneNamed("lab.example") }); err == nil {
+		t.Fatal("used a zone without a token")
+	}
+}

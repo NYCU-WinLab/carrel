@@ -16,9 +16,10 @@ func TestGoldenSpecialDomains(t *testing.T) {
 	randomSource = &seededReader{}
 	t.Cleanup(func() { randomSource = saved })
 	p, b, _ := originFixture(t)
-	dns := &statefulDNS{records: map[string][]D{}, list: true}
+	dns := &statefulDNS{records: map[string][]D{}, list: true, zones: []D{{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "token": "zone-token-0123456789abcdef"}}}
 	p.Config["cloudflare_api"] = dns.serve(t).URL
 	p.Config["cloudflare_token"] = "test"
+	p.Config["zone_dir"] = t.TempDir()
 	p.sshProbe = func(context.Context, D) bool { return true }
 	e := p.execution(context.Background())
 	// Issuance as the control plane would leave it: a pair for the grant.
@@ -131,6 +132,21 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	records("d")
 	status("d")
 
+	// z: an added zone, open to alice only. Its token stays out of results,
+	// rows and the audit log.
+	call("z", "zone_add", D{"name": "lab.example", "token": "wrong-token-0123456789abcdef", "tenants": []any{"alice"}}, admin)
+	call("z", "zone_add", D{"name": "sub.winlab.tw", "token": "zone-token-0123456789abcdef"}, admin)
+	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef", "tenants": []any{"alice"}, "dry_run": true}, admin)
+	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef", "tenants": []any{"alice"}}, admin)
+	call("z", "zone_list", D{}, admin)
+	call("z", "domain_request", D{"name": "app.lab.example", "reason": "not open to bob"}, bob)
+	call("z", "domain_request", D{"name": "*.lab.example", "kind": "wildcard", "reason": "the zone's wildcard"}, alice)
+	call("z", "domain_request", D{"name": "nowhere.example", "reason": "no such zone"}, alice)
+	www := call("z", "domain_request", D{"name": "www.lab.example", "reason": "alice's site"}, alice)
+	call("z", "request_approve", D{"id": requestID(www)}, admin)
+	call("z", "domain_add", D{"machine": "web", "name": "www.lab.example", "target_port": 8080}, alice)
+	call("z", "zone_remove", D{"name": "lab.example", "confirm": "lab.example"}, admin)
+	rows("z")
 	// m: maintenance keeps records in place; a removed domain leaves the
 	// grant unused; an unused grant is released after 30 days.
 	do("m", func() { g.p.execution(bg).MaintainGrants() })
