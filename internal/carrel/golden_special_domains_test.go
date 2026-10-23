@@ -7,6 +7,7 @@ package carrel
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
@@ -137,7 +138,15 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("z", "zone_add", D{"name": "lab.example", "token": "wrong-token-0123456789abcdef", "tenants": []any{"alice"}}, admin)
 	call("z", "zone_add", D{"name": "sub.winlab.tw", "token": "zone-token-0123456789abcdef"}, admin)
 	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef", "tenants": []any{"alice"}, "dry_run": true}, admin)
-	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef", "tenants": []any{"alice"}}, admin)
+	// The token can stay off the client: an admin places the file first
+	// (issue #161).
+	call("z", "zone_add", D{"name": "lab.example", "tenants": []any{"alice"}}, admin)
+	must(os.MkdirAll(g.p.execution(bg).zoneDir(), 0700))
+	must(os.WriteFile(g.p.execution(bg).zoneTokenPath("lab.example"), []byte("zone-token-0123456789abcdef\n"), 0644))
+	call("z", "zone_add", D{"name": "lab.example", "tenants": []any{"alice"}}, admin)
+	if info, err := os.Stat(g.p.execution(bg).zoneTokenPath("lab.example")); err != nil || info.Mode().Perm() != 0600 {
+		g.lines = append(g.lines, "z token file not 0600")
+	}
 	// A new token alone keeps the tenant list.
 	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef"}, admin)
 	call("z", "zone_list", D{}, admin)

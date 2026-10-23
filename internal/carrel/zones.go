@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"encoding/json"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -195,12 +196,29 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 			tenants = append(tenants, integer(t["n"]))
 		}
 	}
-	token := strings.TrimSpace(str(a["token"]))
+	// The token comes as an argument, or, so that it never passes through
+	// a client, from zone_dir/<zone>.token placed by an admin over SSH
+	// (issue #161).
+	token, fromFile := strings.TrimSpace(str(a["token"])), false
 	if token == "" {
-		fail("invalid", "token is required")
+		b, err := readSmall(e.zoneTokenPath(name), 4096)
+		if err != nil {
+			fail("invalid", "Give token, or first place it on the control plane as "+name+".token in the zone directory (zone_dir, /var/lib/carrel/zones by default)", D{"recovery": "resolve_prerequisite"})
+		}
+		token, fromFile = strings.TrimSpace(string(b)), true
 	}
-	// The token must find exactly this zone and read its records.
-	found := dicts(e.cloudflare(token, "GET", "/zones?name="+url.QueryEscape(name), nil)["result"])
+	if !matches(`^[A-Za-z0-9_-]{20,200}$`, token) {
+		fail("invalid", "The token is not a Cloudflare API token", D{"recovery": "revise_request"})
+	}
+	// The token must find exactly this zone and read its records. A token
+	// Cloudflare refuses is the caller's to fix, not a retry.
+	var found []D
+	if err := attempt(func() { found = dicts(e.cloudflare(token, "GET", "/zones?name="+url.QueryEscape(name), nil)["result"]) }); err != nil {
+		if f, ok := err.(Failure); ok && integer(obj(f.Result["error"])["http_status"]) >= 400 && integer(obj(f.Result["error"])["http_status"]) < 500 && integer(obj(f.Result["error"])["http_status"]) != 429 {
+			fail("invalid", "Cloudflare refused the token", D{"recovery": "revise_request"})
+		}
+		panic(err)
+	}
 	if len(found) != 1 || found[0]["name"] != name {
 		fail("conflict", "The token does not see exactly this zone in Cloudflare")
 	}
@@ -232,12 +250,28 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 		e.cfIn(access, "DELETE", "/"+str(obj(probe["result"])["id"]), nil)
 		must(os.MkdirAll(e.zoneDir(), 0700))
 		path := e.zoneTokenPath(name)
-		must(os.WriteFile(path+".next", []byte(token+"\n"), 0600))
-		must(os.Rename(path+".next", path))
+		if !fromFile {
+			must(os.WriteFile(path+".next", []byte(token+"\n"), 0600))
+			must(os.Rename(path+".next", path))
+		}
+		must(os.Chmod(path, 0600))
 		if old != nil {
 			z.AddedAt, z.AddedBy = int64(num(old["added_at"])), str(old["added_by"])
 		}
 		e.S.SitePut("zone", name, decode(string(encoded(z))))
 	}
 	return D{"zone": e.publicZone(z), "dry_run": dry}
+}
+
+// readSmall reads at most limit bytes of a regular file.
+func readSmall(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, os.ErrInvalid
+	}
+	return io.ReadAll(io.LimitReader(f, limit))
 }
