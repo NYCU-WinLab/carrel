@@ -18,7 +18,6 @@ import subprocess
 # also drop host interfaces such as tailscale0.
 TENANT_IFACES = ", ".join([f'"t{d}*"' for d in range(10)] + ['"tap*"'])
 
-
 def underlay_rules(interface, address, peers):
     # PLAN 6.3: VXLAN and BGP only on the underlay interface, to this node's own
     # address, from another node. With no peers both stay dropped everywhere.
@@ -119,28 +118,21 @@ def public_rules(address):
 def public_interface(interface, cidr, gateway, address):
     network = ipaddress.IPv4Interface(cidr).network
     rules = public_rules(address)
-    up = [
-        f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
-        f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}",
-    ]
+    up = [f"    post-up ip route replace {network} dev {interface} table {PUBLIC_TABLE}",
+          f"    post-up ip route replace default via {gateway} dev {interface} table {PUBLIC_TABLE}"]
     up += [f"    post-up ip rule del {r} 2>/dev/null; ip rule add {r}" for r in rules]
     down = [f"    pre-down ip rule del {r} 2>/dev/null || true" for r in rules]
-    return (
-        "\n".join(
-            [
-                "# Managed by carrel install-network.py: the site's public address (PLAN 15.15).",
-                f"auto {interface}",
-                f"iface {interface} inet static",
-                f"    address {cidr}",
-                # Never bring the address up without its protection.
-                "    pre-up nft list table inet carrel_public > /dev/null",
-                f"    post-up echo 1 > /proc/sys/net/ipv6/conf/{interface}/disable_ipv6",
-                *up,
-                *down,
-            ]
-        )
-        + "\n"
-    )
+    return "\n".join([
+        "# Managed by carrel install-network.py: the site's public address (PLAN 15.15).",
+        f"auto {interface}",
+        f"iface {interface} inet static",
+        f"    address {cidr}",
+        # Never bring the address up without its protection.
+        "    pre-up nft list table inet carrel_public > /dev/null",
+        f"    post-up echo 1 > /proc/sys/net/ipv6/conf/{interface}/disable_ipv6",
+        *up,
+        *down,
+    ]) + "\n"
 
 
 def site_layout(node, site):
@@ -167,24 +159,14 @@ def site_layout(node, site):
         if type(port) is not int or not 1 <= port <= 65535:
             raise SystemExit(f"public entry {entry['address']} has an invalid port")
         entries.append({"address": address, "port": port})
-    return {
-        "address": addresses[node],
-        "peers": [a for n, a in addresses.items() if n != node],
-        "all": list(addresses.values()),
-        "exit_nodes": exits,
-        "interface": site["underlay_interface"],
-        "protected": protected,
-        "entries": entries,
-        # The first exit node holds the public address and terminates ingress.
-        "public": {
-            "interface": f"{site['underlay_interface']}.{int(site['public']['vlan'])}",
-            "cidr": str(cidr),
-            "address": str(cidr.ip),
-            "gateway": str(ipaddress.IPv4Address(site["public"]["gateway"])),
-        }
-        if node == exits[0]
-        else None,
-    }
+    return {"address": addresses[node], "peers": [a for n, a in addresses.items() if n != node],
+            "all": list(addresses.values()), "exit_nodes": exits, "interface": site["underlay_interface"],
+            "protected": protected, "entries": entries,
+            # The first exit node holds the public address and terminates ingress.
+            "public": {"interface": f'{site["underlay_interface"]}.{int(site["public"]["vlan"])}',
+                       "cidr": str(cidr), "address": str(cidr.ip),
+                       "gateway": str(ipaddress.IPv4Address(site["public"]["gateway"]))}
+            if node == exits[0] else None}
 
 
 def check_underlay(interface, address, node):
@@ -205,12 +187,8 @@ def run(*args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--site",
-        type=Path,
-        default=Path("/etc/carrel/site.json"),
-        help="Site file shared by every node (sites/<site>/cluster.json)",
-    )
+    parser.add_argument("--site", type=Path, default=Path("/etc/carrel/site.json"),
+                        help="Site file shared by every node (sites/<site>/cluster.json)")
     args = parser.parse_args()
     node = socket.gethostname().split(".")[0]
     layout = site_layout(node, json.loads(args.site.read_text()))
@@ -265,19 +243,10 @@ def main():
             wanted = {"peers": peers} if "--peers" in args else {}
             if "--exitnodes" in args:
                 wanted["exitnodes"] = exits
-            stale = [
-                f
-                for f, v in wanted.items()
-                if ",".join(sorted(str(current.get(f, "")).split(","))) != ",".join(sorted(v.split(",")))
-            ]
+            stale = [f for f, v in wanted.items() if ",".join(sorted(str(current.get(f, "")).split(","))) != ",".join(sorted(v.split(",")))]
             if stale:
                 mark(pending)
-                run(
-                    "pvesh",
-                    "set",
-                    f"/cluster/sdn/{path}/{ident}",
-                    *[x for f in stale for x in ("--" + f, wanted[f])],
-                )
+                run("pvesh", "set", f"/cluster/sdn/{path}/{ident}", *[x for f in stale for x in ("--" + f, wanted[f])])
                 sdn_changed = True
     Path("/etc/carrel").mkdir(exist_ok=True)
     Path("/var/lib/carrel").mkdir(exist_ok=True)
@@ -326,10 +295,7 @@ WantedBy=multi-user.target
         for rule in public_rules(public["address"]):
             # Only a missing one: deleting a present rule would leave a gap.
             priority = rule.rsplit(" ", 1)[1]
-            subprocess.run(
-                ["sh", "-c", f"ip rule list priority {priority} | grep -q . || ip rule add {rule}"],
-                check=True,
-            )
+            subprocess.run(["sh", "-c", f"ip rule list priority {priority} | grep -q . || ip rule add {rule}"], check=True)
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
@@ -385,18 +351,9 @@ WantedBy=multi-user.target
     content = set(storage["content"].split(","))
     if "snippets" not in content:
         run("pvesm", "set", "local", "--content", ",".join(sorted(content | {"snippets"})))
-    print(
-        json.dumps(
-            {
-                "node": node,
-                "zones": ["tenants", "private"],
-                "firewall": "nftables",
-                "peers": layout["peers"],
-                "exit_nodes": layout["exit_nodes"],
-                "public": (public or {}).get("cidr"),
-            }
-        )
-    )
+    print(json.dumps({"node": node, "zones": ["tenants", "private"], "firewall": "nftables",
+                      "peers": layout["peers"], "exit_nodes": layout["exit_nodes"],
+                      "public": (public or {}).get("cidr")}))
 
 
 if __name__ == "__main__":
