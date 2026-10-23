@@ -124,6 +124,9 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			}
 			e.S.Exec("UPDATE tenants SET status='suspended' WHERE n=?", t["n"])
 			e.P.invalidateInventory()
+			// The gateway answers delegated names it knows itself (#166):
+			// it must forget the suspended tenant's names now.
+			e.Reconcile()
 		}
 	}
 	return D{"dry_run": dry, "quota_after": e.Quota(t)}

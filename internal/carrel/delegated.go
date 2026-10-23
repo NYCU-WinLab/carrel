@@ -129,8 +129,29 @@ func (e *Execution) delegatedGrantFor(name string) (domainGrant, bool) {
 }
 
 // AskDelegated decides whether the gateway may obtain a certificate for name.
+// Another handshake may be asking the tenant for the same name: this one
+// waits for that answer instead of failing, and checks everything again
+// once it is in (#166).
 func (e *Execution) AskDelegated(name string) (bool, string) {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
+	deadline := now() + delegatedWaitSeconds
+	for {
+		ok, why := e.askDelegated(name)
+		if why != "in_progress" || now() >= deadline {
+			return ok, why
+		}
+		select {
+		case <-e.Ctx.Done():
+			return false, "in_progress"
+		case <-time.After(200 * time.Millisecond):
+		}
+		if reason, refused := e.P.delegatedAsks.refusal(name); refused {
+			return false, reason
+		}
+	}
+}
+
+func (e *Execution) askDelegated(name string) (bool, string) {
 	if len(name) > 253 || !zonePattern.MatchString(name) {
 		return false, "invalid_name"
 	}
@@ -163,27 +184,16 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	if address == "" {
 		return false, "no_target"
 	}
-	// A name agreed to before skips the limit, so renewals always pass.
-	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); (!seen || n.Pending || n.Grant != g.ID) && !e.P.delegatedAsks.allow(g.ID) {
+	// A name agreed to before skips the limit, so renewals always pass, and
+	// so does a name another ask is putting to the tenant: that one counted.
+	n, seen := rowOf[delegatedName](e.S, "delegated_names", name)
+	asking := seen && n.Grant == g.ID && n.Pending && now()-float64(n.FirstAt) < 60
+	if (!seen || n.Grant != g.ID || (n.Pending && !asking)) && !e.P.delegatedAsks.allow(g.ID) {
 		return false, "rate_limited"
 	}
 	// The place in the budget is taken before the tenant is asked, under a
 	// lock of its own, so concurrent asks cannot pass it together.
-	ok, why := e.reserveDelegated(g, name)
-	// Another handshake is asking the tenant for this name: wait for its
-	// answer instead of failing this one (#166).
-	for deadline := now() + delegatedWaitSeconds; why == "in_progress" && now() < deadline; {
-		select {
-		case <-e.Ctx.Done():
-			return false, "in_progress"
-		case <-time.After(200 * time.Millisecond):
-		}
-		if reason, refused := e.P.delegatedAsks.refusal(name); refused {
-			return false, reason
-		}
-		ok, why = e.reserveDelegated(g, name)
-	}
-	if !ok || why == "known" {
+	if ok, why := e.reserveDelegated(g, name); !ok || why == "known" {
 		return ok, why
 	}
 	agreed := e.tenantAgrees(address, route.TargetPort, name)

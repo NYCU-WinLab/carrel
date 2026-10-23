@@ -296,6 +296,23 @@ func TestDelegatedConcurrentAsksShareAnswer(t *testing.T) {
 			t.Fatalf("agree=%v: tenant asked %d times, answers %v", agree, asked.Load(), answers)
 		}
 	}
+	// A tenant suspended while the second ask waits: it is refused.
+	p.delegatedAsks = askLimiter{}
+	p.tenantAsk = func(string, int, string) bool {
+		p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=1")
+		time.Sleep(300 * time.Millisecond)
+		return true
+	}
+	var wg sync.WaitGroup
+	var why string
+	wg.Add(1)
+	go func() { defer wg.Done(); p.execution(context.Background()).AskDelegated("late.a.lab.example") }()
+	time.Sleep(100 * time.Millisecond)
+	_, why = p.execution(context.Background()).AskDelegated("late.a.lab.example")
+	wg.Wait()
+	if why != "tenant_inactive" {
+		t.Fatalf("waiting ask after suspension answered %q", why)
+	}
 }
 
 // The gateway answers delegated names agreed to before itself, so a restart
