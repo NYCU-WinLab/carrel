@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,7 +224,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The platform is carrel's own, named after the image.
 	platforms := f.all("dcim/platforms/")
-	if len(platforms) != 1 || platforms[0]["name"] != "Catalog:debian-13" || platforms[0]["slug"] != "catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
+	if len(platforms) != 1 || platforms[0]["name"] != "Debian 13" || platforms[0]["slug"] != "catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
 		t.Fatal(platforms, web["platform"])
 	}
 	// Each machine's disk is a virtual disk, in MiB.
@@ -243,7 +244,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The tenant segment shares one VRF; a private network has its own.
 	vrfs := f.all("ipam/vrfs/")
-	shared, private := find(vrfs, func(v D) bool { return v["name"] == "carrel" }), find(vrfs, func(v D) bool { return v["name"] == "carrel-alice-back" })
+	shared, private := find(vrfs, func(v D) bool { return v["name"] == "Carrel" }), find(vrfs, func(v D) bool { return v["name"] == "Carrel Alice back" })
 	if len(vrfs) != 2 || shared == nil || private == nil {
 		t.Fatal(vrfs)
 	}
@@ -257,7 +258,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 		}
 		// Only the machine address carries the infra resolver's name.
 		dns := ""
-		if machine, ok := strings.CutPrefix(str(ip["description"]), "carrel address of "); ok && integer(obj(ip["vrf"])["id"]) == integer(shared["id"]) {
+		if machine, ok := strings.CutPrefix(str(ip["description"]), "Carrel address of "); ok && integer(obj(ip["vrf"])["id"]) == integer(shared["id"]) {
 			dns = machine + ".internal"
 		}
 		if str(ip["dns_name"]) != dns {
@@ -590,8 +591,34 @@ func TestNetBoxTenantImagesAreNotSharedAcrossTenants(t *testing.T) {
 	for _, o := range f.all("dcim/platforms/") {
 		names = append(names, str(o["name"]))
 	}
-	if len(names) != 2 || names[0] == names[1] {
+	if len(names) != 2 || !slices.Contains(names, "Alice image base") || !slices.Contains(names, "Bob image base") {
 		t.Fatal(names)
+	}
+}
+
+func TestNetBoxRenamesAVRFNamedTheOldWay(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	ids := map[string]int{}
+	for _, v := range f.all("ipam/vrfs/") {
+		ids[str(v["name"])] = integer(v["id"])
+		v["name"] = nbVRFKey(str(v["name"]))
+	}
+	if len(ids) != 2 {
+		t.Fatal(ids)
+	}
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	vrfs := f.all("ipam/vrfs/")
+	if len(vrfs) != 2 {
+		t.Fatal("a VRF was replaced instead of renamed", vrfs)
+	}
+	for _, v := range vrfs {
+		if ids[str(v["name"])] != integer(v["id"]) {
+			t.Fatal("VRF kept the old name or got a new id", v, ids)
+		}
 	}
 }
 
