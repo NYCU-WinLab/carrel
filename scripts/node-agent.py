@@ -372,6 +372,13 @@ def machine(m):
     return vmid
 
 
+def disk_volume(m, allow_provisioning=False):
+    """The root disk's Proxmox volume, `<storage>:<volume>`, for NetBox (issue #175)."""
+    cfg = owned(m, allow_provisioning)
+    volume = cfg.get("scsi0" if m["kind"] == "vm" else "rootfs", "").split(",")[0]
+    return {"disk_volume": volume} if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]*:[a-zA-Z0-9_./-]+", volume) else {}
+
+
 def provision_marker(m):
     return "carrel-provision-" + hashlib.sha256(str(m.get("readiness_token", m["name"])).encode()).hexdigest()
 
@@ -1932,7 +1939,7 @@ def main():
     long = op in ("migrate", "migrate_finish")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
-        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "fetch_status", "fetch_store"):
+        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         if req.get("request_id") and op in ("create", "action"):
@@ -1946,6 +1953,7 @@ def main():
             out = reconcile(req["state"], first=req.get("first", True))
         elif op == "create":
             out = create(req["machine"])
+            out = {**out, **disk_volume(req["machine"], allow_provisioning=True)}
         elif op == "action":
             out = action(req)
         elif op == "inventory":
@@ -1987,6 +1995,8 @@ def main():
             m = req["machine"]
             owned(m)
             out = cloud_init_files(m)
+        elif op == "disk_volume":
+            out = disk_volume(req["machine"])
         elif op == "node_files":
             # For the control plane's backup: only files without secrets
             # (the reader token is rebuilt by configure-reader.py).

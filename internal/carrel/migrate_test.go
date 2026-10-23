@@ -23,6 +23,8 @@ func TestMachineMigrateMovesTheRecordAfterTheNodesAgree(t *testing.T) {
 			return D{"state": "done"}, nil
 		case "cloud_init_read":
 			return D{"cloud_init": files}, nil
+		case "disk_volume":
+			return D{"disk_volume": "local-zfs:vm-10100-disk-1"}, nil
 		}
 		return inner(r, target)
 	}
@@ -38,8 +40,8 @@ func TestMachineMigrateMovesTheRecordAfterTheNodesAgree(t *testing.T) {
 	if !equal(steps, want) {
 		t.Fatal(steps)
 	}
-	if p.Store.Get("machines", "10100")["node"] != "carrel02" {
-		t.Fatal("record still on the old node")
+	if m := p.Store.Get("machines", "10100"); m["node"] != "carrel02" || m["disk_volume"] != "local-zfs:vm-10100-disk-1" {
+		t.Fatal("record still on the old node or disk", m)
 	}
 	// Admins follow the job in the machine's tenant.
 	got := p.Execute(ctx, "operation_get", D{"id": op["id"], "wait_seconds": 0}, admin)
@@ -239,5 +241,30 @@ func TestDrainingTwiceMovesEachMachineOnce(t *testing.T) {
 	p.Execute(ctx, "node_drain", D{"node": "carrel02"}, admin)
 	if f := p.Execute(ctx, "node_drain", D{"node": "carrel03"}, admin); f["ok"] != false {
 		t.Fatal("drained every node", f)
+	}
+}
+
+// The backfill of reconcile_run records the root disk volume of machines created before
+// carrel kept it, and ignores a reply that is no volume (#175).
+func TestReconcileCollectsDiskVolumes(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "disk_volume" {
+			if integer(obj(r["machine"])["vmid"]) == 10101 {
+				return D{"disk_volume": "bad volume"}, nil
+			}
+			return D{"disk_volume": "local-zfs:vm-10100-disk-0"}, nil
+		}
+		return inner(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	seedMachine(p, "db", 10101)
+	runQueue(p)
+	if got := p.execution(context.Background()).CollectDiskVolumes(); got != 1 {
+		t.Fatal(got)
+	}
+	if p.Store.Get("machines", "10100")["disk_volume"] != "local-zfs:vm-10100-disk-0" || p.Store.Get("machines", "10101")["disk_volume"] != nil {
+		t.Fatal(p.Store.Get("machines", "10100"), p.Store.Get("machines", "10101"))
 	}
 }
