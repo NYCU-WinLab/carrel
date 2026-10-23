@@ -362,7 +362,11 @@ func (e *Execution) Reconcile() D {
 		}
 	}
 	state["domains"] = domains
-	state["certificates"] = e.CertificateBundles(domains)
+	state["certificates"] = append(e.CertificateBundles(domains), e.grantBundles(domains)...)
+	// Special domain grants route their names at the gateway (PLAN 6.10).
+	if grants := e.S.Objects("domain_grants"); len(grants) > 0 {
+		state["domain_grants"] = grants
+	}
 	machines := []D{}
 	for _, m := range dicts(state["machines"]) {
 		machines = append(machines, without(m, "ssh_keys", "runcmd", "user_data"))
@@ -375,7 +379,7 @@ func (e *Execution) Reconcile() D {
 		// The fetch network and its container's firewall (PLAN 7.8).
 		state["fetch"] = true
 	}
-	request := D{"op": "reconcile", "state": without(state, "certificates")}
+	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants")}
 	nodes := e.P.Nodes()
 	result := D{"node": e.Call(request, nodes[0].Target)}
 	// The gateway goes after the first node, whose guest firewalls admit it,

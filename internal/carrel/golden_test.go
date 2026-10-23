@@ -398,6 +398,7 @@ func goldenScenario(g *goldenRun) {
 
 	approved := call("requests", "quota_request", D{"dimension": "vcpu", "amount": 12, "reason": "golden"}, alice)
 	rejected := call("requests", "quota_request", D{"dimension": "disk_gb", "amount": 200, "reason": "golden"}, alice)
+	call("requests", "domain_request", D{"name": "lab.winlab.tw", "reason": "golden special"}, alice)
 	call("requests", "request_list", D{}, alice)
 	call("admin", "request_list_all", D{}, admin)
 	call("admin", "request_approve", D{"id": obj(approved["request"])["id"]}, admin)

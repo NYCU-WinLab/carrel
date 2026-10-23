@@ -120,7 +120,8 @@ func (e *Execution) EnsureCertificate(t D) D {
 func (e *Execution) CertificateBundles(domains []D) []D {
 	wanted := map[int]bool{}
 	for _, d := range domains {
-		if d["state"] == "ready" {
+		// A special domain uses its grant's pair (grantBundles).
+		if d["state"] == "ready" && str(d["grant"]) == "" {
 			wanted[integer(d["tenant_n"])] = true
 		}
 	}
@@ -138,7 +139,7 @@ func (e *Execution) CertificateBundles(domains []D) []D {
 	return out
 }
 func (e *Execution) RenewCertificate(t D) {
-	if len(e.domains(integer(t["n"]))) == 0 {
+	if len(filter(e.S.Objects("domains", integer(t["n"])), func(d D) bool { return str(d["grant"]) == "" })) == 0 {
 		return
 	}
 	if crt, _, ok := e.livePair(str(t["slug"])); ok && renewalDue(crt) {
@@ -149,12 +150,25 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	domains := e.domains(n)
 	if tool == "domain_list" {
-		return D{"domains": e.PublicGrants("domains", n)}
+		r := D{"domains": e.PublicGrants("domains", n)}
+		if grants := e.publicGrants(n); len(grants) > 0 {
+			r["special_domains"] = grants
+		}
+		return r
 	}
 	var domain, delta D
 	if tool == "domain_add" {
 		vmid, _, vip := e.publishTarget(t, a)
-		name := str(a["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
+		if (a["sub"] == nil) == (a["name"] == nil) {
+			fail("invalid", "Give exactly one of sub and name", D{"recovery": "revise_request"})
+		}
+		// sub names a domain in the tenant's subtree; name a special domain
+		// under one of its grants (PLAN 6.10).
+		name, grant := str(a["sub"])+"."+str(t["slug"])+".winlab.tw", ""
+		if a["name"] != nil {
+			name = strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
+			grant = e.grantCovering(n, name).ID
+		}
 		record, found := domainNamed(domains, name)
 		if found && record.State == "deleting" {
 			fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
@@ -167,7 +181,7 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 			requireHolder(vip)
 			delta["domains"] = 1
 			e.Quota(t, delta)
-			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Sub: str(a["sub"]), Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
+			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Sub: str(a["sub"]), Grant: grant, Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
 		}
 		if dry {
 			domain = D{"name": name, "target_port": a["target_port"], "state": "planned"}
@@ -199,10 +213,17 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 				}
 				fail("conflict", "Certificate preparation must complete before publishing")
 			}
-			e.DomainRecord(t, false)
+			if record.Grant == "" {
+				e.DomainRecord(t, false)
+			}
 			e.Reconcile()
 			record.State = "ready"
 			e.Put("domains", record.ID, n, record)
+			if record.Grant != "" {
+				// The gateway was given the routes, so the record may move.
+				g, _ := rowOf[domainGrant](e.S, "domain_grants", record.Grant)
+				e.GrantRecord(g, false)
+			}
 			domain = record.D()
 		}
 	} else {
@@ -215,9 +236,11 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 			record.State = "deleting"
 			e.Put("domains", record.ID, n, record)
 			e.Reconcile()
-			last := true
+			// The tenant's wildcard record goes with its last own domain;
+			// a grant keeps its record until it is released.
+			last := record.Grant == ""
 			for _, d := range domains {
-				if d.ID != record.ID && d.State != "deleting" {
+				if d.ID != record.ID && d.State != "deleting" && d.Grant == "" {
 					last = false
 				}
 			}

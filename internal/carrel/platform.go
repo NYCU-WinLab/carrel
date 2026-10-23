@@ -190,6 +190,18 @@ func (e *Execution) Register(w D, name string, overview bool) []D {
 	for _, t := range e.S.Tenants() {
 		reserved[str(t["slug"])] = true
 	}
+	// A special domain, granted or asked for, keeps its label from becoming
+	// a slug: the tenant's wildcard would cover it (PLAN 6.10).
+	for _, g := range e.grants() {
+		labels := relativeLabels(g.Name)
+		reserved[labels[len(labels)-1]] = true
+	}
+	for _, r := range e.S.Objects("requests") {
+		if r["kind"] == "domain" && r["status"] == "pending" {
+			labels := relativeLabels(str(r["name"]))
+			reserved[labels[len(labels)-1]] = true
+		}
+	}
 	for _, s := range missing {
 		err := attempt(func() {
 			label := slug(s[1])

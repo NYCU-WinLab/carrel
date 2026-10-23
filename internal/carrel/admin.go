@@ -50,6 +50,12 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			fail("conflict", "Request is already decided")
 		}
 		t := e.S.TenantN(integer(r["tenant_n"]))
+		if r["kind"] == "domain" {
+			return e.approveDomain(tool, a, w, r, t)
+		}
+		if boolean(a["adopt"]) {
+			fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
+		}
 		limits := obj(t["quota"])
 		dim := str(r["dimension"])
 		if tool == "request_approve" {

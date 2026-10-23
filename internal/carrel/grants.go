@@ -29,7 +29,7 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 		}
 	case "domains":
 		// A catch-all name is no address one can open.
-		if g["sub"] != "*" {
+		if g["sub"] != "*" && !strings.HasPrefix(str(g["name"]), "*.") {
 			g["url"] = "https://" + str(g["name"])
 		}
 		if g["state"] == "ready" {

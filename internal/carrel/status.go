@@ -74,10 +74,10 @@ func budget(q D) D {
 }
 
 // publicSlug reports whether a tenant's slug is already published by one of
-// its domains.
+// its domains. A special domain names no slug.
 func publicSlug(domains []domainRecord) bool {
 	for _, d := range domains {
-		if d.State == "ready" {
+		if d.State == "ready" && d.Grant == "" {
 			return true
 		}
 	}

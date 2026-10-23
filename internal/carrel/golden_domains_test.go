@@ -12,18 +12,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// statefulDNS keeps records like Cloudflare does and logs every write.
+// statefulDNS keeps records like Cloudflare does and logs every write. With
+// list, a GET without a name lists every record, as zone checks read them.
 type statefulDNS struct {
 	mu      sync.Mutex
 	records map[string][]D
 	log     []string
 	n       int
+	list    bool
 }
 
 func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
@@ -38,6 +41,17 @@ func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
 		case "GET":
 			if rs := f.records[r.URL.Query().Get("name")]; rs != nil {
 				result = rs
+			} else if f.list && r.URL.Query().Get("name") == "" {
+				all := []D{}
+				names := []string{}
+				for name := range f.records {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				for _, name := range names {
+					all = append(all, f.records[name]...)
+				}
+				result = all
 			} else {
 				result = []D{}
 			}
@@ -53,7 +67,9 @@ func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
 		case "PATCH":
 			for _, rs := range f.records {
 				if len(rs) > 0 && rs[0]["id"] == id {
-					rs[0]["content"] = body["content"]
+					for k, v := range body {
+						rs[0][k] = v
+					}
 				}
 			}
 		}
