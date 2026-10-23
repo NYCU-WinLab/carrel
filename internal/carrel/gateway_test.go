@@ -56,6 +56,8 @@ func TestACatchAllDomainTakesEveryOtherNameOfItsTenant(t *testing.T) {
 	state["domains"] = append(arr(state["domains"]), D{"id": "8", "vmid": 10301, "sub": "*", "name": "*.zyx1121.winlab.tw", "target_port": 80, "state": "ready"})
 	caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", origin, dicts(state["certificates"]))
 	tenant := strings.SplitN(caddy, "https://*.zyx1121.winlab.tw {", 2)[1]
+	// The block ends where the next site starts.
+	tenant = strings.SplitN(tenant, "\nhttps://", 2)[0] + "\n"
 	want := " @d7 host book.zyx1121.winlab.tw\n handle @d7 {\n  reverse_proxy 10.200.3.10:3000\n }\n handle {\n  reverse_proxy 10.200.3.11:80\n }\n}\n"
 	if !strings.Contains(tenant, want) || strings.Contains(tenant, "respond 404") || strings.Contains(tenant, "@d8") {
 		t.Fatalf("tenant block %q", tenant)

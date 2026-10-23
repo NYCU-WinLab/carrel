@@ -205,6 +205,68 @@ func TestDelegatedBudgetHoldsUnderConcurrentAsks(t *testing.T) {
 	}
 }
 
+// A grant asks its tenant at most delegatedAsksPerMinute times a minute, and
+// the gateway endpoint answers a recent refusal without asking again (#166).
+func TestDelegatedAsksAreBounded(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config["zone_dir"] = t.TempDir()
+	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
+	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
+	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})
+	p.Store.Put("domains", "dg0", 1, D{"id": "dg0", "tenant_n": 1, "vmid": 10100, "grant": "g0", "name": "*.a.lab.example", "slug": "alice", "target_port": 8443, "state": "ready", "ready_at": 1})
+	var asked atomic.Int32
+	p.tenantAsk = func(string, int, string) bool { asked.Add(1); return false }
+	limited := 0
+	for i := range delegatedAsksPerMinute + 5 {
+		if _, why := p.execution(context.Background()).AskDelegated(fmt.Sprintf("n%d.a.lab.example", i)); why == "rate_limited" {
+			limited++
+		}
+	}
+	if asked.Load() != delegatedAsksPerMinute || limited != 5 {
+		t.Fatalf("tenant asked %d times, %d limited", asked.Load(), limited)
+	}
+	if rows := p.Store.Objects("delegated_names"); len(rows) != 0 {
+		t.Fatalf("limited asks kept places: %d", len(rows))
+	}
+	p.delegatedAsks = askLimiter{}
+	asked.Store(0)
+	app := NewApp(p, nil)
+	for range 3 {
+		r := httptest.NewRequest("GET", "/gateway/ask?domain=again.a.lab.example", nil)
+		r.RemoteAddr, r.Host = "10.200.0.2:41000", "10.200.0.3:8080"
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		if w.Code != 404 {
+			t.Fatalf("ask answered %d", w.Code)
+		}
+	}
+	if asked.Load() != 1 {
+		t.Fatalf("tenant asked %d times for one refused name", asked.Load())
+	}
+	// A limited name is not remembered: it passes once the grant has room.
+	p.delegatedAsks = askLimiter{}
+	for range delegatedAsksPerMinute {
+		p.delegatedAsks.allow("g0")
+	}
+	p.tenantAsk = func(string, int, string) bool { return true }
+	ask := func() int {
+		r := httptest.NewRequest("GET", "/gateway/ask?domain=late.a.lab.example", nil)
+		r.RemoteAddr, r.Host = "10.200.0.2:41000", "10.200.0.3:8080"
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := ask(); code != 404 {
+		t.Fatalf("limited ask answered %d", code)
+	}
+	p.delegatedAsks.mu.Lock()
+	p.delegatedAsks.asks = nil
+	p.delegatedAsks.mu.Unlock()
+	if code := ask(); code != 200 {
+		t.Fatalf("ask after the limit answered %d", code)
+	}
+}
+
 // A rename waits for every operation that may still reach the machine: a
 // deployment's bindings, its machines, or a queued job naming it.
 func TestRenameRefusesAMachineAnOperationHolds(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,68 @@ import (
 // delegatedWeeklyNames bounds the new names one zone may have issued in 7
 // days; Let's Encrypt allows 50 certificates per registered domain a week.
 const delegatedWeeklyNames = 20
+
+// Caddy neither throttles nor caches refusals (#166): every handshake for a
+// new name asks again. A grant causes at most delegatedAsksPerMinute
+// questions to its tenant a minute, and a refused name is answered from
+// memory for delegatedRefusalSeconds.
+const (
+	delegatedAsksPerMinute  = 30
+	delegatedRefusalSeconds = 60
+	delegatedRefusalsKept   = 10000
+)
+
+// askLimiter holds the recent tenant questions per grant and the recent
+// refusals per name.
+type askLimiter struct {
+	mu      sync.Mutex
+	asks    map[string][]float64
+	refused map[string]float64
+}
+
+// allow records a question to grant's tenant if the grant has room left this
+// minute.
+func (l *askLimiter) allow(grant string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.asks == nil {
+		l.asks = map[string][]float64{}
+	}
+	t := now()
+	recent := l.asks[grant][:0]
+	for _, at := range l.asks[grant] {
+		if at > t-60 {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) >= delegatedAsksPerMinute {
+		l.asks[grant] = recent
+		return false
+	}
+	l.asks[grant] = append(recent, t)
+	return true
+}
+
+// refusal returns the reason name was refused recently, if it was.
+func (l *askLimiter) refusal(name string) (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	until, ok := l.refused[name]
+	if !ok || until < now() {
+		return "", false
+	}
+	return "refused_recently", true
+}
+
+// refuse remembers a refusal of name.
+func (l *askLimiter) refuse(name string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.refused == nil || len(l.refused) >= delegatedRefusalsKept {
+		l.refused = map[string]float64{}
+	}
+	l.refused[name] = now() + delegatedRefusalSeconds
+}
 
 // delegatedName records a name carrel agreed to once. A pending one holds a
 // place in the zone's budget while its tenant is asked.
@@ -96,6 +159,10 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	}
 	if address == "" {
 		return false, "no_target"
+	}
+	// A name agreed to before skips the limit, so renewals always pass.
+	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); (!seen || n.Pending || n.Grant != g.ID) && !e.P.delegatedAsks.allow(g.ID) {
+		return false, "rate_limited"
 	}
 	// The place in the budget is taken before the tenant is asked, under a
 	// lock of its own, so concurrent asks cannot pass it together.
@@ -183,11 +250,21 @@ func (a *App) askRoute(mux *http.ServeMux, p *Platform) {
 			jsonResponse(w, 403, D{"ok": false})
 			return
 		}
+		name := strings.ToLower(strings.TrimSuffix(r.URL.Query().Get("domain"), "."))
+		if why, refused := p.delegatedAsks.refusal(name); refused {
+			jsonResponse(w, 404, D{"ok": false, "reason": why})
+			return
+		}
 		var ok bool
 		var why string
 		// Outside the writer: the tenant's answer can take seconds, and the
 		// record it leaves is no infrastructure state.
-		err := attempt(func() { ok, why = p.execution(r.Context()).AskDelegated(r.URL.Query().Get("domain")) })
+		err := attempt(func() { ok, why = p.execution(r.Context()).AskDelegated(name) })
+		// A pending name may still be agreed to, and a limited one is
+		// asked again once the grant has room: neither is remembered.
+		if err == nil && !ok && why != "in_progress" && why != "rate_limited" && len(name) <= 253 {
+			p.delegatedAsks.refuse(name)
+		}
 		if err != nil || !ok {
 			jsonResponse(w, 404, D{"ok": false, "reason": why})
 			return

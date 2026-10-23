@@ -260,6 +260,10 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		lines = append(lines, " handle {", fallback, " }", "}")
 	}
+	// Last, for any other name: Caddy keeps certificates it obtained on
+	// demand after their site is gone, and without this site a request for
+	// such a name gets an empty 200 (#166).
+	lines = append(lines, "https:// {", " respond 404", "}")
 	if delegated {
 		lines[1] += "\n on_demand_tls {\n  ask http://" + controlAddress + "/gateway/ask\n }"
 	}
