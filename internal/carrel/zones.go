@@ -140,7 +140,7 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 		return D{"zones": out}
 	case "zone_remove":
 		name := strings.ToLower(str(a["name"]))
-		if a["confirm"] != name {
+		if strings.ToLower(str(a["confirm"])) != name {
 			fail("invalid", "confirm must equal the zone name")
 		}
 		if name == specialZone {
@@ -178,7 +178,14 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 			fail("conflict", "This zone overlaps the managed zone "+z.Name)
 		}
 	}
+	old := e.S.SiteGet("zone", name)
 	tenants := []int{}
+	if old != nil && a["tenants"] == nil {
+		// A new token alone keeps the zone's tenants.
+		for _, n := range arr(old["tenants"]) {
+			tenants = append(tenants, integer(n))
+		}
+	}
 	for _, slug := range arr(a["tenants"]) {
 		t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == slug })
 		if t == nil {
@@ -197,21 +204,37 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	if len(found) != 1 || found[0]["name"] != name {
 		fail("conflict", "The token does not see exactly this zone in Cloudflare")
 	}
+	if found[0]["status"] != nil && found[0]["status"] != "active" {
+		fail("conflict", "The zone is not active in Cloudflare yet; finish its name servers first")
+	}
 	z := zoneRecord{ID: str(found[0]["id"]), Name: name, Tenants: tenants, AddedBy: str(w["sub"]), AddedAt: time.Now().Unix()}
 	if !matches(`^[0-9a-f]{32}$`, z.ID) {
 		fail("conflict", "Cloudflare returned an unexpected zone id")
 	}
+	if old != nil && str(old["id"]) != z.ID {
+		for _, g := range e.grants() {
+			if g.zone() == name {
+				fail("conflict", "The token sees another Cloudflare zone of this name while names in it are granted", D{"recovery": "resolve_prerequisite"})
+			}
+		}
+	}
 	access := zoneAccess{Name: name, ID: z.ID, Token: token}
 	e.cfIn(access, "GET", "?per_page=1", nil)
 	if !dry {
-		// A probe record proves the token may write; it goes at once.
+		// A probe record proves the token may write; it goes at once. One
+		// that a failed run left behind goes first.
+		for _, r := range dicts(e.cfIn(access, "GET", "?type=TXT&name=_carrel-probe."+name, nil)["result"]) {
+			if r["comment"] == "carrel:zone-probe" {
+				e.cfIn(access, "DELETE", "/"+str(r["id"]), nil)
+			}
+		}
 		probe := e.cfIn(access, "POST", "", D{"type": "TXT", "name": "_carrel-probe." + name, "content": "carrel zone check", "ttl": 60, "proxied": false, "comment": "carrel:zone-probe"})
 		e.cfIn(access, "DELETE", "/"+str(obj(probe["result"])["id"]), nil)
 		must(os.MkdirAll(e.zoneDir(), 0700))
 		path := e.zoneTokenPath(name)
 		must(os.WriteFile(path+".next", []byte(token+"\n"), 0600))
 		must(os.Rename(path+".next", path))
-		if old := e.S.SiteGet("zone", name); old != nil {
+		if old != nil {
 			z.AddedAt, z.AddedBy = int64(num(old["added_at"])), str(old["added_by"])
 		}
 		e.S.SitePut("zone", name, decode(string(encoded(z))))

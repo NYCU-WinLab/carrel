@@ -138,6 +138,8 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("z", "zone_add", D{"name": "sub.winlab.tw", "token": "zone-token-0123456789abcdef"}, admin)
 	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef", "tenants": []any{"alice"}, "dry_run": true}, admin)
 	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef", "tenants": []any{"alice"}}, admin)
+	// A new token alone keeps the tenant list.
+	call("z", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef"}, admin)
 	call("z", "zone_list", D{}, admin)
 	call("z", "domain_request", D{"name": "app.lab.example", "reason": "not open to bob"}, bob)
 	call("z", "domain_request", D{"name": "*.lab.example", "kind": "wildcard", "reason": "the zone's wildcard"}, alice)

@@ -77,6 +77,9 @@ z mcp {"dry_run":true,"ok":true,"zone":{"added_at":"<time:int>","name":"lab.exam
 z mcp {"dry_run":false,"ok":true,"zone":{"added_at":"<time:int>","name":"lab.example","open_to":["alice"],"zone_id":"0123456789abcdef0123456789abcdef"}}
 z dns POST /zones/0123456789abcdef0123456789abcdef/dns_records {"comment":"carrel:zone-probe","content":"carrel zone check","name":"_carrel-probe.lab.example","proxied":false,"ttl":60,"type":"TXT"}
 z dns DELETE /zones/0123456789abcdef0123456789abcdef/dns_records/r3 null
+z mcp {"dry_run":false,"ok":true,"zone":{"added_at":"<time:int>","name":"lab.example","open_to":["alice"],"zone_id":"0123456789abcdef0123456789abcdef"}}
+z dns POST /zones/0123456789abcdef0123456789abcdef/dns_records {"comment":"carrel:zone-probe","content":"carrel zone check","name":"_carrel-probe.lab.example","proxied":false,"ttl":60,"type":"TXT"}
+z dns DELETE /zones/0123456789abcdef0123456789abcdef/dns_records/r4 null
 z mcp {"ok":true,"zones":[{"name":"winlab.tw","open_to":"all","site":true},{"added_at":"<time:int>","name":"lab.example","open_to":["alice"],"zone_id":"0123456789abcdef0123456789abcdef"}]}
 z mcp {"error":{"code":"forbidden","message":"This zone is not open to this tenant","recovery":"revise_request"},"ok":false}
 z mcp {"error":{"code":"invalid","message":"Request a name under the zone, not the zone itself","recovery":"revise_request"},"ok":false}
@@ -208,6 +211,7 @@ db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"sub.winlab.tw","token":"[redacted]"} outcome=invalid
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"dry_run":true,"name":"lab.example","tenants":["alice"],"token":"[redacted]"} outcome=ok
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","tenants":["alice"],"token":"[redacted]"} outcome=ok
+db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","token":"[redacted]"} outcome=ok
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_list args={} outcome=ok
 db audit id=<id> at=<at> actor=bob tenant=null tool=domain_request args={"name":"app.lab.example","reason":"not open to bob"} outcome=forbidden
 db audit id=<id> at=<at> actor=alice tenant=null tool=domain_request args={"kind":"wildcard","name":"*.lab.example","reason":"the zone's wildcard"} outcome=invalid

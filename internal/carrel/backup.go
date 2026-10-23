@@ -102,6 +102,13 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	}
+	// Zone tokens are secrets like the private keys above (zones.go).
+	zones := p.execution(ctx).zoneDir()
+	if _, e = os.Stat(zones); e == nil {
+		if e = add(zones, "zones"); e != nil {
+			return nil, e
+		}
+	}
 	// Node files a reconcile cannot derive (PLAN 15.15 gap 8). A node that
 	// does not answer is reported; the backup of everything else still lands.
 	missing := []any{}
