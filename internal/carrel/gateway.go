@@ -269,7 +269,12 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		lines[1] += "\n on_demand_tls {\n  ask http://" + askAddress + "/gateway/ask\n }"
 		var known []string
 		for _, n := range dicts(state["delegated_names"]) {
-			if g, ok := grants[str(n["grant"])]; ok && g.Kind == "delegated" && len(grantRoutes[g.ID]) > 0 && zonePattern.MatchString(str(n["id"])) {
+			// As AskDelegated: only while the grant's catch-all is routed.
+			catchAll := false
+			for _, r := range grantRoutes[str(n["grant"])] {
+				catchAll = catchAll || r.domain["name"] == grants[str(n["grant"])].Name
+			}
+			if g, ok := grants[str(n["grant"])]; ok && g.Kind == "delegated" && catchAll && zonePattern.MatchString(str(n["id"])) {
 				known = append(known, "domain="+str(n["id"]))
 			}
 		}

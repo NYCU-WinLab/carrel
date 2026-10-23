@@ -145,9 +145,6 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 			return false, "in_progress"
 		case <-time.After(200 * time.Millisecond):
 		}
-		if reason, refused := e.P.delegatedAsks.refusal(name); refused {
-			return false, reason
-		}
 	}
 }
 
@@ -221,7 +218,16 @@ func (e *Execution) askDelegated(name string) (bool, string) {
 func (e *Execution) reserveDelegated(g domainGrant, name string) (bool, string) {
 	e.P.delegated.Lock()
 	defer e.P.delegated.Unlock()
-	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); seen {
+	n, seen := rowOf[delegatedName](e.S, "delegated_names", name)
+	if !seen {
+		// Under the lock that a refusing ask holds while it records the
+		// refusal: an ask that waited for it gets that answer and does not
+		// put the question to the tenant again.
+		if why, refused := e.P.delegatedAsks.refusal(name); refused {
+			return false, why
+		}
+	}
+	if seen {
 		switch {
 		case n.Grant != g.ID:
 			// Left by a released grant: this one has not agreed yet.
@@ -292,7 +298,7 @@ func (a *App) askRoute(mux *http.ServeMux, p *Platform) {
 		err := attempt(func() { ok, why = p.execution(r.Context()).AskDelegated(name) })
 		// A pending name may still be agreed to, and a limited one is
 		// asked again once the grant has room: neither is remembered.
-		if err == nil && !ok && why != "in_progress" && why != "rate_limited" && len(name) <= 253 {
+		if err == nil && !ok && why != "in_progress" && why != "rate_limited" && why != "refused_recently" && len(name) <= 253 {
 			p.delegatedAsks.refuse(name)
 		}
 		if err != nil || !ok {
