@@ -268,3 +268,29 @@ func TestReconcileCollectsDiskVolumes(t *testing.T) {
 		t.Fatal(p.Store.Get("machines", "10100"), p.Store.Get("machines", "10101"))
 	}
 }
+
+// A move whose volume read fails drops the old volume, so NetBox falls back
+// to the config key and reconcile_run collects the new one (#175).
+func TestAMoveDropsAStaleDiskVolume(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		switch r["op"] {
+		case "migrate_prepare", "migrate", "migrate_finish", "cloud_init_remove":
+			return D{"state": "done"}, nil
+		case "cloud_init_read":
+			return D{"cloud_init": D{"user": "u", "network": "n"}}, nil
+		case "disk_volume":
+			return nil, errors.New("node unreachable")
+		}
+		return inner(r, target)
+	}
+	m := seedMachine(p, "web", 10100)
+	m["disk_volume"] = "local-zfs:vm-10100-disk-0"
+	p.Store.Put("machines", 10100, 1, m)
+	runQueue(p)
+	r := p.Execute(context.Background(), "machine_migrate", D{"tenant": "alice", "machine": "web", "node": "carrel02"}, person("root", true))
+	if got := p.Store.Get("machines", "10100"); obj(r["operation"])["state"] != "succeeded" || got["node"] != "carrel02" || got["disk_volume"] != nil {
+		t.Fatal("a stale volume survived a move", r, got)
+	}
+}
