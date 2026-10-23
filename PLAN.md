@@ -674,8 +674,12 @@ grants have no certificate and no gateway site.
 Delegated names are built too. `domain_request` with `kind: delegated` asks for `*.<base>` in a
 zone open to the tenant alone; `domain_add` publishes its catch-all. The grant's wildcard A record
 is written at once, and the gateway serves `*.<base>` and `*.*.<base>` with `tls { on_demand }`;
-the global `on_demand_tls` asks `http://10.200.0.3:8080/gateway/ask`, a path the public origin does
-not forward, answered only to the gateway's address. carrel agrees to a name once its route is
+the global `on_demand_tls` asks the gateway's own `http://127.0.0.1:2020/gateway/ask`. It answers
+names carrel agreed to at the last reconcile itself, since Caddy asks again when it loads a
+certificate it holds, so a gateway restart while the control plane is down keeps delegated sites
+up; it passes any other name to `http://10.200.0.3:8080/gateway/ask`, a path the public origin does
+not forward, answered only to the gateway's address. A second ask for a name whose tenant is being
+asked waits for that answer. carrel agrees to a name once its route is
 ready, the tenant is active, the grant has issued fewer than 20 new names in 7 days, and the
 route's target answers `GET /.well-known/carrel/ask?domain=<name>` with 200 (the control plane
 reaches it: the guest firewall admits `10.200.0.3` to a delegated route's port). A name agreed to
@@ -1276,7 +1280,7 @@ Mapping:
 |---|---|
 | machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU and memory (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; `start_on_boot` follows Proxmox `onboot`, which is set by the owner's last power action (`on` after a start, `off` after a stop, pause or tenant suspension), so a guest that shuts itself down stays `on`; a machine with no recorded action is `on` when running; the description says VM or CT; the VMID goes into `vmid_field`; the device is the cluster device whose name, or `device_field`, matches the Proxmox node, none when there is no such device |
 | image | platform created and deleted by carrel: `Catalog:<image>` for a platform image, shared by all tenants (`Catalog:debian-13`), and `<tenant>/<image>` with a capital first letter for a tenant image or ISO, one per tenant (`Alice/tenant:base`); the slug is the name in lower case with other characters as `-`; a platform with that slug or name that carrel did not create is an error |
-| machine disk | virtual disk `scsi0` (VM) or `rootfs` (CT) in MiB; NetBox sums it into the machine's disk |
+| machine disk | one virtual disk in MiB, named by its Proxmox volume (`local-zfs:vm-10100-disk-0`), which a node reports at creation and migration and `reconcile_run` collects for older machines; `scsi0` (VM) or `rootfs` (CT) until then. NetBox sums it into the machine's disk |
 | NIC MAC | MAC address object assigned to the interface and set as its primary MAC |
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
 | machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4, with DNS name `<machine>.<tenant>.internal` as the infra resolver answers it |

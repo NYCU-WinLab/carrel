@@ -232,6 +232,17 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	if len(disks) != 2 || root == nil || rootfs == nil || root["size"] != float64(20480) || rootfs["size"] != float64(10240) || integer(obj(root["virtual_machine"])["id"]) != integer(web["id"]) {
 		t.Fatal(disks)
 	}
+	// Once a node reports the volume, the same disk takes its name (#175).
+	webDB := p.Store.Get("machines", "10100")
+	webDB["disk_volume"] = "local-zfs:base-9010-disk-0/vm-10100-disk-0"
+	p.Store.Put("machines", 10100, 1, webDB)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	renamed := find(f.all("virtualization/virtual-disks/"), func(v D) bool { return v["name"] == webDB["disk_volume"] })
+	if len(f.all("virtualization/virtual-disks/")) != 2 || renamed == nil || renamed["id"] != root["id"] {
+		t.Fatal(f.all("virtualization/virtual-disks/"))
+	}
 	// A MAC address is an object of its own and the interface's primary one.
 	macs := f.all("dcim/mac-addresses/")
 	eth0 := find(f.all("virtualization/interfaces/"), func(v D) bool {

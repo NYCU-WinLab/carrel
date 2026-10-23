@@ -1,6 +1,9 @@
 package carrel
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 func (e *Execution) Admin(tool string, a, w D) D {
 	dry := boolean(a["dry_run"])
@@ -38,7 +41,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		}
 		r := e.Reconcile()
 		e.RefreshStorage()
-		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit()}
+		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit(), "disk_volumes_collected": e.CollectDiskVolumes()}
 	case "zone_add", "zone_list", "zone_remove":
 		return e.ZoneAction(tool, a, w)
 	case "domain_proxy":
@@ -130,6 +133,12 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			}
 			e.S.Exec("UPDATE tenants SET status='suspended' WHERE n=?", t["n"])
 			e.P.invalidateInventory()
+			// The gateway answers delegated names it knows itself (#166):
+			// it must forget the suspended tenant's names now. The suspension
+			// stands if it is unreachable; the maintenance pass retries.
+			if err := attempt(func() { e.Reconcile() }); err != nil {
+				slog.Warn("suspend_reconcile_failed", "tenant", t["n"], "error", describe(err))
+			}
 		}
 	}
 	return D{"dry_run": dry, "quota_after": e.Quota(t)}

@@ -84,7 +84,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 // are quick; a reconcile can wait for an SDN reload; creation clones disks.
 func adapterTimeout(op string) time.Duration {
 	switch op {
-	case "inventory", "status", "metrics", "node_files", "storage_usage", "cloud_init_read":
+	case "inventory", "status", "metrics", "node_files", "storage_usage", "cloud_init_read", "disk_volume":
 		return 60 * time.Second
 	case "reconcile":
 		return 300 * time.Second
