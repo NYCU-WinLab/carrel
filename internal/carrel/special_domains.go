@@ -36,6 +36,7 @@ type domainGrant struct {
 	IssuedAt    int64   `json:"issued_at,omitempty"`
 	Kind        string  `json:"kind"`
 	Name        string  `json:"name"`
+	Proxied     bool    `json:"proxied,omitempty"`
 	RequestID   string  `json:"request_id"`
 	TenantN     int     `json:"tenant_n"`
 	UnusedSince float64 `json:"unused_since,omitempty"`
@@ -396,8 +397,13 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 		return
 	}
 	address := str(e.P.Config["public_address"])
-	if len(ours) == 1 && len(foreign) == 0 && ours[0]["type"] == "A" && ours[0]["content"] == address {
+	if len(ours) == 1 && len(foreign) == 0 && ours[0]["type"] == "A" && ours[0]["content"] == address && boolean(ours[0]["proxied"]) == g.Proxied {
 		return
+	}
+	// A proxied record has Cloudflare's automatic TTL (domain_proxy).
+	ttl := 120
+	if g.Proxied {
+		ttl = 1
 	}
 	// A delegated name's certificates are the gateway's own, issued on
 	// demand; the others move once the gateway holds the grant's pair.
@@ -410,7 +416,7 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 	// One A record of someone else's changes in place, so the name never
 	// stops resolving; anything else is replaced.
 	if len(ours) == 0 && len(foreign) == 1 && foreign[0]["type"] == "A" {
-		e.cfIn(z, "PATCH", "/"+str(foreign[0]["id"]), D{"content": address, "ttl": 120, "proxied": false, "comment": g.owner()})
+		e.cfIn(z, "PATCH", "/"+str(foreign[0]["id"]), D{"content": address, "ttl": ttl, "proxied": g.Proxied, "comment": g.owner()})
 		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", foreign[0]["content"])
 		return
 	}
@@ -420,15 +426,15 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 	}
 	for i, r := range ours {
 		if i == 0 && r["type"] == "A" {
-			if r["content"] != address {
-				e.cfIn(z, "PATCH", "/"+str(r["id"]), D{"content": address})
+			if r["content"] != address || boolean(r["proxied"]) != g.Proxied {
+				e.cfIn(z, "PATCH", "/"+str(r["id"]), D{"content": address, "ttl": ttl, "proxied": g.Proxied})
 			}
 			continue
 		}
 		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 	}
 	if len(ours) == 0 || ours[0]["type"] != "A" {
-		e.cfIn(z, "POST", "", D{"type": "A", "name": g.Name, "content": address, "ttl": 120, "proxied": false, "comment": g.owner()})
+		e.cfIn(z, "POST", "", D{"type": "A", "name": g.Name, "content": address, "ttl": ttl, "proxied": g.Proxied, "comment": g.owner()})
 	}
 }
 
@@ -516,6 +522,9 @@ func (e *Execution) publicGrants(n int) []D {
 	out := []D{}
 	for _, g := range e.grants(n) {
 		p := D{"name": g.Name, "kind": g.Kind, "state": "in_use"}
+		if g.Proxied {
+			p["proxied"] = true
+		}
 		if g.UnusedSince != 0 {
 			p["state"] = "unused"
 			p["release_at"] = time.Unix(int64(g.UnusedSince)+grantUnusedDays*86400, 0).UTC().Format(time.RFC3339)

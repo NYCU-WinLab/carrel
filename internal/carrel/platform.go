@@ -54,6 +54,8 @@ type Platform struct {
 	registration sync.Mutex
 	delivered    atomic.Value
 	delegated    sync.Mutex
+	// proxyProbe replaces the check through Cloudflare in tests.
+	proxyProbe func(name string) string
 	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
 	tenantAsk          func(address string, port int, name string) bool
 	netboxKick         chan struct{}

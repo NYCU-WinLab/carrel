@@ -106,6 +106,15 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("r", "domain_add", D{"machine": "web", "name": "video.winlab.tw", "target_port": 3000}, alice)
 	call("r", "request_list", D{}, alice)
 
+	probes := 0
+	g.p.proxyProbe = func(name string) string {
+		// The first check fails, as a zone in Flexible mode would.
+		probes++
+		if probes > 1 {
+			return ""
+		}
+		return "a redirect to itself, as Flexible mode makes"
+	}
 	// a: approval.
 	call("a", "request_list_all", D{}, admin)
 	call("a", "request_approve", D{"id": requestID(video)}, admin)
@@ -133,6 +142,18 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	rows("d")
 	records("d")
 	status("d")
+	// x: the Cloudflare proxy, for an exact name one label under its zone.
+	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true}, alice)
+	call("x", "domain_proxy", D{"name": "api.lab.winlab.tw", "proxied": true}, admin)
+	call("x", "domain_proxy", D{"name": "*.lab.winlab.tw", "proxied": true}, admin)
+	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true, "dry_run": true}, admin)
+	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true}, admin)
+	records("x")
+	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": true}, admin)
+	records("x")
+	call("x", "domain_list", D{}, alice)
+	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": false}, admin)
+	records("x")
 
 	// z: an added zone, open to alice only. Its token stays out of results,
 	// rows and the audit log.

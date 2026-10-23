@@ -676,8 +676,14 @@ not forward, answered only to the gateway's address. carrel agrees to a name onc
 ready, the tenant is active, the grant has issued fewer than 20 new names in 7 days, and the
 route's target answers `GET /.well-known/carrel/ask?domain=<name>` with 200 (the control plane
 reaches it: the guest firewall admits `10.200.0.3` to a delegated route's port). A name agreed to
-once is answered from its record, so renewals spend no budget. Still to build: the Cloudflare
-proxy switch.
+once is answered from its record, so renewals spend no budget.
+
+The Cloudflare proxy switch is built too: admin `domain_proxy` with `name` and `proxied` turns it on
+or off for an exact grant one label under its zone (the record gets Cloudflare's automatic TTL).
+The DNS tokens cannot read a zone's SSL mode, so after turning it on carrel resolves the name
+through 1.1.1.1 until Cloudflare answers for it and asks `https://<name>/` there; a 52x, no answer,
+or the gateway's redirect back to the same URL (Flexible mode) turns the proxy off again. With all
+of this, section 6.10 is built.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
 the tenants the zone is open to. Built: `zone_add` checks that the token sees exactly that zone

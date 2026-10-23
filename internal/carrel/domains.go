@@ -236,8 +236,13 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 			record.State = "ready"
 			e.Put("domains", record.ID, n, record)
 			if record.Grant != "" {
-				// The gateway was given the routes, so the record may move.
+				// The gateway was given the routes, so the record may move;
+				// the grant is in use from now on.
 				g, _ := rowOf[domainGrant](e.S, "domain_grants", record.Grant)
+				if g.UnusedSince != 0 {
+					g.UnusedSince = 0
+					e.S.Put("domain_grants", g.ID, g.TenantN, g.D())
+				}
 				e.GrantRecord(g, false)
 			}
 			domain = record.D()
