@@ -255,6 +255,17 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 		if integer(obj(ip["vrf"])["id"]) != integer(want) {
 			t.Fatal("address in the wrong VRF", ip)
 		}
+		// Only the machine address carries the infra resolver's name.
+		dns := ""
+		if machine, ok := strings.CutPrefix(str(ip["description"]), "carrel address of "); ok && integer(obj(ip["vrf"])["id"]) == integer(shared["id"]) {
+			dns = machine + ".internal"
+		}
+		if str(ip["dns_name"]) != dns {
+			t.Fatal("dns_name", ip)
+		}
+	}
+	if ip := find(f.all("ipam/ip-addresses/"), func(v D) bool { return integer(v["id"]) == integer(obj(web["primary_ip4"])["id"]) }); ip["dns_name"] != "web.alice.internal" {
+		t.Fatal("primary address", ip)
 	}
 	if p := find(f.all("ipam/prefixes/"), func(v D) bool { return v["prefix"] == "10.64.0.0/25" }); integer(obj(p["vrf"])["id"]) != integer(private["id"]) {
 		t.Fatal(p)
