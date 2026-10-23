@@ -1244,14 +1244,14 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `owner` | name of the NetBox owner (NetBox 4.5+) every created object carries. It must exist; the NetBox operator creates it, since an owner needs a group. Use a different owner for each carrel installation that shares a NetBox |
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
 | `device_field` | custom field of a NetBox device that holds the Proxmox node name, for devices named differently from their node (`serverQ10` for `carrel01`). Empty, the default, matches the device name |
-| `vrf` | name of the shared VRF, default `Carrel`; a private network's VRF is `<vrf> <Tenant> <network name>` (`Carrel Alice back`). A VRF that carrel created under the old form (`carrel-alice-back`) is found by its name without case and spaces and renamed in place |
+| `vrf` | name of the shared VRF, default `Carrel`; a private network's VRF is `<vrf> <Tenant> <network name>` (`Carrel Alice back`). A VRF that carrel created under the old form (`carrel-alice-back`) is found by that exact name and renamed in place |
 
 Mapping:
 
 | carrel | NetBox |
 |---|---|
 | machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU and memory (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; `start_on_boot` follows Proxmox `onboot`, which is set by the owner's last power action (`on` after a start, `off` after a stop, pause or tenant suspension), so a guest that shuts itself down stays `on`; a machine with no recorded action is `on` when running; the description says VM or CT; the VMID goes into `vmid_field`; the device is the cluster device whose name, or `device_field`, matches the Proxmox node, none when there is no such device |
-| image | platform created and deleted by carrel. The name is for people: `Debian 13` for a platform image (shared by all tenants), `Alice image base` for a tenant image and `Alice ISO win11` for an ISO (one per tenant). The slug keeps them apart: `catalog-debian-13`, `alice-tenant-base`, `alice-iso-win11` (the name in lower case with other characters as `-`); a platform with that slug or name that carrel did not create is an error |
+| image | platform created and deleted by carrel. The name is for people: `Debian 13` for a platform image (shared by all tenants), `Alice image base` for a tenant image and `Alice ISO win11` for an ISO (one per tenant). The slug keeps them apart: `catalog-debian-13`, `alice-tenant-base`, `alice-iso-win11` (the name in lower case with other characters as `-`); a platform with that slug that carrel did not create is an error. NetBox keeps platform names unique: a platform keeps its name when another platform already holds the new one, and a new platform whose name is taken gets its slug added (`Alice image base (alice-image-base)`), so the machines of the image still sync |
 | machine disk | virtual disk `scsi0` (VM) or `rootfs` (CT) in MiB; NetBox sums it into the machine's disk |
 | NIC MAC | MAC address object assigned to the interface and set as its primary MAC |
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |

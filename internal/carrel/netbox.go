@@ -327,6 +327,7 @@ type nbTenant struct {
 	n        int
 	vrf      string // the shared VRF of the tenant segment
 	vrfs     []string
+	oldVRF   map[string][]string // VRF name -> the names it had before names read like words
 	prefixes []nbPrefix
 	machines []nbMachine
 	vips     []nbVIP
@@ -389,7 +390,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 {
 			continue
 		}
-		tn := nbTenant{n: n, vrf: c.VRF}
+		tn := nbTenant{n: n, vrf: c.VRF, oldVRF: map[string][]string{c.VRF: {strings.ToLower(c.VRF)}}}
 		used := map[string]bool{tn.vrf: true}
 		tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, fmt.Sprintf("10.200.%d.0/24", n), "Carrel tenant " + slug})
 		// Only a private network can overlap another tenant's CIDR, so each one
@@ -402,6 +403,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 			if cidr := str(nw["cidr"]); cidr != "" && nw["mode"] == "managed" {
 				if p, err := netip.ParsePrefix(cidr); err == nil {
 					netVRF[str(nw["id"])] = fmt.Sprintf("%s %s %s", c.VRF, nbTitle(slug), nw["name"])
+					tn.oldVRF[netVRF[str(nw["id"])]] = []string{fmt.Sprintf("%s-%s-%s", c.VRF, slug, nw["name"]), fmt.Sprintf("%s-%s-%s", strings.ToLower(c.VRF), slug, nw["name"])}
 					used[netVRF[str(nw["id"])]] = true
 					tn.prefixes = append(tn.prefixes, nbPrefix{netVRF[str(nw["id"])], p.Masked().String(), fmt.Sprintf("Carrel network %s (tenant %s)", nw["name"], slug)})
 				}
@@ -598,7 +600,7 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 			}
 			// Everything of the tenant stays as it is until the next pass.
 			for _, name := range t.vrfs {
-				v := nbFindVRF(s.vrfs, name)
+				v := nbFindVRF(s.vrfs, name, t.oldVRF[name])
 				if v == nil {
 					continue
 				}
@@ -645,23 +647,19 @@ func (e *Execution) netboxMachines(wanted []nbTenant) []nbMachine {
 // netboxTenant syncs one tenant: its VRF, prefixes, machines and virtual
 // addresses. A failing machine is recorded and skipped; a failing VRF or prefix
 // fails the tenant.
-// nbVRFKey folds a VRF name to its old form, so a VRF named before names read
-// like words ("carrel-alice-back") is found and renamed instead of replaced.
-func nbVRFKey(name string) string {
-	return strings.ToLower(strings.ReplaceAll(name, " ", "-"))
-}
-
-func nbFindVRF(vrfs []D, name string) D {
+// nbFindVRF finds a VRF by its name, or by an old name (before names read like
+// words, "carrel-alice-back") so it is renamed in place instead of replaced.
+func nbFindVRF(vrfs []D, name string, old []string) D {
 	if v := one(vrfs, func(v D) bool { return v["name"] == name }); v != nil {
 		return v
 	}
-	return one(vrfs, func(v D) bool { return nbVRFKey(str(v["name"])) == nbVRFKey(name) })
+	return one(vrfs, func(v D) bool { return contains(old, v["name"]) })
 }
 
 func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID int, cfg nbConfig, synced map[int]string, tenantOf map[int]int, vmNB map[int]int, ifaceNB map[string]int, fail func(string, any) string) {
 	vrfIDs := map[string]int{}
 	for _, name := range t.vrfs {
-		vrf := nbFindVRF(s.vrfs, name)
+		vrf := nbFindVRF(s.vrfs, name, t.oldVRF[name])
 		if vrf == nil && len(c.list("ipam/vrfs/", url.Values{"name": {name}})) > 0 {
 			panic(nbError{Msg: "NetBox VRF " + name + " exists but carrel did not create it"})
 		}
@@ -784,8 +782,20 @@ func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string
 		name = nbTitle(tenant) + " " + map[string]string{"tenant": "image", "iso": "ISO"}[kind] + " " + rest
 	}
 	have := one(s.platforms, func(o D) bool { return o["slug"] == slug })
-	if have == nil && (len(c.list("dcim/platforms/", url.Values{"slug": {slug}})) > 0 || len(c.list("dcim/platforms/", url.Values{"name": {name}})) > 0) {
-		panic(nbError{Msg: "a NetBox platform named " + name + " exists but carrel did not create it"})
+	if have == nil && len(c.list("dcim/platforms/", url.Values{"slug": {slug}})) > 0 {
+		panic(nbError{Msg: "a NetBox platform with slug " + slug + " exists but carrel did not create it"})
+	}
+	// NetBox keeps platform names unique. A name another platform already holds,
+	// by hand or from another image, must not stop the machines of this image:
+	// a platform keeps the name it has, a new one gets its slug added.
+	if have == nil || str(have["name"]) != name {
+		if len(c.list("dcim/platforms/", url.Values{"name": {name}})) > 0 {
+			if have == nil {
+				name += " (" + slug + ")"
+			} else {
+				name = str(have["name"])
+			}
+		}
 	}
 	created := have == nil
 	description := "Carrel image " + image

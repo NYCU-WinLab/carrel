@@ -79,6 +79,17 @@ func (f *fakeNetBox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// NetBox keeps platform names unique.
+	if r.Method == "POST" || r.Method == "PATCH" {
+		if name, ok := body["name"]; ok && path == "dcim/platforms/" {
+			for _, o := range f.objects[path] {
+				if o["name"] == name && integer(o["id"]) != id {
+					reply(400, D{"name": "platform with this name already exists"})
+					return
+				}
+			}
+		}
+	}
 	switch r.Method {
 	case "GET":
 		out := []any{}
@@ -601,9 +612,10 @@ func TestNetBoxRenamesAVRFNamedTheOldWay(t *testing.T) {
 	seedNetBoxWorld(p)
 	syncNetBox(t, p)
 	ids := map[string]int{}
+	old := map[string]string{"Carrel": "carrel", "Carrel Alice back": "carrel-alice-back"}
 	for _, v := range f.all("ipam/vrfs/") {
-		ids[str(v["name"])] = integer(v["id"])
-		v["name"] = nbVRFKey(str(v["name"]))
+		ids[old[str(v["name"])]] = integer(v["id"])
+		v["name"] = old[str(v["name"])]
 	}
 	if len(ids) != 2 {
 		t.Fatal(ids)
@@ -616,9 +628,83 @@ func TestNetBoxRenamesAVRFNamedTheOldWay(t *testing.T) {
 		t.Fatal("a VRF was replaced instead of renamed", vrfs)
 	}
 	for _, v := range vrfs {
-		if ids[str(v["name"])] != integer(v["id"]) {
-			t.Fatal("VRF kept the old name or got a new id", v, ids)
+		if _, still := ids[str(v["name"])]; still {
+			t.Fatal("VRF kept the old name", v)
 		}
+	}
+	for _, v := range vrfs {
+		if v["name"] == "Carrel" && integer(v["id"]) != ids["carrel"] || v["name"] == "Carrel Alice back" && integer(v["id"]) != ids["carrel-alice-back"] {
+			t.Fatal("VRF got a new id", v, ids)
+		}
+	}
+}
+
+func TestNetBoxVRFsOfSimilarTenantsStayApart(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	ab := p.Store.Register("user:alice-back", "alice-back")
+	p.Store.Put("networks", "n1", 1, D{"id": "n1", "tenant_n": 1, "serial": 3, "name": "back-x", "mode": "managed", "cidr": "10.64.1.0/25"})
+	p.Store.Put("networks", "n2", integer(ab["n"]), D{"id": "n2", "tenant_n": integer(ab["n"]), "serial": 4, "name": "x", "mode": "managed", "cidr": "10.64.2.0/25"})
+	syncNetBox(t, p)
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || r.Writes != 0 {
+		t.Fatal("a second pass wrote", r, f.writes)
+	}
+	names := []string{}
+	for _, v := range f.all("ipam/vrfs/") {
+		names = append(names, str(v["name"]))
+	}
+	if !slices.Contains(names, "Carrel Alice back-x") || !slices.Contains(names, "Carrel Alice-back x") {
+		t.Fatal(names)
+	}
+}
+
+func TestNetBoxPlatformRenamedInPlaceKeepsAForeignName(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	platforms := f.all("dcim/platforms/")
+	id := integer(platforms[0]["id"])
+	platforms[0]["name"] = "Catalog:debian-13"
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if got := f.all("dcim/platforms/"); len(got) != 1 || got[0]["name"] != "Debian 13" || integer(got[0]["id"]) != id {
+		t.Fatal("the old platform was not renamed in place", got)
+	}
+	// Someone made a platform with the new name by hand: the machines still sync.
+	f.objects["dcim/platforms/"][0]["name"] = "Catalog:debian-13"
+	f.objects["dcim/platforms/"] = append(f.objects["dcim/platforms/"], D{"id": 900, "name": "Debian 13", "slug": "debian-13-by-hand"})
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	got := f.all("dcim/platforms/")
+	if len(got) != 2 || got[0]["name"] != "Catalog:debian-13" || got[1]["name"] != "Debian 13" {
+		t.Fatal(got)
+	}
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || r.Writes != 0 {
+		t.Fatal("a second pass wrote", r, f.writes)
+	}
+}
+
+func TestNetBoxPlatformsWithTheSameNameBothSync(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	web, db := p.Store.Get("machines", "10100"), p.Store.Get("machines", "10101")
+	web["image"], db["image"] = "alice-image-base", "tenant:base"
+	p.Store.Put("machines", 10100, 1, web)
+	p.Store.Put("machines", 10101, 1, db)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	f.reset()
+	platforms := f.all("dcim/platforms/")
+	if len(platforms) != 2 || platforms[0]["name"] == platforms[1]["name"] {
+		t.Fatal(platforms)
+	}
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || r.Writes != 0 {
+		t.Fatal("a second pass wrote", r, f.writes)
 	}
 }
 
