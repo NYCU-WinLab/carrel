@@ -2822,7 +2822,7 @@
             "type": "string",
             "minLength": 20,
             "maxLength": 200,
-            "description": "Cloudflare API token with Zone.DNS edit on this zone only."
+            "description": "Cloudflare API token with Zone.DNS edit on this zone only. Omit it to use the token an admin placed in zone_dir/<zone>.token on the control plane, so that it never passes through a client."
           },
           "tenants": {
             "type": "array",
@@ -2840,8 +2840,7 @@
           }
         },
         "required": [
-          "name",
-          "token"
+          "name"
         ],
         "additionalProperties": false
       },

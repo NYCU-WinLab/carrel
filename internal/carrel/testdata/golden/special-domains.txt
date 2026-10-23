@@ -74,6 +74,7 @@ z mcp {"error":{"code":"conflict","message":"The token does not see exactly this
 z adapter carrel-node {"op":"inventory"}
 z mcp {"error":{"code":"invalid","message":"The site's own zone is configured, not added"},"ok":false}
 z mcp {"dry_run":true,"ok":true,"zone":{"added_at":"<time:int>","name":"lab.example","open_to":["alice"],"zone_id":"0123456789abcdef0123456789abcdef"}}
+z mcp {"error":{"code":"invalid","message":"Give token, or first place it on the control plane as lab.example.token in the zone directory (zone_dir, /var/lib/carrel/zones by default)","recovery":"resolve_prerequisite"},"ok":false}
 z mcp {"dry_run":false,"ok":true,"zone":{"added_at":"<time:int>","name":"lab.example","open_to":["alice"],"zone_id":"0123456789abcdef0123456789abcdef"}}
 z dns POST /zones/0123456789abcdef0123456789abcdef/dns_records {"comment":"carrel:zone-probe","content":"carrel zone check","name":"_carrel-probe.lab.example","proxied":false,"ttl":60,"type":"TXT"}
 z dns DELETE /zones/0123456789abcdef0123456789abcdef/dns_records/r3 null
@@ -270,7 +271,8 @@ db audit id=<id> at=<at> actor=bob tenant=2 tool=domain_list args={} outcome=ok
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","tenants":["alice"],"token":"[redacted]"} outcome=conflict
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"sub.winlab.tw","token":"[redacted]"} outcome=invalid
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"dry_run":true,"name":"lab.example","tenants":["alice"],"token":"[redacted]"} outcome=ok
-db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","tenants":["alice"],"token":"[redacted]"} outcome=ok
+db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","tenants":["alice"]} outcome=invalid
+db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","tenants":["alice"]} outcome=ok
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_add args={"name":"lab.example","token":"[redacted]"} outcome=ok
 db audit id=<id> at=<at> actor=root tenant=null tool=zone_list args={} outcome=ok
 db audit id=<id> at=<at> actor=bob tenant=null tool=domain_request args={"name":"app.lab.example","reason":"not open to bob"} outcome=forbidden
