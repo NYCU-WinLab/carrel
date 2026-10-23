@@ -290,6 +290,9 @@ func (e *Execution) approveDomain(tool string, a, w, r, t D) D {
 		zone, existing := e.checkSpecialName(t, str(r["domain_kind"]), str(r["name"]), str(r["id"]))
 		r["zone"] = zone
 		if existing && !boolean(a["adopt"]) {
+			if r["domain_kind"] == "srv" {
+				fail("conflict", "The name already has records of someone else; approve with adopt to let this tenant's SRV record speak for it (other SRV records at the name are replaced, its address records stay)", D{"recovery": "revise_request"})
+			}
 			fail("conflict", "The name already has address records; approve with adopt to replace them", D{"recovery": "revise_request"})
 		}
 	}
