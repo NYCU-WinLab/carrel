@@ -1242,7 +1242,7 @@ Behavior:
    keeps every object it already has in NetBox, the other machines still sync, and the error shows
    in `machine_get` as `netbox: {last_synced, last_error}` and once in the audit log (tool
    `netbox_sync`). A pass-level failure is in the site status and the audit log.
-5. A machine rename is not supported, so it is not synced either.
+5. A machine rename (`machine_rename`) changes the VM's name, matched by VMID, on the next pass.
 
 Least privilege. Every object carries the owner from its creation request, and only objects with that owner
 are listed, patched or deleted. NetBox cannot constrain what a binding points at, so carrel only

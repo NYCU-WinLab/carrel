@@ -989,3 +989,22 @@ def test_a_vpn_failure_stays_out_of_the_reconciliation(monkeypatch):
     out = module.vpn(state)
     assert "wireguard-tools" in out["error"] and ("nft", "-f", "/etc/carrel/vpn.nft") in applied
     assert not [a for a in applied if a[0] in ("ip", "wg")]
+
+
+@pytest.mark.parametrize(
+    "kind,command",
+    [("vm", ["qm", "set", 10100, "--name", "portal"]), ("ct", ["pct", "set", 10100, "--hostname", "portal"])],
+)
+def test_rename_sets_the_proxmox_name_of_an_owned_machine(monkeypatch, kind, command):
+    module = load("node-agent.py")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(list(args)) or "")
+    monkeypatch.setattr(module, "pve_get", lambda *args: {"tags": "carrel;tenant-1"})
+    module.action({"machine": dict(MACHINE, kind=kind), "action": "rename", "name": "portal"})
+    assert calls == [command]
+    with pytest.raises(ValueError):
+        module.action({"machine": dict(MACHINE, kind=kind), "action": "rename", "name": "Bad Name; rm"})
+    # Only machines carrel owns, by their tags.
+    monkeypatch.setattr(module, "pve_get", lambda *args: {"tags": "other"})
+    with pytest.raises(ValueError, match="unowned"):
+        module.action({"machine": dict(MACHINE, kind=kind), "action": "rename", "name": "portal"})
