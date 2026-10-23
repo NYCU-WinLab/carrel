@@ -54,7 +54,9 @@ def test_b09_layout_peers_every_other_node_and_protects_the_public_address():
     ]
 
 
-@pytest.mark.parametrize("address", ["140.113.194.0/24", "140.113.1.1/32", "10.0.0.1/32", "192.168.19.101/32"])
+@pytest.mark.parametrize(
+    "address", ["140.113.194.0/24", "140.113.1.1/32", "10.0.0.1/32", "192.168.19.101/32"]
+)
 def test_a_site_public_entry_must_be_a_protected_host(address):
     site = {**SITE, "public_entries": [{"address": address, "port": 443}]}
     with pytest.raises(SystemExit):
