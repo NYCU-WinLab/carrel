@@ -108,13 +108,15 @@ func (e *Execution) authorize(ctx context.Context, client *acme.Client, u string
 	if err != nil {
 		return err
 	}
-	// A wildcard authorization names the base domain.
+	// A wildcard authorization names the base domain. The record goes in the
+	// zone the name belongs to (zones.go).
 	record := "_acme-challenge." + strings.TrimPrefix(z.Identifier.Value, "*.")
-	e.removeChallenges(record)
-	created := e.CF("POST", "", D{"type": "TXT", "name": record, "content": value, "ttl": 60, "proxied": false, "comment": acmeOwner})
+	zone := e.zoneFor(z.Identifier.Value)
+	e.removeChallenges(zone, record)
+	created := e.cfIn(zone, "POST", "", D{"type": "TXT", "name": record, "content": value, "ttl": 60, "proxied": false, "comment": acmeOwner})
 	defer func() {
 		// A record left behind is removed by the next issuance.
-		_ = attempt(func() { e.CF("DELETE", "/"+str(obj(created["result"])["id"]), nil) })
+		_ = attempt(func() { e.cfIn(zone, "DELETE", "/"+str(obj(created["result"])["id"]), nil) })
 	}()
 	if err := e.waitTXT(ctx, record, value); err != nil {
 		return err
@@ -128,10 +130,10 @@ func (e *Execution) authorize(ctx context.Context, client *acme.Client, u string
 	return nil
 }
 
-func (e *Execution) removeChallenges(record string) {
-	for _, r := range dicts(e.CF("GET", "?type=TXT&name="+url.QueryEscape(record), nil)["result"]) {
+func (e *Execution) removeChallenges(zone zoneAccess, record string) {
+	for _, r := range dicts(e.cfIn(zone, "GET", "?type=TXT&name="+url.QueryEscape(record), nil)["result"]) {
 		if r["comment"] == acmeOwner {
-			e.CF("DELETE", "/"+str(r["id"]), nil)
+			e.cfIn(zone, "DELETE", "/"+str(r["id"]), nil)
 		}
 	}
 }

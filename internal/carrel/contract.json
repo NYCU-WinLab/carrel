@@ -1242,7 +1242,7 @@
             "type": "string",
             "minLength": 4,
             "maxLength": 253,
-            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+winlab\\.tw$",
+            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$",
             "description": "A name under one of the tenant's special domain grants, instead of sub."
           },
           "target_port": {
@@ -2276,7 +2276,7 @@
     },
     {
       "name": "domain_request",
-      "description": "Request a special domain outside your own *.<tenant>.winlab.tw subtree, such as video.winlab.tw (kind exact) or *.lab.winlab.tw (kind wildcard), with a reason. An admin approves it; the approved name becomes a grant of the tenant, shown by domain_list, and domain_add with name publishes it. A grant without domains is released after 30 days. Names under another tenant, platform names and names that overlap another grant are refused. Reusing an idempotency_key with the same request returns that request.",
+      "description": "Request a special domain outside your own *.<tenant>.winlab.tw subtree, such as video.winlab.tw (kind exact) or *.lab.winlab.tw (kind wildcard), with a reason. The name must be in a zone carrel manages and that is open to the tenant: winlab.tw, or a zone an admin added with zone_add. An admin approves it; the approved name becomes a grant of the tenant, shown by domain_list, and domain_add with name publishes it. A grant without domains is released after 30 days. Names under another tenant, platform names and names that overlap another grant are refused. Reusing an idempotency_key with the same request returns that request.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2284,7 +2284,7 @@
             "type": "string",
             "minLength": 4,
             "maxLength": 253,
-            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+winlab\\.tw$"
+            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
           },
           "kind": {
             "type": "string",
@@ -2744,6 +2744,102 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zone_add",
+      "description": "Admin: add a Cloudflare DNS zone special domains can live in, or give an added zone a new token or tenant list. carrel checks that the token sees exactly this zone and can write a record, then keeps the token as a server secret, never in results or the audit log. tenants limits the zone to those tenant slugs; omitted, every tenant may request names in it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 253,
+            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+          },
+          "token": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 200,
+            "description": "Cloudflare API token with Zone.DNS edit on this zone only."
+          },
+          "tenants": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,31}$"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name",
+          "token"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zone_list",
+      "description": "Admin: list the zones special domains can live in and the tenants each is open to.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "zone_remove",
+      "description": "Admin: stop managing an added zone and delete its token. Refused while a special domain in the zone is granted or requested.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 4,
+            "maxLength": 253,
+            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+          },
+          "confirm": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "description": "Must equal name."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
         "openWorldHint": false
       }
     },
@@ -3920,6 +4016,9 @@
     "request_list_all",
     "request_approve",
     "request_reject",
+    "zone_add",
+    "zone_list",
+    "zone_remove",
     "app_link",
     "app_list",
     "app_get",
@@ -3943,7 +4042,10 @@
     "request_reject",
     "tenant_list",
     "tenant_suspend",
-    "usage_report"
+    "usage_report",
+    "zone_add",
+    "zone_list",
+    "zone_remove"
   ],
   "mutations": [
     "app_deploy",
@@ -3989,7 +4091,9 @@
     "vip_add",
     "vip_remove",
     "vpn_client_add",
-    "vpn_client_remove"
+    "vpn_client_remove",
+    "zone_add",
+    "zone_remove"
   ],
   "async_tools": [
     "deployment_apply",

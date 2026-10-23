@@ -654,11 +654,19 @@ certificate, grant; the request reads `released`). An adopted name is not restor
 the old records were replaced on purpose, and only the log keeps them. Labels of grants are
 reserved against new tenant slugs; a pending request reserves nothing, and a tenant has at most
 3 pending domain requests. `domain_add` prefers an exact grant of the name over a wildcard that
-covers it. Still to build: zones other than `winlab.tw` (`zone_add`),
-`port_request` and `srv`, `delegated`, and the Cloudflare proxy switch.
+covers it. Still to build: `port_request` and `srv`, `delegated`, and the
+Cloudflare proxy switch.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
-the tenants the zone is open to. `winlab.tw` is open to every tenant; a personal zone such as
+the tenants the zone is open to. Built: `zone_add` checks that the token sees exactly that zone
+and can write (a TXT probe it removes at once), keeps the token in `zone_dir/<zone>.token` (0600,
+never in the database, a result or the audit log) and the zone in the site table; calling it again
+replaces the token and tenant list. `zone_list` shows the site's zone and the added ones;
+`zone_remove` refuses while a name in the zone is granted or requested. A name belongs to the
+longest managed zone it sits in, and its ACME challenge and grant record go to that zone. Outside
+`winlab.tw` the slug and platform-label rules do not apply; the zone's own wildcard is never
+granted, and its apex only outside `winlab.tw`. A zone may not overlap `winlab.tw` or another
+added zone. `winlab.tw` is open to every tenant; a personal zone such as
 `zyx.tw` can be open to one tenant only. Records are DNS only by default. An admin may turn on the
 Cloudflare proxy for an HTTP special domain one label under its zone; Cloudflare's free certificate
 covers only one label, so a proxied `x.afc.winlab.tw` would fail.

@@ -38,9 +38,14 @@ type domainGrant struct {
 	RequestID   string  `json:"request_id"`
 	TenantN     int     `json:"tenant_n"`
 	UnusedSince float64 `json:"unused_since,omitempty"`
+	Zone        string  `json:"zone,omitempty"`
 }
 
 func (g domainGrant) D() D { return decode(string(encoded(g))) }
+
+// zone is the managed zone the grant's name lives in; grants from before
+// zones existed are in the site's own.
+func (g domainGrant) zone() string { return or(g.Zone, specialZone) }
 
 // lineage is the certificate name of the grant. "_" starts no tenant slug.
 func (g domainGrant) lineage() string { return "_grant-" + g.ID }
@@ -86,15 +91,15 @@ func (e *Execution) grantCovering(n int, name string) domainGrant {
 	return domainGrant{}
 }
 
-// specialZone is the managed zone special names live in. Only winlab.tw is
-// managed so far; it is open to every tenant.
+// specialZone is the site's own zone. Tenant slugs and platform names live in
+// it; other zones are added with zone_add (zones.go).
 const specialZone = "winlab.tw"
 
 var specialLabel = `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`
 
 // validSpecialName checks the shape of a requested name: lowercase DNS labels
-// under the zone, a wildcard only as the first label, and never the zone
-// itself or its wildcard (its certificate would cover auth.winlab.tw).
+// and a wildcard only as the first label. Which zone it belongs to is checked
+// with the zones.
 func validSpecialName(kind, name string) {
 	rest := name
 	if kind == "wildcard" {
@@ -105,13 +110,13 @@ func validSpecialName(kind, name string) {
 	} else if kind != "exact" {
 		fail("invalid", "kind is exact or wildcard", D{"recovery": "revise_request"})
 	}
-	if len(name) > 253 || !matches(`^(`+specialLabel+`\.)+winlab\.tw$`, rest) {
-		fail("invalid", "Name must be lowercase DNS labels under winlab.tw", D{"recovery": "revise_request"})
+	if len(name) > 253 || !matches(`^(`+specialLabel+`\.)+[a-z]{2,63}$`, rest) {
+		fail("invalid", "Name must be lowercase DNS labels", D{"recovery": "revise_request"})
 	}
 }
 
-// relativeLabels gives the labels of name above the zone, nearest the zone
-// last: x.afc.winlab.tw -> [x afc].
+// relativeLabels gives the labels of a name above the site's zone, nearest
+// the zone last: x.afc.winlab.tw -> [x afc].
 func relativeLabels(name string) []string {
 	return strings.Split(strings.TrimSuffix(strings.TrimPrefix(name, "*."), "."+specialZone), ".")
 }
@@ -122,9 +127,9 @@ func under(name, base string) bool {
 	return name == base || strings.HasSuffix(name, "."+base)
 }
 
-// zoneRecords lists every record of the managed zone.
-func (e *Execution) zoneRecords() []D {
-	data := e.CF("GET", "?per_page=5000", nil)
+// zoneRecords lists every record of a managed zone.
+func (e *Execution) zoneRecords(z zoneAccess) []D {
+	data := e.cfIn(z, "GET", "?per_page=5000", nil)
 	if num(obj(data["result_info"])["total_pages"]) > 1 {
 		fail("conflict", "Could not verify DNS namespace ownership")
 	}
@@ -138,10 +143,26 @@ func addressRecord(r D) bool {
 }
 
 // checkSpecialName applies the rules of PLAN 6.10 step 2 to a name tenant t
-// wants. It returns whether address records already exist at the name, which
-// an approval must adopt. ignore is a request of t that the check is for.
-func (e *Execution) checkSpecialName(t D, kind, name, ignore string) bool {
+// wants. It returns the zone of the name and whether address records already
+// exist at the name, which an approval must adopt. ignore is a request of t
+// that the check is for.
+func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bool) {
 	validSpecialName(kind, name)
+	zone, managed := e.zoneOf(name)
+	if !managed {
+		fail("invalid", "This name is in no zone carrel manages", D{"recovery": "revise_request"})
+	}
+	if !e.zoneOpen(zone, integer(t["n"])) {
+		fail("forbidden", "This zone is not open to this tenant", D{"recovery": "revise_request"})
+	}
+	// Neither the zone's wildcard nor, in the site's zone, its apex: a
+	// certificate for either would cover every name in the zone.
+	if strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || zone == specialZone) {
+		fail("invalid", "Request a name under the zone, not the zone itself", D{"recovery": "revise_request"})
+	}
+	if zone != specialZone {
+		return zone, e.checkGrantOverlap(t, kind, name, ignore, zone)
+	}
 	labels := relativeLabels(name)
 	top := labels[len(labels)-1]
 	if contains(reservedLabels, top) || name == originHost(e.P.Config) || under(name, originHost(e.P.Config)) {
@@ -159,6 +180,13 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) bool {
 			fail("invalid", "Names under "+owner+" need no request; use domain_add with sub", D{"recovery": "revise_request"})
 		}
 	}
+	return zone, e.checkGrantOverlap(t, kind, name, ignore, zone)
+}
+
+// checkGrantOverlap refuses a name that overlaps another grant or pending
+// request, or a wildcard over someone else's record, and reports whether
+// address records exist at the name.
+func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool {
 	// Another tenant's name, granted or asked for, may neither cover nor
 	// sit under this one.
 	overlaps := func(otherKind, other string) bool {
@@ -181,7 +209,7 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) bool {
 		}
 	}
 	existing := false
-	for _, r := range e.zoneRecords() {
+	for _, r := range e.zoneRecords(e.zoneNamed(zone)) {
 		if strings.HasPrefix(str(r["comment"]), "carrel:") {
 			continue
 		}
@@ -214,12 +242,12 @@ func (e *Execution) DomainRequest(a, w, t D) D {
 			}
 		}
 	}
-	existing := e.checkSpecialName(t, kind, name, "")
+	zone, existing := e.checkSpecialName(t, kind, name, "")
 	pending := filter(e.S.Objects("requests", n), func(r D) bool { return r["kind"] == "domain" && r["status"] == "pending" })
 	if len(pending) >= maxPendingDomainRequests {
 		fail("quota_exceeded", "A tenant has at most 3 pending domain requests; wait for a decision", D{"recovery": "revise_request"})
 	}
-	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "domain", "status": "pending", "domain_kind": kind, "name": name, "reason": a["reason"], "existing_record": existing, "actor": w["sub"], "created_at": time.Now().Unix()}
+	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "domain", "status": "pending", "domain_kind": kind, "name": name, "zone": zone, "reason": a["reason"], "existing_record": existing, "actor": w["sub"], "created_at": time.Now().Unix()}
 	if !dry {
 		if key != "" {
 			r["idempotency_key"], r["fingerprint"] = key, fingerprint
@@ -237,13 +265,17 @@ func (e *Execution) DomainRequest(a, w, t D) D {
 func (e *Execution) approveDomain(tool string, a, w, r, t D) D {
 	dry := boolean(a["dry_run"])
 	if tool == "request_approve" {
-		existing := e.checkSpecialName(t, str(r["domain_kind"]), str(r["name"]), str(r["id"]))
+		zone, existing := e.checkSpecialName(t, str(r["domain_kind"]), str(r["name"]), str(r["id"]))
+		r["zone"] = zone
 		if existing && !boolean(a["adopt"]) {
 			fail("conflict", "The name already has address records; approve with adopt to replace them", D{"recovery": "revise_request"})
 		}
 	}
 	n := integer(t["n"])
 	g := domainGrant{ID: randomID()[:16], TenantN: n, Kind: str(r["domain_kind"]), Name: str(r["name"]), RequestID: str(r["id"]), Adopt: boolean(a["adopt"]), GrantedAt: time.Now().Unix(), UnusedSince: now()}
+	if zone := str(r["zone"]); zone != specialZone {
+		g.Zone = zone
+	}
 	switch {
 	case dry && tool == "request_approve":
 		r["status"] = "planned_approval"
@@ -306,7 +338,8 @@ func (e *Execution) grantCertificateHeld(g domainGrant) bool {
 // certificate, or removes the record carrel wrote. Address records someone
 // else wrote are replaced only for a grant approved with adopt.
 func (e *Execution) GrantRecord(g domainGrant, remove bool) {
-	records := dicts(e.CF("GET", "?name="+url.QueryEscape(g.Name), nil)["result"])
+	z := e.zoneNamed(g.zone())
+	records := dicts(e.cfIn(z, "GET", "?name="+url.QueryEscape(g.Name), nil)["result"])
 	ours, foreign := []D{}, []D{}
 	for _, r := range records {
 		if r["comment"] == g.owner() {
@@ -317,7 +350,7 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 	}
 	if remove {
 		for _, r := range ours {
-			e.CF("DELETE", "/"+str(r["id"]), nil)
+			e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 		}
 		return
 	}
@@ -334,25 +367,25 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 	// One A record of someone else's changes in place, so the name never
 	// stops resolving; anything else is replaced.
 	if len(ours) == 0 && len(foreign) == 1 && foreign[0]["type"] == "A" {
-		e.CF("PATCH", "/"+str(foreign[0]["id"]), D{"content": address, "ttl": 120, "proxied": false, "comment": g.owner()})
+		e.cfIn(z, "PATCH", "/"+str(foreign[0]["id"]), D{"content": address, "ttl": 120, "proxied": false, "comment": g.owner()})
 		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", foreign[0]["content"])
 		return
 	}
 	for _, r := range foreign {
-		e.CF("DELETE", "/"+str(r["id"]), nil)
+		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", r["content"], "type", r["type"])
 	}
 	for i, r := range ours {
 		if i == 0 && r["type"] == "A" {
 			if r["content"] != address {
-				e.CF("PATCH", "/"+str(r["id"]), D{"content": address})
+				e.cfIn(z, "PATCH", "/"+str(r["id"]), D{"content": address})
 			}
 			continue
 		}
-		e.CF("DELETE", "/"+str(r["id"]), nil)
+		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 	}
 	if len(ours) == 0 || ours[0]["type"] != "A" {
-		e.CF("POST", "", D{"type": "A", "name": g.Name, "content": address, "ttl": 120, "proxied": false, "comment": g.owner()})
+		e.cfIn(z, "POST", "", D{"type": "A", "name": g.Name, "content": address, "ttl": 120, "proxied": false, "comment": g.owner()})
 	}
 }
 
