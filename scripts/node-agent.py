@@ -217,6 +217,11 @@ def guest_firewall(m, state, config):
         *vip_addresses(m, state),
         "0.0.0.0",
         "",
+    ]
+    binding = next((b for b in public_bindings(state, config.get("protected_addresses", [])) if b[1]["vmid"] == m["vmid"]), None)
+    if binding:
+        rules += ["[IPSET internet]", *INTERNET_IPSET, ""]
+    rules += [
         "[RULES]",
         "OUT DROP -dest ::/0",
         "IN DROP -source ::/0",
@@ -286,6 +291,13 @@ def guest_firewall(m, state, config):
                 raise ValueError("invalid protocol")
             # The exit node DNATs only, so the client's address arrives.
             rules.append(f"IN ACCEPT -p {proto} -dport {port}")
+    if binding:
+        # The internet reaches a machine with a public address on the ports
+        # its owner chose, or on all of them (issue #91).
+        if binding[2] == ["all"]:
+            rules.append("IN ACCEPT -source +internet")
+        else:
+            rules += [f"IN ACCEPT -source +internet -p {proto} -dport {port}" for proto, port in binding[2]]
     for domain in state.get("domains", []):
         if targets(domain, m, state):
             port = integer(domain["target_port"], 1, 65535)
@@ -372,6 +384,13 @@ def machine(m):
     return vmid
 
 
+def disk_volume(m, allow_provisioning=False):
+    """The root disk's Proxmox volume, `<storage>:<volume>`, for NetBox (issue #175)."""
+    cfg = owned(m, allow_provisioning)
+    volume = cfg.get("scsi0" if m["kind"] == "vm" else "rootfs", "").split(",")[0]
+    return {"disk_volume": volume} if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]*:[a-zA-Z0-9_./-]+", volume) else {}
+
+
 def provision_marker(m):
     return "carrel-provision-" + hashlib.sha256(str(m.get("readiness_token", m["name"])).encode()).hexdigest()
 
@@ -444,6 +463,119 @@ def public_ingress():
     return str(ipaddress.IPv4Interface(s["public"]["address"]).ip)
 
 
+def public_interface():
+    """The exit node's public VLAN interface, as install-network.py names it."""
+    s = site()
+    return f'{s["underlay_interface"]}.{int(s["public"]["vlan"])}'
+
+
+# Public IP bindings (issue #91, PLAN 6.12): the exit node holds each bound
+# address, DNATs it to its machine and SNATs the machine's egress to it. The
+# addresses it added are kept here, so it removes only its own.
+PUBLIC_IPS = Path("/etc/carrel/public-ips.json")
+
+# Internet sources: what reaches a bound address. Private ranges never come in
+# from the uplink (carrel_public drops them), and they must not open a
+# restricted machine to other tenants. An ipset holds no /0, so two halves.
+INTERNET_IPSET = ["0.0.0.0/1", "128.0.0.0/1", "!10.0.0.0/8", "!172.16.0.0/12", "!192.168.0.0/16", "!100.64.0.0/10"]
+
+
+def public_bindings(state, protected=()):
+    """The checked bindings of active tenants: [(public address, machine, ports)]."""
+    if not state.get("public_ips"):
+        return []
+    s = site()
+    shared = ipaddress.IPv4Interface(s["public"]["address"])
+    gateway = ipaddress.IPv4Address(s["public"]["gateway"])
+    active = {t["n"] for t in state["tenants"] if t.get("status", "active") == "active"}
+    machines = {m["vmid"]: m for m in state["machines"]}
+    blocked = [ipaddress.ip_network(p, strict=False) for p in protected]
+    out, seen, held = [], set(), set()
+    for b in state["public_ips"]:
+        n = integer(b["tenant_n"], 1, 254)
+        public = ipaddress.IPv4Address(b["address"])
+        network = shared.network
+        if public in seen:
+            raise ValueError("invalid public address binding")
+        seen.add(public)
+        if (public not in network or public in (network.network_address, network.broadcast_address, gateway, shared.ip)
+                or any(public in p for p in blocked)):
+            # A NetBox range that strays outside the public network: that
+            # binding is not applied, and every other machine keeps working.
+            print(f"public address {public} is not usable here; binding skipped", file=sys.stderr)
+            continue
+        m = machines.get(b["vmid"])
+        if m is None or n not in active:
+            continue
+        machine(m)
+        if m["tenant_n"] != n or m["vmid"] in held:
+            raise ValueError("invalid public address binding")
+        held.add(m["vmid"])
+        out.append((str(public), m, public_ports(b["ports"])))
+    return sorted(out, key=lambda x: ipaddress.IPv4Address(x[0]))
+
+
+def public_ports(ports):
+    """["all"] or protocol/port pairs, each once."""
+    if ports == ["all"]:
+        return ["all"]
+    out = []
+    if not isinstance(ports, list) or not 1 <= len(ports) <= 32:
+        raise ValueError("invalid public address ports")
+    for p in ports:
+        proto, _, port = str(p).partition("/")
+        if proto not in ("tcp", "udp"):
+            raise ValueError("invalid public address ports")
+        if not port.isdigit():
+            raise ValueError("invalid public address ports")
+        out.append((proto, integer(int(port), 1, 65535)))
+    if len(set(out)) != len(out):
+        raise ValueError("invalid public address ports")
+    return out
+
+
+def public_addresses(bindings):
+    """Hold the bound addresses on the public interface, deprecated so the node
+    never picks one as the source of its own connections, and scope link so an
+    ifreload keeps them. bindings maps each
+    address to its machine's address. An address that leaves, or moves to
+    another machine, loses its tracked connections too: a NAT mapping outlives
+    the rules that made it."""
+    iface = public_interface()
+    old = json.loads(PUBLIC_IPS.read_text()) if PUBLIC_IPS.exists() else {}
+    if isinstance(old, list):
+        old = dict.fromkeys(old, "")
+    # Tracked before they are added, so an address added before a failure
+    # is still removed later.
+    write(PUBLIC_IPS, json.dumps(dict(sorted({**old, **bindings}.items()))))
+    for a in sorted(bindings):
+        # scope link: ifupdown2 purges global addresses its files do not
+        # list on every ifreload, which each SDN apply runs.
+        run("ip", "address", "replace", f"{ipaddress.IPv4Address(a)}/32", "dev", iface, "preferred_lft", "0", "scope", "link")
+    for a in sorted(set(old) - set(bindings)):
+        if a in held_addresses(iface):
+            run("ip", "address", "del", f"{ipaddress.IPv4Address(a)}/32", "dev", iface)
+    for a in sorted(old):
+        if bindings.get(a) != old[a]:
+            conntrack_flush(a)
+    write(PUBLIC_IPS, json.dumps(dict(sorted(bindings.items()))))
+
+
+def held_addresses(iface):
+    return {i["local"] for x in json.loads(run("ip", "-4", "-j", "address", "show", "dev", iface)) for i in x.get("addr_info", [])}
+
+
+def conntrack_flush(address):
+    """Forget the connections of a public address in every zone: those that
+    arrived for it (DNAT) and those that left from it (SNAT)."""
+    ipaddress.IPv4Address(address)
+    for selector in ("--orig-dst", "--reply-dst"):
+        p = subprocess.run(["conntrack", "-D", selector, address], capture_output=True, text=True, timeout=60)
+        # conntrack exits 1 when nothing matched.
+        if p.returncode and "flow entries have been deleted" not in p.stderr:
+            raise CommandFailure(f"conntrack -D failed: {p.stderr[-300:]}")
+
+
 # The public port blocks of tenants 1 to 254 (20000 + 10n to 20009 + 10n).
 TENANT_PORTS = "20010:22549"
 
@@ -457,8 +589,11 @@ def grantable(public):
     return public not in NEVER_PORTS and not 20000 <= public <= 22549 and not VPN_PORT_BASE <= public <= VPN_PORT_BASE + 254
 
 
-def ports_nft(state, address):
-    """DNAT the public address: HTTP(S) to the infra gateway, granted ports to machines."""
+def ports_nft(state, address, bindings=()):
+    """DNAT the public address: HTTP(S) to the infra gateway, granted ports to
+    machines; and each bound public address to its machine, 1:1 (issue #91)."""
+    iface = public_interface() if bindings else ""
+    bound = [f'iifname "{iface}" ip daddr {public} dnat to {m["ip"]}' for public, m, _ in bindings]
     rules = [f"ip daddr {address} tcp dport {{ 80, 443 }} dnat to 10.200.0.2"]
     if SITE.exists() and site().get("ssh_jump"):
         # The platform SSH jump host (issue #98) in CT 102.
@@ -483,7 +618,8 @@ def ports_nft(state, address):
             raise ValueError("port grant outside tenant network")
         seen.add((g["proto"], public))
         rules.append(f"ip daddr {address} {g['proto']} dport {public} dnat to {ip}:{port}")
-    body = "\n".join("  " + r for r in rules)
+    body = "\n".join("  " + r for r in bound + rules)
+    egress = "".join(f'\n  oifname "{iface}" ip saddr {m["ip"]} snat to {public}' for public, m, _ in bindings)
     # The node itself reaches its public address too (issue #48): its own
     # packets take the output hook, not prerouting.
     local = "\n".join("  " + r for r in rules if "dport 22 dnat to 10.200.0.4" not in r)
@@ -503,6 +639,8 @@ table ip carrel_ports {{
   # A tenant reaching another tenant's public port (issue #28): the answer
   # must come back through here, so the source becomes the public address.
   ip saddr 10.200.0.0/16 ip daddr 10.200.0.0/16 ip daddr != 10.200.0.0/24 ct status dnat ct original ip daddr {address} snat to {address}
+  # A machine with a public address leaves from it; this chain runs before
+  # carrel_public, whose rule SNATs every other tenant to the shared address.{egress}
  }}
 }}
 """
@@ -917,11 +1055,15 @@ table inet carrel_conntrack {{
     private_dhcp(state, serve=first_exit_node())
     address = public_ingress()
     if address:
-        rules = ports_nft(state, address)
+        bindings = public_bindings(state, config.get("protected_addresses", []))
+        rules = ports_nft(state, address, bindings)
         write("/etc/carrel/ports.nft.next", rules)
         run("nft", "-c", "-f", "/etc/carrel/ports.nft.next")
         write("/etc/carrel/ports.nft", rules)
         run("nft", "-f", "/etc/carrel/ports.nft")
+        # The rules first: an address held without them reaches only the
+        # node, whose public input drops it.
+        public_addresses({public: m["ip"] for public, m, _ in bindings})
         unit = """[Unit]
 Description=Carrel public port forwarding
 After=carrel-public.service
@@ -929,6 +1071,7 @@ After=carrel-public.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/carrel/ports.nft
+ExecStartPost=/usr/local/lib/carrel/node-agent.py public-ips
 [Install]
 WantedBy=multi-user.target
 """
@@ -1932,7 +2075,7 @@ def main():
     long = op in ("migrate", "migrate_finish")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
-        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "fetch_status", "fetch_store"):
+        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         if req.get("request_id") and op in ("create", "action"):
@@ -1946,6 +2089,12 @@ def main():
             out = reconcile(req["state"], first=req.get("first", True))
         elif op == "create":
             out = create(req["machine"])
+            try:
+                out = {**out, **disk_volume(req["machine"], allow_provisioning=True)}
+            except Exception:
+                # Only NetBox's disk name depends on it (issue #175): a
+                # machine that was created must not fail here.
+                pass
         elif op == "action":
             out = action(req)
         elif op == "inventory":
@@ -1987,6 +2136,8 @@ def main():
             m = req["machine"]
             owned(m)
             out = cloud_init_files(m)
+        elif op == "disk_volume":
+            out = disk_volume(req["machine"])
         elif op == "node_files":
             # For the control plane's backup: only files without secrets
             # (the reader token is rebuilt by configure-reader.py).
@@ -2015,6 +2166,10 @@ if __name__ == "__main__":
     # Only the systemd unit passes an argument; the SSH forced command cannot.
     if sys.argv[1:] == ["vip-probe"]:
         vip_probe()
+    if sys.argv[1:] == ["public-ips"]:
+        # At boot, after carrel-ports: the addresses the last reconcile held.
+        public_addresses(json.loads(PUBLIC_IPS.read_text()) if PUBLIC_IPS.exists() else {})
+        sys.exit(0)
     try:
         main()
     except Exception as e:

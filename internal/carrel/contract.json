@@ -2433,6 +2433,182 @@
       }
     },
     {
+      "name": "public_ip_request",
+      "description": "Request a dedicated public IPv4 address, with a reason. An admin approves it and the tenant then holds an address from the site's pool, shown by public_ip_list; public_ip_bind points it at a machine. Addresses are scarce: ask only for a service that needs its own address, such as standard ports (53, 443 with its own TLS), port ranges, or an outbound source of its own. Outbound TCP 25 stays blocked. Reusing an idempotency_key with the same request returns that request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 2000
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "public_ip_list",
+      "description": "List the tenant's public addresses: each one's machine and ports when bound, and how many the pool has free.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "public_ip_bind",
+      "description": "Point a public address the tenant holds at one of its machines, 1:1 NAT as an AWS Elastic IP: the internet reaches the machine on the listed ports of that address, and the machine's outbound traffic leaves from it. The guest keeps its private address and needs no change. ports is [\"all\"] or up to 32 of \"tcp/N\" and \"udp/N\"; the default is [\"tcp/22\"]. Binding again moves the address or changes its ports. Other machines, the machine's other tenants' peers and its network_access are unchanged; carrel's own machines, the bound one included, cannot reach a bound address (no hairpin). A machine holds at most one public address; deleting the machine unbinds it and the tenant keeps the address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$",
+            "description": "The public address; may be omitted when the tenant holds one."
+          },
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^(all|(tcp|udp)/[0-9]{1,5})$"
+            },
+            "minItems": 1,
+            "maxItems": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "public_ip_release",
+      "description": "Return a public address to the pool. Its machine stops answering on it and leaves from the shared address again.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$",
+            "description": "The public address; may be omitted when the tenant holds one."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "request_list",
       "description": "List your quota, special domain and special port requests and decisions.",
       "inputSchema": {
@@ -2780,7 +2956,7 @@
     },
     {
       "name": "request_approve",
-      "description": "Admin: approve a pending quota, special domain or special port request. A domain or port request is checked again; a name that already has address records needs adopt, which replaces them once carrel serves the name.",
+      "description": "Admin: approve a pending quota, special domain, special port or public address request. A domain or port request is checked again; a name that already has address records needs adopt, which replaces them once carrel serves the name. A public address request takes the first free address of the pool.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4140,6 +4316,10 @@
     "quota_request",
     "domain_request",
     "port_request",
+    "public_ip_request",
+    "public_ip_list",
+    "public_ip_bind",
+    "public_ip_release",
     "request_list",
     "audit_log",
     "tenant_list",
@@ -4220,6 +4400,9 @@
     "port_close",
     "port_open",
     "port_request",
+    "public_ip_request",
+    "public_ip_bind",
+    "public_ip_release",
     "quota_request",
     "quota_set",
     "reconcile_run",
@@ -4266,7 +4449,9 @@
     "vip_add",
     "vip_remove",
     "vpn_client_add",
-    "vpn_client_remove"
+    "vpn_client_remove",
+    "public_ip_bind",
+    "public_ip_release"
   ],
   "images": [
     {
