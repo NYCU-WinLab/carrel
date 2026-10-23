@@ -1204,13 +1204,17 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `cluster` | NetBox cluster (name) that holds the virtual machines. It must exist; the NetBox operator owns it |
 | `owner` | name of the NetBox owner (NetBox 4.5+) every created object carries. It must exist; the NetBox operator creates it, since an owner needs a group. Use a different owner for each carrel installation that shares a NetBox |
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
+| `device_field` | custom field of a NetBox device that holds the Proxmox node name, for devices named differently from their node (`serverQ10` for `carrel01`). Empty, the default, matches the device name |
 | `vrf` | name of the shared VRF, default `carrel`; a private network's VRF is `<vrf>-<tenant slug>-<network name>` |
 
 Mapping:
 
 | carrel | NetBox |
 |---|---|
-| machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU, memory and disk (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; the description says VM or CT; the VMID goes into `vmid_field` |
+| machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU and memory (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; `start_on_boot` follows Proxmox `onboot`, which is set by the owner's last power action (`on` after a start, `off` after a stop, pause or tenant suspension), so a guest that shuts itself down stays `on`; a machine with no recorded action is `on` when running; the description says VM or CT; the VMID goes into `vmid_field`; the device is the cluster device whose name, or `device_field`, matches the Proxmox node, none when there is no such device |
+| image | platform created and deleted by carrel: `Catalog:<image>` for a platform image, shared by all tenants (`Catalog:debian-13`), and `<tenant>/<image>` with a capital first letter for a tenant image or ISO, one per tenant (`Alice/tenant:base`); the slug is the name in lower case with other characters as `-`; a platform with that slug or name that carrel did not create is an error |
+| machine disk | virtual disk `scsi0` (VM) or `rootfs` (CT) in MiB; NetBox sums it into the machine's disk |
+| NIC MAC | MAC address object assigned to the interface and set as its primary MAC |
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
 | machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4 |
 | tenant segment `10.200.N.0/24` | prefix in the shared VRF |
@@ -1257,6 +1261,10 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | virtualization.virtualmachine, vminterface | yes | yes | yes | yes |
 | ipam.ipaddress, prefix, vrf, service | yes | yes | yes | yes |
 | ipam.fhrpgroup | yes | yes | yes | yes |
+| dcim.platform | yes | yes | yes | yes |
+| dcim.macaddress | yes | yes | yes | yes |
+| virtualization.virtualdisk | yes | yes | yes | yes |
+| dcim.device | yes | no | no | no |
 | ipam.fhrpgroupassignment | yes | yes | no | yes |
 | virtualization.cluster | yes | no | no | no |
 | users.owner | yes | no | no | no |

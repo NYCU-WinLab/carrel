@@ -76,6 +76,8 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 		}
 		e.P.Operations.Save(e.Op)
 	}
+	// Mirrors the onboot flag the node agent sets: only a running result keeps it.
+	m["onboot"] = state == "running"
 	m["state"], m["power_state"], m["ssh_ready"] = state, state, false
 	if state == "running" {
 		m["state"] = bootState(m)
