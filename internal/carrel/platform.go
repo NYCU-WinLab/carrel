@@ -468,6 +468,9 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	if unmanaged(m) && len(servicePortsOf(m)) == 0 {
 		safe["install"] = installInfo(m)
 	}
+	if b := e.machinePublicIP(m); b != nil {
+		safe["public_ip"] = b
+	}
 	if status := e.netboxStatus(m["vmid"]); status != nil {
 		safe["netbox"] = status
 	}

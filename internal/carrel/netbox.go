@@ -43,7 +43,11 @@ type nbConfig struct {
 	// Proxmox node name; empty matches the device name.
 	DeviceField string
 	Public      string
-	Marker      nbMarker
+	// PublicTenant and PublicRole name the NetBox tenant and role of the IP
+	// ranges that make up the public address pool (PLAN 6.12).
+	PublicTenant string
+	PublicRole   string
+	Marker       nbMarker
 }
 
 // nbMarker is the ownership mark every created object carries: the `owner`
@@ -61,15 +65,17 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		return nbConfig{}, false, nil
 	}
 	c := nbConfig{
-		URL:         strings.TrimRight(str(section["url"]), "/"),
-		Token:       str(section["token"]),
-		TokenFile:   str(section["token_file"]),
-		Cluster:     str(section["cluster"]),
-		VRF:         textAt(section, "vrf", "carrel"),
-		VMIDField:   textAt(section, "vmid_field", "vmid"),
-		DeviceField: str(section["device_field"]),
-		Public:      str(p.Config["public_address"]),
-		Marker:      nbMarker{Value: str(section["owner"])},
+		URL:          strings.TrimRight(str(section["url"]), "/"),
+		Token:        str(section["token"]),
+		TokenFile:    str(section["token_file"]),
+		Cluster:      str(section["cluster"]),
+		VRF:          textAt(section, "vrf", "carrel"),
+		VMIDField:    textAt(section, "vmid_field", "vmid"),
+		DeviceField:  str(section["device_field"]),
+		Public:       str(p.Config["public_address"]),
+		PublicTenant: textAt(section, "public_tenant", "Carrel"),
+		PublicRole:   textAt(section, "public_role", "User"),
+		Marker:       nbMarker{Value: str(section["owner"])},
 	}
 	switch {
 	case !strings.HasPrefix(c.URL, "http://") && !strings.HasPrefix(c.URL, "https://"):
@@ -308,6 +314,7 @@ type nbMachine struct {
 	vmid, tenantN                       int
 	name, tenant, kind, status, comment string
 	image, node, onBoot, diskVolume     string
+	publicIP                            string // address/length bound to the machine (issue #91)
 	cpu                                 float64
 	memoryMB, diskMB                    int
 	primary                             nbAddress
@@ -413,6 +420,9 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 				image: str(m["image"]), node: str(m["node"]), onBoot: nbOnBoot(m), diskVolume: str(m["disk_volume"]),
 				cpu: num(m["cpu"]), memoryMB: integer(m["memory_mb"]), diskMB: integer(m["disk_gb"]) * 1024}
 			nm.comment = fmt.Sprintf("carrel %s, tenant %s, proxmox vmid %d", nm.kind, slug, vmid)
+			if b := e.machinePublicIP(m); b != nil {
+				nm.publicIP = e.publicIPPrefix(str(b["address"]))
+			}
 			key := fmt.Sprintf("%d/eth0", vmid)
 			primary := nbAddress{tn.vrf, str(m["ip"]) + "/24", "carrel address of " + nm.name, key, nm.name + ".internal"}
 			nm.primary = primary
@@ -572,6 +582,10 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 	s.platforms = c.markedList("dcim/platforms/", nil)
 	s.macs = c.markedList("dcim/mac-addresses/", nil)
 	s.disks = c.markedList("virtualization/virtual-disks/", nil)
+	if err := attempt(func() { e.netboxPool(c, cfg) }); err != nil {
+		// The last pool read stays; bound addresses are not touched.
+		fail("public address pool", err)
+	}
 	// The cluster's devices are the hypervisor nodes. They belong to the NetBox
 	// operator: carrel only points a machine at the one it runs on.
 	for _, d := range c.list("dcim/devices/", url.Values{"cluster_id": {strconv.Itoa(clusterID)}}) {
@@ -754,6 +768,13 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 	if primaryID != 0 {
 		c.ensure("virtualization/virtual-machines/", vm, D{"primary_ip4": primaryID})
 	}
+	if m.publicIP != "" && primaryID != 0 {
+		// A bound public address is the outside of its machine's primary
+		// address, 1:1 NAT as the exit node does it (issue #91).
+		haveIP := one(s.ips, func(o D) bool { return o["address"] == m.publicIP && o["vrf"] == nil })
+		ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": m.publicIP, "status": "active", "nat_inside": primaryID, "description": "carrel public address of " + m.name})
+		s.kept("ips", integer(ip["id"]))
+	}
 	netboxServices(c, s, m.services, nbVMType, vmID)
 }
 
@@ -814,6 +835,29 @@ func (e *Execution) netboxVIP(c *nbClient, s *nbState, v nbVIP, vrfID int, iface
 
 // netboxProtectMachine keeps what NetBox holds for a machine that could not be
 // synced, so a failed update never deletes its inventory.
+// netboxPool reads the public address pool (PLAN 6.12): the active IP ranges
+// of the public tenant and role.
+func (e *Execution) netboxPool(c *nbClient, cfg nbConfig) {
+	ranges := []any{}
+	for _, r := range c.list("ipam/ip-ranges/", nil) {
+		if str(obj(r["tenant"])["name"]) == cfg.PublicTenant && str(obj(r["role"])["name"]) == cfg.PublicRole && str(obj(r["status"])["value"]) == "active" && r["vrf"] == nil {
+			ranges = append(ranges, D{"start": r["start_address"], "end": r["end_address"]})
+		}
+	}
+	e.S.SitePut("public_pool", "netbox", D{"ranges": ranges, "read_at": now()})
+}
+
+// publicIPPrefix is a pool address with the length of its NetBox range.
+func (e *Execution) publicIPPrefix(address string) string {
+	a, err := netip.ParseAddr(address)
+	for _, r := range dicts(obj(e.S.SiteGet("public_pool", "netbox"))["ranges"]) {
+		if p, perr := netip.ParsePrefix(str(r["start"])); err == nil && perr == nil && p.Masked().Contains(a) {
+			return fmt.Sprintf("%s/%d", address, p.Bits())
+		}
+	}
+	return address + "/32"
+}
+
 func (e *Execution) netboxProtectMachine(s *nbState, name string) {
 	vm := one(s.vms, func(o D) bool { return o["name"] == name })
 	if vm == nil {
@@ -831,9 +875,16 @@ func (e *Execution) netboxProtectMachine(s *nbState, name string) {
 		s.protect("macs", s.macs, func(o D) bool {
 			return o["assigned_object_type"] == nbIfaceType && integer(o["assigned_object_id"]) == integer(f["id"])
 		})
+		inside := map[int]bool{}
 		s.protect("ips", s.ips, func(o D) bool {
-			return o["assigned_object_type"] == nbIfaceType && integer(o["assigned_object_id"]) == integer(f["id"])
+			mine := o["assigned_object_type"] == nbIfaceType && integer(o["assigned_object_id"]) == integer(f["id"])
+			if mine {
+				inside[integer(o["id"])] = true
+			}
+			return mine
 		})
+		// The public address outside of one of them (issue #91).
+		s.protect("ips", s.ips, func(o D) bool { return inside[refID(o["nat_inside"])] })
 		s.protect("assignments", s.assignments, func(o D) bool {
 			return o["interface_type"] == nbIfaceType && integer(o["interface_id"]) == integer(f["id"])
 		})

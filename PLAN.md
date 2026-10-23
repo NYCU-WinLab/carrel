@@ -210,6 +210,8 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or `name` under a special domain grant, `target_port` |
 | | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `reason` (section 6.10) |
 | | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
+| | `public_ip_request` | `reason`; an approval gives the tenant an address of the pool (section 6.12) |
+| | `public_ip_bind`, `public_ip_release`, `public_ip_list` | `machine`, `address`, `ports: ["all"] \| ["tcp/N", "udp/N"]`; 1:1 NAT |
 | Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
 | | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
@@ -391,8 +393,9 @@ When admission fails the tool returns `capacity_exhausted` and lists the tenant'
 
 ### 5.3 Requests
 
-Three kinds share one flow: `quota_request` (more of a dimension), `domain_request` and
-`port_request` (special names and ports, section 6.10).
+Four kinds share one flow: `quota_request` (more of a dimension), `domain_request` and
+`port_request` (special names and ports, section 6.10) and `public_ip_request` (a public address,
+section 6.12).
 
 1. A member files a request with a reason. A quota request may carry an end date.
 2. Admins are notified by email.
@@ -797,50 +800,66 @@ node, so they follow the exit node failover of #89.
 exit node (more isolation, one more machine per tenant); whether project tenants may attach other
 projects without an admin; whether the lab's NetBird gets a routing peer at all.
 
-### 6.12 Public IP per machine (issue #91, design only)
+### 6.12 Public IP per machine (issue #91)
 
-The Elastic IP of 6.11. A member requests a dedicated public IPv4 address for one machine; once
-approved, the machine is reachable on any port of that address and its outbound traffic leaves
-from it. Other machines keep the shared address.
+The Elastic IP of 6.11. A member requests a dedicated public IPv4 address; once approved, the
+tenant holds it and binds it to one machine, which is then reachable on the chosen ports of that
+address and whose outbound traffic leaves from it. Other machines keep the shared address.
 
 **1:1 NAT, as in AWS.** An AWS instance never holds its Elastic IP: the instance keeps its private
-address and the internet gateway translates one to the other. carrel does the same on the exit
-node: DNAT of inbound traffic for the bound address to the machine's primary address, and SNAT of
-the machine's outbound traffic to the bound address. The guest needs no change, the shared VRF
-stays (6.11), and no anti-spoofing rules are needed. Routing the public address into the guest
-(a second NIC or an extra address on `net0`) is not offered.
+address and the internet gateway translates one to the other. carrel does the same on the first
+exit node: in `carrel_ports`, DNAT of traffic arriving on the public interface for the bound
+address to the machine's primary address, and SNAT of the machine's traffic leaving the public
+interface to the bound address (that chain runs before `carrel_public`, whose rule SNATs every
+other tenant to the shared address). The exit node holds each bound address on its public
+interface as a deprecated /32 of scope link, so it answers ARP but never picks it as the source of its
+own connections, and the ifreload of every SDN apply (which purges global addresses its files do
+not list) keeps it; it records the addresses it added, and each one's machine, in
+`/etc/carrel/public-ips.json` before it adds them and removes only those, checking that the
+interface no longer holds one. An address that leaves or moves to another machine loses its
+tracked connections (`conntrack -D`, every zone), since a NAT mapping outlives its rule.
+`carrel-ports.service` puts the addresses back at boot. The guest needs no change, the shared
+VRF stays (6.11), and no anti-spoofing rules are needed. Routing the public address into the
+guest (a second NIC or an extra address on `net0`) is not offered. carrel's own machines cannot
+reach a bound address (the DNAT matches only the uplink), as there is no hairpin for it.
 
 **Address pool.** NetBox holds the pool, not `config.json` or the code: the lab network team
-assigns addresses to carrel there, and NetBox is where they track the range. The pool is every IP
-range in NetBox whose tenant is `netbox.public_tenant` and whose role is `netbox.public_role`
-(defaults `Carrel` and `User`). Addresses of that tenant outside such a range, such as the exit
-nodes' own addresses and the shared address, are never handed out. An address that does not
-answer ARP is not free unless NetBox assigns it to carrel. A site without NetBox sync, or with no
-such range, offers no public IPs. carrel reads the ranges on each NetBox pass and records each
-binding as an IP address it owns inside its range, so NetBox shows which machine holds it. A
-range that shrinks under a bound address keeps the binding and refuses new ones from that
-address. On B09 the range is `140.113.60.163` to `.165` (2026-10-23).
+assigns addresses to carrel there, and NetBox is where they track the range. The pool is every
+active IP range in NetBox, in the global table, whose tenant is `netbox.public_tenant` and whose
+role is `netbox.public_role` (defaults `Carrel` and `User`), less the shared address. Addresses of
+that tenant outside such a range, such as the exit nodes' own addresses and the shared address,
+are never handed out. An address that does not answer ARP is not free unless NetBox assigns it to
+carrel. A site without NetBox sync, or with no such range, offers no public IPs. carrel reads the
+ranges on each NetBox pass (a failed read keeps the last pool) and records each bound address as
+an IP address it owns, with the length of its range, whose `nat_inside` is the machine's primary
+address, so NetBox shows which machine holds it. A range that shrinks under a held address keeps
+its binding working, but the address cannot be bound again and is not handed out once released. On B09 the range is `140.113.60.163` to `.165`
+(2026-10-23).
 
-**Objects and tools.** A binding belongs to one machine and one tenant. `public_ip_request`
-(machine, reason) creates a request like `quota_request`; an administrator answers it with
-`request_approve` or `request_reject`. `public_ip_release` and machine deletion return the address.
-A new quota dimension `public_ips` (default 0) counts what a tenant holds. `machine_get` shows the
-bound address; `catalog_get` shows whether the site has a pool and how many addresses are free. A
-rejected or pending request changes nothing on the network. A binding survives restarts, resizes
-and snapshots.
+**Objects and tools.** Like special ports, approval grants and the member applies.
+`public_ip_request` (reason) creates a request; an administrator answers it with
+`request_approve`, which takes the first free address of the pool for the tenant, or
+`request_reject`. `public_ip_bind` (machine, optional address, ports) points a held address at a
+machine of the tenant; binding again moves it or changes its ports. A machine holds at most one.
+`public_ip_release` returns the address to the pool; a release whose
+reconcile failed is finished by releasing again. `public_ip_list` shows the tenant's
+addresses and the free count, `machine_get` shows a machine's bound address, and `catalog_get`
+shows whether the site offers them and how many are free. Deleting a machine unbinds its address
+and the tenant keeps it, so a later machine with the same VMID inherits nothing. A suspended
+tenant's addresses stop answering until it is active again. A pending or rejected request changes
+nothing on the network. A binding survives restarts, resizes and snapshots. Approval is the
+control on a scarce resource, so there is no quota dimension, no expiry and no automatic DNS
+name (Loki, 2026-10-23); the member points a name at the address with `domain_request` or a zone
+of its own.
 
-**Filtering.** Traffic to a bound address still passes the guest firewall. It follows the
-machine's `network_access` plus an explicit list of allowed ports or "all", chosen by the member;
-the default is SSH only. Egress limits and abuse handling of 6.6 apply to the bound address too.
+**Filtering.** Traffic to a bound address still passes the guest firewall: a bound machine's
+firewall gets an `internet` ipset (every IPv4 source except 10/8, 172.16/12, 192.168/16 and
+100.64/10) and accepts it on the chosen ports (`tcp/N`, `udp/N`, at most 32) or on all of them;
+the default is `tcp/22`. Its `network_access` toward other machines is unchanged. Egress limits
+and abuse handling of 6.6 apply to the bound address too.
 
 **Exit node.** The NAT rules live on the exit node, so each bound address follows the exit node
 failover of #89: the address moves with the active node.
-
-**Order.** Independent of the attachments in 6.11: it needs neither a route table nor a
-VRF, so it can be built beside the client VPN once a pool exists in NetBox.
-
-**Left open**: who approves and for how long (`until`, automatic removal of expired bindings), and
-whether carrel creates a DNS name for a bound address.
 
 ## 7. Machines
 

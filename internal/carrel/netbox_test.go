@@ -25,7 +25,7 @@ type fakeNetBox struct {
 	fields  map[string]bool
 }
 
-var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true}
+var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true}
 var nbChoices = map[string]bool{"status": true, "role": true, "start_on_boot": true}
 
 func newFakeNetBox(t *testing.T) (*fakeNetBox, *httptest.Server) {
@@ -625,5 +625,43 @@ func TestNetBoxRenameKeepsTheVirtualMachine(t *testing.T) {
 	}
 	if find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" }) != nil {
 		t.Fatal("the old name stayed")
+	}
+}
+
+// The pool is the active ranges of the public tenant and role, and a bound
+// address is recorded as the outside of its machine's primary address (#91).
+func TestNetBoxReadsThePoolAndRecordsBoundAddresses(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.objects["ipam/ip-ranges/"] = []D{
+		{"id": 1, "start_address": "140.113.60.163/27", "end_address": "140.113.60.165/27", "tenant": D{"name": "Carrel"}, "role": D{"name": "User"}, "status": D{"value": "active"}},
+		{"id": 2, "start_address": "140.113.60.171/27", "end_address": "140.113.60.174/27", "tenant": D{"name": "Lab"}, "role": D{"name": "User"}, "status": D{"value": "active"}},
+		{"id": 3, "start_address": "140.113.60.175/27", "end_address": "140.113.60.176/27", "tenant": D{"name": "Carrel"}, "role": D{"name": "User"}, "status": D{"value": "reserved"}},
+	}
+	p.Config["public_address"] = "140.113.60.184"
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	e := p.execution(context.Background())
+	if pool := e.publicPool(); strings.Join(pool, " ") != "140.113.60.163 140.113.60.164 140.113.60.165" {
+		t.Fatal(pool)
+	}
+	p.Store.Put("public_ips", "b", 1, publicIP{ID: "b", TenantN: 1, Address: "140.113.60.163", VMID: 10100, Ports: []string{"tcp/22"}}.D())
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	ips := f.all("ipam/ip-addresses/")
+	outside := find(ips, func(o D) bool { return o["address"] == "140.113.60.163/27" })
+	inside := find(ips, func(o D) bool { return o["address"] == "10.200.1.10/24" })
+	if outside == nil || inside == nil || integer(obj(outside["nat_inside"])["id"]) != integer(inside["id"]) || outside["vrf"] != nil {
+		t.Fatal(outside, inside)
+	}
+	// Unbound, the record goes.
+	p.Store.Put("public_ips", "b", 1, publicIP{ID: "b", TenantN: 1, Address: "140.113.60.163"}.D())
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if find(f.all("ipam/ip-addresses/"), func(o D) bool { return o["address"] == "140.113.60.163/27" }) != nil {
+		t.Fatal("an unbound address stayed in NetBox")
 	}
 }

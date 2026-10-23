@@ -60,6 +60,12 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		if r["kind"] == "domain" {
 			return e.approveDomain(tool, a, w, r, t)
 		}
+		if r["kind"] == "public_ip" {
+			if boolean(a["adopt"]) {
+				fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
+			}
+			return e.approvePublicIP(tool, a, w, r, t)
+		}
 		if r["kind"] == "port" {
 			if boolean(a["adopt"]) {
 				fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})

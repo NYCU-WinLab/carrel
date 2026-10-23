@@ -479,6 +479,21 @@ func goldenScenario(g *goldenRun) {
 	call("vpn", "vpn_client_list", D{}, bob)
 	call("vpn", "vpn_client_remove", D{"name": "laptop"}, alice)
 	call("vpn", "vpn_client_remove", D{"name": "laptop"}, alice)
+
+	// Public addresses (issue #91): the pool comes from NetBox.
+	call("public", "public_ip_request", D{"reason": "no pool yet"}, alice)
+	g.p.Store.SitePut("public_pool", "netbox", D{"ranges": []any{D{"start": "203.0.113.10/24", "end": "203.0.113.11/24"}}})
+	asked := call("public", "public_ip_request", D{"reason": "a mail server on port 25"}, alice)
+	call("admin", "request_approve", D{"id": obj(asked["request"])["id"]}, admin)
+	call("public", "public_ip_list", D{}, alice)
+	call("public", "public_ip_bind", D{"machine": "web", "ports": []any{"tcp/25", "tcp/25"}}, alice)
+	call("public", "public_ip_bind", D{"machine": "web", "ports": []any{"tcp/25", "udp/53"}, "dry_run": true}, alice)
+	call("public", "public_ip_bind", D{"machine": "web", "ports": []any{"tcp/25", "udp/53"}}, alice)
+	call("public", "machine_get", D{"machine": "web"}, alice)
+	call("public", "public_ip_list", D{}, bob)
+	call("public", "public_ip_release", D{"address": "203.0.113.11"}, alice)
+	call("public", "public_ip_release", D{}, alice)
+	call("public", "public_ip_list", D{}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {
