@@ -24,6 +24,9 @@ import (
 
 const grantUnusedDays = 30
 
+// maxPendingDomainRequests bounds the names one tenant can have waiting.
+const maxPendingDomainRequests = 3
+
 // domainGrant is one approved special name.
 type domainGrant struct {
 	Adopt       bool    `json:"adopt,omitempty"`
@@ -66,8 +69,14 @@ func (e *Execution) grants(n ...int) []domainGrant {
 	return rowsOf[domainGrant](e.S, "domain_grants", n...)
 }
 
-// grantCovering finds the tenant's grant that lets domain_add publish name.
+// grantCovering finds the tenant's grant that lets domain_add publish name:
+// an exact grant of the name before a wildcard that covers it.
 func (e *Execution) grantCovering(n int, name string) domainGrant {
+	for _, g := range e.grants(n) {
+		if g.Name == name {
+			return g
+		}
+	}
 	for _, g := range e.grants(n) {
 		if g.covers(name) {
 			return g
@@ -206,6 +215,10 @@ func (e *Execution) DomainRequest(a, w, t D) D {
 		}
 	}
 	existing := e.checkSpecialName(t, kind, name, "")
+	pending := filter(e.S.Objects("requests", n), func(r D) bool { return r["kind"] == "domain" && r["status"] == "pending" })
+	if len(pending) >= maxPendingDomainRequests {
+		fail("quota_exceeded", "A tenant has at most 3 pending domain requests; wait for a decision", D{"recovery": "revise_request"})
+	}
 	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "domain", "status": "pending", "domain_kind": kind, "name": name, "reason": a["reason"], "existing_record": existing, "actor": w["sub"], "created_at": time.Now().Unix()}
 	if !dry {
 		if key != "" {
@@ -395,20 +408,26 @@ func (e *Execution) MaintainGrants() {
 	}
 }
 
-// releaseGrant gives a name back: its record goes first, then the gateway
-// stops serving it, then its certificate and the grant.
+// releaseGrant gives a name back: its record goes first, then the grant and
+// its request together, then the gateway stops serving it, then its
+// certificate. A name taken over with adopt is not restored: the old records
+// were replaced on purpose, and only the log keeps what they said.
 func (e *Execution) releaseGrant(g domainGrant, why string) {
 	e.GrantRecord(g, true)
-	e.S.Remove("domain_grants", g.ID)
+	e.Transaction(func(tx *Execution) {
+		tx.S.Remove("domain_grants", g.ID)
+		if r := tx.S.Get("requests", g.RequestID); r != nil {
+			r["status"] = "released"
+			r["released_at"] = time.Now().Unix()
+			tx.S.Put("requests", g.RequestID, g.TenantN, r)
+		}
+	})
+	e.S.Log("system", g.TenantN, "domain_grant_released", D{"grant": g.ID, "name": g.Name, "reason": why}, "ok")
+	// A failed pass leaves the site to the next reconcile, which no longer
+	// has the grant; the pair goes only once the gateway dropped it.
 	e.Reconcile()
 	_ = os.RemoveAll(filepath.Join(e.CertificateDir(), "live", g.lineage()))
 	_ = os.RemoveAll(filepath.Join(e.CertificateDir(), "archive", g.lineage()))
-	if r := e.S.Get("requests", g.RequestID); r != nil {
-		r["status"] = "released"
-		r["released_at"] = time.Now().Unix()
-		e.S.Put("requests", g.RequestID, g.TenantN, r)
-	}
-	e.S.Log("system", g.TenantN, "domain_grant_released", D{"grant": g.ID, "name": g.Name, "reason": why}, "ok")
 }
 
 // publicGrants is the tenant's grants as domain_list shows them.

@@ -94,6 +94,8 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("r", "domain_request", D{"name": "site.alice.winlab.tw", "reason": "already mine"}, alice)
 	call("r", "domain_request", D{"name": "alice.winlab.tw", "reason": "alice's apex"}, bob)
 	apex := call("r", "domain_request", D{"name": "alice.winlab.tw", "reason": "my apex"}, alice)
+	call("r", "domain_request", D{"name": "extra.winlab.tw", "reason": "third pending"}, alice)
+	call("r", "domain_request", D{"name": "more.winlab.tw", "reason": "one too many"}, alice)
 	call("r", "domain_request", D{"name": "auth.winlab.tw", "reason": "platform name"}, alice)
 	call("r", "domain_request", D{"name": "carrel.winlab.tw", "reason": "platform name"}, alice)
 	call("r", "domain_request", D{"name": "*.taken.winlab.tw", "kind": "wildcard", "reason": "covers a name"}, bob)
@@ -108,6 +110,9 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("a", "request_approve", D{"id": requestID(video), "adopt": true}, admin)
 	call("a", "request_approve", D{"id": requestID(lab)}, admin)
 	call("a", "request_reject", D{"id": requestID(apex)}, admin)
+	// An exact name under the tenant's own wildcard wins over the wildcard.
+	api := call("a", "domain_request", D{"name": "api.lab.winlab.tw", "reason": "its own certificate"}, bob)
+	call("a", "request_approve", D{"id": requestID(api)}, admin)
 	call("a", "domain_list", D{}, alice)
 	rows("a")
 	records("a")

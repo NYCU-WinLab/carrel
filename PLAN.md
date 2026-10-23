@@ -650,8 +650,11 @@ gateway. Its A record, comment `carrel:b09:grant:<id>`, is written or moved only
 holds that certificate, so an adopted name keeps answering where it did until carrel serves it;
 a lone foreign A record changes in place. Removing a grant's last domain keeps the grant and its
 record; the maintenance pass releases a grant unused for 30 days (record, gateway site,
-certificate, grant; the request reads `released`). Labels of grants and pending requests are
-reserved against new tenant slugs. Still to build: zones other than `winlab.tw` (`zone_add`),
+certificate, grant; the request reads `released`). An adopted name is not restored on release:
+the old records were replaced on purpose, and only the log keeps them. Labels of grants are
+reserved against new tenant slugs; a pending request reserves nothing, and a tenant has at most
+3 pending domain requests. `domain_add` prefers an exact grant of the name over a wildcard that
+covers it. Still to build: zones other than `winlab.tw` (`zone_add`),
 `port_request` and `srv`, `delegated`, and the Cloudflare proxy switch.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
