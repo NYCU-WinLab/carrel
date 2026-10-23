@@ -806,10 +806,16 @@ the machine's outbound traffic to the bound address. The guest needs no change, 
 stays (6.11), and no anti-spoofing rules are needed. Routing the public address into the guest
 (a second NIC or an extra address on `net0`) is not offered.
 
-**Address pool.** The pool is site configuration (`config.json`), not a constant in the code: a
-list of addresses or prefixes the lab network team has assigned to carrel. A site with no pool
-offers no public IPs. The control plane takes a free address from the pool, never one of the
-exit node's own addresses or the shared address.
+**Address pool.** NetBox holds the pool, not `config.json` or the code: the lab network team
+assigns addresses to carrel there, and NetBox is where they track the range. The pool is every IP
+range in NetBox whose tenant is `netbox.public_tenant` and whose role is `netbox.public_role`
+(defaults `Carrel` and `User`). Addresses of that tenant outside such a range, such as the exit
+nodes' own addresses and the shared address, are never handed out. An address that does not
+answer ARP is not free unless NetBox assigns it to carrel. A site without NetBox sync, or with no
+such range, offers no public IPs. carrel reads the ranges on each NetBox pass and records each
+binding as an IP address it owns inside its range, so NetBox shows which machine holds it. A
+range that shrinks under a bound address keeps the binding and refuses new ones from that
+address. On B09 the range is `140.113.60.163` to `.165` (2026-10-23).
 
 **Objects and tools.** A binding belongs to one machine and one tenant. `public_ip_request`
 (machine, reason) creates a request like `quota_request`; an administrator answers it with
@@ -827,7 +833,7 @@ the default is SSH only. Egress limits and abuse handling of 6.6 apply to the bo
 failover of #89: the address moves with the active node.
 
 **Order.** Independent of the attachments in 6.11: it needs neither a route table nor a
-VRF, so it can be built beside the client VPN once a pool is configured.
+VRF, so it can be built beside the client VPN once a pool exists in NetBox.
 
 **Left open**: who approves and for how long (`until`, automatic removal of expired bindings), and
 whether carrel creates a DNS name for a bound address.
