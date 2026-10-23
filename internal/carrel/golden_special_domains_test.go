@@ -165,9 +165,17 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("p", "port_open", D{"machine": "web", "port": 25566, "proto": "tcp", "public_port": 25565}, alice)
 	srv := call("p", "domain_request", D{"name": "_minecraft._tcp.mc.winlab.tw", "kind": "srv", "reason": "minecraft"}, alice)
 	call("p", "domain_request", D{"name": "_minecraft._tcp.winlab.tw", "kind": "srv", "reason": "the zone apex"}, alice)
+	// An SRV record speaks for its name: not under another tenant's grant.
+	call("p", "domain_request", D{"name": "_minecraft._tcp.video.winlab.tw", "kind": "srv", "reason": "alice's name"}, bob)
+	call("p", "domain_request", D{"name": "_minecraft._tcp.x.lab.winlab.tw", "kind": "srv", "reason": "under bob's wildcard"}, alice)
+	// Someone else's address at the name needs adopt.
+	dns.records["mc2.winlab.tw"] = []D{{"id": "old3", "type": "A", "name": "mc2.winlab.tw", "content": "140.113.194.231"}}
+	call("p", "domain_request", D{"name": "_minecraft._tcp.mc2.winlab.tw", "kind": "srv", "reason": "foreign base", "dry_run": true}, alice)
 	call("p", "request_approve", D{"id": requestID(srv)}, admin)
 	call("p", "domain_add", D{"machine": "web", "name": "_minecraft._tcp.mc.winlab.tw", "target_port": 25566}, alice)
 	call("p", "domain_add", D{"machine": "web", "name": "_minecraft._tcp.mc.winlab.tw", "target_port": 25565}, alice)
+	// Nor may another tenant take the name an SRV record speaks for.
+	call("p", "domain_request", D{"name": "mc.winlab.tw", "reason": "over alice's SRV"}, bob)
 	do("p", func() { g.p.execution(bg).MaintainGrants() })
 	do("p", func() { g.p.execution(bg).MaintainSpecialPorts() })
 	call("p", "port_list", D{}, alice)

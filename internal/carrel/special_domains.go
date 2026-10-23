@@ -204,7 +204,16 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 		if kind == "wildcard" && under(other, strings.TrimPrefix(name, "*.")) && other != strings.TrimPrefix(name, "*.") {
 			return true
 		}
-		return otherKind == "wildcard" && under(name, strings.TrimPrefix(other, "*.")) && name != strings.TrimPrefix(other, "*.")
+		if otherKind == "wildcard" && under(name, strings.TrimPrefix(other, "*.")) && name != strings.TrimPrefix(other, "*.") {
+			return true
+		}
+		// An SRV record speaks for the name it sits on: clients of that name
+		// follow it. So the name, and everything under it, must be the
+		// tenant's own.
+		if kind == "srv" && otherKind != "srv" && under(srvBase(name), strings.TrimPrefix(other, "*.")) {
+			return true
+		}
+		return kind != "srv" && otherKind == "srv" && under(srvBase(other), strings.TrimPrefix(name, "*."))
 	}
 	for _, g := range e.grants() {
 		if overlaps(g.Kind, g.Name) && (g.TenantN != integer(t["n"]) || g.Name == name) {
@@ -227,6 +236,11 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 			fail("conflict", "The wildcard would cover an existing name: "+recorded, D{"recovery": "revise_request"})
 		}
 		if recorded == name && (addressRecord(r) && kind != "srv" || r["type"] == "SRV" && kind == "srv") {
+			existing = true
+		}
+		// Someone else's address at the name an SRV record would speak for
+		// is taken over only with adopt.
+		if kind == "srv" && recorded == srvBase(name) && addressRecord(r) {
 			existing = true
 		}
 	}
