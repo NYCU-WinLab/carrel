@@ -95,7 +95,8 @@ func (e *Execution) machineBusy(n int, m D) bool {
 			return true
 		}
 		args := obj(o["args"])
-		if names(args["machine"]) || names(args["from"]) || names(args["to"]) {
+		// machine_migrate names nodes in from and to, not machines.
+		if names(args["machine"]) {
 			return true
 		}
 		for _, list := range []string{"attachments", "access", "publications"} {

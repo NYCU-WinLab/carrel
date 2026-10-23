@@ -160,7 +160,6 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 		dns.mu.Unlock()
 	}
 	call := func(step, tool string, a, who D) D { r := g.call(step, tool, a, who); flush(step); return r }
-	submit := func(step, tool string, a, who D) D { r := g.submit(step, tool, a, who); flush(step); return r }
 	// racy submits a job that the queue may or may not have picked up by the
 	// time the response is rendered (issue #115): those fields are masked.
 	racy := func(step, tool string, a, who D) D {
@@ -231,7 +230,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 
 	// q1: certificate queued with a fractional ready_at, then ready.
 	cert(later(0.5))
-	r := submit("q1", "domain_add", D{"machine": "web", "sub": "q1", "target_port": 8080, "wait_seconds": 0}, alice)
+	r := racy("q1", "domain_add", D{"machine": "web", "sub": "q1", "target_port": 8080, "wait_seconds": 0}, alice)
 	wait("q1", opOf(r), "waiting")
 	rows("q1w")
 	opRow("q1w", opOf(r))
@@ -244,7 +243,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 
 	// q2: queued with a whole-second ready_at given as int64.
 	cert(func() D { return D{"state": "queued", "ready_at": time.Now().Unix() + 1} })
-	r = submit("q2", "domain_add", D{"machine": "api", "sub": "q2", "target_port": 3000, "wait_seconds": 0}, alice)
+	r = racy("q2", "domain_add", D{"machine": "api", "sub": "q2", "target_port": 3000, "wait_seconds": 0}, alice)
 	wait("q2", opOf(r), "waiting")
 	rows("q2w")
 	opRow("q2w", opOf(r))
@@ -259,7 +258,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 
 	// r1: the record's operation changes while the job waits.
 	cert(later(0.5))
-	r = submit("r1", "domain_add", D{"machine": "web", "sub": "r1", "target_port": 8082, "wait_seconds": 0}, alice)
+	r = racy("r1", "domain_add", D{"machine": "web", "sub": "r1", "target_port": 8082, "wait_seconds": 0}, alice)
 	wait("r1", opOf(r), "waiting")
 	for _, d := range g.p.Store.Objects("domains", 1) {
 		if d["sub"] == "r1" {
@@ -273,7 +272,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 	rows("r1")
 	// r2: the record starts deleting while the job waits.
 	cert(later(0.5))
-	r = submit("r2", "domain_add", D{"machine": "web", "sub": "r2", "target_port": 8083, "wait_seconds": 0}, alice)
+	r = racy("r2", "domain_add", D{"machine": "web", "sub": "r2", "target_port": 8083, "wait_seconds": 0}, alice)
 	wait("r2", opOf(r), "waiting")
 	for _, d := range g.p.Store.Objects("domains", 1) {
 		if d["sub"] == "r2" {
@@ -309,7 +308,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 	}
 	cert(later(0.6))
 	call("p", "deployment_plan", obj(copyValue(spec)), alice)
-	r = submit("p", "deployment_apply", merge(obj(copyValue(spec)), D{"wait_seconds": 0}), alice)
+	r = racy("p", "deployment_apply", merge(obj(copyValue(spec)), D{"wait_seconds": 0}), alice)
 	wait("p", opOf(r), "waiting_for_certificate")
 	rows("pw")
 	opRow("pw", opOf(r))
