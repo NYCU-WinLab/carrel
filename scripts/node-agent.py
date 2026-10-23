@@ -495,10 +495,15 @@ def public_bindings(state, protected=()):
         n = integer(b["tenant_n"], 1, 254)
         public = ipaddress.IPv4Address(b["address"])
         network = shared.network
-        if (public not in network or public in (network.network_address, network.broadcast_address, gateway, shared.ip)
-                or any(public in p for p in blocked) or public in seen):
+        if public in seen:
             raise ValueError("invalid public address binding")
         seen.add(public)
+        if (public not in network or public in (network.network_address, network.broadcast_address, gateway, shared.ip)
+                or any(public in p for p in blocked)):
+            # A NetBox range that strays outside the public network: that
+            # binding is not applied, and every other machine keeps working.
+            print(f"public address {public} is not usable here; binding skipped", file=sys.stderr)
+            continue
         m = machines.get(b["vmid"])
         if m is None or n not in active:
             continue
@@ -531,7 +536,8 @@ def public_ports(ports):
 
 def public_addresses(bindings):
     """Hold the bound addresses on the public interface, deprecated so the node
-    never picks one as the source of its own connections. bindings maps each
+    never picks one as the source of its own connections, and scope link so an
+    ifreload keeps them. bindings maps each
     address to its machine's address. An address that leaves, or moves to
     another machine, loses its tracked connections too: a NAT mapping outlives
     the rules that made it."""
@@ -543,7 +549,9 @@ def public_addresses(bindings):
     # is still removed later.
     write(PUBLIC_IPS, json.dumps(dict(sorted({**old, **bindings}.items()))))
     for a in sorted(bindings):
-        run("ip", "address", "replace", f"{ipaddress.IPv4Address(a)}/32", "dev", iface, "preferred_lft", "0")
+        # scope link: ifupdown2 purges global addresses its files do not
+        # list on every ifreload, which each SDN apply runs.
+        run("ip", "address", "replace", f"{ipaddress.IPv4Address(a)}/32", "dev", iface, "preferred_lft", "0", "scope", "link")
     for a in sorted(set(old) - set(bindings)):
         if a in held_addresses(iface):
             run("ip", "address", "del", f"{ipaddress.IPv4Address(a)}/32", "dev", iface)

@@ -849,9 +849,10 @@ func (e *Execution) netboxPool(c *nbClient, cfg nbConfig) {
 
 // publicIPPrefix is a pool address with the length of its NetBox range.
 func (e *Execution) publicIPPrefix(address string) string {
+	a, err := netip.ParseAddr(address)
 	for _, r := range dicts(obj(e.S.SiteGet("public_pool", "netbox"))["ranges"]) {
-		if _, bits, ok := strings.Cut(str(r["start"]), "/"); ok {
-			return address + "/" + bits
+		if p, perr := netip.ParsePrefix(str(r["start"])); err == nil && perr == nil && p.Masked().Contains(a) {
+			return fmt.Sprintf("%s/%d", address, p.Bits())
 		}
 	}
 	return address + "/32"

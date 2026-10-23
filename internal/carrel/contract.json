@@ -2434,7 +2434,7 @@
     },
     {
       "name": "public_ip_request",
-      "description": "Request a dedicated public IPv4 address, with a reason. An admin approves it and the tenant then holds an address from the site's pool, shown by public_ip_list; public_ip_bind points it at a machine. Addresses are scarce: ask only for a service that needs its own address, such as standard ports (25, 53, 443 with its own TLS), port ranges, or an outbound source of its own. Reusing an idempotency_key with the same request returns that request.",
+      "description": "Request a dedicated public IPv4 address, with a reason. An admin approves it and the tenant then holds an address from the site's pool, shown by public_ip_list; public_ip_bind points it at a machine. Addresses are scarce: ask only for a service that needs its own address, such as standard ports (53, 443 with its own TLS), port ranges, or an outbound source of its own. Outbound TCP 25 stays blocked. Reusing an idempotency_key with the same request returns that request.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2491,7 +2491,7 @@
     },
     {
       "name": "public_ip_bind",
-      "description": "Point a public address the tenant holds at one of its machines, 1:1 NAT as an AWS Elastic IP: the internet reaches the machine on the listed ports of that address, and the machine's outbound traffic leaves from it. The guest keeps its private address and needs no change. ports is [\"all\"] or up to 32 of \"tcp/N\" and \"udp/N\"; the default is [\"tcp/22\"]. Binding again moves the address or changes its ports. Other machines, the machine's other tenants' peers and its network_access are unchanged; carrel's own machines cannot reach a bound address. A machine holds at most one public address; deleting the machine unbinds it and the tenant keeps the address.",
+      "description": "Point a public address the tenant holds at one of its machines, 1:1 NAT as an AWS Elastic IP: the internet reaches the machine on the listed ports of that address, and the machine's outbound traffic leaves from it. The guest keeps its private address and needs no change. ports is [\"all\"] or up to 32 of \"tcp/N\" and \"udp/N\"; the default is [\"tcp/22\"]. Binding again moves the address or changes its ports. Other machines, the machine's other tenants' peers and its network_access are unchanged; carrel's own machines, the bound one included, cannot reach a bound address (no hairpin). A machine holds at most one public address; deleting the machine unbinds it and the tenant keeps the address.",
       "inputSchema": {
         "type": "object",
         "properties": {

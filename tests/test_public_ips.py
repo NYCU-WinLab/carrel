@@ -78,11 +78,6 @@ def test_a_suspended_tenant_or_a_missing_machine_holds_nothing():
 @pytest.mark.parametrize(
     "change",
     [
-        {"address": "140.113.60.184"},  # the shared address
-        {"address": "140.113.60.190"},  # the gateway
-        {"address": "140.113.60.191"},  # broadcast
-        {"address": "140.113.61.10"},  # outside the public network
-        {"address": "140.113.60.170"},  # protected
         {"tenant_n": 4},  # another tenant's machine
         {"ports": []},
         {"ports": ["icmp/1"]},
@@ -147,7 +142,18 @@ def test_addresses_are_held_deprecated_and_only_its_own_removed(tmp_path, monkey
     monkeypatch.setattr(module, "conntrack_flush", flushed.append)
     monkeypatch.setattr(module, "PUBLIC_IPS", tmp_path / "public-ips.json")
     module.public_addresses({"140.113.60.163": "10.200.3.11", "140.113.60.164": "10.200.3.12"})
-    assert ("ip", "address", "replace", "140.113.60.163/32", "dev", "vmbr0.60", "preferred_lft", "0") in calls
+    assert (
+        "ip",
+        "address",
+        "replace",
+        "140.113.60.163/32",
+        "dev",
+        "vmbr0.60",
+        "preferred_lft",
+        "0",
+        "scope",
+        "link",
+    ) in calls
     assert flushed == []
     calls.clear()
     # .163 leaves, .164 moves to another machine: both lose their connections.
@@ -175,3 +181,15 @@ def test_a_failed_removal_keeps_the_address_tracked(tmp_path, monkeypatch):
     with pytest.raises(module.CommandFailure):
         module.public_addresses({})
     assert "140.113.60.163" in json.loads((tmp_path / "public-ips.json").read_text())
+
+
+@pytest.mark.parametrize(
+    "address", ["140.113.60.184", "140.113.60.190", "140.113.60.191", "140.113.61.10", "140.113.60.170"]
+)
+def test_an_unusable_address_is_skipped_not_fatal(address):
+    # The shared address, the gateway, broadcast, outside the network, protected.
+    module = load()
+    s = state({**BOUND, "address": address})
+    assert module.public_bindings(s, ["140.113.60.170/32"]) == []
+    # Every machine's firewall still builds.
+    module.guest_firewall(OTHER, s, {"protected_addresses": ["140.113.60.170/32"]})

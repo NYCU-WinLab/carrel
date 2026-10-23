@@ -812,8 +812,9 @@ exit node: in `carrel_ports`, DNAT of traffic arriving on the public interface f
 address to the machine's primary address, and SNAT of the machine's traffic leaving the public
 interface to the bound address (that chain runs before `carrel_public`, whose rule SNATs every
 other tenant to the shared address). The exit node holds each bound address on its public
-interface as a deprecated /32, so it answers ARP but never picks it as the source of its own
-connections; it records the addresses it added, and each one's machine, in
+interface as a deprecated /32 of scope link, so it answers ARP but never picks it as the source of its
+own connections, and the ifreload of every SDN apply (which purges global addresses its files do
+not list) keeps it; it records the addresses it added, and each one's machine, in
 `/etc/carrel/public-ips.json` before it adds them and removes only those, checking that the
 interface no longer holds one. An address that leaves or moves to another machine loses its
 tracked connections (`conntrack -D`, every zone), since a NAT mapping outlives its rule.
