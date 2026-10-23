@@ -147,9 +147,20 @@ def site_layout(node, site):
     public = str(cidr.ip) + "/32"
     protected = [a + "/32" for a in addresses.values()] + [public]
     protected += [str(ipaddress.IPv4Network(p)) for p in site.get("protected_addresses", [])]
+    entries = [{"address": public, "port": 443}]
+    # Another protected host's public HTTPS (such as the lab host's gateway): the
+    # internet reaches it, so tenants may too. Its other ports stay dropped.
+    for entry in site.get("public_entries", []):
+        address = str(ipaddress.IPv4Network(entry["address"]))
+        if address not in protected or not address.endswith("/32"):
+            raise SystemExit(f"public entry {entry['address']} is not a protected host")
+        port = int(entry["port"])
+        if not 1 <= port <= 65535:
+            raise SystemExit(f"public entry {entry['address']} has an invalid port")
+        entries.append({"address": address, "port": port})
     return {"address": addresses[node], "peers": [a for n, a in addresses.items() if n != node],
             "all": list(addresses.values()), "exit_nodes": exits, "interface": site["underlay_interface"],
-            "protected": protected, "entries": [{"address": public, "port": 443}],
+            "protected": protected, "entries": entries,
             # The first exit node holds the public address and terminates ingress.
             "public": {"interface": f'{site["underlay_interface"]}.{int(site["public"]["vlan"])}',
                        "cidr": str(cidr), "address": str(cidr.ip),
