@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"encoding/json"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -200,7 +201,7 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	// (issue #161).
 	token, fromFile := strings.TrimSpace(str(a["token"])), false
 	if token == "" {
-		b, err := os.ReadFile(e.zoneTokenPath(name))
+		b, err := readSmall(e.zoneTokenPath(name), 4096)
 		if err != nil {
 			fail("invalid", "Give token, or first place it on the control plane as "+name+".token in the zone directory (zone_dir, /var/lib/carrel/zones by default)", D{"recovery": "resolve_prerequisite"})
 		}
@@ -213,7 +214,7 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	// Cloudflare refuses is the caller's to fix, not a retry.
 	var found []D
 	if err := attempt(func() { found = dicts(e.cloudflare(token, "GET", "/zones?name="+url.QueryEscape(name), nil)["result"]) }); err != nil {
-		if f, ok := err.(Failure); ok && integer(obj(f.Result["error"])["http_status"]) >= 400 && integer(obj(f.Result["error"])["http_status"]) < 500 {
+		if f, ok := err.(Failure); ok && integer(obj(f.Result["error"])["http_status"]) >= 400 && integer(obj(f.Result["error"])["http_status"]) < 500 && integer(obj(f.Result["error"])["http_status"]) != 429 {
 			fail("invalid", "Cloudflare refused the token", D{"recovery": "revise_request"})
 		}
 		panic(err)
@@ -260,4 +261,17 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 		e.S.SitePut("zone", name, decode(string(encoded(z))))
 	}
 	return D{"zone": e.publicZone(z), "dry_run": dry}
+}
+
+// readSmall reads at most limit bytes of a regular file.
+func readSmall(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, os.ErrInvalid
+	}
+	return io.ReadAll(io.LimitReader(f, limit))
 }
