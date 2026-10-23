@@ -471,7 +471,9 @@ Every tenant machine gets the security group of its tenant:
    anycast gateway still works. Public entry points listed in `node.json` `public_entries` are
    accepted above this drop: TCP 443 on the public address (`140.113.60.184`), the HTTPS gateway
    the internet already reaches, so tenants can use carrel and lab sites by their public names
-   (the hairpin in section 6.4), and the tenants' public port blocks (TCP and UDP 20010 to 22549,
+   (the hairpin in section 6.4), TCP 443 on each protected host the site file lists in its own
+   `public_entries` (the lab host's gateway `140.113.194.229`, which serves door, display and other
+   lab sites), and the tenants' public port blocks (TCP and UDP 20010 to 22549,
    issue #28): what the internet reaches, tenants reach too. The first exit node gives a tenant
    reaching another tenant's public port the public address as its source, so the answer comes
    back through it. The node itself and CT 100 and 101 reach the public address as well (issue

@@ -48,7 +48,19 @@ def test_b09_layout_peers_every_other_node_and_protects_the_public_address():
     assert layout["exit_nodes"] == ["carrel01"]
     assert "140.113.60.184/32" in layout["protected"] and "192.168.19.104/32" in layout["protected"]
     assert "140.113.60.189/32" in layout["protected"]
-    assert layout["entries"] == [{"address": "140.113.60.184/32", "port": 443}]
+    assert layout["entries"] == [
+        {"address": "140.113.60.184/32", "port": 443},
+        {"address": "140.113.194.229/32", "port": 443},
+    ]
+
+
+@pytest.mark.parametrize(
+    "address", ["140.113.194.0/24", "140.113.1.1/32", "10.0.0.1/32", "192.168.19.101/32"]
+)
+def test_a_site_public_entry_must_be_a_protected_host(address):
+    site = {**SITE, "public_entries": [{"address": address, "port": 443}]}
+    with pytest.raises(SystemExit):
+        load("install-network.py").site_layout("carrel02", site)
 
 
 def test_a_node_outside_the_site_file_is_refused():
@@ -166,3 +178,10 @@ def test_the_jump_host_reaches_dns_and_tenant_tcp_only(monkeypatch):
     assert dns < rules.index(
         'iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop'
     )
+
+
+@pytest.mark.parametrize("port", [True, 443.9, "443", 0, 65536])
+def test_a_site_public_entry_port_must_be_an_integer_port(port):
+    site = {**SITE, "public_entries": [{"address": "140.113.194.229/32", "port": port}]}
+    with pytest.raises(SystemExit):
+        load("install-network.py").site_layout("carrel02", site)
