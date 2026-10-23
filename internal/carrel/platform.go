@@ -54,6 +54,8 @@ type Platform struct {
 	registration sync.Mutex
 	delivered    atomic.Value
 	delegated    sync.Mutex
+	// delegatedAsks bounds the work Caddy's on-demand asks cause.
+	delegatedAsks askLimiter
 	// proxyProbe replaces the check through Cloudflare in tests.
 	proxyProbe func(name string) string
 	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
