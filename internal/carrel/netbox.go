@@ -627,7 +627,12 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 }
 
 func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs map[string]int, clusterID int, cfg nbConfig, vmNB map[int]int, ifaceNB map[string]int) {
-	have := one(s.vms, func(o D) bool { return o["name"] == m.name })
+	// The VMID first: a renamed machine keeps its NetBox object, history and
+	// all (machine_rename). The name finds objects from before the field.
+	have := one(s.vms, func(o D) bool { return integer(obj(o["custom_fields"])[cfg.VMIDField]) == m.vmid })
+	if have == nil {
+		have = one(s.vms, func(o D) bool { return o["name"] == m.name })
+	}
 	if have == nil && len(c.list("virtualization/virtual-machines/", url.Values{"name": {m.name}, "cluster_id": {strconv.Itoa(clusterID)}})) > 0 {
 		panic(nbError{Msg: "a NetBox virtual machine named " + m.name + " exists but carrel did not create it"})
 	}

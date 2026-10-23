@@ -29,13 +29,8 @@ func (e *Execution) RenameMachine(a, t D) D {
 	if state := str(m["state"]); state == "provisioning" || state == "deleting" || state == "migrating" {
 		fail("conflict", "The machine is "+state+"; rename it once that has finished", D{"recovery": "resolve_prerequisite"})
 	}
-	for _, o := range e.S.ActiveOperations(n) {
-		if target := obj(o["machine_target"]); target != nil && integer(target["vmid"]) == integer(m["vmid"]) {
-			fail("conflict", "An operation on this machine is still running", D{"recovery": "resolve_prerequisite"})
-		}
-		if o["current_resource"] == old {
-			fail("conflict", "An operation on this machine is still running", D{"recovery": "resolve_prerequisite"})
-		}
+	if e.machineBusy(n, m) {
+		fail("conflict", "An operation on this machine is queued or running; rename it once that has finished", D{"recovery": "resolve_prerequisite"})
 	}
 	if dry {
 		planned := merge(m, D{"name": name})
@@ -69,12 +64,67 @@ func (e *Execution) RenameMachine(a, t D) D {
 	e.Reconcile()
 	e.P.NetBoxKick()
 	return D{
-		"machine": e.PublicMachine(m, e.ports(n)),
-		"renamed": D{"from": old, "to": name},
-		"owner_actions": []string{
-			"Replace the SSH alias " + old + "." + str(t["slug"]) + " with the returned ssh_config.",
-			"The guest's own hostname is unchanged; set it with: sudo hostnamectl set-hostname " + name,
-		},
-		"dry_run": false,
+		"machine":       e.PublicMachine(m, e.ports(n)),
+		"renamed":       D{"from": old, "to": name},
+		"owner_actions": e.renameActions(m, old, str(t["slug"])),
+		"dry_run":       false,
 	}
+}
+
+// machineBusy reports whether any active operation of the tenant may still
+// reach the machine: by its target, a deployment's machines or bindings, a
+// machine it created, or arguments that name it by name or vmid, since a
+// queued job binds those only when it runs (CheckBusy in operations.go).
+func (e *Execution) machineBusy(n int, m D) bool {
+	vmid, name := integer(m["vmid"]), str(m["name"])
+	names := func(v any) bool { return str(v) == name || str(v) == str(vmid) }
+	for _, o := range e.S.ActiveOperations(n) {
+		ids := arr(obj(o["deployment"])["machines"])
+		if id := obj(o["machine_target"])["vmid"]; id != nil {
+			ids = append(ids, id)
+		}
+		for id := range obj(obj(o["deployment"])["bindings"]) {
+			ids = append(ids, id)
+		}
+		for _, id := range ids {
+			if integer(id) == vmid {
+				return true
+			}
+		}
+		if m["operation_id"] == o["id"] || o["current_resource"] == name {
+			return true
+		}
+		args := obj(o["args"])
+		if names(args["machine"]) || names(args["from"]) || names(args["to"]) {
+			return true
+		}
+		for _, list := range []string{"attachments", "access", "publications"} {
+			for _, x := range dicts(args[list]) {
+				if names(x["machine"]) {
+					return true
+				}
+			}
+		}
+		for _, c := range dicts(args["connections"]) {
+			if names(c["from"]) || names(c["to"]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// renameActions says what is left to the owner after a rename.
+func (e *Execution) renameActions(m D, old, slug string) []string {
+	name := str(m["name"])
+	out := []string{
+		"Replace the SSH alias " + old + "." + slug + " with the returned ssh_config.",
+		"The internal name " + old + "." + slug + ".internal no longer resolves; use " + name + "." + slug + ".internal in other machines' settings.",
+	}
+	if m["kind"] == "ct" {
+		return append(out, "The container's hostname is now "+name+".")
+	}
+	// cloud-init sets the hostname and /etc/hosts from its files at every
+	// boot unless told to keep what the guest has.
+	return append(out, "The guest's own hostname is unchanged; set it and keep it across boots with: sudo hostnamectl set-hostname "+name+" && printf 'preserve_hostname: true\\nmanage_etc_hosts: false\\n' | sudo tee /etc/cloud/cloud.cfg.d/99-carrel-hostname.cfg && sudo sed -i 's/\\b"+old+"\\b/"+name+"/g' /etc/hosts")
 }

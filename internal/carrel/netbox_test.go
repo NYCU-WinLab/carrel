@@ -467,3 +467,25 @@ func TestNetBoxKickNeverBlocks(t *testing.T) {
 		p.NetBoxKick()
 	}
 }
+
+// A renamed machine keeps its NetBox object: the VMID finds it, the name is
+// patched (machine_rename).
+func TestNetBoxRenameKeepsTheVirtualMachine(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	before := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" })
+	web := p.Store.Get("machines", "10100")
+	web["name"] = "site"
+	p.Store.Put("machines", 10100, 1, web)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	after := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "site.alice" })
+	if before == nil || after == nil || before["id"] != after["id"] {
+		t.Fatal("rename replaced the NetBox VM", before, after)
+	}
+	if find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" }) != nil {
+		t.Fatal("the old name stayed")
+	}
+}
