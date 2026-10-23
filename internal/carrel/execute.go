@@ -250,6 +250,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.DomainRequest(a, w, t)
 	case "port_request":
 		return e.PortRequest(a, w, t)
+	case "public_ip_request":
+		return e.PublicIPRequest(a, w, t)
+	case "public_ip_list", "public_ip_bind", "public_ip_release":
+		return e.PublicIPAction(tool, a, t)
 	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink":
 		return e.AppTool(tool, a, t)
 	}
@@ -341,6 +345,14 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 						tx.S.Remove("peers", p.ID)
 					}
 				}
+				// A public address stays the tenant's, unbound (issue #91): a
+				// later machine with this VMID must not inherit it.
+				for _, b := range tx.publicIPs(n) {
+					if b.VMID == integer(m["vmid"]) {
+						b.VMID, b.Ports, b.BoundAt = 0, nil, 0
+						tx.Put("public_ips", b.ID, n, b)
+					}
+				}
 				// The address stays reserved for the tenant; only this holder goes.
 				for _, v := range tx.vips(n) {
 					holders := []int{}
@@ -398,5 +410,7 @@ func parseExpiry(v string) time.Time {
 func (e *Execution) capabilities() D {
 	c := clone(obj(Contract["capabilities"]))
 	c["custom_image_import"] = boolean(e.P.Config["fetch"])
+	// Public addresses per machine (issue #91): how many the pool has free.
+	c["public_ips"] = D{"offered": len(e.publicPool()) > 0, "free": len(e.freePublicIPs())}
 	return c
 }
