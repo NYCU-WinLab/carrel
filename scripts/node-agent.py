@@ -1953,7 +1953,12 @@ def main():
             out = reconcile(req["state"], first=req.get("first", True))
         elif op == "create":
             out = create(req["machine"])
-            out = {**out, **disk_volume(req["machine"], allow_provisioning=True)}
+            try:
+                out = {**out, **disk_volume(req["machine"], allow_provisioning=True)}
+            except Exception:
+                # Only NetBox's disk name depends on it (issue #175): a
+                # machine that was created must not fail here.
+                pass
         elif op == "action":
             out = action(req)
         elif op == "inventory":
