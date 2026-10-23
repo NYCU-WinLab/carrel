@@ -120,6 +120,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	})
 	a.appRoutes(mux)
 	a.statusRoute(mux, p)
+	a.askRoute(mux, p)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authorization := r.Header.Get("Authorization")
 		var who D
@@ -143,7 +144,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	}))
 	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		internal := r.URL.Path == "/internal/guest-status"
+		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/gateway/ask"
 		if internal && !strings.HasPrefix(host, "10.200.") {
 			jsonResponse(w, 403, D{"error": "forbidden"})
 			return

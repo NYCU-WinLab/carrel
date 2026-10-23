@@ -134,6 +134,30 @@ def test_port_grants_admit_the_client_address():
     assert "IN ACCEPT -p tcp -dport 22" in rules.splitlines()
 
 
+def test_delegated_routes_admit_the_control_plane():
+    module = load("node-agent.py")
+    machine = {
+        "tenant_n": 3,
+        "vmid": 10300,
+        "host": 10,
+        "name": "web",
+        "kind": "vm",
+        "ip": "10.200.3.10",
+        "mac": "02:ca:03:00:00:01",
+    }
+    domain = {"tenant_n": 3, "vmid": 10300, "target_port": 8080, "state": "ready"}
+    plain = module.guest_firewall(
+        machine, {"ports": [], "domains": [domain], "peers": []}, {"protected_addresses": []}
+    )
+    assert "IN ACCEPT -source 10.200.0.3 -p tcp -dport 8080" not in plain.splitlines()
+    rules = module.guest_firewall(
+        machine,
+        {"ports": [], "domains": [{**domain, "delegated": True}], "peers": []},
+        {"protected_addresses": []},
+    )
+    assert "IN ACCEPT -source 10.200.0.3 -p tcp -dport 8080" in rules.splitlines()
+
+
 def test_a_node_must_hold_its_site_address(monkeypatch):
     module = load("install-network.py")
     shown = [{"addr_info": [{"local": "192.168.19.101"}]}]

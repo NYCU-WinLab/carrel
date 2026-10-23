@@ -379,6 +379,17 @@ func (e *Execution) Reconcile() D {
 	}
 	state["domains"] = domains
 	state["certificates"] = append(e.CertificateBundles(domains), e.grantBundles(domains)...)
+	// The control plane asks a delegated route's target before the gateway
+	// obtains a certificate (delegated.go), so its guest firewall admits it.
+	for _, g := range e.grants() {
+		if g.Kind == "delegated" {
+			for _, d := range domains {
+				if d["grant"] == g.ID {
+					d["delegated"] = true
+				}
+			}
+		}
+	}
 	// Special domain grants route their names at the gateway (PLAN 6.10).
 	if grants := e.S.Objects("domain_grants"); len(grants) > 0 {
 		state["domain_grants"] = grants

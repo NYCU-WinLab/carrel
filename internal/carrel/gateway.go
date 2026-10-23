@@ -91,7 +91,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 			srv[g.ID] = true
 			continue
 		}
-		if !grantPattern.MatchString(g.Name) || (g.Kind != "exact" && g.Kind != "wildcard") || (g.Kind == "wildcard") != strings.HasPrefix(g.Name, "*.") || under(g.Name, origin) {
+		if !grantPattern.MatchString(g.Name) || (g.Kind != "exact" && g.Kind != "wildcard" && g.Kind != "delegated") || (g.Kind != "exact") != strings.HasPrefix(g.Name, "*.") || under(g.Name, origin) {
 			fail("conflict", "Invalid special domain grant")
 		}
 		// A tenant's subtree is its own site block; no grant may reach into it.
@@ -214,8 +214,23 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return grants[ids[i]].Name < grants[ids[j]].Name })
+	delegated := false
 	for _, id := range ids {
 		g := grants[id]
+		if g.Kind == "delegated" {
+			// The gateway's own certificates, issued when a name is first
+			// asked for, after carrel's ask endpoint agrees (PLAN 6.10):
+			// names one or two labels under the base.
+			delegated = true
+			fallback := "  respond 404"
+			for _, r := range grantRoutes[id] {
+				if r.domain["name"] == g.Name {
+					fallback = fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
+				}
+			}
+			lines = append(lines, "https://*."+g.base()+", https://*.*."+g.base()+" {", " tls {", "  on_demand", " }", " handle {", fallback, " }", "}")
+			continue
+		}
 		lineage := g.lineage()
 		bundle := byName[lineage]
 		if bundle == nil {
@@ -245,8 +260,14 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		lines = append(lines, " handle {", fallback, " }", "}")
 	}
+	if delegated {
+		lines[1] += "\n on_demand_tls {\n  ask http://" + controlAddress + "/gateway/ask\n }"
+	}
 	return strings.Join(lines, "\n") + "\n", hosts.String(), certificates
 }
+
+// controlAddress is where the gateway reaches the control plane.
+const controlAddress = "10.200.0.3:8080"
 
 // SyncGateway sends the gateway its configuration and returns the
 // fingerprints of the pairs it now holds.

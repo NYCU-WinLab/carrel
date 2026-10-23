@@ -65,6 +65,8 @@ func (g domainGrant) covers(name string) bool {
 		return true
 	}
 	if g.Kind != "wildcard" {
+		// A delegated grant has one route, its catch-all; the gateway
+		// serves every name under it from there.
 		return false
 	}
 	label, rest, ok := strings.Cut(name, ".")
@@ -110,13 +112,13 @@ func validSpecialName(kind, name string) {
 			fail("invalid", "An srv name is _service._tcp.<name> or _service._udp.<name>", D{"recovery": "revise_request"})
 		}
 		rest = m[3]
-	} else if kind == "wildcard" {
+	} else if kind == "wildcard" || kind == "delegated" {
 		var ok bool
 		if rest, ok = strings.CutPrefix(name, "*."); !ok {
 			fail("invalid", "A wildcard name starts with *.", D{"recovery": "revise_request"})
 		}
 	} else if kind != "exact" {
-		fail("invalid", "kind is exact, wildcard or srv", D{"recovery": "revise_request"})
+		fail("invalid", "kind is exact, wildcard, delegated or srv", D{"recovery": "revise_request"})
 	}
 	if len(name) > 253 || !matches(`^(`+specialLabel+`\.)+[a-z]{2,63}$`, rest) {
 		fail("invalid", "Name must be lowercase DNS labels", D{"recovery": "revise_request"})
@@ -163,9 +165,14 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 	if !e.zoneOpen(zone, integer(t["n"])) {
 		fail("forbidden", "This zone is not open to this tenant", D{"recovery": "revise_request"})
 	}
+	// The gateway issues certificates for delegated names on demand, under
+	// the zone's own budget: only in a zone of this tenant alone.
+	if kind == "delegated" && !e.zoneOnlyFor(zone, integer(t["n"])) {
+		fail("forbidden", "Delegated names live only in a zone open to this tenant alone", D{"recovery": "revise_request"})
+	}
 	// Neither the zone's wildcard nor, in the site's zone, its apex: a
 	// certificate for either would cover every name in the zone.
-	if (strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || zone == specialZone)) || (kind == "srv" && srvBase(name) == specialZone) {
+	if (strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || kind == "delegated" || zone == specialZone)) || (kind == "srv" && srvBase(name) == specialZone) {
 		fail("invalid", "Request a name under the zone, not the zone itself", D{"recovery": "revise_request"})
 	}
 	if zone != specialZone {
@@ -201,10 +208,10 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 		if other == name {
 			return true
 		}
-		if kind == "wildcard" && under(other, strings.TrimPrefix(name, "*.")) && other != strings.TrimPrefix(name, "*.") {
+		if covering(kind) && under(other, strings.TrimPrefix(name, "*.")) && other != strings.TrimPrefix(name, "*.") {
 			return true
 		}
-		if otherKind == "wildcard" && under(name, strings.TrimPrefix(other, "*.")) && name != strings.TrimPrefix(other, "*.") {
+		if covering(otherKind) && under(name, strings.TrimPrefix(other, "*.")) && name != strings.TrimPrefix(other, "*.") {
 			return true
 		}
 		// An SRV record speaks for the name it sits on: clients of that name
@@ -231,7 +238,7 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 			continue
 		}
 		recorded := str(r["name"])
-		if kind == "wildcard" && under(recorded, strings.TrimPrefix(name, "*.")) && recorded != strings.TrimPrefix(name, "*.") && recorded != name {
+		if covering(kind) && under(recorded, strings.TrimPrefix(name, "*.")) && recorded != strings.TrimPrefix(name, "*.") && recorded != name {
 			// A wildcard never covers a name that belongs to someone else.
 			fail("conflict", "The wildcard would cover an existing name: "+recorded, D{"recovery": "revise_request"})
 		}
@@ -325,8 +332,9 @@ func (e *Execution) approveDomain(tool string, a, w, r, t D) D {
 // EnsureGrantCertificate issues or renews the grant's certificate. A first
 // issuance waits while the 7-day budget is used up.
 func (e *Execution) EnsureGrantCertificate(g domainGrant) D {
-	if g.Kind == "srv" {
-		// An SRV record names a public port; there is nothing to encrypt.
+	if g.Kind == "srv" || g.Kind == "delegated" {
+		// An SRV record names a public port; a delegated name's
+		// certificates come from the gateway on demand.
 		return D{"state": "ready"}
 	}
 	e.P.certificates.Lock()
@@ -391,7 +399,9 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 	if len(ours) == 1 && len(foreign) == 0 && ours[0]["type"] == "A" && ours[0]["content"] == address {
 		return
 	}
-	if !e.grantCertificateHeld(g) {
+	// A delegated name's certificates are the gateway's own, issued on
+	// demand; the others move once the gateway holds the grant's pair.
+	if g.Kind != "delegated" && !e.grantCertificateHeld(g) {
 		return
 	}
 	if len(foreign) > 0 && !g.Adopt {
@@ -463,7 +473,7 @@ func (e *Execution) MaintainGrants() {
 				e.releaseGrant(g, "unused")
 				return
 			}
-			if _, _, held := e.livePair(g.lineage()); held || g.Kind == "srv" {
+			if _, _, held := e.livePair(g.lineage()); held || g.Kind == "srv" || g.Kind == "delegated" {
 				e.GrantRecord(g, false)
 			}
 		})
@@ -482,6 +492,11 @@ func (e *Execution) releaseGrant(g domainGrant, why string) {
 	e.GrantRecord(g, true)
 	e.Transaction(func(tx *Execution) {
 		tx.S.Remove("domain_grants", g.ID)
+		for _, n := range rowsOf[delegatedName](tx.S, "delegated_names", g.TenantN) {
+			if n.Grant == g.ID {
+				tx.S.Remove("delegated_names", n.ID)
+			}
+		}
 		if r := tx.S.Get("requests", g.RequestID); r != nil {
 			r["status"] = "released"
 			r["released_at"] = time.Now().Unix()
@@ -520,7 +535,7 @@ func (e *Execution) grantBundles(domains []D) []D {
 	}
 	out := []D{}
 	for _, g := range e.grants() {
-		if !wanted[g.ID] || g.Kind == "srv" {
+		if !wanted[g.ID] || g.Kind == "srv" || g.Kind == "delegated" {
 			continue
 		}
 		crt, key, ok := e.livePair(g.lineage())
@@ -608,3 +623,6 @@ func (e *Execution) srvRecord(g domainGrant, remove bool) {
 		e.cfIn(z, "POST", "", D{"type": "SRV", "name": g.Name, "data": data, "ttl": 120, "proxied": false, "comment": g.owner()})
 	}
 }
+
+// covering reports whether a grant kind covers the names under its base.
+func covering(kind string) bool { return kind == "wildcard" || kind == "delegated" }

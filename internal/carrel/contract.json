@@ -1231,7 +1231,7 @@
     },
     {
       "name": "domain_add",
-      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address.",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under a delegated grant, publish its catch-all *.<base>; the target serves /.well-known/carrel/ask. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2297,10 +2297,11 @@
             "enum": [
               "exact",
               "wildcard",
+              "delegated",
               "srv"
             ],
             "default": "exact",
-            "description": "exact: the name itself. wildcard: *.<base>, every name one label under base. srv: _service._tcp.<name> or _service._udp.<name>, an SRV record that names a public port of the tenant."
+            "description": "exact: the name itself. wildcard: *.<base>, every name one label under base. delegated: *.<base> in a zone open to this tenant alone; the gateway obtains a certificate for each name one or two labels under base when it is first asked for, at most 20 new names a week, once the route's target answers GET /.well-known/carrel/ask?domain=<name> with 200. srv: _service._tcp.<name> or _service._udp.<name>, an SRV record that names a public port of the tenant."
           },
           "reason": {
             "type": "string",

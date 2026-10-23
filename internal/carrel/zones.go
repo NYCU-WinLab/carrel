@@ -113,6 +113,16 @@ func (e *Execution) zoneOpen(zone string, n int) bool {
 	return false
 }
 
+// zoneOnlyFor reports whether zone is open to tenant n and no other.
+func (e *Execution) zoneOnlyFor(zone string, n int) bool {
+	for _, z := range e.zones() {
+		if z.Name == zone {
+			return len(z.Tenants) == 1 && z.Tenants[0] == n
+		}
+	}
+	return false
+}
+
 // publicZone is a zone as zone_list shows it: no id beyond Cloudflare's, no
 // token.
 func (e *Execution) publicZone(z zoneRecord) D {

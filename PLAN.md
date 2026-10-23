@@ -666,7 +666,17 @@ is released after 30 days. `domain_request` with `kind: srv` asks for `_service.
 `_service._udp.<name>`; `domain_add` under that grant needs an open public port to the target with
 the grant's protocol and writes an SRV record that names `carrel.winlab.tw` and that public port.
 The maintenance pass follows the port and removes the record once no port forwards there; SRV
-grants have no certificate and no gateway site. Still to build: `delegated` and the Cloudflare
+grants have no certificate and no gateway site.
+
+Delegated names are built too. `domain_request` with `kind: delegated` asks for `*.<base>` in a
+zone open to the tenant alone; `domain_add` publishes its catch-all. The grant's wildcard A record
+is written at once, and the gateway serves `*.<base>` and `*.*.<base>` with `tls { on_demand }`;
+the global `on_demand_tls` asks `http://10.200.0.3:8080/gateway/ask`, a path the public origin does
+not forward, answered only to the gateway's address. carrel agrees to a name once its route is
+ready, the tenant is active, the grant has issued fewer than 20 new names in 7 days, and the
+route's target answers `GET /.well-known/carrel/ask?domain=<name>` with 200 (the control plane
+reaches it: the guest firewall admits `10.200.0.3` to a delegated route's port). A name agreed to
+once is answered from its record, so renewals spend no budget. Still to build: the Cloudflare
 proxy switch.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and

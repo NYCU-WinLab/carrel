@@ -44,15 +44,17 @@ func validateKeys(keys any) {
 }
 
 type Platform struct {
-	Store              *Store
-	Backend            Backend
-	Config             D
-	HTTP               *http.Client
-	writer             sync.Mutex
-	originRetry        backoff
-	certificates       sync.Mutex
-	registration       sync.Mutex
-	delivered          atomic.Value
+	Store        *Store
+	Backend      Backend
+	Config       D
+	HTTP         *http.Client
+	writer       sync.Mutex
+	originRetry  backoff
+	certificates sync.Mutex
+	registration sync.Mutex
+	delivered    atomic.Value
+	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
+	tenantAsk          func(address string, port int, name string) bool
 	netboxKick         chan struct{}
 	inventoryMu        sync.Mutex
 	inventories        map[string]*ObservationCache

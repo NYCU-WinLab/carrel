@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -132,5 +133,29 @@ func TestZoneOfPicksTheLongestManagedZone(t *testing.T) {
 	// Without its token file a zone cannot be used.
 	if err := attempt(func() { e.zoneNamed("lab.example") }); err == nil {
 		t.Fatal("used a zone without a token")
+	}
+}
+
+// Only the gateway asks about delegated names: from anywhere else, and by
+// the public origin, the endpoint refuses (delegated.go).
+func TestGatewayAskIsTheGatewaysAlone(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config["origin"] = "https://carrel.winlab.tw"
+	app := NewApp(p, nil)
+	for _, c := range []struct {
+		remote, host string
+		want         int
+	}{
+		{"10.200.0.2:41000", "10.200.0.3:8080", 404},
+		{"10.200.1.10:41000", "10.200.0.3:8080", 403},
+		{"203.0.113.9:41000", "carrel.winlab.tw", 403},
+	} {
+		r := httptest.NewRequest("GET", "/gateway/ask?domain=x.d.lab.example", nil)
+		r.RemoteAddr, r.Host = c.remote, c.host
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		if w.Code != c.want {
+			t.Errorf("%s: %d", c.remote, w.Code)
+		}
 	}
 }
