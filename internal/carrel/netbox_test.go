@@ -304,6 +304,40 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 }
 
+// A public port or domain at a virtual address belongs to its FHRP group,
+// not to a machine (issue #146).
+func TestNetBoxServicesAtAVirtualAddressBelongToItsGroup(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	p.Store.Put("ports", "b", 1, D{"id": "b", "tenant_n": 1, "vmid": 0, "vip": "v", "ip": "10.200.1.251", "port": 6443, "proto": "tcp", "public_port": 20011})
+	p.Store.Put("domains", "e", 1, D{"id": "e", "tenant_n": 1, "vmid": 0, "vip": "v", "name": "k8s.alice.winlab.tw", "sub": "k8s", "slug": "alice", "target_port": 443, "state": "ready"})
+	for range 2 {
+		if r := syncNetBox(t, p); len(r.Errors) > 0 {
+			t.Fatal(r.Errors)
+		}
+	}
+	group := f.all("ipam/fhrp-groups/")[0]
+	services := f.all("ipam/services/")
+	if len(services) != 4 {
+		t.Fatal(services)
+	}
+	for _, name := range []string{"public-tcp-20011", "https://k8s.alice.winlab.tw"} {
+		sv := find(services, func(v D) bool { return v["name"] == name })
+		if sv == nil || sv["parent_object_type"] != nbGroupType || integer(sv["parent_object_id"]) != integer(group["id"]) {
+			t.Fatal(name, services)
+		}
+	}
+	// Closing them removes only the group's services.
+	p.Store.Remove("ports", "b")
+	p.Store.Remove("domains", "e")
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if services := f.all("ipam/services/"); len(services) != 2 || find(services, func(v D) bool { return v["parent_object_type"] == nbGroupType }) != nil {
+		t.Fatal(services)
+	}
+}
+
 func TestNetBoxSyncIsIdempotentAndFollowsChanges(t *testing.T) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
@@ -547,5 +581,27 @@ func TestNetBoxTenantImagesAreNotSharedAcrossTenants(t *testing.T) {
 	}
 	if len(names) != 2 || names[0] == names[1] {
 		t.Fatal(names)
+	}
+}
+
+// A renamed machine keeps its NetBox object: the VMID finds it, the name is
+// patched (machine_rename).
+func TestNetBoxRenameKeepsTheVirtualMachine(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	before := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" })
+	web := p.Store.Get("machines", "10100")
+	web["name"] = "site"
+	p.Store.Put("machines", 10100, 1, web)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	after := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "site.alice" })
+	if before == nil || after == nil || before["id"] != after["id"] {
+		t.Fatal("rename replaced the NetBox VM", before, after)
+	}
+	if find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" }) != nil {
+		t.Fatal("the old name stayed")
 	}
 }

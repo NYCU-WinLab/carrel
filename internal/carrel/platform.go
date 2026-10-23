@@ -44,15 +44,20 @@ func validateKeys(keys any) {
 }
 
 type Platform struct {
-	Store              *Store
-	Backend            Backend
-	Config             D
-	HTTP               *http.Client
-	writer             sync.Mutex
-	originRetry        backoff
-	certificates       sync.Mutex
-	registration       sync.Mutex
-	delivered          atomic.Value
+	Store        *Store
+	Backend      Backend
+	Config       D
+	HTTP         *http.Client
+	writer       sync.Mutex
+	originRetry  backoff
+	certificates sync.Mutex
+	registration sync.Mutex
+	delivered    atomic.Value
+	delegated    sync.Mutex
+	// proxyProbe replaces the check through Cloudflare in tests.
+	proxyProbe func(name string) string
+	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
+	tenantAsk          func(address string, port int, name string) bool
 	netboxKick         chan struct{}
 	inventoryMu        sync.Mutex
 	inventories        map[string]*ObservationCache
@@ -189,6 +194,16 @@ func (e *Execution) Register(w D, name string, overview bool) []D {
 	}
 	for _, t := range e.S.Tenants() {
 		reserved[str(t["slug"])] = true
+	}
+	// A granted special domain keeps its label from becoming a slug: the
+	// tenant's wildcard would cover it (PLAN 6.10). A pending request does
+	// not; its approval checks the slugs again.
+	for _, g := range e.grants() {
+		if g.zone() != specialZone {
+			continue
+		}
+		labels := relativeLabels(g.Name)
+		reserved[labels[len(labels)-1]] = true
 	}
 	for _, s := range missing {
 		err := attempt(func() {

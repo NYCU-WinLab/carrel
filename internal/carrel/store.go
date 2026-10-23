@@ -197,6 +197,18 @@ func (s *Store) SiteGet(kind, id string) D {
 	}
 	return decode(str(r[0]["data"]))
 }
+
+// SiteRows lists a kind's site state in id order.
+func (s *Store) SiteRows(kind string) []D {
+	out := []D{}
+	for _, r := range s.Rows("SELECT data FROM site WHERE kind=? ORDER BY id", kind) {
+		out = append(out, decode(str(r["data"])))
+	}
+	return out
+}
+func (s *Store) SiteRemove(kind, id string) {
+	s.Exec("DELETE FROM site WHERE kind=? AND id=?", kind, id)
+}
 func (s *Store) SitePut(kind, id string, value D) {
 	s.Exec("INSERT INTO site VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data", kind, id, string(encoded(value)))
 }
@@ -272,6 +284,10 @@ func (s *Store) Desired() D {
 	// Sent only when a tenant has one, so requests without any stay as they were.
 	if vips := filter(s.Objects("vips"), func(o D) bool { return o["state"] != "deleting" }); len(vips) > 0 {
 		state["vips"] = vips
+	}
+	// The same for VPN clients; an expired one is gone before its record.
+	if clients := filter(s.Objects("vpn_clients"), func(o D) bool { return o["state"] != "deleting" && num(o["expires_at"]) > now() }); len(clients) > 0 {
+		state["vpn_clients"] = clients
 	}
 	return state
 }

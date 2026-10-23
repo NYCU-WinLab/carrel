@@ -207,8 +207,8 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | Keys | `ssh_key_add`, `ssh_key_list`, `ssh_key_remove` | account keys applied to new machines |
 | Snapshots | `snapshot_create`, `snapshot_list`, `snapshot_rollback`, `snapshot_delete` | count and size against quota |
 | Ingress | `port_open`, `port_close`, `port_list` | `machine`, `port`, `proto: tcp \| udp`; the public port is assigned |
-| | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or an owned special domain, `target_port` |
-| | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `machine`, `target_port`, `reason` (section 6.10) |
+| | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or `name` under a special domain grant, `target_port` |
+| | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `reason` (section 6.10) |
 | | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
 | Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
 | | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
@@ -471,7 +471,9 @@ Every tenant machine gets the security group of its tenant:
    anycast gateway still works. Public entry points listed in `node.json` `public_entries` are
    accepted above this drop: TCP 443 on the public address (`140.113.60.184`), the HTTPS gateway
    the internet already reaches, so tenants can use carrel and lab sites by their public names
-   (the hairpin in section 6.4), and the tenants' public port blocks (TCP and UDP 20010 to 22549,
+   (the hairpin in section 6.4), TCP 443 on each protected host the site file lists in its own
+   `public_entries` (the lab host's gateway `140.113.194.229`, which serves door, display and other
+   lab sites), and the tenants' public port blocks (TCP and UDP 20010 to 22549,
    issue #28): what the internet reaches, tenants reach too. The first exit node gives a tenant
    reaching another tenant's public port the public address as its source, so the answer comes
    back through it. The node itself and CT 100 and 101 reach the public address as well (issue
@@ -493,6 +495,14 @@ least 5 seconds after taking the address, as keepalived and kube-vip do by defau
 holder accepts at the virtual address what it accepts at its own. Deleting a machine drops it from
 the holders and keeps the address. carrel neither balances load nor checks health; a load balancer
 object stays a later option.
+
+A public port or domain can target a virtual address instead of a machine (issue #146):
+`port_open` and `domain_add` take `vip` in place of `machine`. The exit node DNATs, or the gateway
+forwards, to the address, and every holder admits the port, so the public entry follows the
+address. A virtual address without holders cannot be published, and `vip_remove` refuses while a
+port or domain targets it. In NetBox such a service belongs to the address's FHRP group.
+A deployment publication takes `vip` the same way (issue #151); the deployment records the
+address's identity, so a retry after the address was replaced is refused.
 
 `ipfilter` is on for every primary NIC, so a tenant cannot take another tenant's address. The
 nftables `proxmox-firewall` is used, because VNet level rules need it. Host management ports
@@ -631,14 +641,67 @@ request it; admins approve it.
    another of the tenant's machines without a new approval. Deleting the machine leaves the grant
    unattached for 30 days, then it is released.
 
+**Built so far** (exact and wildcard names in `winlab.tw`): `domain_request` takes `name`, `kind`
+and `reason` and stores a request of kind `domain`; `request_approve` checks the rules again and,
+with `adopt`, may replace existing A, AAAA or CNAME records at the name. An approval stores a
+`domain_grants` row. `domain_add` with `name` instead of `sub` publishes the granted name, or for
+a wildcard its catch-all `*.<base>` or one label under it, as a domain row that carries the
+grant's id; quota counts it like any domain. Each grant has its own certificate lineage
+`_grant-<id>` (DNS-01, the same 7-day budget as tenant wildcards) and its own site block at the
+gateway. Its A record, comment `carrel:b09:grant:<id>`, is written or moved only once the gateway
+holds that certificate, so an adopted name keeps answering where it did until carrel serves it;
+a lone foreign A record changes in place. Removing a grant's last domain keeps the grant and its
+record; the maintenance pass releases a grant unused for 30 days (record, gateway site,
+certificate, grant; the request reads `released`). An adopted name is not restored on release:
+the old records were replaced on purpose, and only the log keeps them. Labels of grants are
+reserved against new tenant slugs; a pending request reserves nothing, and a tenant has at most
+3 pending domain requests. `domain_add` prefers an exact grant of the name over a wildcard that
+covers it.
+
+Special ports and SRV records are built too. `port_request` takes `public_port`, `proto` and
+`reason`; an approval stores a `port_grants` row, and `port_open` with `public_port` forwards that
+port instead of one from the tenant's block (the grant row carries `special`, and the exit node
+accepts such a port only outside the never-granted list below). A port grant that forwards nothing
+is released after 30 days. `domain_request` with `kind: srv` asks for `_service._tcp.<name>` or
+`_service._udp.<name>`; `domain_add` under that grant needs an open public port to the target with
+the grant's protocol and writes an SRV record that names `carrel.winlab.tw` and that public port.
+The maintenance pass follows the port and removes the record once no port forwards there; SRV
+grants have no certificate and no gateway site.
+
+Delegated names are built too. `domain_request` with `kind: delegated` asks for `*.<base>` in a
+zone open to the tenant alone; `domain_add` publishes its catch-all. The grant's wildcard A record
+is written at once, and the gateway serves `*.<base>` and `*.*.<base>` with `tls { on_demand }`;
+the global `on_demand_tls` asks `http://10.200.0.3:8080/gateway/ask`, a path the public origin does
+not forward, answered only to the gateway's address. carrel agrees to a name once its route is
+ready, the tenant is active, the grant has issued fewer than 20 new names in 7 days, and the
+route's target answers `GET /.well-known/carrel/ask?domain=<name>` with 200 (the control plane
+reaches it: the guest firewall admits `10.200.0.3` to a delegated route's port). A name agreed to
+once is answered from its record, so renewals spend no budget.
+
+The Cloudflare proxy switch is built too: admin `domain_proxy` with `name` and `proxied` turns it on
+or off for an exact grant one label under its zone (the record gets Cloudflare's automatic TTL).
+The DNS tokens cannot read a zone's SSL mode, so after turning it on carrel resolves the name
+through 1.1.1.1 until Cloudflare answers for it and asks `https://<name>/` there; a 52x, no answer,
+or the gateway's redirect back to the same URL (Flexible mode) turns the proxy off again. With all
+of this, section 6.10 is built.
+
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
-the tenants the zone is open to. `winlab.tw` is open to every tenant; a personal zone such as
+the tenants the zone is open to. Built: `zone_add` checks that the token sees exactly that zone
+and can write (a TXT probe it removes at once), keeps the token in `zone_dir/<zone>.token` (0600,
+never in the database, a result or the audit log) and the zone in the site table; calling it again
+replaces the token and tenant list. `zone_list` shows the site's zone and the added ones;
+`zone_remove` refuses while a name in the zone is granted or requested. A name belongs to the
+longest managed zone it sits in, and its ACME challenge and grant record go to that zone. Outside
+`winlab.tw` the slug and platform-label rules do not apply; the zone's own wildcard is never
+granted, and its apex only outside `winlab.tw`. A zone may not overlap `winlab.tw` or another
+added zone. `winlab.tw` is open to every tenant; a personal zone such as
 `zyx.tw` can be open to one tenant only. Records are DNS only by default. An admin may turn on the
 Cloudflare proxy for an HTTP special domain one label under its zone; Cloudflare's free certificate
 covers only one label, so a proxied `x.afc.winlab.tw` would fail.
 
 **Ports that are never granted**: 22, 25, 53, 80, 443, 111, 3128, 8006, the tenant blocks (`20000`
-to `29999`), and any port the nodes themselves use. A protocol that supports SRV records gets an
+to `22549`: 10 ports for each of 254 tenants), the client VPN ports (`31000` to `31254`), and any
+port the nodes themselves use. A protocol that supports SRV records gets an
 `srv` domain on its normal tenant port instead of a scarce well-known port.
 
 **Certificate budget**: `delegated` names mint certificates on demand, so each such grant carries a
@@ -687,11 +750,25 @@ refuses an entry whose prefix overlaps a tenant network it does not belong to. T
 attachment still passes the destination machine's guest firewall: a VPN client is one more source
 the machine must accept, never a way around `restricted`.
 
-**Client VPN** (first attachment to build). WireGuard on the exit node, one interface per tenant
-(`wg-tNNN`) bound to `vrf_tenants`, with client addresses from `10.201.N.0/24`. The member generates
-the key pair and sends only the public key (`vpn_client_add`), so carrel never holds a client
-private key. A client reaches only its tenant's `/24`: the interface's input is filtered on the exit
-node, and tenant machines accept `10.201.N.0/24` as they accept their own network. The lab's
+**Client VPN** (first attachment to build, issue #103). WireGuard on the first exit node, one
+interface per tenant (`wg-tNNN`) in `vrf_tenants`, listening on UDP `31000 + N` of the public
+address (below the ephemeral range), with client addresses from `10.201.N.0/24`. The member or
+agent generates the key pair and sends only the public key (`vpn_client_add`), so carrel never
+holds a client private key; the server keys stay on the exit node. A client reaches only its
+tenant's `/24`: `inet carrel_vpn` on the exit node passes `10.201.N.0/24 <-> 10.200.N.0/24` and drops
+every other packet of a `wg-t*` interface, the node itself included, and tenant machines with
+`network_access` `tenant` accept `10.201.N.0/24` as they accept their own network. Other nodes
+reach the clients through the VRF default route to the exit node; `wg-t*` joins conntrack zone 1
+like the other VRF ports.
+
+Agents use it on their own. The skill tells an agent to try the SSH jump host first (`ssh -L` for
+one or two TCP ports) and to open a client only for UDP, many ports or a browser on internal
+services. The agent runs `wg genkey`, calls `vpn_client_add` with the public key and a name for the
+session, writes the private key into the returned `config`, and brings it up: `wg-quick` when it may
+use root, or a userspace client such as wireproxy (WireGuard as a local SOCKS5 proxy) when it may
+not, which needs no prompt at all. A client expires after `hours` (default 8, at most 168), so a
+session an agent forgot ends by itself; adding the same name again renews it. A tenant keeps at
+most 8 clients. The lab's
 NetBird mesh uses `100.64.0.0/10`, which tenants drop as the tailnet range (6.3); it can be added
 later as a routing peer per tenant, mapped to the same attachment.
 
@@ -943,9 +1020,10 @@ stays a pet machine: the member can still SSH in and change anything, and carrel
 **Flow**
 
 1. The member's agent calls `app_link` with the machine, repository, branch, start command and
-   port. carrel returns an install line and a workflow snippet. A public name is a separate
-   `domain_add` to the same port.
-2. The agent runs the install line on the machine over its own SSH. It installs `carrel-deployd`
+   port. carrel returns an install line, the app's agent token and a workflow snippet. A public
+   name is a separate `domain_add` to the same port.
+2. The agent runs the install line on the machine over its own SSH, with the token piped into it
+   from the client, so no command line on the machine carries the token (issue #33). It installs `carrel-deployd`
    (a small static binary run by systemd) with a token scoped to this one app, and writes the start
    command into a local file that carrel cannot change. carrel has no other way into the machine
    (section 7.7).
@@ -1142,7 +1220,7 @@ Mapping:
 | tenant segment `10.200.N.0/24` | prefix in the shared VRF |
 | managed private network CIDR | prefix in that network's own VRF |
 | `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
-| published port, HTTPS route | service on the VM with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
+| published port, HTTPS route | service on the VM, or on the FHRP group when it targets a virtual address, with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
 
 The tenant segment `10.200.N.0/24`, machine addresses and virtual addresses are allocated by the
@@ -1168,7 +1246,7 @@ Behavior:
    keeps every object it already has in NetBox, the other machines still sync, and the error shows
    in `machine_get` as `netbox: {last_synced, last_error}` and once in the audit log (tool
    `netbox_sync`). A pass-level failure is in the site status and the audit log.
-5. A machine rename is not supported, so it is not synced either.
+5. A machine rename (`machine_rename`) changes the VM's name, matched by VMID, on the next pass.
 
 Least privilege. Every object carries the owner from its creation request, and only objects with that owner
 are listed, patched or deleted. NetBox cannot constrain what a binding points at, so carrel only

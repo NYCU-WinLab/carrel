@@ -16,15 +16,26 @@ type Waiting struct {
 	ReadyAt float64
 }
 
+// CF reads or writes a DNS record of the site's own zone.
 func (e *Execution) CF(method, path string, body any) D {
+	return e.cfIn(e.siteZone(), method, path, body)
+}
+
+// cfIn reads or writes a DNS record of zone z.
+func (e *Execution) cfIn(z zoneAccess, method, path string, body any) D {
+	return e.cloudflare(z.Token, method, "/zones/"+z.ID+"/dns_records"+path, body)
+}
+
+// cloudflare calls the Cloudflare API with token.
+func (e *Execution) cloudflare(token, method, path string, body any) D {
 	base := textAt(e.P.Config, "cloudflare_api", "https://api.cloudflare.com/client/v4")
 	var data io.Reader
 	if body != nil {
 		data = bytes.NewReader(encoded(body))
 	}
-	req, err := http.NewRequestWithContext(e.Ctx, method, base+"/zones/"+str(e.P.Config["cloudflare_zone"])+"/dns_records"+path, data)
+	req, err := http.NewRequestWithContext(e.Ctx, method, base+path, data)
 	must(err)
-	req.Header.Set("Authorization", "Bearer "+str(e.P.Config["cloudflare_token"]))
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := e.P.HTTP.Do(req)
 	if err != nil {
@@ -120,7 +131,8 @@ func (e *Execution) EnsureCertificate(t D) D {
 func (e *Execution) CertificateBundles(domains []D) []D {
 	wanted := map[int]bool{}
 	for _, d := range domains {
-		if d["state"] == "ready" {
+		// A special domain uses its grant's pair (grantBundles).
+		if d["state"] == "ready" && str(d["grant"]) == "" {
 			wanted[integer(d["tenant_n"])] = true
 		}
 	}
@@ -138,7 +150,7 @@ func (e *Execution) CertificateBundles(domains []D) []D {
 	return out
 }
 func (e *Execution) RenewCertificate(t D) {
-	if len(e.domains(integer(t["n"]))) == 0 {
+	if len(filter(e.S.Objects("domains", integer(t["n"])), func(d D) bool { return str(d["grant"]) == "" })) == 0 {
 		return
 	}
 	if crt, _, ok := e.livePair(str(t["slug"])); ok && renewalDue(crt) {
@@ -149,27 +161,51 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	domains := e.domains(n)
 	if tool == "domain_list" {
-		return D{"domains": e.PublicGrants("domains", n)}
+		r := D{"domains": e.PublicGrants("domains", n)}
+		if grants := e.publicGrants(n); len(grants) > 0 {
+			r["special_domains"] = grants
+		}
+		return r
 	}
 	var domain, delta D
 	if tool == "domain_add" {
-		m := e.Machine(t, a["machine"])
-		name := str(a["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
+		vmid, _, vip := e.publishTarget(t, a)
+		if (a["sub"] == nil) == (a["name"] == nil) {
+			fail("invalid", "Give exactly one of sub and name", D{"recovery": "revise_request"})
+		}
+		// sub names a domain in the tenant's subtree; name a special domain
+		// under one of its grants (PLAN 6.10).
+		name, grant := str(a["sub"])+"."+str(t["slug"])+".winlab.tw", ""
+		if a["name"] != nil {
+			name = strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
+			g := e.grantCovering(n, name)
+			grant = g.ID
+			// An SRV record names the public port that forwards to the target.
+			if _, open := e.openPortFor(n, vmid, vip.ID, integer(a["target_port"]), srvProto(name)); g.Kind == "srv" && !open {
+				fail("invalid", "Open a public port to this target with port_open first; the SRV record names it", D{"recovery": "resolve_prerequisite"})
+			}
+		}
 		record, found := domainNamed(domains, name)
 		if found && record.State == "deleting" {
 			fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
 		}
-		if found && (record.VMID != integer(m["vmid"]) || float64(record.TargetPort) != num(a["target_port"])) {
+		if found && (record.VMID != vmid || record.VIP != vip.ID || float64(record.TargetPort) != num(a["target_port"])) {
 			fail("conflict", "Domain already targets a different service; remove it explicitly first", D{"recovery": "revise_request"})
 		}
 		delta = D{"domains": 0}
 		if !found {
+			requireHolder(vip)
 			delta["domains"] = 1
 			e.Quota(t, delta)
-			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: integer(m["vmid"]), Sub: str(a["sub"]), Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
+			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Sub: str(a["sub"]), Grant: grant, Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
 		}
 		if dry {
-			domain = D{"name": name, "machine": m["name"], "target_port": a["target_port"], "state": "planned"}
+			domain = D{"name": name, "target_port": a["target_port"], "state": "planned"}
+			if vip.ID != "" {
+				domain["vip"] = vip.ID
+			} else {
+				domain["machine"] = e.Machine(t, a["machine"])["name"]
+			}
 		} else {
 			if e.Op != nil && e.Op["tool"] == "domain_add" {
 				owner := e.Op["id"]
@@ -193,10 +229,22 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 				}
 				fail("conflict", "Certificate preparation must complete before publishing")
 			}
-			e.DomainRecord(t, false)
+			if record.Grant == "" {
+				e.DomainRecord(t, false)
+			}
 			e.Reconcile()
 			record.State = "ready"
 			e.Put("domains", record.ID, n, record)
+			if record.Grant != "" {
+				// The gateway was given the routes, so the record may move;
+				// the grant is in use from now on.
+				g, _ := rowOf[domainGrant](e.S, "domain_grants", record.Grant)
+				if g.UnusedSince != 0 {
+					g.UnusedSince = 0
+					e.S.Put("domain_grants", g.ID, g.TenantN, g.D())
+				}
+				e.GrantRecord(g, false)
+			}
 			domain = record.D()
 		}
 	} else {
@@ -209,9 +257,11 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 			record.State = "deleting"
 			e.Put("domains", record.ID, n, record)
 			e.Reconcile()
-			last := true
+			// The tenant's wildcard record goes with its last own domain;
+			// a grant keeps its record until it is released.
+			last := record.Grant == ""
 			for _, d := range domains {
-				if d.ID != record.ID && d.State != "deleting" {
+				if d.ID != record.ID && d.State != "deleting" && d.Grant == "" {
 					last = false
 				}
 			}

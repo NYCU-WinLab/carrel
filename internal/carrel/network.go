@@ -14,7 +14,11 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 	case "network_list":
 		return D{"networks": e.S.Objects("networks", n)}
 	case "port_list":
-		return D{"ports": e.PublicGrants("ports", n)}
+		r := D{"ports": e.PublicGrants("ports", n)}
+		if grants := e.publicSpecialPorts(n); len(grants) > 0 {
+			r["special_ports"] = grants
+		}
+		return r
 	case "peer_list":
 		return D{"peers": e.PublicGrants("peers", n)}
 	case "vip_list":
@@ -144,9 +148,18 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 	case "port_open", "port_close":
 		var grant, delta D
 		if tool == "port_open" {
-			m := e.Machine(t, a["machine"])
+			vmid, ip, vip := e.publishTarget(t, a)
+			// public_port asks for a special port the tenant was granted.
+			special := a["public_port"] != nil
+			var reserved specialPort
+			if special {
+				reserved = e.specialPortFor(n, integer(a["public_port"]), str(a["proto"]))
+			}
 			for _, p := range e.ports(n) {
-				if p.VMID == integer(m["vmid"]) && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] {
+				if special && p.PublicPort == reserved.PublicPort && p.Proto == reserved.Proto && (p.VMID != vmid || p.VIP != vip.ID || float64(p.Port) != num(a["port"])) {
+					fail("conflict", "This special port already forwards to another target; close it with port_close first", D{"recovery": "resolve_prerequisite"})
+				}
+				if p.VMID == vmid && p.VIP == vip.ID && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] && p.Special == special && (!special || p.PublicPort == reserved.PublicPort) {
 					if p.State == "deleting" {
 						fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
 					}
@@ -156,16 +169,25 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 					return D{"port": e.PublicGrant("ports", p.D(), n), "quota_after": e.Quota(t)}
 				}
 			}
+			requireHolder(vip)
 			delta = D{"public_ports": 1}
 			e.Quota(t, delta)
-			public := e.AllocatePort(t)
-			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: integer(m["vmid"]), IP: str(m["ip"]), PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"])}
+			public := reserved.PublicPort
+			if !special {
+				public = e.AllocatePort(t)
+			}
+			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: vmid, VIP: vip.ID, IP: ip, PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"]), Special: special}
 			grant = opened.D()
 			if !dry {
 				e.Put("ports", opened.ID, n, opened)
 				e.Reconcile()
 			} else {
-				grant = D{"machine": m["name"], "port": a["port"], "proto": a["proto"], "state": "planned"}
+				grant = D{"port": a["port"], "proto": a["proto"], "state": "planned"}
+				if vip.ID != "" {
+					grant["vip"] = vip.ID
+				} else {
+					grant["machine"] = e.Machine(t, a["machine"])["name"]
+				}
 			}
 		} else {
 			var closing portGrant
@@ -303,6 +325,17 @@ func (e *Execution) VIPAction(tool string, a, t D) D {
 		if !found {
 			fail("not_found", "Virtual address not found")
 		}
+		// A public port or domain at the address would point nowhere (issue #146).
+		for _, p := range e.ports(n) {
+			if p.VIP == vip.ID {
+				fail("conflict", fmt.Sprintf("Public port %d targets this address; close it with port_close first", p.PublicPort), D{"recovery": "resolve_prerequisite"})
+			}
+		}
+		for _, d := range e.domains(n) {
+			if d.VIP == vip.ID {
+				fail("conflict", d.Name+" targets this address; remove it with domain_remove first", D{"recovery": "resolve_prerequisite"})
+			}
+		}
 		vip.State = "deleted"
 	}
 	if dry {
@@ -345,7 +378,22 @@ func (e *Execution) Reconcile() D {
 		}
 	}
 	state["domains"] = domains
-	state["certificates"] = e.CertificateBundles(domains)
+	state["certificates"] = append(e.CertificateBundles(domains), e.grantBundles(domains)...)
+	// The control plane asks a delegated route's target before the gateway
+	// obtains a certificate (delegated.go), so its guest firewall admits it.
+	for _, g := range e.grants() {
+		if g.Kind == "delegated" {
+			for _, d := range domains {
+				if d["grant"] == g.ID {
+					d["delegated"] = true
+				}
+			}
+		}
+	}
+	// Special domain grants route their names at the gateway (PLAN 6.10).
+	if grants := e.S.Objects("domain_grants"); len(grants) > 0 {
+		state["domain_grants"] = grants
+	}
 	machines := []D{}
 	for _, m := range dicts(state["machines"]) {
 		machines = append(machines, without(m, "ssh_keys", "runcmd", "user_data"))
@@ -358,7 +406,7 @@ func (e *Execution) Reconcile() D {
 		// The fetch network and its container's firewall (PLAN 7.8).
 		state["fetch"] = true
 	}
-	request := D{"op": "reconcile", "state": without(state, "certificates")}
+	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants")}
 	nodes := e.P.Nodes()
 	result := D{"node": e.Call(request, nodes[0].Target)}
 	// The gateway goes after the first node, whose guest firewalls admit it,

@@ -182,6 +182,10 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	must(c.Write(context.Background(), websocket.MessageBinary, []byte("RFB")))
 	_, _, err = c.Read(context.Background())
 	ticket := str(backend.last()["ticket"])
+	// Every module of the pinned noVNC is checked by the browser (issue #130).
+	if !strings.Contains(body, `"`+novnc+`/core/rfb.js":"`+novncIntegrity["/core/rfb.js"]+`"`) || len(novncIntegrity) < 40 {
+		t.Fatal("the VNC page has no import map integrity for noVNC")
+	}
 	if err != nil || !strings.Contains(body, "core/rfb.js") || backend.last()["mode"] != "vnc" || len(ticket) != 8 || !strings.Contains(body, `"ticket":"`+ticket+`"`) {
 		t.Fatal("an ISO machine got no VNC screen", err, backend.last())
 	}

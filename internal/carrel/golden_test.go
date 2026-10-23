@@ -121,6 +121,16 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 		return D{"status": state}, nil
 	case "metrics":
 		return []D{{"time": 1, "cpu": 0.25, "mem": 512, "maxmem": 1024}}, nil
+	case "reconcile":
+		// The exit node reports each tenant's VPN interface, as node-agent does.
+		vpn := D{}
+		for _, c := range dicts(obj(req["state"])["vpn_clients"]) {
+			n := integer(c["tenant_n"])
+			vpn[str(n)] = D{"public_key": fmt.Sprintf("%043d=", n), "port": 31000 + n}
+		}
+		if len(vpn) > 0 && req["first"] == nil {
+			return D{"changed": []any{}, "vpn": vpn}, nil
+		}
 	}
 	return r.fakeBackend.Call(ctx, req, target)
 }
@@ -144,7 +154,9 @@ func (r *recorder) guests(ctx context.Context) {
 				for _, nic := range dicts(m["nics"]) {
 					interfaces = append(interfaces, D{"mac": nic["mac"], "ip": nic["ip"], "mtu": 1450})
 				}
-				r.p.Store.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"boot_id": "boot-" + key, "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked", "interfaces": interfaces})
+				// With its vmid, as GuestReport writes it, so deleting the machine
+				// removes it and a reused vmid never reads it as fresh.
+				r.p.Store.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"vmid": m["vmid"], "boot_id": "boot-" + key, "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked", "interfaces": interfaces})
 				r.p.notifyReport(integer(m["vmid"]))
 			}
 		}
@@ -354,6 +366,11 @@ func goldenScenario(g *goldenRun) {
 	call("power", "machine_power", D{"machine": "web", "action": "start"}, alice)
 	call("resize", "machine_resize", D{"machine": "web", "cpu": 2, "dry_run": true}, alice)
 	call("resize", "machine_resize", D{"machine": "web", "cpu": 2}, alice)
+	call("rename", "machine_rename", D{"machine": "box", "name": "web", "confirm": "box"}, alice)
+	call("rename", "machine_rename", D{"machine": "box", "name": "crate", "confirm": "wrong"}, alice)
+	call("rename", "machine_rename", D{"machine": "box", "name": "crate", "confirm": "box", "dry_run": true}, alice)
+	call("rename", "machine_rename", D{"machine": "box", "name": "crate", "confirm": "box"}, alice)
+	call("rename", "machine_rename", D{"machine": "crate", "name": "box", "confirm": "crate"}, alice)
 
 	call("network", "network_create", D{"name": "lab", "dry_run": true}, alice)
 	call("network", "network_create", D{"name": "lab"}, alice)
@@ -386,10 +403,16 @@ func goldenScenario(g *goldenRun) {
 
 	approved := call("requests", "quota_request", D{"dimension": "vcpu", "amount": 12, "reason": "golden"}, alice)
 	rejected := call("requests", "quota_request", D{"dimension": "disk_gb", "amount": 200, "reason": "golden"}, alice)
+	call("requests", "domain_request", D{"name": "lab.winlab.tw", "reason": "golden special"}, alice)
+	call("requests", "port_request", D{"public_port": 25565, "reason": "golden special"}, alice)
 	call("requests", "request_list", D{}, alice)
 	call("admin", "request_list_all", D{}, admin)
 	call("admin", "request_approve", D{"id": obj(approved["request"])["id"]}, admin)
 	call("admin", "request_reject", D{"id": obj(rejected["request"])["id"]}, admin)
+	call("admin", "zone_list", D{}, admin)
+	call("admin", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef"}, admin)
+	call("admin", "zone_remove", D{"name": "lab.example", "confirm": "lab.example"}, admin)
+	call("admin", "domain_proxy", D{"name": "lab.winlab.tw", "proxied": true}, admin)
 	call("admin", "tenant_list", D{}, admin)
 	call("admin", "node_list", D{}, admin)
 	call("admin", "usage_report", D{}, admin)
@@ -444,6 +467,18 @@ func goldenScenario(g *goldenRun) {
 	call("images", "machine_media", D{"machine": "api", "action": "eject"}, alice)
 
 	call("console", "machine_console_url", D{"machine": "api", "dry_run": true}, alice)
+
+	// Client VPN (issue #103): the key pair stays with the client.
+	vpnKey := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
+	call("vpn", "vpn_client_add", D{"name": "laptop", "public_key": vpnKey, "dry_run": true}, alice)
+	call("vpn", "vpn_client_add", D{"name": "laptop", "public_key": vpnKey, "hours": 2}, alice)
+	call("vpn", "vpn_client_add", D{"name": "agent", "public_key": vpnKey}, alice)
+	call("vpn", "vpn_client_add", D{"name": "bad", "public_key": "not-a-key"}, alice)
+	call("vpn", "vpn_client_add", D{"name": "long", "public_key": vpnKey, "hours": 200}, alice)
+	call("vpn", "vpn_client_list", D{}, alice)
+	call("vpn", "vpn_client_list", D{}, bob)
+	call("vpn", "vpn_client_remove", D{"name": "laptop"}, alice)
+	call("vpn", "vpn_client_remove", D{"name": "laptop"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

@@ -47,12 +47,38 @@ func (e *Execution) PreparePublication() {
 	if err != nil {
 		panic(err)
 	}
-	certificate := e.EnsureCertificate(tenant)
+	// Each domain needs its certificate: the tenant's wildcard, or the one
+	// of its special domain grant (PLAN 6.10). The bindings were checked
+	// above; they are checked again under the writer below.
+	certificates := map[string]D{}
+	for _, id := range ids {
+		d, _ := rowOf[domainRecord](e.S, "domains", str(id))
+		if _, done := certificates[d.Grant]; done {
+			continue
+		}
+		if d.Grant == "" {
+			certificates[""] = e.EnsureCertificate(tenant)
+			continue
+		}
+		g, ok := rowOf[domainGrant](e.S, "domain_grants", d.Grant)
+		if !ok {
+			fail("conflict", "The special domain grant was released during preparation")
+		}
+		certificates[d.Grant] = e.EnsureGrantCertificate(g)
+	}
 	e.P.writer.Lock()
 	defer e.P.writer.Unlock()
 	check()
+	var waiting *Waiting
 	for _, id := range ids {
 		d, _ := rowOf[domainRecord](e.S, "domains", str(id))
+		certificate, ok := certificates[d.Grant]
+		if !ok {
+			fail("conflict", "Publication replaced during preparation")
+		}
+		if certificate["state"] != "ready" && (waiting == nil || num(certificate["ready_at"]) > waiting.ReadyAt) {
+			waiting = &Waiting{"waiting_for_certificate", num(certificate["ready_at"])}
+		}
 		if d.State == "ready" {
 			continue
 		}
@@ -66,8 +92,8 @@ func (e *Execution) PreparePublication() {
 		}
 		e.Put("domains", id, integer(tenant["n"]), d)
 	}
-	if certificate["state"] != "ready" {
-		panic(Waiting{"waiting_for_certificate", num(certificate["ready_at"])})
+	if waiting != nil {
+		panic(*waiting)
 	}
 	e.publicationPrepared = true
 }

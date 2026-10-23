@@ -53,7 +53,7 @@ func certificateOf(s *Store, n int, slug string) (certificateRecord, bool) {
 }
 
 // recentIssuance lists certificates issued in the last 7 days, the window of
-// Let's Encrypt's per-account limits.
+// Let's Encrypt's per-account limits: tenant wildcards and special domains.
 func recentIssuance(s *Store) []certificateRecord {
 	out := []certificateRecord{}
 	for _, c := range rowsOf[certificateRecord](s, "certificates") {
@@ -61,10 +61,18 @@ func recentIssuance(s *Store) []certificateRecord {
 			out = append(out, c)
 		}
 	}
+	for _, g := range rowsOf[domainGrant](s, "domain_grants") {
+		if float64(g.IssuedAt) > now()-7*86400 {
+			out = append(out, certificateRecord{ID: g.lineage(), IssuedAt: g.IssuedAt, Slug: g.lineage(), TenantN: g.TenantN})
+		}
+	}
 	return out
 }
 
-// portGrant forwards a public port on the exit node to a machine.
+// portGrant forwards a public port on the exit node to a machine, or to a
+// virtual address (VIP holds its id, VMID is 0, IP its address; issue #146).
+// Special marks a public port outside the tenant's block, granted through
+// port_request (PLAN 6.10).
 type portGrant struct {
 	ID          string `json:"id"`
 	IP          string `json:"ip"`
@@ -72,8 +80,10 @@ type portGrant struct {
 	Port        int    `json:"port"`
 	Proto       string `json:"proto"`
 	PublicPort  int    `json:"public_port"`
+	Special     bool   `json:"special,omitempty"`
 	State       string `json:"state,omitempty"`
 	TenantN     int    `json:"tenant_n"`
+	VIP         string `json:"vip,omitempty"`
 	VMID        int    `json:"vmid"`
 }
 
@@ -104,8 +114,12 @@ func (e *Execution) peers(n ...int) []peerGrant { return rowsOf[peerGrant](e.S, 
 // protocol reads grants written before proto was recorded as TCP.
 func (g peerGrant) protocol() string { return or(g.Proto, "tcp") }
 
-// domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port.
+// domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port, or
+// to a port of a virtual address (VIP holds its id, VMID is 0; issue #146).
+// A domain under a special domain grant (PLAN 6.10) holds the grant's id in
+// Grant and has no Sub; Name is the granted name or one label under it.
 type domainRecord struct {
+	Grant       string  `json:"grant,omitempty"`
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	OperationID string  `json:"operation_id,omitempty"`
@@ -115,10 +129,27 @@ type domainRecord struct {
 	Sub         string  `json:"sub"`
 	TargetPort  int     `json:"target_port"`
 	TenantN     int     `json:"tenant_n"`
+	VIP         string  `json:"vip,omitempty"`
 	VMID        int     `json:"vmid"`
 }
 
 func (d domainRecord) D() D { return decode(string(encoded(d))) }
+
+// target is the domain_add argument that names the domain's target again.
+func (d domainRecord) target() D {
+	if d.VIP != "" {
+		return D{"vip": d.VIP}
+	}
+	return D{"machine": str(d.VMID)}
+}
+
+// again is the domain_add request that publishes this domain once more.
+func (d domainRecord) again() D {
+	if d.Grant != "" {
+		return merge(d.target(), D{"name": d.Name, "target_port": d.TargetPort})
+	}
+	return merge(d.target(), D{"sub": d.Sub, "target_port": d.TargetPort})
+}
 
 func (e *Execution) domains(n int) []domainRecord {
 	return rowsOf[domainRecord](e.S, "domains", n)
@@ -139,6 +170,53 @@ type vipRecord struct {
 func (v vipRecord) D() D { return decode(string(encoded(v))) }
 
 func (e *Execution) vips(n int) []vipRecord { return rowsOf[vipRecord](e.S, "vips", n) }
+
+// publishTarget resolves where a public port or domain points: a machine,
+// or a virtual address that one of its holders answers for (issue #146).
+// Exactly one of machine and vip is given.
+func (e *Execution) publishTarget(t, a D) (vmid int, ip string, vip vipRecord) {
+	if (a["machine"] == nil) == (a["vip"] == nil) {
+		fail("invalid", "Give exactly one of machine and vip", D{"recovery": "revise_request"})
+	}
+	if a["machine"] != nil {
+		m := e.Machine(t, a["machine"])
+		return integer(m["vmid"]), str(m["ip"]), vip
+	}
+	vip = e.VIP(t, a["vip"])
+	return 0, vip.Address, vip
+}
+
+// VIP finds one of the tenant's virtual addresses by name or id.
+func (e *Execution) VIP(t D, ref any) vipRecord {
+	for _, v := range e.vips(integer(t["n"])) {
+		if v.Name == ref || v.ID == ref {
+			if v.State == "deleting" {
+				fail("conflict", "This virtual address is being removed", D{"recovery": "revise_request"})
+			}
+			return v
+		}
+	}
+	fail("not_found", "Virtual address not found in this tenant")
+	return vipRecord{}
+}
+
+// at reports whether a grant with this vmid and virtual address points
+// where m or vip does. A planned machine has no vmid yet, which reads as 0,
+// the vmid of every grant at a virtual address.
+func at(m D, vip vipRecord, vmid int, address string) bool {
+	if vip.ID != "" {
+		return address == vip.ID
+	}
+	return address == "" && m["vmid"] != nil && vmid == integer(m["vmid"])
+}
+
+// requireHolder refuses a new publication at a virtual address no machine
+// may hold. An existing one is kept: its holders can come back.
+func requireHolder(vip vipRecord) {
+	if vip.ID != "" && len(vip.VMIDs) == 0 {
+		fail("invalid", "Add a machine to the virtual address with vip_add first", D{"recovery": "resolve_prerequisite"})
+	}
+}
 
 // vipHosts are the host numbers kept for virtual addresses, above every
 // machine address (10 + slot, at most 100 machines per tenant).

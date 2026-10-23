@@ -171,7 +171,8 @@ reached through the platform jump host (`ssh -J jump@carrel.winlab.tw user@<addr
 returned `ssh_config` sets `ProxyJump`), so a tenant can have more machines than ports. Tenant HTTPS domains use the gateway without consuming these ports.
 `vip_add(name="api", machines=["cp1", "cp2", "cp3"])` keeps a virtual address (`.251` to `.254`
 of the tenant network) that those machines may hold, for keepalived or kube-vip. Use unicast peers:
-VRRP multicast is dropped.
+VRRP multicast is dropped. `port_open(vip="api", ...)` and `domain_add(vip="api", ...)` publish the
+address instead of one machine, so the public entry follows whichever machine holds it.
 `domain_add(sub="*")` is a catch-all: every single-label name under the tenant without a domain of
 its own goes to one machine and port, so an ingress controller can route by Host. It counts as one
 domain. The gateway ends TLS and forwards plain HTTP with the original `Host` header,

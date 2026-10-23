@@ -37,10 +37,15 @@ def test_gateway_sync_writes_certificates_for_caddy_and_removes_stale_ones(tmp_p
     assert stale == [tmp_path / "certs" / "gone"] and (tmp_path / "certs/gone").exists()
     assert ("privkey.pem.carrel-next", "caddy") in owners
     assert digest != module.certificates({"zyx1121": {"fullchain": "A", "privkey": "C"}})[0]
+    # A special domain grant's lineage (PLAN 6.10).
+    module.certificates({"_grant-0123456789abcdef": {"fullchain": "A", "privkey": "B"}})
+    assert (tmp_path / "certs/_grant-0123456789abcdef/fullchain.pem").read_text() == "A"
     for bad in (
         {"../x": {"fullchain": "A", "privkey": "B"}},
         {"zyx1121": {"fullchain": "A"}},
         {"origin": {"fullchain": "A", "privkey": "B"}, "_x": {}},
+        {"_grant-../../etc": {"fullchain": "A", "privkey": "B"}},
+        {"_grant-0123456789ABCDEF": {"fullchain": "A", "privkey": "B"}},
     ):
         with pytest.raises(ValueError):
             module.certificates(bad)

@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import ssl
 import subprocess
@@ -182,6 +183,18 @@ def vip_addresses(m, state):
     return sorted(out)
 
 
+def targets(grant, m, state):
+    """Whether a public port or domain reaches this machine: it names the
+    machine, or a virtual address this machine may hold (issue #146), so
+    every holder admits it at the address that moves."""
+    if grant.get("vip"):
+        return any(
+            v["id"] == grant["vip"] and v["tenant_n"] == m["tenant_n"] == grant["tenant_n"] and m["vmid"] in v["vmids"]
+            for v in state.get("vips", [])
+        )
+    return grant["vmid"] == m["vmid"]
+
+
 def guest_firewall(m, state, config):
     # These rules cover net0 only: experiment NICs run with firewall=0, so a
     # restricted machine's private NICs stay unfiltered (issue #75).
@@ -230,6 +243,8 @@ def guest_firewall(m, state, config):
     ]
     if m.get("network_access", "tenant") == "tenant":
         rules.append(f"IN ACCEPT -source 10.200.{n}.0/24")
+        # The tenant's VPN clients count as its network (PLAN 6.11).
+        rules.append(f"IN ACCEPT -source 10.201.{n}.0/24")
     # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
@@ -246,6 +261,11 @@ def guest_firewall(m, state, config):
         # them by the public address too, like anyone on the internet.
         for proto in ("tcp", "udp"):
             rules.append(f"OUT ACCEPT -dest {dest} -p {proto} -dport {TENANT_PORTS}")
+        # Special ports are public too (PLAN 6.10).
+        for g in state["ports"]:
+            public = integer(g["public_port"], 1, 65535)
+            if g.get("special") and grantable(public) and g["proto"] in ("tcp", "udp"):
+                rules.append(f"OUT ACCEPT -dest {dest} -p {g['proto']} -dport {public}")
     for block in [
         "10.0.0.0/8",
         "172.16.0.0/12",
@@ -259,7 +279,7 @@ def guest_firewall(m, state, config):
         rules.append(f"OUT DROP -dest {ipaddress.ip_network(block, strict=False)}")
     rules += ["OUT DROP -p tcp -dport 25"]
     for grant in state["ports"]:
-        if grant["vmid"] == m["vmid"]:
+        if targets(grant, m, state):
             port = integer(grant["port"], 1, 65535)
             proto = grant["proto"]
             if proto not in ("tcp", "udp"):
@@ -267,9 +287,13 @@ def guest_firewall(m, state, config):
             # The exit node DNATs only, so the client's address arrives.
             rules.append(f"IN ACCEPT -p {proto} -dport {port}")
     for domain in state.get("domains", []):
-        if domain["vmid"] == m["vmid"]:
+        if targets(domain, m, state):
             port = integer(domain["target_port"], 1, 65535)
             rules.append(f"IN ACCEPT -source 10.200.0.2 -p tcp -dport {port}")
+            if domain.get("delegated"):
+                # The control plane asks the target before the gateway
+                # obtains a certificate for a delegated name (PLAN 6.10).
+                rules.append(f"IN ACCEPT -source 10.200.0.3 -p tcp -dport {port}")
     # Reachability probes only, from the authenticated control plane, and
     # the jump host forwarding members to their machines (issue #98): SSH,
     # or the declared ports of a machine without it (issue #94).
@@ -423,6 +447,15 @@ def public_ingress():
 # The public port blocks of tenants 1 to 254 (20000 + 10n to 20009 + 10n).
 TENANT_PORTS = "20010:22549"
 
+# Public ports never granted to a tenant as a special port (PLAN 6.10);
+# internal/carrel/special_ports.go keeps the same list.
+NEVER_PORTS = {22, 25, 53, 80, 111, 443, 3128, 8006}
+
+
+def grantable(public):
+    """A special public port: none of the site's own, no tenant block, no client VPN port."""
+    return public not in NEVER_PORTS and not 20000 <= public <= 22549 and not VPN_PORT_BASE <= public <= VPN_PORT_BASE + 254
+
 
 def ports_nft(state, address):
     """DNAT the public address: HTTP(S) to the infra gateway, granted ports to machines."""
@@ -433,12 +466,20 @@ def ports_nft(state, address):
     seen = set()
     for g in state["ports"]:
         n = integer(g["tenant_n"], 1, 254)
-        public = integer(g["public_port"], 20000 + n * 10, 20009 + n * 10)
+        if g.get("special"):
+            # A port granted through port_request, outside every block.
+            public = integer(g["public_port"], 1, 65535)
+            if not grantable(public):
+                raise ValueError("special port grant on a reserved port")
+        else:
+            public = integer(g["public_port"], 20000 + n * 10, 20009 + n * 10)
         port = integer(g["port"], 1, 65535)
         if g["proto"] not in ("tcp", "udp") or (g["proto"], public) in seen:
             raise ValueError("invalid port grant")
         ip = ipaddress.IPv4Address(g["ip"])
-        if ip not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 10 <= int(str(ip).rsplit(".", 1)[1]) <= 109:
+        # A machine address, or a virtual address of the tenant (issue #146).
+        hosts = range(251, 255) if g.get("vip") else range(10, 110)
+        if ip not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or int(str(ip).rsplit(".", 1)[1]) not in hosts:
             raise ValueError("port grant outside tenant network")
         seen.add((g["proto"], public))
         rules.append(f"ip daddr {address} {g['proto']} dport {public} dnat to {ip}:{port}")
@@ -465,6 +506,114 @@ table ip carrel_ports {{
  }}
 }}
 """
+
+
+# Client VPN (issue #103, PLAN 6.11): one WireGuard interface per tenant on the
+# first exit node, in the tenants' VRF. Tenant N listens on 31000 + N, below the
+# ephemeral port range, and its clients take addresses from 10.201.N.0/24.
+VPN_PORT_BASE = 31000
+VPN_KEYS = Path("/etc/carrel/wg")
+VPN_MTU = 1420
+WG_KEY = re.compile(r"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=")
+
+
+def vpn_clients(state):
+    """The checked client peers of each active tenant: {n: [(public key, address)]}."""
+    active = {t["n"] for t in state["tenants"] if t.get("status", "active") == "active"}
+    out = {}
+    for c in state.get("vpn_clients", []):
+        n = integer(c["tenant_n"], 1, 254)
+        address = ipaddress.IPv4Address(c["address"])
+        if address not in ipaddress.IPv4Network(f"10.201.{n}.0/24") or not 2 <= int(address) % 256 <= 254:
+            raise ValueError("VPN client address outside its tenant's range")
+        if not WG_KEY.fullmatch(str(c["public_key"])):
+            raise ValueError("invalid VPN client public key")
+        if n in active:
+            out.setdefault(n, []).append((c["public_key"], str(address)))
+    return out
+
+
+def vpn_nft(tenants):
+    """A client reaches its own tenant's network and nothing else: not another
+    tenant, not the infra or fetch network, not the node, not the internet.
+
+    Inbound is filtered in prerouting: once a packet enters the VRF, the
+    forward and input hooks see vrf_tenants as its interface, not wg-tNNN.
+    Outbound, the forward hook does see the wg-tNNN it leaves through."""
+    ingress, egress = [], []
+    for n in sorted(tenants):
+        dev = f"wg-t{n:03d}"
+        # The node's own gateway address is in that /24 too: not for clients.
+        ingress.append(f'iifname "{dev}" ip daddr 10.200.{n}.1 counter drop')
+        ingress.append(f'iifname "{dev}" ip saddr 10.201.{n}.0/24 ip daddr 10.200.{n}.0/24 accept')
+        egress.append(f'oifname "{dev}" ip saddr 10.200.{n}.0/24 ip daddr 10.201.{n}.0/24 accept')
+    return f"""add table inet carrel_vpn
+flush table inet carrel_vpn
+table inet carrel_vpn {{
+ chain prerouting {{
+  type filter hook prerouting priority -150; policy accept;
+{chr(10).join("  " + r for r in ingress)}
+  iifname "wg-t*" counter drop
+ }}
+ chain forward {{
+  type filter hook forward priority -25; policy accept;
+{chr(10).join("  " + r for r in egress)}
+  oifname "wg-t*" counter drop
+ }}
+}}
+"""
+
+
+def vpn(state):
+    """Bring each tenant's WireGuard interface to the desired peers; returns
+    the public key and port of each, which the control plane hands to clients.
+    The private keys stay in VPN_KEYS on this node. A failure here stays here:
+    the rest of the reconciliation, every other tenant's included, goes on."""
+    if not public_ingress():
+        return {}
+    try:
+        return vpn_apply(vpn_clients(state))
+    except Exception as e:  # noqa: BLE001 - reported to the control plane
+        return {"error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def vpn_apply(tenants):
+    # The filter goes first, so no interface is ever up without it.
+    rules = vpn_nft(tenants)
+    write("/etc/carrel/vpn.nft", rules)
+    run("nft", "-c", "-f", "/etc/carrel/vpn.nft")
+    run("nft", "-f", "/etc/carrel/vpn.nft")
+    if tenants and not shutil.which("wg"):
+        raise CommandFailure("wireguard-tools is not installed on the exit node")
+    out = {}
+    for n, peers in sorted(tenants.items()):
+        dev = f"wg-t{n:03d}"
+        key = VPN_KEYS / f"t{n:03d}.key"
+        if not key.exists():
+            VPN_KEYS.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # The key first, then a file created 0600: a failed genkey leaves
+            # no empty key behind, and the file is never readable in between.
+            private = run("wg", "genkey")
+            with os.fdopen(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+                f.write(private + "\n")
+        private = key.read_text().strip()
+        if not Path(f"/sys/class/net/{dev}").exists():
+            run("ip", "link", "add", dev, "type", "wireguard")
+        run("ip", "link", "set", dev, "master", "vrf_tenants", "mtu", str(VPN_MTU))
+        run("ip", "address", "replace", f"10.201.{n}.1/24", "dev", dev)
+        conf = f"[Interface]\nListenPort = {VPN_PORT_BASE + n}\nPrivateKey = {private}\n"
+        conf += "".join(f"\n[Peer]\nPublicKey = {k}\nAllowedIPs = {a}/32\n" for k, a in sorted(peers))
+        path = VPN_KEYS / f"{dev}.conf"
+        write(path, conf, 0o600)
+        run("wg", "syncconf", dev, path)
+        run("ip", "link", "set", dev, "up")
+        out[str(n)] = {"public_key": run("wg", "pubkey", input=private), "port": VPN_PORT_BASE + n}
+    # A tenant without clients, or suspended, keeps no interface.
+    for link in Path("/sys/class/net").glob("wg-t*"):
+        if re.fullmatch(r"wg-t\d{3}", link.name) and int(link.name[4:]) not in tenants:
+            run("ip", "link", "del", link.name)
+            (VPN_KEYS / f"{link.name}.conf").unlink(missing_ok=True)
+    return out
 
 
 def first_exit_node():
@@ -749,6 +898,7 @@ flush table inet carrel_conntrack
 table inet carrel_conntrack {{
  chain prerouting {{ type filter hook prerouting priority -300; policy accept;
   iifname {{ "xvrfp_tenants", "vrf_tenants", "vrfbr_tenants" }} ct zone set 1
+  iifname "wg-t*" ct zone set 1
  }}
 }}
 """
@@ -785,12 +935,15 @@ WantedBy=multi-user.target
         if write("/etc/systemd/system/carrel-ports.service", unit):
             run("systemctl", "daemon-reload")
             run("systemctl", "enable", "carrel-ports")
+    tunnels = vpn(state)
     write(STATE / "vips.json", json.dumps(vip_targets(state)))
     if write("/etc/systemd/system/carrel-vip-probe.service", VIP_PROBE_UNIT):
         run("systemctl", "daemon-reload")
     # Every time, so an enable that failed once is retried.
     run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
+    if tunnels:
+        return {"changed": changed, "vpn": tunnels}
     return {"changed": changed}
 
 
@@ -1706,6 +1859,14 @@ def action(req):
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-user.json").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-network.json").unlink(missing_ok=True)
         (STATE / f"create-{vmid}.json").unlink(missing_ok=True)
+    elif op == "rename":
+        # The VM's name, or the CT's hostname, follows the record. Ownership
+        # rests on the tags, not the name.
+        name = label(req["name"])
+        if cmd == "qm":
+            run("qm", "set", vmid, "--name", name)
+        else:
+            run("pct", "set", vmid, "--hostname", name)
     elif op == "resize":
         cpu = integer(req["cpu"], 1, 64)
         mem = integer(req["memory_mb"], 512, 131072)

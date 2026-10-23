@@ -120,6 +120,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	})
 	a.appRoutes(mux)
 	a.statusRoute(mux, p)
+	a.askRoute(mux, p)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authorization := r.Header.Get("Authorization")
 		var who D
@@ -143,7 +144,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	}))
 	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		internal := r.URL.Path == "/internal/guest-status"
+		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/gateway/ask"
 		if internal && !strings.HasPrefix(host, "10.200.") {
 			jsonResponse(w, 403, D{"error": "forbidden"})
 			return
@@ -233,6 +234,7 @@ func (p *Platform) Start() {
 				e := p.execution(p.ctx)
 				if len(e.S.Tenants()) > 0 {
 					e.ExpireGrants()
+					e.ExpireVPNClients()
 					e.Reconcile()
 				}
 				e.S.PurgeOAuth()
@@ -246,6 +248,8 @@ func (p *Platform) Start() {
 				return
 			}
 			p.execution(p.ctx).MaintainDomains()
+			p.execution(p.ctx).MaintainGrants()
+			p.execution(p.ctx).MaintainSpecialPorts()
 			if err := attempt(func() { p.execution(p.ctx).MaintainOrigin() }); err != nil {
 				failure := obj(failureResult(err)["error"])
 				slog.Error("origin_maintenance_failed", "type", "maintenance", "code", failure["code"], "backend_code", failure["backend_code"])
@@ -277,7 +281,14 @@ func (e *Execution) MaintainDomains() {
 				if active() || t["status"] != "active" {
 					continue
 				}
-				cert := e.EnsureCertificate(t)
+				var cert D
+				if original.Grant == "" {
+					cert = e.EnsureCertificate(t)
+				} else if g, ok := rowOf[domainGrant](e.S, "domain_grants", original.Grant); ok {
+					cert = e.EnsureGrantCertificate(g)
+				} else {
+					continue
+				}
 				if cert["state"] != "ready" {
 					panic(Waiting{"waiting_for_certificate", num(cert["ready_at"])})
 				}
@@ -290,16 +301,18 @@ func (e *Execution) MaintainDomains() {
 					}
 					d.State = "configuring"
 					e.Put("domains", d.ID, n, d)
-					e.DomainAction("domain_add", D{"machine": str(d.VMID), "sub": d.Sub, "target_port": d.TargetPort}, t)
+					e.DomainAction("domain_add", d.again(), t)
 				}()
 			}
 			e.RenewCertificate(t)
 			func() {
 				e.P.writer.Lock()
 				defer e.P.writer.Unlock()
+				// The tenant's wildcard record follows its own domains;
+				// grants keep records of their own (MaintainGrants).
 				live, ready := 0, false
 				for _, d := range e.domains(n) {
-					if d.State != "deleting" {
+					if d.State != "deleting" && d.Grant == "" {
 						live++
 						ready = ready || d.State == "ready"
 					}

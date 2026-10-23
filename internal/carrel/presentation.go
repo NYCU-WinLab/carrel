@@ -3,6 +3,7 @@ package carrel
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // Compact only the MCP presentation. Durable results retain the full accounting
@@ -96,7 +97,7 @@ func operationSummary(op D) D {
 	if domain, ok := result["domain"]; ok {
 		pub := grantSummary("domains", obj(domain))
 		if op["tool"] == "domain_add" {
-			if pub["sub"] != "*" {
+			if pub["sub"] != "*" && !strings.HasPrefix(str(pub["name"]), "*.") && !strings.HasPrefix(str(pub["name"]), "_") {
 				pub["url"] = "https://" + str(pub["name"])
 			}
 			pub["verification"] = "routing_configured"

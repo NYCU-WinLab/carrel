@@ -39,6 +39,10 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		r := e.Reconcile()
 		e.RefreshStorage()
 		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit()}
+	case "zone_add", "zone_list", "zone_remove":
+		return e.ZoneAction(tool, a, w)
+	case "domain_proxy":
+		return e.DomainProxy(a, w)
 	case "request_list_all":
 		return D{"requests": publicRequests(e.S.Objects("requests"))}
 	case "request_approve", "request_reject":
@@ -50,6 +54,18 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			fail("conflict", "Request is already decided")
 		}
 		t := e.S.TenantN(integer(r["tenant_n"]))
+		if r["kind"] == "domain" {
+			return e.approveDomain(tool, a, w, r, t)
+		}
+		if r["kind"] == "port" {
+			if boolean(a["adopt"]) {
+				fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
+			}
+			return e.approvePort(tool, a, w, r, t)
+		}
+		if boolean(a["adopt"]) {
+			fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
+		}
 		limits := obj(t["quota"])
 		dim := str(r["dimension"])
 		if tool == "request_approve" {

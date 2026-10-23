@@ -226,12 +226,16 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.MachineAction(tool, a, t)
 	case "machine_media":
 		return e.Media(e.Machine(t, a["machine"]), a, t)
+	case "machine_rename":
+		return e.RenameMachine(a, t)
 	case "machine_console_url":
 		return e.ConsoleURL(a, w, t)
 	case "network_create", "network_list", "network_delete", "machine_nic_attach", "machine_nic_detach", "port_open", "port_list", "port_close", "peer_allow", "peer_list", "peer_revoke", "vip_add", "vip_list", "vip_remove":
 		return e.NetworkAction(tool, a, t)
 	case "domain_add", "domain_list", "domain_remove":
 		return e.DomainAction(tool, a, t)
+	case "vpn_client_add", "vpn_client_list", "vpn_client_remove":
+		return e.VPNAction(tool, a, t)
 	case "iso_import", "image_import":
 		return e.PlanImport(tool, a, t)
 	case "image_list", "image_delete":
@@ -242,6 +246,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return D{"requests": publicRequests(e.S.Objects("requests", n))}
 	case "quota_request":
 		return e.QuotaRequest(a, w, t)
+	case "domain_request":
+		return e.DomainRequest(a, w, t)
+	case "port_request":
+		return e.PortRequest(a, w, t)
 	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink":
 		return e.AppTool(tool, a, t)
 	}

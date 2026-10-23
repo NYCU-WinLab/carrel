@@ -250,7 +250,13 @@ def packages(vmid, role):
 
 
 def infra_firewall(config, host):
-    """The infra bridge's isolation: what CT 100, 101 and 102 may reach."""
+    """The infra bridge's isolation: what CT 100, 101 and 102 may reach.
+
+    CT 102 reaches tenant machines over TCP only, on any port: SSH, and the
+    declared ports of machines without SSH (Talos, issue #125). Each guest's
+    firewall admits it on exactly those ports, and sshd's permitopen decides
+    which machine a key opens.
+    """
     rules = """add table inet carrel_infra
 flush table inet carrel_infra
 table inet carrel_infra {
@@ -259,13 +265,16 @@ table inet carrel_infra {
   iifname "vmbr98" ct state established,related accept
   iifname "vmbr98" ip saddr 10.200.0.3 tcp dport 22 accept
   iifname "vmbr98" counter drop
+  # CT 102 reaches a tenant gateway (the node, 10.200.N.1) through the VRF,
+  # not vmbr98: drop it here too, below its own firewall.
+  iifname "xvrfp_tenants" ip saddr 10.200.0.4 counter drop
 UNDERLAY
  }
  chain forward {
   type filter hook forward priority -15; policy accept;
   iifname "vmbr98" ip saddr != { 10.200.0.2, 10.200.0.3, 10.200.0.4 } counter drop
   iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.2 meta l4proto { tcp, udp } th dport 53 accept
-  iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 tcp dport != 22 drop
+  iifname "vmbr98" ip saddr 10.200.0.4 ip daddr { 10.200.0.0/24, 10.200.255.0/24 } drop
   iifname "vmbr98" ip saddr 10.200.0.4 ip daddr 10.200.0.0/16 meta l4proto != tcp drop
   iifname "vmbr98" meta nfproto ipv6 drop
   iifname "vmbr98" ct state established,related accept
