@@ -240,26 +240,26 @@ m record x.taken.winlab.tw [{"content":"140.113.194.230","id":"old2","name":"x.t
 db tenants n=1 subject=user:alice slug=alice quota={"disk_gb":100,"domains":10,"images_gb":20,"ips":8,"machines":8,"memory_mb":16384,"networks":4,"public_ports":10,"snapshot_gb":100,"snapshots":4,"vcpu":8} status=active
 db tenants n=2 subject=user:bob slug=bob quota={"disk_gb":100,"domains":10,"images_gb":20,"ips":8,"machines":8,"memory_mb":16384,"networks":4,"public_ports":10,"snapshot_gb":100,"snapshots":4,"vcpu":8} status=active
 db tenants n=3 subject=winlab-projects/shared slug=shared quota={"disk_gb":100,"domains":10,"images_gb":20,"ips":8,"machines":8,"memory_mb":16384,"networks":4,"public_ports":10,"snapshot_gb":100,"snapshots":4,"vcpu":8} status=active
-db objects kind=delegated_names id=a.b.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"a.b.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n0.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n0.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n1.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n1.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n10.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n10.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n11.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n11.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n12.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n12.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n13.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n13.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n14.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n14.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n15.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n15.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n16.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n16.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n17.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n17.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n2.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n2.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n3.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n3.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n4.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n4.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n5.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n5.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n6.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n6.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n7.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n7.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n8.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n8.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=n9.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n9.d.lab.example","tenant_n":1}
-db objects kind=delegated_names id=x.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"x.d.lab.example","tenant_n":1}
+db objects kind=delegated_names id=a.b.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"a.b.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n0.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n0.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n1.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n1.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n10.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n10.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n11.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n11.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n12.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n12.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n13.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n13.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n14.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n14.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n15.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n15.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n16.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n16.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n17.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n17.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n2.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n2.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n3.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n3.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n4.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n4.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n5.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n5.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n6.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n6.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n7.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n7.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n8.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n8.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=n9.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"n9.d.lab.example","tenant_n":1,"zone":"lab.example"}
+db objects kind=delegated_names id=x.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"a348621a527709a7","id":"x.d.lab.example","tenant_n":1,"zone":"lab.example"}
 db objects kind=domain_grants id=12c25f05cadd1579 tenant=1 data={"granted_at":"<time:int>","id":"12c25f05cadd1579","kind":"srv","name":"_minecraft._tcp.mc.winlab.tw","request_id":"3d8d846df25088da","tenant_n":1}
 db objects kind=domain_grants id=4c0e071832d52769 tenant=2 data={"granted_at":"<time:int>","id":"4c0e071832d52769","kind":"wildcard","name":"*.lab.winlab.tw","request_id":"5dee4dd60ff8d0ba","tenant_n":2,"unused_since":"<time:float>"}
 db objects kind=domain_grants id=a348621a527709a7 tenant=1 data={"granted_at":"<time:int>","id":"a348621a527709a7","kind":"delegated","name":"*.d.lab.example","request_id":"a6d2d5a29755bc5a","tenant_n":1,"zone":"lab.example"}

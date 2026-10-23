@@ -53,6 +53,7 @@ type Platform struct {
 	certificates sync.Mutex
 	registration sync.Mutex
 	delivered    atomic.Value
+	delegated    sync.Mutex
 	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
 	tenantAsk          func(address string, port int, name string) bool
 	netboxKick         chan struct{}

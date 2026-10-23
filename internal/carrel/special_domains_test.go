@@ -2,9 +2,13 @@ package carrel
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestGrantCovers(t *testing.T) {
@@ -157,5 +161,46 @@ func TestGatewayAskIsTheGatewaysAlone(t *testing.T) {
 		if w.Code != c.want {
 			t.Errorf("%s: %d", c.remote, w.Code)
 		}
+	}
+}
+
+// Concurrent asks share the zone's weekly budget: each takes its place
+// before the tenant is asked, so no more than the budget get through.
+func TestDelegatedBudgetHoldsUnderConcurrentAsks(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config["zone_dir"] = t.TempDir()
+	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
+	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
+	for i, base := range []string{"a.lab.example", "b.lab.example"} {
+		id := fmt.Sprintf("g%015d", i)
+		p.Store.Put("domain_grants", id, 1, D{"id": id, "tenant_n": 1, "kind": "delegated", "name": "*." + base, "zone": "lab.example", "granted_at": 1, "request_id": "r"})
+		p.Store.Put("domains", "d"+id, 1, D{"id": "d" + id, "tenant_n": 1, "vmid": 10100, "grant": id, "name": "*." + base, "slug": "alice", "target_port": 8443, "state": "ready", "ready_at": 1})
+	}
+	p.tenantAsk = func(string, int, string) bool { time.Sleep(50 * time.Millisecond); return true }
+	var allowed atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 60 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Two grants in one zone: the budget is the zone's.
+			base := []string{"a", "b"}[i%2]
+			if ok, _ := p.execution(context.Background()).AskDelegated(fmt.Sprintf("r%d.%s.lab.example", i, base)); ok {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := allowed.Load(); got != delegatedWeeklyNames {
+		t.Fatalf("%d names allowed, budget %d", got, delegatedWeeklyNames)
+	}
+	// A refused name gives its place back.
+	p.Store.Exec("DELETE FROM objects WHERE kind='delegated_names'")
+	p.tenantAsk = func(string, int, string) bool { return false }
+	for i := range 30 {
+		p.execution(context.Background()).AskDelegated(fmt.Sprintf("no%d.a.lab.example", i))
+	}
+	if rows := p.Store.Objects("delegated_names"); len(rows) != 0 {
+		t.Fatalf("refusals kept places: %d", len(rows))
 	}
 }

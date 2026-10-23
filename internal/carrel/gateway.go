@@ -91,7 +91,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 			srv[g.ID] = true
 			continue
 		}
-		if !grantPattern.MatchString(g.Name) || (g.Kind != "exact" && g.Kind != "wildcard" && g.Kind != "delegated") || (g.Kind != "exact") != strings.HasPrefix(g.Name, "*.") || under(g.Name, origin) {
+		if !grantPattern.MatchString(g.Name) || (g.Kind == "delegated" && under(g.Name, specialZone)) || (g.Kind != "exact" && g.Kind != "wildcard" && g.Kind != "delegated") || (g.Kind != "exact") != strings.HasPrefix(g.Name, "*.") || under(g.Name, origin) {
 			fail("conflict", "Invalid special domain grant")
 		}
 		// A tenant's subtree is its own site block; no grant may reach into it.

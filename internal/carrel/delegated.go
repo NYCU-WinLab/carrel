@@ -18,16 +18,19 @@ import (
 // answer GET /.well-known/carrel/ask?domain=<name> with 200. A name asked for
 // before is answered from the record, so renewals spend no budget.
 
-// delegatedWeeklyNames bounds the new names one grant may have issued in 7
+// delegatedWeeklyNames bounds the new names one zone may have issued in 7
 // days; Let's Encrypt allows 50 certificates per registered domain a week.
 const delegatedWeeklyNames = 20
 
-// delegatedName records a name carrel agreed to once.
+// delegatedName records a name carrel agreed to once. A pending one holds a
+// place in the zone's budget while its tenant is asked.
 type delegatedName struct {
+	FirstAt int64  `json:"first_at"`
 	Grant   string `json:"grant"`
 	ID      string `json:"id"`
-	FirstAt int64  `json:"first_at"`
+	Pending bool   `json:"pending,omitempty"`
 	TenantN int    `json:"tenant_n"`
+	Zone    string `json:"zone"`
 }
 
 // gatewayAddress is where the gateway's own requests come from.
@@ -72,9 +75,6 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	if t := e.S.TenantN(g.TenantN); t == nil || t["status"] != "active" {
 		return false, "tenant_inactive"
 	}
-	if _, seen := rowOf[delegatedName](e.S, "delegated_names", name); seen {
-		return true, "known"
-	}
 	var route domainRecord
 	for _, d := range e.grantDomains(g) {
 		if d.State == "ready" && d.Name == g.Name {
@@ -83,15 +83,6 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	}
 	if route.ID == "" {
 		return false, "no_route"
-	}
-	recent := 0
-	for _, n := range rowsOf[delegatedName](e.S, "delegated_names", g.TenantN) {
-		if n.Grant == g.ID && float64(n.FirstAt) > now()-7*86400 {
-			recent++
-		}
-	}
-	if recent >= delegatedWeeklyNames {
-		return false, "weekly_budget"
 	}
 	address := ""
 	if route.VIP != "" {
@@ -106,12 +97,58 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	if address == "" {
 		return false, "no_target"
 	}
-	if !e.tenantAgrees(address, route.TargetPort, name) {
+	// The place in the budget is taken before the tenant is asked, under a
+	// lock of its own, so concurrent asks cannot pass it together.
+	if ok, why := e.reserveDelegated(g, name); !ok || why == "known" {
+		return ok, why
+	}
+	agreed := e.tenantAgrees(address, route.TargetPort, name)
+	e.P.delegated.Lock()
+	defer e.P.delegated.Unlock()
+	n, held := rowOf[delegatedName](e.S, "delegated_names", name)
+	if !held || !n.Pending || n.Grant != g.ID {
+		return false, "released"
+	}
+	if !agreed {
+		e.S.Remove("delegated_names", name)
 		return false, "tenant_refused"
 	}
-	e.S.Put("delegated_names", name, g.TenantN, decode(string(encoded(delegatedName{ID: name, Grant: g.ID, TenantN: g.TenantN, FirstAt: time.Now().Unix()}))))
+	n.Pending = false
+	e.S.Put("delegated_names", name, g.TenantN, decode(string(encoded(n))))
 	e.S.Log("system", g.TenantN, "delegated_name_allowed", D{"grant": g.ID, "name": name}, "ok")
 	return true, "allowed"
+}
+
+// reserveDelegated answers a name agreed to before, or holds a place for it
+// in the zone's weekly budget.
+func (e *Execution) reserveDelegated(g domainGrant, name string) (bool, string) {
+	e.P.delegated.Lock()
+	defer e.P.delegated.Unlock()
+	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); seen {
+		switch {
+		case n.Grant != g.ID:
+			// Left by a released grant: this one has not agreed yet.
+			e.S.Remove("delegated_names", name)
+		case n.Pending && now()-float64(n.FirstAt) < 60:
+			return false, "in_progress"
+		case n.Pending:
+			// An ask that never finished, such as across a restart.
+			e.S.Remove("delegated_names", name)
+		default:
+			return true, "known"
+		}
+	}
+	recent := 0
+	for _, n := range rowsOf[delegatedName](e.S, "delegated_names") {
+		if n.Zone == g.zone() && float64(n.FirstAt) > now()-7*86400 {
+			recent++
+		}
+	}
+	if recent >= delegatedWeeklyNames {
+		return false, "weekly_budget"
+	}
+	e.S.Put("delegated_names", name, g.TenantN, decode(string(encoded(delegatedName{ID: name, Grant: g.ID, TenantN: g.TenantN, Zone: g.zone(), FirstAt: time.Now().Unix(), Pending: true}))))
+	return true, "reserved"
 }
 
 // tenantAgrees asks the tenant's ask_url, on the route's target.
