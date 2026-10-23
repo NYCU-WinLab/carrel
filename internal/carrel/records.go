@@ -53,12 +53,17 @@ func certificateOf(s *Store, n int, slug string) (certificateRecord, bool) {
 }
 
 // recentIssuance lists certificates issued in the last 7 days, the window of
-// Let's Encrypt's per-account limits.
+// Let's Encrypt's per-account limits: tenant wildcards and special domains.
 func recentIssuance(s *Store) []certificateRecord {
 	out := []certificateRecord{}
 	for _, c := range rowsOf[certificateRecord](s, "certificates") {
 		if float64(c.IssuedAt) > now()-7*86400 {
 			out = append(out, c)
+		}
+	}
+	for _, g := range rowsOf[domainGrant](s, "domain_grants") {
+		if float64(g.IssuedAt) > now()-7*86400 {
+			out = append(out, certificateRecord{ID: g.lineage(), IssuedAt: g.IssuedAt, Slug: g.lineage(), TenantN: g.TenantN})
 		}
 	}
 	return out
@@ -108,7 +113,10 @@ func (g peerGrant) protocol() string { return or(g.Proto, "tcp") }
 
 // domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port, or
 // to a port of a virtual address (VIP holds its id, VMID is 0; issue #146).
+// A domain under a special domain grant (PLAN 6.10) holds the grant's id in
+// Grant and has no Sub; Name is the granted name or one label under it.
 type domainRecord struct {
+	Grant       string  `json:"grant,omitempty"`
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	OperationID string  `json:"operation_id,omitempty"`
@@ -130,6 +138,14 @@ func (d domainRecord) target() D {
 		return D{"vip": d.VIP}
 	}
 	return D{"machine": str(d.VMID)}
+}
+
+// again is the domain_add request that publishes this domain once more.
+func (d domainRecord) again() D {
+	if d.Grant != "" {
+		return merge(d.target(), D{"name": d.Name, "target_port": d.TargetPort})
+	}
+	return merge(d.target(), D{"sub": d.Sub, "target_port": d.TargetPort})
 }
 
 func (e *Execution) domains(n int) []domainRecord {

@@ -41,8 +41,9 @@ def private_directory(path):
 def certificates(bundles):
     """Write each PEM pair readable by Caddy only.
 
-    Names are fixed directories: a tenant slug, or "_origin" for carrel's own
-    name, which no slug can match. Returns a digest of the set and the stale
+    Names are fixed directories: a tenant slug, "_origin" for carrel's own
+    name, or "_grant-<id>" for a special domain (PLAN 6.10); no slug can match
+    the last two. Returns a digest of the set and the stale
     directories, which go only after Caddy accepted the new routes.
     """
     if not isinstance(bundles, dict):
@@ -51,7 +52,7 @@ def certificates(bundles):
     digest = hashlib.sha256()
     for name in sorted(bundles):
         pair = bundles[name]
-        if not re.fullmatch(r"_origin|[a-z][a-z0-9-]{0,31}", name) or set(pair) != {"fullchain", "privkey"}:
+        if not re.fullmatch(r"_origin|_grant-[0-9a-f]{16}|[a-z][a-z0-9-]{0,31}", name) or set(pair) != {"fullchain", "privkey"}:
             raise ValueError("invalid certificate bundle")
         private_directory(CERTS / name)
         for file in ("fullchain", "privkey"):

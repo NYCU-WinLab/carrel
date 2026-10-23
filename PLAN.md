@@ -207,8 +207,8 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | Keys | `ssh_key_add`, `ssh_key_list`, `ssh_key_remove` | account keys applied to new machines |
 | Snapshots | `snapshot_create`, `snapshot_list`, `snapshot_rollback`, `snapshot_delete` | count and size against quota |
 | Ingress | `port_open`, `port_close`, `port_list` | `machine`, `port`, `proto: tcp \| udp`; the public port is assigned |
-| | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or an owned special domain, `target_port` |
-| | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `machine`, `target_port`, `reason` (section 6.10) |
+| | `domain_add`, `domain_remove`, `domain_list` | `machine`, `sub` or `name` under a special domain grant, `target_port` |
+| | `domain_request` | `name`, `kind: exact \| wildcard \| delegated \| srv`, `reason` (section 6.10) |
 | | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
 | Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
 | | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
@@ -638,6 +638,24 @@ request it; admins approve it.
 4. The approved name or port becomes a grant of the tenant. `domain_add` can later point it at
    another of the tenant's machines without a new approval. Deleting the machine leaves the grant
    unattached for 30 days, then it is released.
+
+**Built so far** (exact and wildcard names in `winlab.tw`): `domain_request` takes `name`, `kind`
+and `reason` and stores a request of kind `domain`; `request_approve` checks the rules again and,
+with `adopt`, may replace existing A, AAAA or CNAME records at the name. An approval stores a
+`domain_grants` row. `domain_add` with `name` instead of `sub` publishes the granted name, or for
+a wildcard its catch-all `*.<base>` or one label under it, as a domain row that carries the
+grant's id; quota counts it like any domain. Each grant has its own certificate lineage
+`_grant-<id>` (DNS-01, the same 7-day budget as tenant wildcards) and its own site block at the
+gateway. Its A record, comment `carrel:b09:grant:<id>`, is written or moved only once the gateway
+holds that certificate, so an adopted name keeps answering where it did until carrel serves it;
+a lone foreign A record changes in place. Removing a grant's last domain keeps the grant and its
+record; the maintenance pass releases a grant unused for 30 days (record, gateway site,
+certificate, grant; the request reads `released`). An adopted name is not restored on release:
+the old records were replaced on purpose, and only the log keeps them. Labels of grants are
+reserved against new tenant slugs; a pending request reserves nothing, and a tenant has at most
+3 pending domain requests. `domain_add` prefers an exact grant of the name over a wildcard that
+covers it. Still to build: zones other than `winlab.tw` (`zone_add`),
+`port_request` and `srv`, `delegated`, and the Cloudflare proxy switch.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
 the tenants the zone is open to. `winlab.tw` is open to every tenant; a personal zone such as

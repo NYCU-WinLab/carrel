@@ -3,6 +3,7 @@ package carrel
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,7 @@ const gatewayCerts = "/etc/caddy/carrel-certs"
 var (
 	labelPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	originPattern = regexp.MustCompile(`^([a-z0-9-]+\.)+winlab\.tw$`)
+	grantPattern  = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+winlab\.tw$`)
 )
 
 // checkedPair returns the PEM pair if it covers host, has not expired and its
@@ -78,6 +80,23 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		port    int
 	}
 	routes := map[string][]route{}
+	// Special domain grants (PLAN 6.10) and the routes under each.
+	grants := map[string]domainGrant{}
+	for _, raw := range dicts(state["domain_grants"]) {
+		var g domainGrant
+		must(json.Unmarshal(encoded(raw), &g))
+		if !grantPattern.MatchString(g.Name) || (g.Kind != "exact" && g.Kind != "wildcard") || (g.Kind == "wildcard") != strings.HasPrefix(g.Name, "*.") || under(g.Name, origin) {
+			fail("conflict", "Invalid special domain grant")
+		}
+		// A tenant's subtree is its own site block; no grant may reach into it.
+		for n, slug := range slugs {
+			if owner := slug + ".winlab.tw"; under(g.Name, owner) && (g.Name != owner || n != g.TenantN) {
+				fail("conflict", "Invalid special domain grant")
+			}
+		}
+		grants[g.ID] = g
+	}
+	grantRoutes := map[string][]route{}
 	for _, d := range dicts(state["domains"]) {
 		if d["state"] != "ready" {
 			continue
@@ -96,6 +115,18 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 			address = str(target["address"])
 		}
 		slug := slugs[integer(target["tenant_n"])]
+		if id := str(d["grant"]); id != "" {
+			g, ok := grants[id]
+			if !ok || g.TenantN != integer(d["tenant_n"]) || integer(target["tenant_n"]) != g.TenantN || !g.covers(str(d["name"])) {
+				fail("conflict", "Invalid special domain")
+			}
+			port := integer(d["target_port"])
+			if port < 1 || port > 65535 {
+				fail("conflict", "Invalid tenant domain port")
+			}
+			grantRoutes[id] = append(grantRoutes[id], route{d, address, port})
+			continue
+		}
 		sub := str(d["sub"])
 		if (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+".winlab.tw" {
 			fail("conflict", "Invalid tenant domain")
@@ -156,6 +187,42 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 			if r.domain["sub"] == "*" {
 				// Caddy runs a handle without a matcher after every named
 				// one, so a domain of its own always wins over the catch-all.
+				fallback = upstream
+				continue
+			}
+			id := str(r.domain["id"])
+			lines = append(lines,
+				" @d"+id+" host "+str(r.domain["name"]),
+				" handle @d"+id+" {",
+				upstream,
+				" }",
+			)
+		}
+		lines = append(lines, " handle {", fallback, " }", "}")
+	}
+	ids := make([]string, 0, len(grantRoutes))
+	for id := range grantRoutes {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return grants[ids[i]].Name < grants[ids[j]].Name })
+	for _, id := range ids {
+		g := grants[id]
+		lineage := g.lineage()
+		bundle := byName[lineage]
+		if bundle == nil {
+			fail("conflict", "Missing domain certificate", D{"grant": g.ID})
+		}
+		probe := g.Name
+		if g.Kind == "wildcard" {
+			probe = "probe." + g.base()
+		}
+		certificates[lineage] = checkedPair(bundle, probe)
+		lines = append(lines, "https://"+g.Name+" {", " tls "+gatewayCerts+"/"+lineage+"/fullchain.pem "+gatewayCerts+"/"+lineage+"/privkey.pem")
+		fallback := "  respond 404"
+		for _, r := range grantRoutes[id] {
+			upstream := fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
+			if r.domain["name"] == g.Name {
+				// The exact name, or a wildcard's catch-all.
 				fallback = upstream
 				continue
 			}

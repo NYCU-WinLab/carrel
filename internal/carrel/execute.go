@@ -244,6 +244,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return D{"requests": publicRequests(e.S.Objects("requests", n))}
 	case "quota_request":
 		return e.QuotaRequest(a, w, t)
+	case "domain_request":
+		return e.DomainRequest(a, w, t)
 	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink":
 		return e.AppTool(tool, a, t)
 	}
