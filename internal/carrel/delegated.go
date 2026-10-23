@@ -162,12 +162,12 @@ func (e *Execution) AskDelegated(name string) (bool, string) {
 	}
 	// The place in the budget is taken before the tenant is asked, under a
 	// lock of its own, so concurrent asks cannot pass it together.
+	// A name agreed to before skips the limit, so renewals always pass.
+	if n, seen := rowOf[delegatedName](e.S, "delegated_names", name); (!seen || n.Pending || n.Grant != g.ID) && !e.P.delegatedAsks.allow(g.ID) {
+		return false, "rate_limited"
+	}
 	if ok, why := e.reserveDelegated(g, name); !ok || why == "known" {
 		return ok, why
-	}
-	if !e.P.delegatedAsks.allow(g.ID) {
-		e.releaseDelegated(g, name)
-		return false, "rate_limited"
 	}
 	agreed := e.tenantAgrees(address, route.TargetPort, name)
 	e.P.delegated.Lock()
@@ -218,15 +218,6 @@ func (e *Execution) reserveDelegated(g domainGrant, name string) (bool, string) 
 	return true, "reserved"
 }
 
-// releaseDelegated gives back the place reserveDelegated held for name.
-func (e *Execution) releaseDelegated(g domainGrant, name string) {
-	e.P.delegated.Lock()
-	defer e.P.delegated.Unlock()
-	if n, held := rowOf[delegatedName](e.S, "delegated_names", name); held && n.Pending && n.Grant == g.ID {
-		e.S.Remove("delegated_names", name)
-	}
-}
-
 // tenantAgrees asks the tenant's ask_url, on the route's target.
 func (e *Execution) tenantAgrees(address string, port int, name string) bool {
 	if e.P.tenantAsk != nil {
@@ -269,9 +260,9 @@ func (a *App) askRoute(mux *http.ServeMux, p *Platform) {
 		// Outside the writer: the tenant's answer can take seconds, and the
 		// record it leaves is no infrastructure state.
 		err := attempt(func() { ok, why = p.execution(r.Context()).AskDelegated(name) })
-		if err == nil && !ok && why != "in_progress" {
-			// A pending name is still being asked about: its answer may
-			// still be yes.
+		// A pending name may still be agreed to, and a limited one is
+		// asked again once the grant has room: neither is remembered.
+		if err == nil && !ok && why != "in_progress" && why != "rate_limited" && len(name) <= 253 {
 			p.delegatedAsks.refuse(name)
 		}
 		if err != nil || !ok {

@@ -243,6 +243,28 @@ func TestDelegatedAsksAreBounded(t *testing.T) {
 	if asked.Load() != 1 {
 		t.Fatalf("tenant asked %d times for one refused name", asked.Load())
 	}
+	// A limited name is not remembered: it passes once the grant has room.
+	p.delegatedAsks = askLimiter{}
+	for range delegatedAsksPerMinute {
+		p.delegatedAsks.allow("g0")
+	}
+	p.tenantAsk = func(string, int, string) bool { return true }
+	ask := func() int {
+		r := httptest.NewRequest("GET", "/gateway/ask?domain=late.a.lab.example", nil)
+		r.RemoteAddr, r.Host = "10.200.0.2:41000", "10.200.0.3:8080"
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := ask(); code != 404 {
+		t.Fatalf("limited ask answered %d", code)
+	}
+	p.delegatedAsks.mu.Lock()
+	p.delegatedAsks.asks = nil
+	p.delegatedAsks.mu.Unlock()
+	if code := ask(); code != 200 {
+		t.Fatalf("ask after the limit answered %d", code)
+	}
 }
 
 // A rename waits for every operation that may still reach the machine: a
