@@ -151,11 +151,12 @@ def site_layout(node, site):
     # Another protected host's public HTTPS (such as the lab host's gateway): the
     # internet reaches it, so tenants may too. Its other ports stay dropped.
     for entry in site.get("public_entries", []):
-        address = str(ipaddress.IPv4Network(entry["address"]))
-        if address not in protected or not address.endswith("/32"):
-            raise SystemExit(f"public entry {entry['address']} is not a protected host")
-        port = int(entry["port"])
-        if not 1 <= port <= 65535:
+        network = ipaddress.IPv4Network(entry["address"])
+        address = str(network)
+        if address not in protected or network.prefixlen != 32 or not network.network_address.is_global:
+            raise SystemExit(f"public entry {entry['address']} is not a protected public host")
+        port = entry["port"]
+        if type(port) is not int or not 1 <= port <= 65535:
             raise SystemExit(f"public entry {entry['address']} has an invalid port")
         entries.append({"address": address, "port": port})
     return {"address": addresses[node], "peers": [a for n, a in addresses.items() if n != node],
