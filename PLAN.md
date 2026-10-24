@@ -65,6 +65,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-19 | No QDevice: every place it could run fails together with B09 |
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
 | 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the `owner` is set at creation (section 9.4, issue #141) |
+| 2026-10-24 | The lab website moves onto a tenant: `winlab.tw` and `www.winlab.tw` may be granted as exact special names. `www` stays reserved as a tenant slug, and the zone's wildcard is never granted (section 6.10) |
 
 ### 1.6 Current core and deferred work
 
@@ -631,7 +632,9 @@ request it; admins approve it.
 
 1. `domain_request` or `port_request` files a request (section 5.3).
 2. carrel validates it before an admin sees it:
-   - the zone is managed and open to this tenant, and the name is not reserved;
+   - the zone is managed and open to this tenant, and the name is not reserved (the site's own
+     `winlab.tw` and `www.winlab.tw` may be requested as exact names; their certificates cover
+     only themselves);
    - a name equal to or under a slug (`bob.winlab.tw`, `x.bob.winlab.tw`) may be requested only by
      that slug's tenant;
    - a wildcard is never `*.<zone>` (its certificate would cover `auth.winlab.tw`), and never
@@ -700,7 +703,7 @@ replaces the token and tenant list. `zone_list` shows the site's zone and the ad
 `zone_remove` refuses while a name in the zone is granted or requested. A name belongs to the
 longest managed zone it sits in, and its ACME challenge and grant record go to that zone. Outside
 `winlab.tw` the slug and platform-label rules do not apply; the zone's own wildcard is never
-granted, and its apex only outside `winlab.tw`. A zone may not overlap `winlab.tw` or another
+granted, and its apex only as an exact name (in `winlab.tw` too, for the lab website). A zone may not overlap `winlab.tw` or another
 added zone. `winlab.tw` is open to every tenant; a personal zone such as
 `zyx.tw` can be open to one tenant only. Records are DNS only by default. An admin may turn on the
 Cloudflare proxy for an HTTP special domain one label under its zone; Cloudflare's free certificate

@@ -99,6 +99,10 @@ func (e *Execution) grantCovering(n int, name string) domainGrant {
 // it; other zones are added with zone_add (zones.go).
 const specialZone = "winlab.tw"
 
+// siteHost is the lab website. Its label stays reserved for tenant slugs,
+// but the name itself may be granted as an exact name (PLAN 6.10).
+const siteHost = "www." + specialZone
+
 var specialLabel = `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`
 
 // validSpecialName checks the shape of a requested name: lowercase DNS labels
@@ -171,17 +175,19 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 	if kind == "delegated" && !e.zoneOnlyFor(zone, integer(t["n"])) {
 		fail("forbidden", "Delegated names live only in a zone open to this tenant alone", D{"recovery": "revise_request"})
 	}
-	// Neither the zone's wildcard nor, in the site's zone, its apex: a
-	// certificate for either would cover every name in the zone.
-	if (strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || kind == "delegated" || zone == specialZone)) || (kind == "srv" && srvBase(name) == specialZone) {
+	// Never the zone's wildcard: its certificate would cover every name in
+	// the zone. A zone's apex, the site's included, is granted only as an
+	// exact name, whose certificate covers that name alone.
+	if (strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || kind == "delegated")) || (kind == "srv" && srvBase(name) == specialZone) {
 		fail("invalid", "Request a name under the zone, not the zone itself", D{"recovery": "revise_request"})
 	}
-	if zone != specialZone {
+	if zone != specialZone || name == specialZone {
 		return zone, e.checkGrantOverlap(t, kind, name, ignore, zone)
 	}
 	labels := relativeLabels(name)
 	top := labels[len(labels)-1]
-	if contains(reservedLabels, top) || name == originHost(e.P.Config) || under(name, originHost(e.P.Config)) {
+	site := kind == "exact" && name == siteHost
+	if (contains(reservedLabels, top) && !site) || name == originHost(e.P.Config) || under(name, originHost(e.P.Config)) {
 		fail("conflict", "This name is reserved for the platform", D{"recovery": "revise_request"})
 	}
 	for _, other := range e.S.Tenants() {
@@ -203,6 +209,14 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 // request, or a wildcard over someone else's record, and reports whether
 // address records exist at the name.
 func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool {
+	// holds reports whether a grant of owner speaks for base. A zone's apex
+	// speaks only for itself: every name of the zone sits under it.
+	holds := func(owner, base string) bool {
+		if owner == zone {
+			return base == owner
+		}
+		return under(base, owner)
+	}
 	// Another tenant's name, granted or asked for, may neither cover nor
 	// sit under this one.
 	overlaps := func(otherKind, other string) bool {
@@ -218,10 +232,10 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 		// An SRV record speaks for the name it sits on: clients of that name
 		// follow it. So the name, and everything under it, must be the
 		// tenant's own.
-		if kind == "srv" && otherKind != "srv" && under(srvBase(name), strings.TrimPrefix(other, "*.")) {
+		if kind == "srv" && otherKind != "srv" && holds(strings.TrimPrefix(other, "*."), srvBase(name)) {
 			return true
 		}
-		return kind != "srv" && otherKind == "srv" && under(srvBase(other), strings.TrimPrefix(name, "*."))
+		return kind != "srv" && otherKind == "srv" && holds(strings.TrimPrefix(name, "*."), srvBase(other))
 	}
 	for _, g := range e.grants() {
 		if overlaps(g.Kind, g.Name) && (g.TenantN != integer(t["n"]) || g.Name == name) {
