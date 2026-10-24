@@ -1349,6 +1349,8 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | virtualization.cluster | yes | no | no | no |
 | users.owner | yes | no | no | no |
 
+A child object has no owner of its own to constrain, or is better constrained by its parent: constrain interfaces and virtual disks by the owner of their machine's cluster (`virtual_machine__cluster__owner__users`), addresses and prefixes by the owner of their VRF (`vrf__owner__users`), and FHRP group assignments by the owner of their group (`group__owner__users`); each with the matching `__user_groups__user` constraint for groups.
+
 ## 10. Maintenance
 
 ### 10.1 Backups
