@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeNetBox keeps objects per API path and answers the few filters the sync
@@ -788,5 +789,65 @@ func TestNetBoxReadsThePoolAndRecordsBoundAddresses(t *testing.T) {
 	}
 	if find(f.all("ipam/ip-addresses/"), func(o D) bool { return o["address"] == "140.113.60.163/27" }) != nil {
 		t.Fatal("an unbound address stayed in NetBox")
+	}
+}
+
+func TestNetBoxSyncsVPNClientsAsAddresses(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	key := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
+	soon := now() + 3600
+	p.Store.Put("vpn_clients", "a", 1, vpnClient{ID: "a", TenantN: 1, Name: "laptop", Address: "10.201.1.2", PublicKey: key, State: "ready", ExpiresAt: soon}.D())
+	p.Store.Put("vpn_clients", "b", 1, vpnClient{ID: "b", TenantN: 1, Name: "agent", Address: "10.201.1.3", PublicKey: key, State: "ready", ExpiresAt: soon}.D())
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	address := func(a string) D {
+		return find(f.all("ipam/ip-addresses/"), func(o D) bool { return o["address"] == a })
+	}
+	laptop := address("10.201.1.2/32")
+	shared := find(f.all("ipam/vrfs/"), func(o D) bool { return o["name"] == "Carrel" })
+	if laptop == nil || laptop["assigned_object_id"] != nil || refID(laptop["vrf"]) != integer(shared["id"]) || obj(laptop["status"])["value"] != "active" {
+		t.Fatal("client address missing or wrong", laptop)
+	}
+	before := str(laptop["description"])
+	if want := "Carrel VPN client laptop of tenant alice, expires " + time.Unix(int64(soon), 0).UTC().Format("2006-01-02"); before != want {
+		t.Fatal(before)
+	}
+	if !strings.Contains(fmt.Sprint(laptop), "owner") || strings.Contains(fmt.Sprint(laptop), key) {
+		t.Fatal("owner missing or key leaked", laptop)
+	}
+	if find(f.all("ipam/prefixes/"), func(o D) bool { return o["prefix"] == "10.201.1.0/24" }) == nil {
+		t.Fatal("no prefix for the client range")
+	}
+	// Unchanged state sends no write; renewing changes only the description.
+	f.reset()
+	if r := syncNetBox(t, p); r.Writes != 0 || len(f.writes) != 0 {
+		t.Fatal("a second pass wrote", f.writes)
+	}
+	p.Store.Put("vpn_clients", "a", 1, vpnClient{ID: "a", TenantN: 1, Name: "laptop", Address: "10.201.1.2", PublicKey: key, State: "ready", ExpiresAt: soon + 86400}.D())
+	syncNetBox(t, p)
+	if len(f.writes) != 1 || address("10.201.1.2/32")["description"] == before {
+		t.Fatal("a renewal should change one description", f.writes)
+	}
+	// An expired or removed client leaves; the prefix goes with the last one.
+	p.Store.Put("vpn_clients", "b", 1, vpnClient{ID: "b", TenantN: 1, Name: "agent", Address: "10.201.1.3", PublicKey: key, State: "ready", ExpiresAt: now() - 1}.D())
+	syncNetBox(t, p)
+	if address("10.201.1.3/32") != nil || address("10.201.1.2/32") == nil {
+		t.Fatal("expiry removed the wrong client")
+	}
+	p.Store.Remove("vpn_clients", "a")
+	syncNetBox(t, p)
+	if address("10.201.1.2/32") != nil || find(f.all("ipam/prefixes/"), func(o D) bool { return o["prefix"] == "10.201.1.0/24" }) != nil {
+		t.Fatal("the last client left its address or prefix behind")
+	}
+}
+
+func TestNetBoxVPNClientsAloneKeepTheirTenant(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	key := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
+	p.Store.Put("vpn_clients", "a", 1, vpnClient{ID: "a", TenantN: 1, Name: "laptop", Address: "10.201.1.2", PublicKey: key, State: "ready", ExpiresAt: now() + 3600}.D())
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || len(f.all("ipam/ip-addresses/")) != 1 {
+		t.Fatal(r.Errors, f.all("ipam/ip-addresses/"))
 	}
 }

@@ -1290,6 +1290,8 @@ Mapping:
 | machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4, with DNS name `<machine>.<tenant>.internal` as the infra resolver answers it |
 | tenant segment `10.200.N.0/24` | prefix in the shared VRF |
 | managed private network CIDR | prefix in that network's own VRF |
+| client VPN range `10.201.N.0/24` | prefix in the shared VRF, while the tenant has a client |
+| client VPN client (`vpn_client_add`) | IP address `10.201.N.x/32` in the shared VRF, bound to no interface, description with the client name and the day it expires; an expired or removed client leaves with its record |
 | `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
 | published port, HTTPS route | service on the VM, or on the FHRP group when it targets a virtual address, with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
