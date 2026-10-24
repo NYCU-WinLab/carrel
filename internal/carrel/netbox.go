@@ -804,13 +804,17 @@ func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string
 		return id
 	}
 	// Name and slug both start with carrel, so neither can meet a platform made
-	// by hand. A tenant's image and ISO names share one namespace, so the name
-	// needs no kind. A platform from before the prefix is found by its old slug
-	// and renamed in place.
+	// by hand. A tenant's image and ISO of one name can both exist (deleting an
+	// ISO does not touch machines that used it), and NetBox keeps names unique,
+	// so an ISO's name says so. A platform from before the prefix is found by its
+	// old slug and renamed in place.
 	old := nbSlug(label)
 	slug, name := "carrel-"+old, "Carrel: "+nbTitle(strings.ReplaceAll(image, "-", " "))
-	if _, rest, ok := strings.Cut(image, ":"); ok {
+	if kind, rest, ok := strings.Cut(image, ":"); ok {
 		name = "Carrel: " + nbTitle(tenant) + "/" + rest
+		if kind == "iso" {
+			name += " (ISO)"
+		}
 	}
 	have := one(s.platforms, func(o D) bool { return o["slug"] == slug })
 	if have == nil {

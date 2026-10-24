@@ -622,6 +622,27 @@ func TestNetBoxTenantImagesAreNotSharedAcrossTenants(t *testing.T) {
 	}
 }
 
+func TestNetBoxTenantImageAndISOOfOneNameGetOwnPlatforms(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	web := p.Store.Get("machines", "10100")
+	web["image"] = "tenant:win11"
+	p.Store.Put("machines", 10100, 1, web)
+	iso := seedMachine(p, "app", 10200)
+	iso["image"] = "iso:win11"
+	p.Store.Put("machines", 10200, 1, iso)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	names := []string{}
+	for _, o := range f.all("dcim/platforms/") {
+		names = append(names, str(o["name"]))
+	}
+	if len(names) != 2 || !slices.Contains(names, "Carrel: Alice/win11") || !slices.Contains(names, "Carrel: Alice/win11 (ISO)") {
+		t.Fatal(names)
+	}
+}
+
 func TestNetBoxRenamesAVRFNamedTheOldWay(t *testing.T) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
