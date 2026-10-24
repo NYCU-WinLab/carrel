@@ -159,9 +159,15 @@ func addressRecord(r D) bool {
 
 // checkSpecialName applies the rules of PLAN 6.10 step 2 to a name tenant t
 // wants. It returns the zone of the name and whether address records already
-// exist at the name, which an approval must adopt. ignore is the request or
-// grant the check is for.
+// exist at the name, which an approval must adopt. ignore is a request of t
+// that the check is for.
 func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bool) {
+	return e.checkName(t, kind, name, ignore, "")
+}
+
+// checkName is checkSpecialName with a grant of its own to leave out, for a
+// grant that changes tenants.
+func (e *Execution) checkName(t D, kind, name, ignore, ignoreGrant string) (string, bool) {
 	validSpecialName(kind, name)
 	zone, managed := e.zoneOf(name)
 	if !managed {
@@ -182,7 +188,7 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 		fail("invalid", "Request a name under the zone, not the zone itself", D{"recovery": "revise_request"})
 	}
 	if zone != specialZone || name == specialZone {
-		return zone, e.checkGrantOverlap(t, kind, name, ignore, zone)
+		return zone, e.checkGrantOverlap(t, kind, name, ignore, ignoreGrant, zone)
 	}
 	labels := relativeLabels(name)
 	top := labels[len(labels)-1]
@@ -202,13 +208,13 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 			fail("invalid", "Names under "+owner+" need no request; use domain_add with sub", D{"recovery": "revise_request"})
 		}
 	}
-	return zone, e.checkGrantOverlap(t, kind, name, ignore, zone)
+	return zone, e.checkGrantOverlap(t, kind, name, ignore, ignoreGrant, zone)
 }
 
 // checkGrantOverlap refuses a name that overlaps another grant or pending
 // request, or a wildcard over someone else's record, and reports whether
 // address records exist at the name.
-func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool {
+func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, ignoreGrant, zone string) bool {
 	// holds reports whether a grant of owner speaks for base. A zone's apex
 	// speaks only for itself: every name of the zone sits under it.
 	holds := func(owner, base string) bool {
@@ -238,7 +244,7 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 		return kind != "srv" && otherKind == "srv" && holds(strings.TrimPrefix(name, "*."), srvBase(other))
 	}
 	for _, g := range e.grants() {
-		if g.ID == ignore {
+		if g.ID == ignoreGrant {
 			continue
 		}
 		if overlaps(g.Kind, g.Name) && (g.TenantN != integer(t["n"]) || g.Name == name) {
@@ -541,7 +547,8 @@ func (e *Execution) releaseGrant(g domainGrant, why string) {
 // with domains is refused: they route the name to the old tenant's machines,
 // so the old tenant removes them first. The new tenant must be one that could
 // have asked for the name: the zone open to it, nothing of another tenant's
-// in the way.
+// in the way. Its request moves with it; what the old tenant agreed to does
+// not (delegated names, an SRV record naming its port).
 func (e *Execution) DomainTransfer(a, w D) D {
 	name := strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
 	dry := boolean(a["dry_run"])
@@ -571,21 +578,29 @@ func (e *Execution) DomainTransfer(a, w D) D {
 			fail("conflict", "The grant still has domains; remove them with domain_remove first", D{"recovery": "resolve_prerequisite", "domain": d.Name})
 		}
 	}
-	e.checkSpecialName(to, g.Kind, g.Name, g.ID)
+	e.checkName(to, g.Kind, g.Name, "", g.ID)
 	from := e.S.TenantN(g.TenantN)
 	out := D{"grant": D{"name": g.Name, "kind": g.Kind, "from": from["slug"], "tenant": to["slug"]}, "dry_run": dry}
 	if dry {
 		return out
 	}
+	// domain_remove leaves an SRV record to maintenance, and it still
+	// names the old tenant's public port: it goes before the grant moves,
+	// and a failure leaves the grant where it was.
+	if g.Kind == "srv" {
+		e.GrantRecord(g, true)
+	}
 	e.Transaction(func(tx *Execution) {
 		g.TenantN = n
+		// The new tenant gets the full unused period, as a new grant would.
+		g.UnusedSince = now()
 		tx.S.Put("domain_grants", g.ID, n, g.D())
 		tx.S.Move("domain_grants", g.ID, n)
+		// Delegated names the old tenant agreed to are not the new
+		// tenant's: its target is asked again for each.
 		for _, d := range rowsOf[delegatedName](tx.S, "delegated_names", integer(from["n"])) {
 			if d.Grant == g.ID {
-				d.TenantN = n
-				tx.S.Put("delegated_names", d.ID, n, decode(string(encoded(d))))
-				tx.S.Move("delegated_names", d.ID, n)
+				tx.S.Remove("delegated_names", d.ID)
 			}
 		}
 		if r := tx.S.Get("requests", g.RequestID); r != nil {

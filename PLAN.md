@@ -697,8 +697,9 @@ of this, section 6.10 is built.
 
 A grant can change tenants: admin `domain_transfer` with `name` and `tenant` moves it, for a name
 filed in a personal tenant that belongs to a project. The grant keeps its id, so its certificate
-lineage and DNS record stay and the name keeps resolving; its request and delegated names move with
-it. It is refused while the grant has domains (the old tenant removes them first), and the new
+lineage and DNS record stay and the name keeps resolving. Its request moves with it; the delegated
+names the old tenant agreed to are dropped, so the new tenant's target is asked again, and an SRV
+record goes at once, since it names the old tenant's port. The unused period starts over. It is refused while the grant has domains (the old tenant removes them first), and the new
 tenant passes the same checks a request would, the grant itself aside.
 
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and

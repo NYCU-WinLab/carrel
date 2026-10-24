@@ -282,6 +282,21 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("p", "domain_request", D{"name": "mc.winlab.tw", "reason": "over alice's SRV"}, bob)
 	do("p", func() { g.p.execution(bg).MaintainGrants() })
 	do("p", func() { g.p.execution(bg).MaintainSpecialPorts() })
+	// An SRV grant that moves takes its record down at once: removing the
+	// domain leaves it to maintenance, and it names alice's port.
+	srvRecords := func(step string) {
+		dns.mu.Lock()
+		defer dns.mu.Unlock()
+		g.lines = append(g.lines, step+" record _minecraft._tcp.mc.winlab.tw "+normalize(encoded(dns.records["_minecraft._tcp.mc.winlab.tw"])))
+	}
+	srvRecords("p")
+	call("p", "domain_remove", D{"name": "_minecraft._tcp.mc.winlab.tw"}, alice)
+	srvRecords("p")
+	call("p", "domain_transfer", D{"name": "_minecraft._tcp.mc.winlab.tw", "tenant": "bob"}, admin)
+	srvRecords("p")
+	call("p", "domain_transfer", D{"name": "_minecraft._tcp.mc.winlab.tw", "tenant": "alice"}, admin)
+	call("p", "domain_add", D{"machine": "web", "name": "_minecraft._tcp.mc.winlab.tw", "target_port": 25565}, alice)
+	srvRecords("p")
 	call("p", "port_list", D{}, alice)
 	call("p", "port_close", D{"id": obj(obj(obj(opened["operation"])["result"])["port"])["id"]}, alice)
 	do("p", func() { g.p.execution(bg).MaintainGrants() })
