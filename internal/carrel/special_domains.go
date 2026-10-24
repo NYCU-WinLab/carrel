@@ -159,8 +159,8 @@ func addressRecord(r D) bool {
 
 // checkSpecialName applies the rules of PLAN 6.10 step 2 to a name tenant t
 // wants. It returns the zone of the name and whether address records already
-// exist at the name, which an approval must adopt. ignore is a request of t
-// that the check is for.
+// exist at the name, which an approval must adopt. ignore is the request or
+// grant the check is for.
 func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bool) {
 	validSpecialName(kind, name)
 	zone, managed := e.zoneOf(name)
@@ -238,6 +238,9 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 		return kind != "srv" && otherKind == "srv" && holds(strings.TrimPrefix(name, "*."), srvBase(other))
 	}
 	for _, g := range e.grants() {
+		if g.ID == ignore {
+			continue
+		}
 		if overlaps(g.Kind, g.Name) && (g.TenantN != integer(t["n"]) || g.Name == name) {
 			fail("conflict", "This name overlaps a granted special domain", D{"recovery": "revise_request"})
 		}
@@ -529,6 +532,73 @@ func (e *Execution) releaseGrant(g domainGrant, why string) {
 	e.Reconcile()
 	_ = os.RemoveAll(filepath.Join(e.CertificateDir(), "live", g.lineage()))
 	_ = os.RemoveAll(filepath.Join(e.CertificateDir(), "archive", g.lineage()))
+}
+
+// DomainTransfer gives a grant to another tenant (admin), such as a name a
+// member asked for in their own tenant that belongs to a project. The grant
+// keeps its id, so its certificate lineage and its DNS record stay as they
+// are and the name never stops resolving; only the owner changes. A grant
+// with domains is refused: they route the name to the old tenant's machines,
+// so the old tenant removes them first. The new tenant must be one that could
+// have asked for the name: the zone open to it, nothing of another tenant's
+// in the way.
+func (e *Execution) DomainTransfer(a, w D) D {
+	name := strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
+	dry := boolean(a["dry_run"])
+	to := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
+	if to == nil {
+		fail("not_found", "Tenant not found")
+	}
+	var g domainGrant
+	found := false
+	for _, x := range e.grants() {
+		if x.Name == name {
+			g, found = x, true
+		}
+	}
+	if !found {
+		fail("not_found", "No special domain grant has this name")
+	}
+	n := integer(to["n"])
+	if g.TenantN == n {
+		fail("conflict", "The grant is already this tenant's", D{"recovery": "revise_request"})
+	}
+	if to["status"] != "active" {
+		fail("forbidden", "Tenant is suspended")
+	}
+	for _, d := range e.domains(g.TenantN) {
+		if d.Grant == g.ID {
+			fail("conflict", "The grant still has domains; remove them with domain_remove first", D{"recovery": "resolve_prerequisite", "domain": d.Name})
+		}
+	}
+	e.checkSpecialName(to, g.Kind, g.Name, g.ID)
+	from := e.S.TenantN(g.TenantN)
+	out := D{"grant": D{"name": g.Name, "kind": g.Kind, "from": from["slug"], "tenant": to["slug"]}, "dry_run": dry}
+	if dry {
+		return out
+	}
+	e.Transaction(func(tx *Execution) {
+		g.TenantN = n
+		tx.S.Put("domain_grants", g.ID, n, g.D())
+		tx.S.Move("domain_grants", g.ID, n)
+		for _, d := range rowsOf[delegatedName](tx.S, "delegated_names", integer(from["n"])) {
+			if d.Grant == g.ID {
+				d.TenantN = n
+				tx.S.Put("delegated_names", d.ID, n, decode(string(encoded(d))))
+				tx.S.Move("delegated_names", d.ID, n)
+			}
+		}
+		if r := tx.S.Get("requests", g.RequestID); r != nil {
+			r["tenant_n"] = n
+			r["transferred_from"] = from["slug"]
+			tx.S.Put("requests", g.RequestID, n, r)
+			tx.S.Move("requests", g.RequestID, n)
+		}
+	})
+	detail := D{"grant": g.ID, "name": g.Name, "from": from["slug"], "to": to["slug"]}
+	e.S.Log(str(w["sub"]), integer(from["n"]), "domain_grant_transferred", detail, "ok")
+	e.S.Log(str(w["sub"]), n, "domain_grant_transferred", detail, "ok")
+	return out
 }
 
 // publicGrants is the tenant's grants as domain_list shows them.

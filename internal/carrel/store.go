@@ -212,6 +212,13 @@ func (s *Store) SiteRemove(kind, id string) {
 func (s *Store) SitePut(kind, id string, value D) {
 	s.Exec("INSERT INTO site VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET data=excluded.data", kind, id, string(encoded(value)))
 }
+
+// Move gives a row to another tenant; Put keeps the tenant a row was
+// written with.
+func (s *Store) Move(kind string, id any, n int) {
+	s.Exec("UPDATE objects SET tenant=? WHERE kind=? AND id=?", n, kind, str(id))
+}
+
 func (s *Store) Remove(kind string, id any) {
 	s.Exec("DELETE FROM objects WHERE kind=? AND id=?", kind, str(id))
 }

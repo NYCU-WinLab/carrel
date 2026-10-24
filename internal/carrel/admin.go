@@ -46,6 +46,8 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		return e.ZoneAction(tool, a, w)
 	case "domain_proxy":
 		return e.DomainProxy(a, w)
+	case "domain_transfer":
+		return e.DomainTransfer(a, w)
 	case "request_list_all":
 		return D{"requests": publicRequests(e.S.Objects("requests"))}
 	case "request_approve", "request_reject":

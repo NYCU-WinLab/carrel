@@ -695,6 +695,12 @@ through 1.1.1.1 until Cloudflare answers for it and asks `https://<name>/` there
 or the gateway's redirect back to the same URL (Flexible mode) turns the proxy off again. With all
 of this, section 6.10 is built.
 
+A grant can change tenants: admin `domain_transfer` with `name` and `tenant` moves it, for a name
+filed in a personal tenant that belongs to a project. The grant keeps its id, so its certificate
+lineage and DNS record stay and the name keeps resolving; its request and delegated names move with
+it. It is refused while the grant has domains (the old tenant removes them first), and the new
+tenant passes the same checks a request would, the grant itself aside.
+
 **Zones**: admins add DNS zones with `zone_add`: the Cloudflare token, kept as a server secret, and
 the tenants the zone is open to. Built: `zone_add` checks that the token sees exactly that zone
 and can write (a TXT probe it removes at once), keeps the token in `zone_dir/<zone>.token` (0600,
