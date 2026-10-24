@@ -166,6 +166,35 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("x", "domain_proxy", D{"name": "video.winlab.tw", "proxied": false}, admin)
 	records("x")
 
+	// t: an admin gives a grant to another tenant. Refused while it has
+	// domains, to a tenant that does not exist, by a member, to the owner
+	// itself, and over another tenant's name; the record stays put.
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "bob"}, admin)
+	call("t", "domain_remove", D{"name": "video.winlab.tw"}, alice)
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "bob"}, alice)
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "nobody"}, admin)
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "alice"}, admin)
+	call("t", "domain_transfer", D{"name": "nothing.winlab.tw", "tenant": "bob"}, admin)
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "bob", "dry_run": true}, admin)
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "bob"}, admin)
+	call("t", "domain_list", D{}, alice)
+	call("t", "domain_list", D{}, bob)
+	call("t", "request_list", D{}, bob)
+	call("t", "domain_add", D{"machine": "web", "name": "video.winlab.tw", "target_port": 3000}, alice)
+	call("t", "domain_add", D{"machine": "bweb", "name": "video.winlab.tw", "target_port": 3000}, bob)
+	records("t")
+	// bob's wildcard cannot go to alice: its api name is still bob's.
+	call("t", "domain_remove", D{"name": "*.lab.winlab.tw"}, bob)
+	call("t", "domain_transfer", D{"name": "*.lab.winlab.tw", "tenant": "alice"}, admin)
+	call("t", "domain_add", D{"machine": "bweb", "name": "*.lab.winlab.tw", "target_port": 80}, bob)
+	// And back, so the rest runs as before.
+	call("t", "domain_remove", D{"name": "video.winlab.tw"}, bob)
+	call("t", "domain_transfer", D{"name": "video.winlab.tw", "tenant": "alice"}, admin)
+	call("t", "domain_add", D{"machine": "web", "name": "video.winlab.tw", "target_port": 3000}, alice)
+	do("t", func() { g.p.execution(bg).MaintainGrants() })
+	rows("t")
+	records("t")
+
 	// z: an added zone, open to alice only. Its token stays out of results,
 	// rows and the audit log.
 	call("z", "zone_add", D{"name": "lab.example", "token": "wrong-token-0123456789abcdef", "tenants": []any{"alice"}}, admin)
@@ -253,6 +282,21 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("p", "domain_request", D{"name": "mc.winlab.tw", "reason": "over alice's SRV"}, bob)
 	do("p", func() { g.p.execution(bg).MaintainGrants() })
 	do("p", func() { g.p.execution(bg).MaintainSpecialPorts() })
+	// An SRV grant that moves takes its record down at once: removing the
+	// domain leaves it to maintenance, and it names alice's port.
+	srvRecords := func(step string) {
+		dns.mu.Lock()
+		defer dns.mu.Unlock()
+		g.lines = append(g.lines, step+" record _minecraft._tcp.mc.winlab.tw "+normalize(encoded(dns.records["_minecraft._tcp.mc.winlab.tw"])))
+	}
+	srvRecords("p")
+	call("p", "domain_remove", D{"name": "_minecraft._tcp.mc.winlab.tw"}, alice)
+	srvRecords("p")
+	call("p", "domain_transfer", D{"name": "_minecraft._tcp.mc.winlab.tw", "tenant": "bob"}, admin)
+	srvRecords("p")
+	call("p", "domain_transfer", D{"name": "_minecraft._tcp.mc.winlab.tw", "tenant": "alice"}, admin)
+	call("p", "domain_add", D{"machine": "web", "name": "_minecraft._tcp.mc.winlab.tw", "target_port": 25565}, alice)
+	srvRecords("p")
 	call("p", "port_list", D{}, alice)
 	call("p", "port_close", D{"id": obj(obj(obj(opened["operation"])["result"])["port"])["id"]}, alice)
 	do("p", func() { g.p.execution(bg).MaintainGrants() })
