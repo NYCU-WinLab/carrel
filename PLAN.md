@@ -703,7 +703,7 @@ replaces the token and tenant list. `zone_list` shows the site's zone and the ad
 `zone_remove` refuses while a name in the zone is granted or requested. A name belongs to the
 longest managed zone it sits in, and its ACME challenge and grant record go to that zone. Outside
 `winlab.tw` the slug and platform-label rules do not apply; the zone's own wildcard is never
-granted; in `winlab.tw` its apex is granted only as an exact name. A zone may not overlap `winlab.tw` or another
+granted, and its apex only as an exact name (in `winlab.tw` too, for the lab website). A zone may not overlap `winlab.tw` or another
 added zone. `winlab.tw` is open to every tenant; a personal zone such as
 `zyx.tw` can be open to one tenant only. Records are DNS only by default. An admin may turn on the
 Cloudflare proxy for an HTTP special domain one label under its zone; Cloudflare's free certificate

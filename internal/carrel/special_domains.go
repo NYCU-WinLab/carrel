@@ -176,10 +176,9 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 		fail("forbidden", "Delegated names live only in a zone open to this tenant alone", D{"recovery": "revise_request"})
 	}
 	// Never the zone's wildcard: its certificate would cover every name in
-	// the zone. The site's apex and www may move to a tenant as exact names
-	// only, since an admin approves each one and its certificate covers that
-	// name alone.
-	if (strings.TrimPrefix(name, "*.") == zone && (kind != "exact" || zone != specialZone)) || (kind == "srv" && srvBase(name) == specialZone) {
+	// the zone. A zone's apex, the site's included, is granted only as an
+	// exact name, whose certificate covers that name alone.
+	if (strings.TrimPrefix(name, "*.") == zone && (kind == "wildcard" || kind == "delegated")) || (kind == "srv" && srvBase(name) == specialZone) {
 		fail("invalid", "Request a name under the zone, not the zone itself", D{"recovery": "revise_request"})
 	}
 	if zone != specialZone || name == specialZone {
@@ -210,6 +209,14 @@ func (e *Execution) checkSpecialName(t D, kind, name, ignore string) (string, bo
 // request, or a wildcard over someone else's record, and reports whether
 // address records exist at the name.
 func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool {
+	// holds reports whether a grant of owner speaks for base. A zone's apex
+	// speaks only for itself: every name of the zone sits under it.
+	holds := func(owner, base string) bool {
+		if owner == zone {
+			return base == owner
+		}
+		return under(base, owner)
+	}
 	// Another tenant's name, granted or asked for, may neither cover nor
 	// sit under this one.
 	overlaps := func(otherKind, other string) bool {
@@ -225,10 +232,10 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, zone string) bool
 		// An SRV record speaks for the name it sits on: clients of that name
 		// follow it. So the name, and everything under it, must be the
 		// tenant's own.
-		if kind == "srv" && otherKind != "srv" && under(srvBase(name), strings.TrimPrefix(other, "*.")) {
+		if kind == "srv" && otherKind != "srv" && holds(strings.TrimPrefix(other, "*."), srvBase(name)) {
 			return true
 		}
-		return kind != "srv" && otherKind == "srv" && under(srvBase(other), strings.TrimPrefix(name, "*."))
+		return kind != "srv" && otherKind == "srv" && holds(strings.TrimPrefix(name, "*."), srvBase(other))
 	}
 	for _, g := range e.grants() {
 		if overlaps(g.Kind, g.Name) && (g.TenantN != integer(t["n"]) || g.Name == name) {
