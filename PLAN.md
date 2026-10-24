@@ -1276,14 +1276,14 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `owner` | name of the NetBox owner (NetBox 4.5+) every created object carries. It must exist; the NetBox operator creates it, since an owner needs a group. Use a different owner for each carrel installation that shares a NetBox |
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
 | `device_field` | custom field of a NetBox device that holds the Proxmox node name, for devices named differently from their node (`serverQ10` for `carrel01`). Empty, the default, matches the device name |
-| `vrf` | name of the shared VRF, default `carrel`; a private network's VRF is `<vrf>-<tenant slug>-<network name>` |
+| `vrf` | name of the shared VRF, default `Carrel`; a private network's VRF is `<vrf> <Tenant> <network name>` (`Carrel Alice back`). A VRF that carrel created under the old form (`carrel-alice-back`) is found by that exact name and renamed in place |
 
 Mapping:
 
 | carrel | NetBox |
 |---|---|
 | machine (VM and CT) | virtual machine `<machine>.<tenant>` in the cluster; vCPU and memory (MiB) from the spec; `active` when running, `planned` while provisioning, otherwise `offline`; `start_on_boot` follows Proxmox `onboot`, which is set by the owner's last power action (`on` after a start, `off` after a stop, pause or tenant suspension), so a guest that shuts itself down stays `on`; a machine with no recorded action is `on` when running; the description says VM or CT; the VMID goes into `vmid_field`; the device is the cluster device whose name, or `device_field`, matches the Proxmox node, none when there is no such device |
-| image | platform created and deleted by carrel: `Catalog:<image>` for a platform image, shared by all tenants (`Catalog:debian-13`), and `<tenant>/<image>` with a capital first letter for a tenant image or ISO, one per tenant (`Alice/tenant:base`); the slug is the name in lower case with other characters as `-`; a platform with that slug or name that carrel did not create is an error |
+| image | platform created and deleted by carrel. The name starts with `Carrel: `: `Carrel: Debian 13` for a platform image (shared by all tenants) and `Carrel: Alice/base` for a tenant image and `Carrel: Alice/base (ISO)` for a tenant ISO (one per tenant; an image and an ISO of one name can both exist, and NetBox keeps names unique, so the ISO says so). The slug keeps them apart and starts with `carrel-` so it cannot meet a platform made by hand: `carrel-catalog-debian-13`, `carrel-alice-tenant-base`, `carrel-alice-iso-win11` (the label in lower case with other characters as `-`); a platform with that slug that carrel did not create is an error. A platform from before the prefix is found by its old slug and renamed in place. NetBox keeps platform names unique, so a platform made by hand with the same name, which the prefix makes unlikely, fails the machines of that image until it is renamed; the error shows in `machine_get` |
 | machine disk | one virtual disk in MiB, named by its Proxmox volume (`local-zfs:vm-10100-disk-0`), which a node reports at creation and migration and `reconcile_run` collects for older machines; `scsi0` (VM) or `rootfs` (CT) until then. NetBox sums it into the machine's disk |
 | NIC MAC | MAC address object assigned to the interface and set as its primary MAC |
 | primary NIC and each extra NIC | VM interface `eth0`, `eth<index>` |
@@ -1318,6 +1318,8 @@ Behavior:
    in `machine_get` as `netbox: {last_synced, last_error}` and once in the audit log (tool
    `netbox_sync`). A pass-level failure is in the site status and the audit log.
 5. A machine rename (`machine_rename`) changes the VM's name, matched by VMID, on the next pass.
+
+Names and descriptions start with a capital letter and may have spaces; only slugs are lower case with dashes.
 
 Least privilege. Every object carries the owner from its creation request, and only objects with that owner
 are listed, patched or deleted. NetBox cannot constrain what a binding points at, so carrel only

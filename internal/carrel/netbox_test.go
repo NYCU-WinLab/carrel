@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,21 @@ func (f *fakeNetBox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					if !f.fields[name] {
 						reply(400, D{"custom_fields": "unknown field " + name})
 						return
+					}
+				}
+			}
+		}
+	}
+	// NetBox keeps platform names unique.
+	if r.Method == "POST" || r.Method == "PATCH" {
+		if path == "dcim/platforms/" {
+			for _, field := range []string{"name", "slug"} {
+				if v, ok := body[field]; ok {
+					for _, o := range f.objects[path] {
+						if o[field] == v && integer(o["id"]) != id {
+							reply(400, D{field: "platform with this " + field + " already exists"})
+							return
+						}
 					}
 				}
 			}
@@ -223,7 +239,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The platform is carrel's own, named after the image.
 	platforms := f.all("dcim/platforms/")
-	if len(platforms) != 1 || platforms[0]["name"] != "Catalog:debian-13" || platforms[0]["slug"] != "catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
+	if len(platforms) != 1 || platforms[0]["name"] != "Carrel: Debian 13" || platforms[0]["slug"] != "carrel-catalog-debian-13" || integer(obj(web["platform"])["id"]) != integer(platforms[0]["id"]) {
 		t.Fatal(platforms, web["platform"])
 	}
 	// Each machine's disk is a virtual disk, in MiB.
@@ -254,7 +270,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 	}
 	// The tenant segment shares one VRF; a private network has its own.
 	vrfs := f.all("ipam/vrfs/")
-	shared, private := find(vrfs, func(v D) bool { return v["name"] == "carrel" }), find(vrfs, func(v D) bool { return v["name"] == "carrel-alice-back" })
+	shared, private := find(vrfs, func(v D) bool { return v["name"] == "Carrel" }), find(vrfs, func(v D) bool { return v["name"] == "Carrel Alice back" })
 	if len(vrfs) != 2 || shared == nil || private == nil {
 		t.Fatal(vrfs)
 	}
@@ -268,7 +284,7 @@ func TestNetBoxSyncCreatesOwnedObjects(t *testing.T) {
 		}
 		// Only the machine address carries the infra resolver's name.
 		dns := ""
-		if machine, ok := strings.CutPrefix(str(ip["description"]), "carrel address of "); ok && integer(obj(ip["vrf"])["id"]) == integer(shared["id"]) {
+		if machine, ok := strings.CutPrefix(str(ip["description"]), "Carrel address of "); ok && integer(obj(ip["vrf"])["id"]) == integer(shared["id"]) {
 			dns = machine + ".internal"
 		}
 		if str(ip["dns_name"]) != dns {
@@ -601,8 +617,117 @@ func TestNetBoxTenantImagesAreNotSharedAcrossTenants(t *testing.T) {
 	for _, o := range f.all("dcim/platforms/") {
 		names = append(names, str(o["name"]))
 	}
-	if len(names) != 2 || names[0] == names[1] {
+	if len(names) != 2 || !slices.Contains(names, "Carrel: Alice/base") || !slices.Contains(names, "Carrel: Bob/base") {
 		t.Fatal(names)
+	}
+}
+
+func TestNetBoxTenantImageAndISOOfOneNameGetOwnPlatforms(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	web := p.Store.Get("machines", "10100")
+	web["image"] = "tenant:win11"
+	p.Store.Put("machines", 10100, 1, web)
+	iso := seedMachine(p, "app", 10200)
+	iso["image"] = "iso:win11"
+	p.Store.Put("machines", 10200, 1, iso)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	names := []string{}
+	for _, o := range f.all("dcim/platforms/") {
+		names = append(names, str(o["name"]))
+	}
+	if len(names) != 2 || !slices.Contains(names, "Carrel: Alice/win11") || !slices.Contains(names, "Carrel: Alice/win11 (ISO)") {
+		t.Fatal(names)
+	}
+}
+
+func TestNetBoxRenamesAVRFNamedTheOldWay(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	ids := map[string]int{}
+	old := map[string]string{"Carrel": "carrel", "Carrel Alice back": "carrel-alice-back"}
+	for _, v := range f.all("ipam/vrfs/") {
+		ids[old[str(v["name"])]] = integer(v["id"])
+		v["name"] = old[str(v["name"])]
+	}
+	if len(ids) != 2 {
+		t.Fatal(ids)
+	}
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	vrfs := f.all("ipam/vrfs/")
+	if len(vrfs) != 2 {
+		t.Fatal("a VRF was replaced instead of renamed", vrfs)
+	}
+	for _, v := range vrfs {
+		if _, still := ids[str(v["name"])]; still {
+			t.Fatal("VRF kept the old name", v)
+		}
+	}
+	for _, v := range vrfs {
+		if v["name"] == "Carrel" && integer(v["id"]) != ids["carrel"] || v["name"] == "Carrel Alice back" && integer(v["id"]) != ids["carrel-alice-back"] {
+			t.Fatal("VRF got a new id", v, ids)
+		}
+	}
+}
+
+func TestNetBoxVRFsOfSimilarTenantsStayApart(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	ab := p.Store.Register("user:alice-back", "alice-back")
+	p.Store.Put("networks", "n1", 1, D{"id": "n1", "tenant_n": 1, "serial": 3, "name": "back-x", "mode": "managed", "cidr": "10.64.1.0/25"})
+	p.Store.Put("networks", "n2", integer(ab["n"]), D{"id": "n2", "tenant_n": integer(ab["n"]), "serial": 4, "name": "x", "mode": "managed", "cidr": "10.64.2.0/25"})
+	syncNetBox(t, p)
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || r.Writes != 0 {
+		t.Fatal("a second pass wrote", r, f.writes)
+	}
+	names := []string{}
+	for _, v := range f.all("ipam/vrfs/") {
+		names = append(names, str(v["name"]))
+	}
+	if !slices.Contains(names, "Carrel Alice back-x") || !slices.Contains(names, "Carrel Alice-back x") {
+		t.Fatal(names)
+	}
+}
+
+func TestNetBoxPlatformFromBeforeThePrefixIsRenamedInPlace(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	platforms := f.all("dcim/platforms/")
+	id := integer(platforms[0]["id"])
+	platforms[0]["name"], platforms[0]["slug"] = "Catalog:debian-13", "catalog-debian-13"
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	got := f.all("dcim/platforms/")
+	if len(got) != 1 || got[0]["name"] != "Carrel: Debian 13" || got[0]["slug"] != "carrel-catalog-debian-13" || integer(got[0]["id"]) != id {
+		t.Fatal("the old platform was not renamed in place", got)
+	}
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || r.Writes != 0 {
+		t.Fatal("a second pass wrote", r, f.writes)
+	}
+}
+
+func TestNetBoxPlatformNameTakenByHandFailsOnlyThatImage(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.objects["dcim/platforms/"] = []D{{"id": 900, "name": "Carrel: Debian 13", "slug": "debian-13"}}
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "web") {
+		t.Fatal(r.Errors)
+	}
+	if vm := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "db.alice" }); vm == nil {
+		t.Fatal("a machine without that image did not sync")
+	}
+	if got := f.all("dcim/platforms/"); len(got) != 1 || got[0]["slug"] != "debian-13" {
+		t.Fatal("the platform made by hand was touched", got)
 	}
 }
 
