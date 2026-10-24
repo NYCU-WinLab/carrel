@@ -338,6 +338,8 @@ type nbTenant struct {
 	prefixes []nbPrefix
 	machines []nbMachine
 	vips     []nbVIP
+	// vpnClients are the addresses of the tenant's client VPN (issue #184).
+	vpnClients []nbAddress
 }
 
 func nbStatus(m D) string {
@@ -394,12 +396,23 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		ports := filter(dicts(portsAsD(e.ports(n))), live)
 		domains := filter(dicts(domainsAsD(e.domains(n))), live)
 		vips := filter(dicts(vipsAsD(e.vips(n))), live)
-		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 {
+		// A client that is expiring or being removed has left the desired state.
+		clients := filter(dicts(vpnClientsAsD(e.vpnClients(n))), func(o D) bool { return o["state"] != "deleting" && num(o["expires_at"]) > now() })
+		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 && len(clients) == 0 {
 			continue
 		}
 		tn := nbTenant{n: n, vrf: c.VRF, oldVRF: map[string][]string{c.VRF: {strings.ToLower(c.VRF)}}}
 		used := map[string]bool{tn.vrf: true}
 		tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, fmt.Sprintf("10.200.%d.0/24", n), "Carrel tenant " + slug})
+		// Client VPN addresses come from 10.201.N.0/24 and are as unique as the
+		// tenant segment, so they share its VRF. No interface: a client is not a machine.
+		if len(clients) > 0 {
+			tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, fmt.Sprintf("10.201.%d.0/24", n), "Carrel VPN clients of tenant " + slug})
+		}
+		for _, cl := range clients {
+			expires := time.Unix(int64(num(cl["expires_at"])), 0).UTC().Format("2006-01-02")
+			tn.vpnClients = append(tn.vpnClients, nbAddress{vrf: tn.vrf, address: str(cl["address"]) + "/32", description: fmt.Sprintf("Carrel VPN client %s of tenant %s, expires %s", cl["name"], slug, expires)})
+		}
 		// Only a private network can overlap another tenant's CIDR, so each one
 		// that has addresses gets a VRF of its own; the tenant segment is unique
 		// platform-wide and shares one.
@@ -493,6 +506,14 @@ func portsAsD(xs []portGrant) []any {
 }
 
 func domainsAsD(xs []domainRecord) []any {
+	out := make([]any, len(xs))
+	for i, x := range xs {
+		out[i] = x.D()
+	}
+	return out
+}
+
+func vpnClientsAsD(xs []vpnClient) []any {
 	out := make([]any, len(xs))
 	for i, x := range xs {
 		out[i] = x.D()
@@ -629,6 +650,9 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 			for _, p := range t.prefixes {
 				s.protect("prefixes", s.prefixes, func(o D) bool { return o["prefix"] == p.prefix })
 			}
+			for _, a := range t.vpnClients {
+				s.protect("ips", s.ips, func(o D) bool { return o["address"] == a.address })
+			}
 			for _, m := range t.machines {
 				e.netboxProtectMachine(s, m.name)
 			}
@@ -690,6 +714,12 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 		have := one(s.prefixes, func(o D) bool { return o["prefix"] == p.prefix && refID(o["vrf"]) == vrfID })
 		got := c.ensure("ipam/prefixes/", have, D{"prefix": p.prefix, "vrf": vrfID, "status": "active", "description": p.description})
 		s.kept("prefixes", integer(got["id"]))
+	}
+	for _, a := range t.vpnClients {
+		vrfID := vrfIDs[a.vrf]
+		haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
+		ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "description": a.description})
+		s.kept("ips", integer(ip["id"]))
 	}
 	for _, m := range t.machines {
 		tenantOf[m.vmid] = t.n
