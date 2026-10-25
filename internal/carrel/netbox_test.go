@@ -25,6 +25,8 @@ type fakeNetBox struct {
 	auth    string
 	writes  []string
 	fields  map[string]bool
+	// refuse names IP addresses NetBox rejects, as it does a duplicate.
+	refuse map[string]bool
 }
 
 var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true}
@@ -78,6 +80,16 @@ func (f *fakeNetBox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		}
+	}
+	if (r.Method == "POST" || r.Method == "PATCH") && path == "ipam/ip-addresses/" {
+		address, _ := body["address"].(string)
+		if o := find(f.objects[path], func(o D) bool { return integer(o["id"]) == id }); o != nil {
+			address, _ = o["address"].(string)
+		}
+		if f.refuse[address] {
+			reply(400, D{"address": "refused"})
+			return
 		}
 	}
 	// NetBox keeps platform names unique.
@@ -849,5 +861,39 @@ func TestNetBoxVPNClientsAloneKeepTheirTenant(t *testing.T) {
 	p.Store.Put("vpn_clients", "a", 1, vpnClient{ID: "a", TenantN: 1, Name: "laptop", Address: "10.201.1.2", PublicKey: key, State: "ready", ExpiresAt: now() + 3600}.D())
 	if r := syncNetBox(t, p); len(r.Errors) > 0 || len(f.all("ipam/ip-addresses/")) != 1 {
 		t.Fatal(r.Errors, f.all("ipam/ip-addresses/"))
+	}
+}
+
+func TestNetBoxFailedVPNClientFailsAlone(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	key := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
+	for i, name := range []string{"laptop", "agent"} {
+		p.Store.Put("vpn_clients", name, 1, vpnClient{ID: name, TenantN: 1, Name: name, Address: fmt.Sprintf("10.201.1.%d", i+2), PublicKey: key, State: "ready", ExpiresAt: now() + 3600}.D())
+	}
+	syncNetBox(t, p)
+	// One client address is refused from now on; the machine changes of the same pass still land.
+	f.mu.Lock()
+	f.refuse = map[string]bool{"10.201.1.2/32": true}
+	f.mu.Unlock()
+	p.Store.Put("vpn_clients", "laptop", 1, vpnClient{ID: "laptop", TenantN: 1, Name: "laptop", Address: "10.201.1.2", PublicKey: key, State: "ready", ExpiresAt: now() + 2*86400}.D())
+	web := p.Store.Get("machines", "10100")
+	web["cpu"] = 8
+	p.Store.Put("machines", 10100, 1, web)
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "VPN client 10.201.1.2/32") {
+		t.Fatal("the client address should fail alone", r.Errors)
+	}
+	vm := find(f.all("virtualization/virtual-machines/"), func(v D) bool { return v["name"] == "web.alice" })
+	if vm["vcpus"] != float64(8) {
+		t.Fatal("a failing client address held back the machines", vm["vcpus"])
+	}
+	for _, a := range []string{"10.201.1.2/32", "10.201.1.3/32"} {
+		if find(f.all("ipam/ip-addresses/"), func(o D) bool { return o["address"] == a }) == nil {
+			t.Fatal("a client address was deleted by the failure", a)
+		}
+	}
+	if st := p.Store.Get("netbox_sync", "10100"); st != nil && st["last_error"] != nil {
+		t.Fatal("the machine was marked failed for a client address", st)
 	}
 }

@@ -715,11 +715,17 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 		got := c.ensure("ipam/prefixes/", have, D{"prefix": p.prefix, "vrf": vrfID, "status": "active", "description": p.description})
 		s.kept("prefixes", integer(got["id"]))
 	}
+	// A client address that fails keeps what NetBox holds and fails alone.
 	for _, a := range t.vpnClients {
-		vrfID := vrfIDs[a.vrf]
-		haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
-		ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "description": a.description})
-		s.kept("ips", integer(ip["id"]))
+		if err := attempt(func() {
+			vrfID := vrfIDs[a.vrf]
+			haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
+			ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "description": a.description})
+			s.kept("ips", integer(ip["id"]))
+		}); err != nil {
+			fail("VPN client "+a.address, err)
+			s.protect("ips", s.ips, func(o D) bool { return o["address"] == a.address })
+		}
 	}
 	for _, m := range t.machines {
 		tenantOf[m.vmid] = t.n
