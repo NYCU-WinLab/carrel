@@ -1342,7 +1342,7 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | virtualization.cluster | yes | no | no | no |
 | users.owner | yes | no | no | no |
 
-A child object has no owner of its own to constrain, or is better constrained by its parent: constrain interfaces and virtual disks by the owner of their machine's cluster (`virtual_machine__cluster__owner__users`), addresses and prefixes by the owner of their VRF (`vrf__owner__users`), and FHRP group assignments by the owner of their group (`group__owner__users`); each with the matching `__user_groups__user` constraint for groups.
+A child object is also constrained by its parent's owner, so it cannot be bound to a foreign parent. Interfaces and virtual disks add their machine's cluster (`virtual_machine__cluster__owner__users`), addresses and prefixes add their VRF (`vrf__owner__users`), each next to their own `owner__users` in the same constraint, because NetBox requires every key of one constraint. FHRP group assignments have no owner, so they have only their group's (`group__owner__users`). An owner that names user groups needs a second constraint with `__user_groups__users` in place of `__users` in every key, because NetBox accepts any one of several constraints.
 
 ## 10. Maintenance
 
