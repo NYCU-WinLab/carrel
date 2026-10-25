@@ -397,7 +397,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		domains := filter(dicts(domainsAsD(e.domains(n))), live)
 		vips := filter(dicts(vipsAsD(e.vips(n))), live)
 		// A client that is expiring or being removed has left the desired state.
-		clients := filter(dicts(vpnClientsAsD(e.vpnClients(n))), func(o D) bool { return o["state"] != "deleting" && num(o["expires_at"]) > now() })
+		clients := filter(dicts(vpnClientsAsD(e.vpnClients(n))), vpnClientLive)
 		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 && len(clients) == 0 {
 			continue
 		}
