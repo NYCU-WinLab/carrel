@@ -2217,6 +2217,12 @@ def discard_restore(m, where):
     if where != NODE:
         raise ValueError("machine is on another node")
     if cfg.get("lock") == "create":
+        # A cut-off restore may not have written its tags yet, but whatever it
+        # did write must be this machine's.
+        name = cfg.get("name", cfg.get("hostname"))
+        tags = cfg.get("tags")
+        if (name is not None and name != m["name"]) or (tags is not None and "carrel" not in tags.split(";")):
+            raise ValueError("VMID is in use")
         run(cmd, "unlock", vmid)
     else:
         owned(m, node=where)

@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -348,6 +349,14 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		case "machine_delete":
 			m["state"] = "deleting"
 			e.Put("machines", m["vmid"], n, m)
+			// A thaw whose backup could not be removed: the machine is going, so is its backup.
+			if backup := obj(m["thaw_backup"]); len(backup) > 0 {
+				if problem := attempt(func() {
+					e.Call(D{"op": "backup_remove", "machine": m, "volid": backup["volid"], "note": backup["note"]})
+				}); problem != nil {
+					slog.Warn("thaw_backup_not_removed", "vmid", m["vmid"], "volid", backup["volid"])
+				}
+			}
 			e.Reconcile()
 			e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
 			e.Transaction(func(tx *Execution) {

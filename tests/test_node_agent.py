@@ -1305,6 +1305,35 @@ def test_thaw_discard_removes_what_a_thaw_restored(monkeypatch, tmp_path):
     assert ["qm", "destroy", "10100", "--purge", "1"] in commands
 
 
+@pytest.mark.parametrize(
+    "config", [{"lock": "create", "name": "someone-else"}, {"lock": "create", "tags": "other"}]
+)
+def test_thaw_never_destroys_a_locked_machine_that_is_not_the_one_being_restored(
+    monkeypatch, tmp_path, config
+):
+    module, commands, _nodes = thawer(monkeypatch, tmp_path, config=config)
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID})
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID, "discard": True})
+    assert not any(c[:2] in (["qm", "destroy"], ["qm", "unlock"]) for c in commands)
+
+
+def test_thaw_replaces_a_cut_off_restore_that_has_no_tags_yet(monkeypatch, tmp_path):
+    module, commands, nodes = thawer(
+        monkeypatch, tmp_path, config={"lock": "create", "name": MACHINE["name"]}
+    )
+
+    def destroyed(*args, **kw):
+        commands.append([str(a) for a in args])
+        if args[:2] == ("qm", "destroy"):
+            (nodes / "carrel01" / "qemu-server" / "10100.conf").unlink()
+        return ""
+
+    monkeypatch.setattr(module, "run", destroyed)
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+
+
 def test_thaw_discard_of_a_machine_that_was_never_restored_does_nothing(monkeypatch, tmp_path):
     module, commands, _nodes = thawer(monkeypatch, tmp_path)
     assert module.thaw({"machine": dict(MACHINE), "volid": VOLID, "discard": True}) == {"state": "absent"}

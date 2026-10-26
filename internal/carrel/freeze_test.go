@@ -452,3 +452,24 @@ func TestAFreezeStoppedAfterItsRowIsWrittenKeepsTheBackup(t *testing.T) {
 		})
 	}
 }
+
+func TestDeletingAThawedMachineWhoseBackupRemainedRemovesTheBackup(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	failed := false
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "backup_remove" && !failed {
+			failed = true
+			return nil, errors.New("pbs unreachable"), true
+		}
+		return nil, nil, false
+	})
+	if failure(member(p, "machine_thaw", D{"machine": "box"}))["code"] == nil {
+		t.Fatal("the cleanup did not fail")
+	}
+	before := frozenOps(*seen, "backup_remove")
+	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	if frozenOps(*seen, "backup_remove") != before+1 || p.Store.Get("machines", "10100") != nil {
+		t.Fatalf("the backup stayed: %v", *seen)
+	}
+}
