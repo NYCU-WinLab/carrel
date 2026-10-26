@@ -359,7 +359,11 @@ or removes any other: scheduled backups of a frozen machine stay as they are, ou
 follow the retention of their job. A freeze always takes a backup of its own of the stopped machine, and
 fails with "being backed up by another job" while a scheduled run holds the machine; freeze it again then.
 A freeze that fails after the backup is kept for the retry, and the retry reuses it only if the machine has
-not been started or changed since; otherwise the node deletes it and takes a new one. The backup of a
+not been started or changed since (any start PVE logs counts, the node's boot, HA and the PVE interface
+included; the node also turns off start-at-boot before the backup); otherwise the node deletes it and takes
+a new one. The machine is checked again once PBS has verified the backup, and a machine that ran in between
+keeps running: the backup is removed. Power, resize and delete requests for the machine wait while a freeze
+or a thaw is copying. The backup of a
 freeze that was never retried stays protected on PBS with the note above; an admin may remove it there.
 
 A freeze or a thaw copies for minutes to hours without holding carrel's writer lock, so other tenants'

@@ -168,6 +168,13 @@ func thawDelta(f D) D {
 // new backup.
 func (e *Execution) freezeWait() int { return intAt(e.P.Config, "freeze_verify_wait", 1800) }
 
+// freezeCommitted reports that this operation already wrote its frozen row:
+// the backup it names is the machine's only copy and must not be touched.
+func (e *Execution) freezeCommitted(vmid any) bool {
+	f := e.S.Get("frozen", str(vmid))
+	return f != nil && e.Op != nil && f["frozen_by"] == e.Op["id"]
+}
+
 func (e *Execution) FreezeMachine(a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	storage := e.backupStorage()
@@ -179,7 +186,7 @@ func (e *Execution) FreezeMachine(a, t D) D {
 		fail("invalid", "confirm must equal the machine name")
 	}
 	// A freeze that stopped after the backup: the machine row is all that is left to remove.
-	resumed := e.S.Get("frozen", str(m["vmid"])) != nil && m["state"] == "deleting"
+	resumed := e.S.Get("frozen", str(m["vmid"])) != nil && (m["state"] == "deleting" || e.freezeCommitted(m["vmid"]))
 	if !resumed {
 		e.freezeChecks(n, m)
 	}
@@ -227,7 +234,7 @@ func (e *Execution) PerformFreeze() {
 		return
 	}
 	plan := obj(e.Op["freeze"])
-	if boolean(plan["resumed"]) {
+	if boolean(plan["resumed"]) || e.freezeCommitted(plan["vmid"]) {
 		return
 	}
 	m := e.S.Get("machines", str(plan["vmid"]))
@@ -259,11 +266,15 @@ func (e *Execution) FinishFreeze(t D) D {
 		return D{}
 	}
 	plan, n := obj(e.Op["freeze"]), integer(t["n"])
+	committed := e.freezeCommitted(plan["vmid"])
 	m := e.S.Get("machines", str(plan["vmid"]))
 	if m == nil {
+		if committed {
+			return D{"machine": e.PublicFrozen(e.S.Get("frozen", str(plan["vmid"]))), "dry_run": false, "quota_after": e.Quota(t)}
+		}
 		fail("not_found", "The machine was deleted while freezing")
 	}
-	if !boolean(plan["resumed"]) {
+	if !boolean(plan["resumed"]) && !committed {
 		backup := obj(plan["backup"])
 		// The backup is unwanted if the machine can no longer go: drop it, so
 		// no protected copy is left without a record.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // freezeSite is a site with a backup storage and one stopped machine whose
@@ -394,3 +395,60 @@ func TestDeletingAfterAPartialThawDiscardsWhatItRestored(t *testing.T) {
 }
 
 func opOf(r D) string { return str(obj(r["operation"])["id"]) }
+
+func TestPowerDuringAFreezeIsHeldUntilTheMachineIsGone(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	var started string
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "freeze" {
+			// A member starts the machine while the backup is being made.
+			started = opOf(member(p, "machine_power", D{"machine": "box", "action": "start", "wait_seconds": 0}))
+			time.Sleep(300 * time.Millisecond)
+		}
+		return nil, nil, false
+	})
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	if frozenOps(*seen, "action:start") != 0 {
+		t.Fatalf("the machine started while it was being frozen: %v", *seen)
+	}
+	awaitState(t, p, started, "failed")
+	if frozenOps(*seen, "action:start") != 0 || p.Store.Get("frozen", "10100") == nil {
+		t.Fatalf("%v", *seen)
+	}
+}
+
+// A freeze that stops after its frozen row is written must finish on
+// recovery or retry without touching the backup that row names.
+func TestAFreezeStoppedAfterItsRowIsWrittenKeepsTheBackup(t *testing.T) {
+	for _, how := range []string{"recover", "retry"} {
+		t.Run(how, func(t *testing.T) {
+			p, b, seen := freezeSite(t)
+			failed := false
+			intercept(b, func(r D) (any, error, bool) {
+				if r["op"] == "action" && r["action"] == "delete" && !failed {
+					failed = true
+					return nil, errors.New("carrel stopped before the machine was deleted"), true
+				}
+				return nil, nil, false
+			})
+			r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box"})
+			id := opOf(r)
+			if failure(r)["code"] == nil || p.Store.Get("frozen", "10100") == nil || p.Store.Get("machines", "10100")["state"] != "deleting" {
+				t.Fatalf("setup: %s", encoded(r))
+			}
+			if how == "recover" {
+				op := p.Store.Get("operations", id)
+				op["state"], op["phase"] = "running", "waiting_for_guest"
+				op["prepared_result"] = D{"machine": D{"name": "box", "state": "freezing"}}
+				p.Operations.Save(op)
+				p.Operations.Recover()
+				awaitState(t, p, id, "succeeded")
+			} else {
+				assertOK(t, member(p, "operation_retry", D{"id": id}))
+			}
+			if frozenOps(*seen, "backup_remove") != 0 || p.Store.Get("frozen", "10100") == nil || p.Store.Get("machines", "10100") != nil {
+				t.Fatalf("the backup or the row was lost: %v", *seen)
+			}
+		})
+	}
+}

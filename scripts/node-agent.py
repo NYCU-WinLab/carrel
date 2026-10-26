@@ -2110,18 +2110,31 @@ def config_digest(m):
     return pve_get(f"/nodes/{NODE}/{kind}/{machine(m)}/config").get("digest")
 
 
+def last_start(m):
+    """The newest start of the machine that PVE recorded, whoever asked for it."""
+    task = "qmstart" if m["kind"] == "vm" else "vzstart"
+    out = run("pvesh", "get", f"/nodes/{NODE}/tasks", "--vmid", machine(m), "--typefilter", task, "--limit", 5, "--output-format", "json")
+    return max((int(t.get("starttime", 0)) for t in (json.loads(out) if out else [])), default=0)
+
+
 def freeze_stamp_valid(m, note):
     """True when the machine is provably as it was when this backup was made.
 
-    Only this agent starts or changes a machine, and every such request
-    removes the stamp (main); the configuration digest covers the rest.
+    The agent's own requests remove the stamp (main). A start by anything else
+    (the node's boot, HA, an admin in the PVE interface) is a task PVE logs,
+    which changes last_start; the configuration digest covers the rest.
     """
     path = freeze_stamp(m)
     try:
         stamp = json.loads(path.read_text())
     except (OSError, ValueError):
         return False
-    return stamp.get("note") == note and stamp.get("digest") is not None and stamp.get("digest") == config_digest(m)
+    return (
+        stamp.get("note") == note
+        and stamp.get("digest") is not None
+        and stamp.get("digest") == config_digest(m)
+        and stamp.get("started") == last_start(m)
+    )
 
 
 def freeze(req):
@@ -2149,6 +2162,11 @@ def freeze(req):
         found = []
     if not found:
         freeze_stamp(m).unlink(missing_ok=True)
+        # A machine that boots with the node would run again before the retry.
+        if str(pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config").get("onboot", 0)) not in ("0", ""):
+            run("qm" if kind == "qemu" else "pct", "set", vmid, "--onboot", 0)
+        # Taken before the backup: a start after this point differs from it.
+        proof = {"note": note, "digest": config_digest(m), "started": last_start(m)}
         try:
             run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--protected", 1, "--notes-template", note, timeout=VZDUMP_SECONDS)
         except CommandFailure as e:
@@ -2156,7 +2174,7 @@ def freeze(req):
             if "lock" in str(e):
                 raise CommandFailure("the machine is being backed up by another job; freeze it again later") from e
             raise
-        write(freeze_stamp(m), json.dumps({"note": note, "digest": config_digest(m)}), 0o600)
+        write(freeze_stamp(m), json.dumps(proof), 0o600)
         found = mine()
     if len(found) != 1:
         raise CommandFailure("the backup is not on the storage")
@@ -2173,6 +2191,11 @@ def freeze(req):
         backup_free(storage, backup)
         freeze_stamp(m).unlink(missing_ok=True)
         raise CommandFailure("the backup failed its verification and was removed")
+    # The wait above can take minutes: the machine must be what the backup holds.
+    if power_status(m) != "stopped" or not freeze_stamp_valid(m, note):
+        backup_free(storage, backup)
+        freeze_stamp(m).unlink(missing_ok=True)
+        raise CommandFailure("the machine changed while it was backed up; the backup was removed")
     if verification != "ok":
         # Kept for the next attempt, which reuses it while the machine is unchanged.
         raise CommandFailure("the backup was not verified in time; the Proxmox Backup Server must verify new snapshots")

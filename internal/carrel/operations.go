@@ -504,6 +504,10 @@ func (e *Execution) CheckBusy(t D) {
 	if id := obj(e.Op["machine_target"])["vmid"]; id != nil {
 		targets[integer(id)] = true
 	}
+	// A frozen machine has no live row to bind; a thaw may be restoring it.
+	if f := e.frozenMachine(t, obj(e.Op["args"])["machine"]); f != nil && obj(e.Op["args"])["machine"] != nil {
+		targets[integer(f["vmid"])] = true
+	}
 	if e.Op["tool"] == "deployment_apply" {
 		args := obj(e.Op["args"])
 		refs := []any{}
@@ -525,7 +529,7 @@ func (e *Execution) CheckBusy(t D) {
 		}
 	}
 	for _, other := range e.S.ActiveOperations() {
-		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine"}, other["phase"]) {
+		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine", "freezing_machine", "restoring_machine"}, other["phase"]) {
 			continue
 		}
 		ids := arr(obj(other["deployment"])["machines"])
@@ -534,6 +538,9 @@ func (e *Execution) CheckBusy(t D) {
 		}
 		for vmid := range obj(obj(other["deployment"])["bindings"]) {
 			ids = append(ids, vmid)
+		}
+		if id := obj(other["thaw"])["vmid"]; id != nil {
+			ids = append(ids, id)
 		}
 		for _, m := range e.S.Objects("machines", integer(t["n"])) {
 			if m["operation_id"] == other["id"] {

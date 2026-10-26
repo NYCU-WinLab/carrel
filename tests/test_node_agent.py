@@ -1137,7 +1137,9 @@ def test_freeze_reuses_its_backup_only_while_the_machine_is_unchanged(monkeypatc
 
     module, commands = freezer(monkeypatch, tmp_path, listing=listing)
     # The first attempt made OLD_VOLID and stamped the machine as it was.
-    module.write(module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1"}))
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1", "started": 0})
+    )
     # It was started and written to since: the node's own requests drop the stamp.
     module.freeze_stamp(MACHINE).unlink()
     out = module.freeze(REQUEST)
@@ -1148,9 +1150,50 @@ def test_freeze_does_not_reuse_a_backup_after_a_configuration_change(monkeypatch
     module, commands = freezer(
         monkeypatch, tmp_path, listing=lambda c: [backup(volid=OLD_VOLID)] if not dumped(c) else [backup()]
     )
-    module.write(module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "other"}))
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "other", "started": 0})
+    )
     module.freeze(REQUEST)
     assert dumped(commands)
+
+
+def test_freeze_does_not_reuse_a_backup_after_a_start_the_agent_never_saw(monkeypatch, tmp_path):
+    # The node booted and PVE started the machine, or an admin did: no agent request, no config change.
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(volid=OLD_VOLID)] if not dumped(c) else [backup()]
+    )
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1", "started": 0})
+    )
+    monkeypatch.setattr(module, "last_start", lambda m: 1793000000)
+    module.freeze(REQUEST)
+    assert dumped(commands) and OLD_VOLID in freed(commands)
+
+
+def test_freeze_checks_the_machine_again_after_waiting_for_the_verification(monkeypatch, tmp_path):
+    polls = []
+
+    def listing(c):
+        polls.append(1)
+        if len(polls) > 4:
+            # Started and stopped again while PBS was verifying.
+            module.last_start = lambda m: 1793000000
+        return [backup(verification={"state": "ok"} if len(polls) > 4 else {})] if dumped(c) else []
+
+    module, commands = freezer(monkeypatch, tmp_path, listing=listing)
+    with pytest.raises(module.CommandFailure, match="changed while"):
+        module.freeze({**REQUEST, "verify_wait": 3600})
+    assert freed(commands) == [VOLID]
+
+
+def test_freeze_turns_off_start_at_boot_before_the_backup(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()] if dumped(c) else [])
+    module.test_config["onboot"] = 1
+    module.freeze(REQUEST)
+    names = [c[:2] for c in commands]
+    assert ["qm", "set"] in names and names.index(["qm", "set"]) < next(
+        i for i, c in enumerate(commands) if c[0] == "vzdump"
+    )
 
 
 def test_any_request_for_a_machine_drops_the_proof_of_an_unchanged_one(monkeypatch, tmp_path):
@@ -1191,7 +1234,9 @@ def test_freeze_names_a_backup_job_that_holds_the_machine(monkeypatch, tmp_path)
 @pytest.mark.parametrize("listed", [backup(protected=0), backup(size=0)])
 def test_freeze_refuses_a_backup_it_cannot_trust(monkeypatch, tmp_path, listed):
     module, _ = freezer(monkeypatch, tmp_path, listing=lambda c: [listed])
-    module.write(module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1"}))
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1", "started": 0})
+    )
     with pytest.raises(module.CommandFailure):
         module.freeze(REQUEST)
 
