@@ -74,6 +74,9 @@ func frozenDisks(frozen []D) float64 {
 func (e *Execution) PublicFrozen(f D) D {
 	r := pick(f, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "swap_mb", "ip", "frozen_at")
 	r["state"] = "frozen"
+	if f["thaw_node"] != nil {
+		r["state"] = "thawing"
+	}
 	r["backup"] = D{"size_bytes": f["backup_bytes"]}
 	r["quota"] = D{"frozen_gb": f["disk_gb"], "ips": 1}
 	return r
@@ -155,6 +158,16 @@ func thawDelta(f D) D {
 	return d
 }
 
+// A freeze or a thaw runs in three parts, like a migration: the request is
+// checked and planned under the writer lock (FreezeMachine, ThawMachine),
+// the backup or the restore runs outside it (PerformFreeze, PerformThaw),
+// and the records change under it again (FinishFreeze, FinishThaw). Every
+// step on a node is idempotent, so a job that restarts runs them again.
+
+// freezeWait is how long the agent waits for the backup server to verify the
+// new backup.
+func (e *Execution) freezeWait() int { return intAt(e.P.Config, "freeze_verify_wait", 1800) }
+
 func (e *Execution) FreezeMachine(a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	storage := e.backupStorage()
@@ -168,21 +181,7 @@ func (e *Execution) FreezeMachine(a, t D) D {
 	// A freeze that stopped after the backup: the machine row is all that is left to remove.
 	resumed := e.S.Get("frozen", str(m["vmid"])) != nil && m["state"] == "deleting"
 	if !resumed {
-		if state := str(m["state"]); contains([]string{"provisioning", "deleting", "migrating", "needs_owner_fix"}, state) || m["resize_from"] != nil {
-			fail("conflict", "The machine is "+state+"; freeze it once that has finished", D{"recovery": "resolve_prerequisite"})
-		}
-		if e.machineBusy(n, m) && e.Op == nil {
-			fail("conflict", "An operation on this machine is queued or running; freeze it once that has finished", D{"recovery": "resolve_prerequisite"})
-		}
-		if status := obj(e.Call(D{"op": "status", "machine": m})); powerState(status) != "stopped" {
-			fail("conflict", "Shut the machine down with machine_power before freezing it", D{"recovery": "resolve_prerequisite", "requirements": []string{"machine_stopped"}})
-		}
-		if snaps := filter(toDicts(e.snapshots(n)), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) }); len(snaps) > 0 {
-			fail("conflict", "Delete the machine's disk snapshots first; they are not part of the backup", D{"recovery": "resolve_prerequisite", "snapshots": len(snaps)})
-		}
-		if held := e.freezeHeld(n, m); len(held) > 0 {
-			fail("conflict", "Release "+str(held[0]["name"])+" first: it is a shared resource that a frozen machine cannot keep", D{"recovery": "resolve_prerequisite", "held": held})
-		}
+		e.freezeChecks(n, m)
 	}
 	delta := freezeDelta(m)
 	if !resumed {
@@ -191,16 +190,93 @@ func (e *Execution) FreezeMachine(a, t D) D {
 	if dry {
 		return D{"machine": D{"name": m["name"], "state": "frozen_planned"}, "dry_run": true, "quota_after": e.Quota(t, delta), "requirements": []string{"machine_stopped"}, "ready_to_apply": true}
 	}
-	if !resumed {
-		freezeID := randomID()
-		if e.Op != nil {
-			freezeID = str(e.Op["id"])
+	if e.Op == nil {
+		fail("internal", "A freeze runs as an operation")
+	}
+	// The operation's id names the backup: a retry finds the one it made,
+	// and the agent keeps it only while the machine has not run since.
+	e.Op["freeze"] = D{"vmid": m["vmid"], "storage": storage, "freeze_id": e.Op["id"], "resumed": resumed}
+	e.P.Operations.Save(e.Op)
+	return D{"machine": D{"name": m["name"], "state": "freezing"}, "dry_run": false, "quota_after": e.Quota(t, delta)}
+}
+
+// freezeChecks is what a machine must satisfy to be backed up and removed;
+// it runs again before the machine goes, since the backup takes a while.
+func (e *Execution) freezeChecks(n int, m D) {
+	if state := str(m["state"]); contains([]string{"provisioning", "deleting", "migrating", "needs_owner_fix"}, state) || m["resize_from"] != nil {
+		fail("conflict", "The machine is "+state+"; freeze it once that has finished", D{"recovery": "resolve_prerequisite"})
+	}
+	if e.machineBusy(n, m) && e.Op == nil {
+		fail("conflict", "An operation on this machine is queued or running; freeze it once that has finished", D{"recovery": "resolve_prerequisite"})
+	}
+	if status := obj(e.Call(D{"op": "status", "machine": m})); powerState(status) != "stopped" {
+		fail("conflict", "Shut the machine down with machine_power before freezing it", D{"recovery": "resolve_prerequisite", "requirements": []string{"machine_stopped"}})
+	}
+	if snaps := filter(toDicts(e.snapshots(n)), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) }); len(snaps) > 0 {
+		fail("conflict", "Delete the machine's disk snapshots first; they are not part of the backup", D{"recovery": "resolve_prerequisite", "snapshots": len(snaps)})
+	}
+	if held := e.freezeHeld(n, m); len(held) > 0 {
+		fail("conflict", "Release "+str(held[0]["name"])+" first: it is a shared resource that a frozen machine cannot keep", D{"recovery": "resolve_prerequisite", "held": held})
+	}
+}
+
+// PerformFreeze takes the backup without the writer lock. The machine stays
+// as it is: a failure, or a backup the backup server did not verify, leaves it.
+func (e *Execution) PerformFreeze() {
+	if e.Op["tool"] != "machine_freeze" || e.Op["freeze"] == nil {
+		return
+	}
+	plan := obj(e.Op["freeze"])
+	if boolean(plan["resumed"]) {
+		return
+	}
+	m := e.S.Get("machines", str(plan["vmid"]))
+	if m == nil {
+		fail("not_found", "The machine was deleted while freezing")
+	}
+	func() {
+		e.P.writer.Lock()
+		defer e.P.writer.Unlock()
+		e.Op["phase"] = "freezing_machine"
+		e.P.Operations.Save(e.Op)
+	}()
+	backup := obj(e.Call(D{"op": "freeze", "machine": m, "storage": plan["storage"], "freeze_id": plan["freeze_id"], "verify_wait": e.freezeWait()}))
+	// An explicit verification, not just the absence of a failed one.
+	if !backupVolume.MatchString(str(backup["volid"])) || num(backup["size"]) <= 0 || backup["verification"] != "ok" || str(backup["note"]) == "" {
+		fail("backend_unavailable", "The backup could not be verified; the machine is unchanged", D{"recovery": "retry_infrastructure"})
+	}
+	e.P.writer.Lock()
+	defer e.P.writer.Unlock()
+	plan["backup"] = backup
+	e.Op["freeze"] = plan
+	e.P.Operations.Save(e.Op)
+}
+
+// FinishFreeze removes the machine once its backup is verified, under the
+// writer lock, after checking again that nothing changed meanwhile.
+func (e *Execution) FinishFreeze(t D) D {
+	if e.Op["tool"] != "machine_freeze" || e.Op["freeze"] == nil {
+		return D{}
+	}
+	plan, n := obj(e.Op["freeze"]), integer(t["n"])
+	m := e.S.Get("machines", str(plan["vmid"]))
+	if m == nil {
+		fail("not_found", "The machine was deleted while freezing")
+	}
+	if !boolean(plan["resumed"]) {
+		backup := obj(plan["backup"])
+		// The backup is unwanted if the machine can no longer go: drop it, so
+		// no protected copy is left without a record.
+		if problem := attempt(func() {
+			e.freezeChecks(n, m)
+			e.Quota(t, freezeDelta(m))
+		}); problem != nil {
+			_ = attempt(func() {
+				e.Call(D{"op": "backup_remove", "machine": m, "volid": backup["volid"], "note": backup["note"]})
+			})
+			panic(problem)
 		}
-		backup := obj(e.Call(D{"op": "freeze", "machine": m, "storage": storage, "freeze_id": freezeID}))
-		if !backupVolume.MatchString(str(backup["volid"])) || num(backup["size"]) <= 0 {
-			fail("backend_unavailable", "The backup could not be verified; the machine is unchanged", D{"recovery": "retry_infrastructure"})
-		}
-		frozen := merge(without(m, "state", "power_state", "ssh_ready", "onboot", "resize", "readiness"), D{"state": "frozen", "frozen_at": time.Now().Unix(), "backup_volid": backup["volid"], "backup_storage": storage, "backup_bytes": backup["size"], "frozen_by": e.Op["id"]})
+		frozen := merge(without(m, "state", "power_state", "ssh_ready", "onboot", "resize", "readiness"), D{"state": "frozen", "frozen_at": time.Now().Unix(), "backup_volid": backup["volid"], "backup_storage": plan["storage"], "backup_bytes": backup["size"], "backup_note": backup["note"], "frozen_by": e.Op["id"]})
 		e.Transaction(func(tx *Execution) {
 			tx.Put("frozen", m["vmid"], n, frozen)
 			m["state"] = "deleting"
@@ -211,9 +287,7 @@ func (e *Execution) FreezeMachine(a, t D) D {
 	e.P.invalidateInventory()
 	e.Reconcile()
 	e.Transaction(func(tx *Execution) {
-		for _, kind := range []string{"guest_reports"} {
-			tx.S.Remove(kind, m["vmid"])
-		}
+		tx.S.Remove("guest_reports", m["vmid"])
 		tx.S.Remove("machines", m["vmid"])
 	})
 	return D{"machine": e.PublicFrozen(e.S.Get("frozen", str(m["vmid"]))), "dry_run": false, "quota_after": e.Quota(t)}
@@ -227,28 +301,106 @@ func toDicts[T any](rows []T) []D {
 	return out
 }
 
+// thawRecord is the machine a frozen one becomes on the node.
+func thawRecord(f D, node nodeRef) D {
+	m := node.record(without(f, "state", "frozen_at", "frozen_by", "backup_volid", "backup_storage", "backup_bytes", "backup_note", "thaw_node"))
+	m["state"], m["power_state"], m["ssh_ready"], m["onboot"] = "stopped", "stopped", false, false
+	return m
+}
+
 func (e *Execution) ThawMachine(a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
 	f := e.frozenMachine(t, a["machine"])
 	if f == nil {
+		// A thaw that restored the machine but could not remove its backup.
+		if m := find(e.S.Objects("machines", n), func(m D) bool {
+			return m["thaw_backup"] != nil && (str(m["vmid"]) == str(a["machine"]) || str(m["name"]) == str(a["machine"]))
+		}); m != nil && !dry {
+			e.Op["thaw"] = D{"vmid": m["vmid"], "cleanup": true}
+			e.P.Operations.Save(e.Op)
+			return D{"machine": D{"name": m["name"], "state": "thawing"}, "dry_run": false}
+		}
 		fail("not_found", "No frozen machine of this name in this tenant")
 	}
-	delta := thawDelta(f)
-	after := e.Quota(t, delta)
-	node, admission := e.Place(num(f["cpu"]), num(f["memory_mb"]), num(f["disk_gb"]))
+	after := e.Quota(t, thawDelta(f))
+	var node nodeRef
+	var admission D
+	if name := str(f["thaw_node"]); name != "" {
+		// An interrupted thaw may have restored the machine there: only that node can finish it.
+		ref, ok := e.nodeNamed(name)
+		if !ok {
+			fail("conflict", "The node of this machine's thaw is no longer configured", D{"recovery": "contact_administrator"})
+		}
+		node = ref
+	} else {
+		node, admission = e.Place(num(f["cpu"]), num(f["memory_mb"]), num(f["disk_gb"]))
+	}
 	if dry {
 		return D{"machine": D{"name": f["name"], "state": "thaw_planned"}, "dry_run": true, "quota_after": after, "admission": admission}
 	}
-	m := node.record(without(f, "state", "frozen_at", "frozen_by", "backup_volid", "backup_storage", "backup_bytes"))
-	m["state"], m["power_state"], m["ssh_ready"], m["onboot"] = "stopped", "stopped", false, false
+	if e.Op == nil {
+		fail("internal", "A thaw runs as an operation")
+	}
+	// Written before the restore: from here a node may hold the machine, and
+	// a retry or a delete must look there.
+	f["thaw_node"] = node.Name
+	e.Put("frozen", f["vmid"], n, f)
+	e.Op["thaw"] = D{"vmid": f["vmid"]}
+	e.P.Operations.Save(e.Op)
+	return D{"machine": D{"name": f["name"], "state": "thawing"}, "dry_run": false, "quota_after": after}
+}
+
+// PerformThaw restores the machine without the writer lock.
+func (e *Execution) PerformThaw() {
+	if e.Op["tool"] != "machine_thaw" || e.Op["thaw"] == nil || boolean(obj(e.Op["thaw"])["cleanup"]) {
+		return
+	}
+	f := e.S.Get("frozen", str(obj(e.Op["thaw"])["vmid"]))
+	if f == nil {
+		fail("not_found", "The frozen machine was deleted while thawing")
+	}
+	node, _ := e.nodeNamed(str(f["thaw_node"]))
+	m := thawRecord(f, node)
+	func() {
+		e.P.writer.Lock()
+		defer e.P.writer.Unlock()
+		e.Op["phase"] = "restoring_machine"
+		e.P.Operations.Save(e.Op)
+	}()
 	e.Call(D{"op": "thaw", "machine": m, "volid": f["backup_volid"], "storage": f["backup_storage"]})
-	// Only now is the backup of no use: a retry finds the machine restored and the backup gone.
-	e.Call(D{"op": "backup_remove", "machine": m, "volid": f["backup_volid"]})
-	e.Transaction(func(tx *Execution) {
-		tx.S.Remove("frozen", f["vmid"])
-		tx.Put("machines", m["vmid"], n, m)
-	})
-	e.P.invalidateInventory()
+}
+
+// FinishThaw records the restored machine, and only then removes the backup:
+// until the live row is committed the backup is the only copy.
+func (e *Execution) FinishThaw(t D) D {
+	if e.Op["tool"] != "machine_thaw" || e.Op["thaw"] == nil {
+		return D{}
+	}
+	plan, n := obj(e.Op["thaw"]), integer(t["n"])
+	var m D
+	if boolean(plan["cleanup"]) {
+		m = e.S.Get("machines", str(plan["vmid"]))
+		if m == nil {
+			fail("not_found", "The machine was deleted while thawing")
+		}
+	} else {
+		f := e.S.Get("frozen", str(plan["vmid"]))
+		if f == nil {
+			fail("not_found", "The frozen machine was deleted while thawing")
+		}
+		node, _ := e.nodeNamed(str(f["thaw_node"]))
+		m = thawRecord(f, node)
+		m["thaw_backup"] = D{"volid": f["backup_volid"], "note": f["backup_note"]}
+		e.Transaction(func(tx *Execution) {
+			tx.S.Remove("frozen", f["vmid"])
+			tx.Put("machines", m["vmid"], n, m)
+		})
+		e.P.invalidateInventory()
+	}
+	backup := obj(m["thaw_backup"])
+	e.Call(D{"op": "backup_remove", "machine": m, "volid": backup["volid"], "note": backup["note"]})
+	delete(m, "thaw_backup")
+	e.Put("machines", m["vmid"], n, m)
 	e.Reconcile()
 	return D{"machine": e.PublicMachine(m, e.ports(n)), "dry_run": false, "quota_after": e.Quota(t)}
 }
@@ -261,7 +413,16 @@ func (e *Execution) DeleteFrozen(f D, a, t D) D {
 	}
 	delta := D{"ips": -1, "frozen_gb": -num(f["disk_gb"]), "public_ports": -len(filter(toDicts(e.ports(n)), func(p D) bool { return integer(p["vmid"]) == integer(f["vmid"]) }))}
 	if !dry {
-		e.Call(D{"op": "backup_remove", "machine": f, "volid": f["backup_volid"]})
+		if name := str(f["thaw_node"]); name != "" {
+			// A thaw was begun: the machine may be restored there, wholly or in part.
+			node, ok := e.nodeNamed(name)
+			if !ok {
+				fail("conflict", "The node of this machine's thaw is no longer configured", D{"recovery": "contact_administrator"})
+			}
+			e.Call(D{"op": "thaw", "machine": thawRecord(f, node), "volid": f["backup_volid"], "storage": f["backup_storage"], "discard": true})
+			e.P.invalidateInventory()
+		}
+		e.Call(D{"op": "backup_remove", "machine": f, "volid": f["backup_volid"], "note": f["backup_note"]})
 		e.removeApps(filter(e.S.Objects("apps", n), func(x D) bool { return integer(x["vmid"]) == integer(f["vmid"]) }))
 		e.Transaction(func(tx *Execution) {
 			tx.forgetMachine(n, f)

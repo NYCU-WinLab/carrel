@@ -114,7 +114,7 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 		}
 		return D{"state": "ok"}, nil
 	case "freeze":
-		return D{"volid": fmt.Sprintf("pbs:backup/vm/%v/2026-10-26T00:00:00Z", m["vmid"]), "size": 1 << 30}, nil
+		return D{"volid": fmt.Sprintf("pbs:backup/vm/%v/2026-10-26T00:00:00Z", m["vmid"]), "size": 1 << 30, "verification": "ok", "note": "carrel-freeze test"}, nil
 	case "thaw", "backup_remove":
 		return D{"state": "done"}, nil
 	case "status":

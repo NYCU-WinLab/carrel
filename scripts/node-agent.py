@@ -2060,10 +2060,16 @@ def action(req):
 
 # Freezing a machine (issue #190): vzdump to the PVE storage of the Proxmox
 # Backup Server, then the control plane deletes the machine. The backup is
-# protected, so a prune job on the datastore cannot take it; its notes carry
-# the operation, which makes a repeated request find the backup it made.
+# protected, so a prune job on the datastore cannot take it. The cluster may
+# run its own scheduled backups of the same machine into the same storage:
+# the ones this agent made are told apart by their notes alone, and it never
+# reads, reuses or removes any other.
 BACKUP_VOLUME = re.compile(r"[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+-]+")
 FREEZE_NOTE = "carrel-freeze "
+# vzdump and the wait for a verification must end inside the control plane's
+# 4 hour bound on one request.
+VZDUMP_SECONDS = 3 * 3600
+VERIFY_POLL_SECONDS = 20
 
 
 def backup_storage(storage):
@@ -2079,34 +2085,123 @@ def backups(storage, vmid):
     return json.loads(out) if out else []
 
 
+def freeze_note(freeze_id):
+    if not isinstance(freeze_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", freeze_id):
+        raise ValueError("invalid freeze id")
+    return FREEZE_NOTE + freeze_id
+
+
+def carrel_backups(storage, vmid):
+    return [b for b in backups(storage, vmid) if str(b.get("notes", "")).strip().startswith(FREEZE_NOTE)]
+
+
+def backup_free(storage, backup):
+    if backup.get("protected"):
+        run("pvesh", "set", f"/nodes/{NODE}/storage/{storage}/content/{backup['volid']}", "--protected", 0)
+    run("pvesm", "free", backup["volid"], timeout=600)
+
+
+def freeze_stamp(m):
+    return STATE / f"freeze-{machine(m)}.json"
+
+
+def config_digest(m):
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    return pve_get(f"/nodes/{NODE}/{kind}/{machine(m)}/config").get("digest")
+
+
+def freeze_stamp_valid(m, note):
+    """True when the machine is provably as it was when this backup was made.
+
+    Only this agent starts or changes a machine, and every such request
+    removes the stamp (main); the configuration digest covers the rest.
+    """
+    path = freeze_stamp(m)
+    try:
+        stamp = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return stamp.get("note") == note and stamp.get("digest") is not None and stamp.get("digest") == config_digest(m)
+
+
 def freeze(req):
     m = req["machine"]
     vmid = machine(m)
     storage = backup_storage(req["storage"])
-    if not isinstance(req["freeze_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", req["freeze_id"]):
-        raise ValueError("invalid freeze id")
+    note = freeze_note(req["freeze_id"])
+    wait = integer(req.get("verify_wait", 1800), 0, 3600)
     owned(m)
     if power_status(m) != "stopped":
         raise ValueError("a machine freezes only when stopped")
     kind = "qemu" if m["kind"] == "vm" else "lxc"
     if any(s["name"] != "current" for s in pve_get(f"/nodes/{NODE}/{kind}/{vmid}/snapshot")):
         raise ValueError("a machine with snapshots does not freeze")
-    note = FREEZE_NOTE + req["freeze_id"]
 
-    def made():
+    def mine():
         return [b for b in backups(storage, vmid) if str(b.get("notes", "")).strip() == note]
 
-    found = made()
+    found = mine()
+    if found and not freeze_stamp_valid(m, note):
+        # A backup of an earlier attempt: the machine may have run since, so
+        # what it holds is not what a freeze must keep.
+        for b in found:
+            backup_free(storage, b)
+        found = []
     if not found:
-        run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--protected", 1, "--notes-template", note, timeout=6 * 3600)
-        found = made()
+        freeze_stamp(m).unlink(missing_ok=True)
+        try:
+            run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--protected", 1, "--notes-template", note, timeout=VZDUMP_SECONDS)
+        except CommandFailure as e:
+            # Another backup job of the cluster holds the guest.
+            if "lock" in str(e):
+                raise CommandFailure("the machine is being backed up by another job; freeze it again later") from e
+            raise
+        write(freeze_stamp(m), json.dumps({"note": note, "digest": config_digest(m)}), 0o600)
+        found = mine()
     if len(found) != 1:
         raise CommandFailure("the backup is not on the storage")
-    backup = found[0]
-    verification = (backup.get("verification") or {}).get("state")
-    if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or verification == "failed" or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
+    deadline = time.monotonic() + wait
+    while True:
+        backup = (mine() or [None])[0]
+        if backup is None:
+            raise CommandFailure("the backup is not on the storage")
+        verification = (backup.get("verification") or {}).get("state")
+        if verification in ("ok", "failed") or time.monotonic() >= deadline:
+            break
+        time.sleep(VERIFY_POLL_SECONDS)
+    if verification == "failed":
+        backup_free(storage, backup)
+        freeze_stamp(m).unlink(missing_ok=True)
+        raise CommandFailure("the backup failed its verification and was removed")
+    if verification != "ok":
+        # Kept for the next attempt, which reuses it while the machine is unchanged.
+        raise CommandFailure("the backup was not verified in time; the Proxmox Backup Server must verify new snapshots")
+    if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
         raise CommandFailure("the backup could not be verified")
-    return {"volid": backup["volid"], "size": int(backup["size"]), "verification": verification or "unverified"}
+    # Earlier attempts' leftovers: the machine is live, so no other freeze backup of it is wanted.
+    for other in carrel_backups(storage, vmid):
+        if other["volid"] != backup["volid"]:
+            backup_free(storage, other)
+    return {"volid": backup["volid"], "size": int(backup["size"]), "verification": "ok", "note": note}
+
+
+def discard_restore(m, where):
+    """Remove what a restore left on this node: a finished machine or a cut-off half."""
+    vmid = machine(m)
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    cmd = "qm" if m["kind"] == "vm" else "pct"
+    cfg = pve_get(f"/nodes/{where}/{kind}/{vmid}/config")
+    if where != NODE:
+        raise ValueError("machine is on another node")
+    if cfg.get("lock") == "create":
+        run(cmd, "unlock", vmid)
+    else:
+        owned(m, node=where)
+        if cfg.get("name", cfg.get("hostname")) != m["name"]:
+            raise ValueError("VMID is in use")
+        if "running" in run(cmd, "status", vmid):
+            run(cmd, "stop", vmid)
+    run(cmd, "destroy", vmid, "--purge", "1")
 
 
 def thaw(req):
@@ -2118,18 +2213,29 @@ def thaw(req):
     backup_storage(volid.split(":")[0])
     guest = storage_id()
     where = located(m)
+    if req.get("discard"):
+        # Deleting a machine whose thaw was cut off: drop what it restored.
+        if where is None:
+            return {"state": "absent"}
+        discard_restore(m, where)
+        return {"state": "discarded"}
     if where is not None:
-        # A retry after the restore finished; anything else holds the VMID.
-        cfg = owned(m, node=where)
-        if where != NODE or cfg.get("lock") or cfg.get("name", cfg.get("hostname")) != m["name"]:
-            raise ValueError("VMID is in use")
-        return {"state": "restored"}
+        kind = "qemu" if m["kind"] == "vm" else "lxc"
+        if where == NODE and pve_get(f"/nodes/{where}/{kind}/{vmid}/config").get("lock") == "create":
+            # A restore that was cut off: PVE leaves its half behind, locked.
+            discard_restore(m, where)
+        else:
+            # A retry after the restore finished; anything else holds the VMID.
+            cfg = owned(m, node=where)
+            if where != NODE or cfg.get("lock") or cfg.get("name", cfg.get("hostname")) != m["name"]:
+                raise ValueError("VMID is in use")
+            return {"state": "restored"}
     if any(PVE_NODES.glob(f"*/*/{vmid}.conf")):
         raise ValueError("VMID is in use")
     if m["kind"] == "vm":
-        run("qmrestore", volid, vmid, "--storage", guest, timeout=6 * 3600)
+        run("qmrestore", volid, vmid, "--storage", guest, timeout=VZDUMP_SECONDS)
     else:
-        run("pct", "restore", vmid, volid, "--storage", guest, timeout=6 * 3600)
+        run("pct", "restore", vmid, volid, "--storage", guest, timeout=VZDUMP_SECONDS)
     owned(m)
     return {"state": "restored"}
 
@@ -2144,11 +2250,12 @@ def backup_remove(req):
     found = [b for b in backups(storage, vmid) if b.get("volid") == volid]
     if not found:
         return {"state": "absent"}
-    if not str(found[0].get("notes", "")).startswith(FREEZE_NOTE):
+    notes = str(found[0].get("notes", "")).strip()
+    # Never a scheduled or manual backup of the cluster, and never the backup
+    # of another freeze.
+    if not notes.startswith(FREEZE_NOTE) or (req.get("note") and notes != req["note"]):
         raise ValueError("not the backup of a frozen machine")
-    if found[0].get("protected"):
-        run("pvesh", "set", f"/nodes/{NODE}/storage/{storage}/content/{volid}", "--protected", 0)
-    run("pvesm", "free", volid, timeout=600)
+    backup_free(storage, found[0])
     return {"state": "removed"}
 
 
@@ -2172,6 +2279,10 @@ def main():
         if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
+        # Anything that may change or start a machine ends the proof that a
+        # freeze backup still matches it (freeze_stamp_valid).
+        if isinstance(req.get("machine"), dict) and op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "freeze", "thaw", "backup_remove"):
+            freeze_stamp(req["machine"]).unlink(missing_ok=True)
         if req.get("request_id") and op in ("create", "action"):
             if not re.fullmatch(r"[a-f0-9]{64}", req["request_id"]):
                 raise ValueError("invalid request ID")

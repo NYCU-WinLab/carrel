@@ -273,7 +273,7 @@ func (o *Operations) apply(id string) {
 					machines = append(machines, m)
 				}
 			}
-			if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" {
+			if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" && op["tool"] != "machine_thaw" {
 				m := e.Machine(t, pub["name"])
 				machines = filter(machines, func(v D) bool { return integer(v["vmid"]) != integer(m["vmid"]) })
 				machines = append(machines, m)
@@ -292,6 +292,8 @@ func (o *Operations) apply(id string) {
 			e.PreparePublication()
 			e.PerformMigration()
 			e.PerformImport()
+			e.PerformFreeze()
+			e.PerformThaw()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
@@ -306,6 +308,12 @@ func (o *Operations) apply(id string) {
 				}
 				if op["tool"] == "machine_migrate" {
 					result = merge(result, e.FinishMigration(t))
+				}
+				if op["tool"] == "machine_freeze" {
+					result = merge(result, e.FinishFreeze(t))
+				}
+				if op["tool"] == "machine_thaw" {
+					result = merge(result, e.FinishThaw(t))
 				}
 				if op["tool"] == "iso_import" || op["tool"] == "image_import" {
 					result = merge(result, e.FinishImport())
@@ -328,7 +336,7 @@ func (o *Operations) apply(id string) {
 					}
 					result["updated_machines"] = updated
 				}
-				if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" {
+				if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" && op["tool"] != "machine_thaw" {
 					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.ports(integer(t["n"])))
 				}
 				op["result"] = merge(D{"ok": true}, result)

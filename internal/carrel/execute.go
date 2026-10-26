@@ -199,7 +199,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		}
 		if tool == "machine_list" {
 			for _, f := range e.S.Objects("frozen", n) {
-				out = append(out, e.PublicFrozen(f))
+				// Seen as a machine too while a freeze is being finished.
+				if find(ms, func(m D) bool { return m["vmid"] == f["vmid"] }) == nil {
+					out = append(out, e.PublicFrozen(f))
+				}
 			}
 		}
 		return D{"machines": out}

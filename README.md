@@ -339,16 +339,32 @@ backup) or holds a bound public IP, a fixed public port or a special domain. Rel
 are shared and scarce. The backup is the only copy: freezing is not an off-site backup.
 
 Admins set this up by hand; carrel does not manage PBS. Add the datastore to Proxmox VE as a PBS storage
-(use a namespace of its own for frozen machines and schedule a PBS verify job on it), then name the storage
-in `/etc/carrel/config.json` and restart the control service:
+(use a namespace of its own for frozen machines) and turn on **Verify New Snapshots** for the datastore:
+a machine is removed only after PBS reports its backup verified, so without it every freeze fails with
+"not verified in time" and the machine stays. Then name the storage in `/etc/carrel/config.json` and
+restart the control service:
 
 ```json
-{ "backup_storage": "pbs-frozen", "freeze_release": ["public_ips", "special_ports", "special_domains"] }
+{ "backup_storage": "pbs-frozen", "freeze_release": ["public_ips", "special_ports", "special_domains"], "freeze_verify_wait": 1800 }
 ```
 
 `freeze_release` is optional and lists what a machine must have released first (these three by default).
+`freeze_verify_wait` is how many seconds a freeze waits for the verification (1800 by default, at most 3600).
 carrel makes each backup protected, so PBS prune jobs skip it; still keep prune jobs off the frozen
 namespace, and never delete its backups by hand: `machine_delete` and `machine_thaw` remove them.
+
+The cluster may also run scheduled backups of the same machines, into this storage or another. carrel
+tells its own backups apart by their notes (`carrel-freeze <operation>`) and never reads, reuses, counts
+or removes any other: scheduled backups of a frozen machine stay as they are, outside `frozen_gb`, and
+follow the retention of their job. A freeze always takes a backup of its own of the stopped machine, and
+fails with "being backed up by another job" while a scheduled run holds the machine; freeze it again then.
+A freeze that fails after the backup is kept for the retry, and the retry reuses it only if the machine has
+not been started or changed since; otherwise the node deletes it and takes a new one. The backup of a
+freeze that was never retried stays protected on PBS with the note above; an admin may remove it there.
+
+A freeze or a thaw copies for minutes to hours without holding carrel's writer lock, so other tenants'
+requests go on. A thaw that is cut off is finished by retrying it (`operation_retry`), on the node where it
+began; `machine_delete` of that machine discards the half-restored one first.
 Without `backup_storage`, `machine_freeze` fails and `catalog_get` reports `machine_freeze: false`.
 
 See the [0.3 reliability acceptance](docs/evaluations/2026-10-01-reliability.md) for live recovery,

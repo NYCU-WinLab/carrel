@@ -24,7 +24,7 @@ func freezeSite(t *testing.T) (*Platform, *fakeBackend, *[]string) {
 		case "status":
 			return D{"status": "stopped"}, nil
 		case "freeze":
-			return D{"volid": "pbs:backup/vm/10100/2026-10-26T00:00:00Z", "size": 1 << 30}, nil
+			return D{"volid": "pbs:backup/vm/10100/2026-10-26T00:00:00Z", "size": 1 << 30, "verification": "ok", "note": "carrel-freeze test"}, nil
 		case "inventory":
 			return baseInventory(), nil
 		case "storage_usage":
@@ -114,6 +114,10 @@ func TestFailedOrUnverifiedBackupKeepsTheMachine(t *testing.T) {
 	for name, reply := range map[string]func() (any, error){
 		"failed":     func() (any, error) { return nil, errors.New("vzdump failed") },
 		"unverified": func() (any, error) { return D{"volid": "", "size": 0}, nil },
+		// A backup with no verification result is no better than a failed one.
+		"unconfirmed": func() (any, error) {
+			return D{"volid": "pbs:backup/vm/10100/2026-10-26T00:00:00Z", "size": 1 << 30, "note": "carrel-freeze x"}, nil
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, b, seen := freezeSite(t)
@@ -229,3 +233,164 @@ func TestFreezeReleaseListComesFromTheConfig(t *testing.T) {
 	p.Config["freeze_release"] = []any{"special_ports"}
 	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
 }
+
+// intercept answers an adapter request itself or leaves it to the site's fake.
+func intercept(b *fakeBackend, answer func(r D) (any, error, bool)) {
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if v, err, ok := answer(r); ok {
+			return v, err
+		}
+		return inner(r, target)
+	}
+}
+
+func TestRetriedFreezeKeepsItsBackupIdentity(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	ids, failed := []any{}, false
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] != "freeze" {
+			return nil, nil, false
+		}
+		ids = append(ids, r["freeze_id"])
+		*seen = append(*seen, "freeze")
+		if !failed {
+			failed = true
+			return nil, errors.New("ssh dropped after the backup"), true
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box"})
+	if failure(r)["code"] == nil || p.Store.Get("machines", "10100") == nil || frozenOps(*seen, "action:delete") != 0 {
+		t.Fatalf("the first attempt did not leave the machine: %s", encoded(r))
+	}
+	assertOK(t, member(p, "operation_retry", D{"id": opOf(r)}))
+	if len(ids) != 2 || ids[0] != ids[1] || ids[0] != opOf(r) || p.Store.Get("frozen", "10100") == nil {
+		t.Fatalf("ids %v: a retry must ask for the same backup, which the node keeps only while the machine is unchanged", ids)
+	}
+}
+
+func TestMachineThatRanDuringTheBackupIsKept(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	started := false
+	intercept(b, func(r D) (any, error, bool) {
+		switch r["op"] {
+		case "freeze":
+			// Someone started the machine while vzdump was running.
+			started = true
+		case "status":
+			if started {
+				return D{"status": "running"}, nil, true
+			}
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box"})
+	if failure(r)["code"] != "conflict" || p.Store.Get("machines", "10100") == nil || p.Store.Get("frozen", "10100") != nil {
+		t.Fatalf("a machine that ran was frozen: %s", encoded(r))
+	}
+	if frozenOps(*seen, "action:delete") != 0 || frozenOps(*seen, "backup_remove") != 1 {
+		t.Fatalf("the stale backup stayed or the machine went: %v", *seen)
+	}
+}
+
+func TestFreezeAndThawLeaveTheWriterLockFree(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	free := map[string]bool{}
+	intercept(b, func(r D) (any, error, bool) {
+		if op := str(r["op"]); op == "freeze" || op == "thaw" {
+			locked := !p.writer.TryLock()
+			if !locked {
+				p.writer.Unlock()
+			}
+			free[op] = !locked
+		}
+		return nil, nil, false
+	})
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	assertOK(t, member(p, "machine_thaw", D{"machine": "box"}))
+	if !free["freeze"] || !free["thaw"] {
+		t.Fatalf("the writer lock was held during a backup or a restore: %v", free)
+	}
+}
+
+func TestInterruptedThawIsFinishedOnTheSameNode(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	nodes, failed := []any{}, false
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "thaw" && r["discard"] == nil {
+			nodes = append(nodes, obj(r["machine"])["node"])
+			if !failed {
+				failed = true
+				return nil, errors.New("connection lost during the restore"), true
+			}
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_thaw", D{"machine": "box"})
+	f := p.Store.Get("frozen", "10100")
+	if failure(r)["code"] == nil || f == nil || f["thaw_node"] == nil || p.Store.Get("machines", "10100") != nil {
+		t.Fatalf("an interrupted thaw must keep the frozen row and say where it restores: %s", encoded(r))
+	}
+	if frozenOps(*seen, "backup_remove") != 0 {
+		t.Fatal("the backup went before the machine was recorded")
+	}
+	assertOK(t, member(p, "operation_retry", D{"id": opOf(r)}))
+	if len(nodes) != 2 || nodes[0] != nodes[1] || p.Store.Get("machines", "10100") == nil || p.Store.Get("frozen", "10100") != nil {
+		t.Fatalf("nodes %v", nodes)
+	}
+}
+
+func TestBackupOfAThawedMachineGoesOnlyAfterItIsRecorded(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	failed, recorded := false, []bool{}
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "backup_remove" {
+			recorded = append(recorded, p.Store.Get("machines", "10100") != nil && p.Store.Get("frozen", "10100") == nil)
+			if !failed {
+				failed = true
+				return nil, errors.New("pbs unreachable"), true
+			}
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_thaw", D{"machine": "box"})
+	if failure(r)["code"] == nil || p.Store.Get("machines", "10100") == nil {
+		t.Fatalf("the restored machine must stay when only the cleanup failed: %s", encoded(r))
+	}
+	if listed := dicts(member(p, "machine_list", D{})["machines"]); len(listed) != 1 || listed[0]["state"] != "stopped" || listed[0]["thaw_backup"] != nil {
+		t.Fatal(encoded(listed))
+	}
+	assertOK(t, member(p, "operation_retry", D{"id": opOf(r)}))
+	if frozenOps(*seen, "thaw") != 1 || len(recorded) != 2 || !recorded[0] || !recorded[1] || p.Store.Get("machines", "10100")["thaw_backup"] != nil {
+		t.Fatalf("recorded %v, %v", recorded, *seen)
+	}
+}
+
+func TestDeletingAfterAPartialThawDiscardsWhatItRestored(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	order := []string{}
+	intercept(b, func(r D) (any, error, bool) {
+		switch {
+		case r["op"] == "thaw" && r["discard"] == nil:
+			return nil, errors.New("killed during the restore"), true
+		case r["op"] == "thaw":
+			order = append(order, "discard")
+		case r["op"] == "backup_remove":
+			order = append(order, "backup_remove")
+		}
+		return nil, nil, false
+	})
+	if failure(member(p, "machine_thaw", D{"machine": "box"}))["code"] == nil {
+		t.Fatal("the thaw did not fail")
+	}
+	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	if strings.Join(order, ",") != "discard,backup_remove" || p.Store.Get("frozen", "10100") != nil {
+		t.Fatalf("%v %v", order, *seen)
+	}
+}
+
+func opOf(r D) string { return str(obj(r["operation"])["id"]) }
