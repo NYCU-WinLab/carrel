@@ -35,6 +35,10 @@ type vpnServer struct {
 
 func (c vpnClient) D() D { return decode(string(encoded(c))) }
 
+// vpnClientLive says whether the exit node serves a client: it is neither
+// being removed nor past its time. The desired state and the NetBox sync share it.
+func vpnClientLive(o D) bool { return o["state"] != "deleting" && num(o["expires_at"]) > now() }
+
 func (e *Execution) vpnClients(n ...int) []vpnClient {
 	return rowsOf[vpnClient](e.S, "vpn_clients", n...)
 }
