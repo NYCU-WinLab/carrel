@@ -273,7 +273,7 @@ func (o *Operations) apply(id string) {
 					machines = append(machines, m)
 				}
 			}
-			if pub := obj(result["machine"]); pub["name"] != nil {
+			if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" {
 				m := e.Machine(t, pub["name"])
 				machines = filter(machines, func(v D) bool { return integer(v["vmid"]) != integer(m["vmid"]) })
 				machines = append(machines, m)
@@ -328,7 +328,7 @@ func (o *Operations) apply(id string) {
 					}
 					result["updated_machines"] = updated
 				}
-				if pub := obj(result["machine"]); pub["name"] != nil {
+				if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" {
 					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.ports(integer(t["n"])))
 				}
 				op["result"] = merge(D{"ok": true}, result)
@@ -403,7 +403,11 @@ func (o *Operations) saveOutcome(e *Execution) {
 }
 func (e *Execution) BindMachine(t D) bool {
 	op, a := e.Op, obj(e.Op["args"])
-	if a["machine"] == nil {
+	if a["machine"] == nil || op["tool"] == "machine_thaw" {
+		return false
+	}
+	// A frozen machine has no live row to bind: deleting it is its own path.
+	if f := e.frozenMachine(t, a["machine"]); f != nil && op["tool"] == "machine_delete" && e.S.Get("machines", str(f["vmid"])) == nil {
 		return false
 	}
 	bound := obj(op["machine_target"])
@@ -411,7 +415,7 @@ func (e *Execution) BindMachine(t D) bool {
 	if len(bound) > 0 {
 		m = find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return integer(m["vmid"]) == integer(bound["vmid"]) })
 		if m == nil {
-			if op["tool"] == "machine_delete" {
+			if op["tool"] == "machine_delete" || op["tool"] == "machine_freeze" {
 				return true
 			}
 			fail("not_found", "The operation's original machine no longer exists")

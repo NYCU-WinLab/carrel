@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var DefaultQuota = D{"vcpu": 8, "memory_mb": 16384, "disk_gb": 100, "machines": 8, "ips": 8, "public_ports": 10, "domains": 10, "networks": 4, "snapshots": 4, "snapshot_gb": 100, "images_gb": 20}
+var DefaultQuota = D{"vcpu": 8, "memory_mb": 16384, "disk_gb": 100, "machines": 8, "ips": 8, "public_ports": 10, "domains": 10, "networks": 4, "snapshots": 4, "snapshot_gb": 100, "frozen_gb": 100, "images_gb": 20}
 
 type sqlAccess interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)

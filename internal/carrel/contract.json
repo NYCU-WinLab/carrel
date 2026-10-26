@@ -622,6 +622,119 @@
       }
     },
     {
+      "name": "machine_freeze",
+      "description": "Park a stopped machine: carrel backs it up to the Proxmox Backup Server, verifies the backup and only then removes it from the cluster. While frozen it releases vcpu, memory_mb, disk_gb and machines and charges its disk size to frozen_gb; its name, internal address, domains, ports and peers stay. Refused unless the machine is shut down, has no disk snapshots, and has released any public IP, fixed public port or special domain it holds. A failed or unverified backup leaves the machine untouched. The backup is the only copy: freezing is not an off-site backup. confirm must equal the machine name. Bring it back with machine_thaw.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "confirm": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          }
+        },
+        "required": [
+          "machine",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_thaw",
+      "description": "Restore a frozen machine from its backup as a new machine with the same name and internal address. Checks the normal quota like machine_create and fails with quota_exceeded when it is short; the machine comes back stopped, start it with machine_power. Its backup is deleted and its frozen_gb released.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          },
+          "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 55,
+            "default": 55,
+            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          }
+        },
+        "required": [
+          "machine"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "machine_media",
       "description": "Eject the installer ISO from a machine installed from an ISO, which marks it ready, or insert one of the tenant's ISOs again (rescue). Only for machines created with iso.",
       "inputSchema": {
@@ -2277,6 +2390,7 @@
               "networks",
               "snapshots",
               "snapshot_gb",
+              "frozen_gb",
               "images_gb"
             ]
           },
@@ -2869,6 +2983,7 @@
               "networks",
               "snapshots",
               "snapshot_gb",
+              "frozen_gb",
               "images_gb"
             ]
           },
@@ -4311,6 +4426,8 @@
     "machine_list",
     "machine_get",
     "machine_delete",
+    "machine_freeze",
+    "machine_thaw",
     "machine_power",
     "machine_resize",
     "machine_rename",
@@ -4421,6 +4538,7 @@
     "machine_console_url",
     "machine_create",
     "machine_delete",
+    "machine_freeze",
     "machine_media",
     "machine_migrate",
     "machine_nic_attach",
@@ -4428,6 +4546,7 @@
     "machine_power",
     "machine_rename",
     "machine_resize",
+    "machine_thaw",
     "network_create",
     "network_delete",
     "node_drain",
@@ -4467,12 +4586,14 @@
     "iso_import",
     "machine_create",
     "machine_delete",
+    "machine_freeze",
     "machine_media",
     "machine_migrate",
     "machine_nic_attach",
     "machine_nic_detach",
     "machine_power",
     "machine_resize",
+    "machine_thaw",
     "network_create",
     "network_delete",
     "peer_allow",
@@ -4587,7 +4708,8 @@
       "releases_quota": false,
       "survives_host_restart": false
     },
-    "existing_machine_access": true
+    "existing_machine_access": true,
+    "machine_freeze": false
   },
-  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; delete -> machine_delete; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is the complete preview. Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
+  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; delete -> machine_delete; park a stopped machine -> machine_freeze, bring it back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is the complete preview. Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
 }

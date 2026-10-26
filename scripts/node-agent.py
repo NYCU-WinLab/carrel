@@ -2058,6 +2058,100 @@ def action(req):
     return {"state": "done"}
 
 
+# Freezing a machine (issue #190): vzdump to the PVE storage of the Proxmox
+# Backup Server, then the control plane deletes the machine. The backup is
+# protected, so a prune job on the datastore cannot take it; its notes carry
+# the operation, which makes a repeated request find the backup it made.
+BACKUP_VOLUME = re.compile(r"[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+-]+")
+FREEZE_NOTE = "carrel-freeze "
+
+
+def backup_storage(storage):
+    entry = storage_entry(storage) if isinstance(storage, str) and re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage) else None
+    if entry is None or entry["type"] != "pbs":
+        raise ValueError("backup storage must be a Proxmox Backup Server storage")
+    return storage
+
+
+def backups(storage, vmid):
+    # As root: the reader token has no view of the backup storage.
+    out = run("pvesh", "get", f"/nodes/{NODE}/storage/{storage}/content", "--content", "backup", "--vmid", vmid, "--output-format", "json")
+    return json.loads(out) if out else []
+
+
+def freeze(req):
+    m = req["machine"]
+    vmid = machine(m)
+    storage = backup_storage(req["storage"])
+    if not isinstance(req["freeze_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", req["freeze_id"]):
+        raise ValueError("invalid freeze id")
+    owned(m)
+    if power_status(m) != "stopped":
+        raise ValueError("a machine freezes only when stopped")
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    if any(s["name"] != "current" for s in pve_get(f"/nodes/{NODE}/{kind}/{vmid}/snapshot")):
+        raise ValueError("a machine with snapshots does not freeze")
+    note = FREEZE_NOTE + req["freeze_id"]
+
+    def made():
+        return [b for b in backups(storage, vmid) if str(b.get("notes", "")).strip() == note]
+
+    found = made()
+    if not found:
+        run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--protected", 1, "--notes-template", note, timeout=6 * 3600)
+        found = made()
+    if len(found) != 1:
+        raise CommandFailure("the backup is not on the storage")
+    backup = found[0]
+    verification = (backup.get("verification") or {}).get("state")
+    if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or verification == "failed" or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
+        raise CommandFailure("the backup could not be verified")
+    return {"volid": backup["volid"], "size": int(backup["size"]), "verification": verification or "unverified"}
+
+
+def thaw(req):
+    m = req["machine"]
+    vmid = machine(m)
+    volid = req["volid"]
+    if not isinstance(volid, str) or not BACKUP_VOLUME.fullmatch(volid):
+        raise ValueError("invalid backup volume")
+    backup_storage(volid.split(":")[0])
+    guest = storage_id()
+    where = located(m)
+    if where is not None:
+        # A retry after the restore finished; anything else holds the VMID.
+        cfg = owned(m, node=where)
+        if where != NODE or cfg.get("lock") or cfg.get("name", cfg.get("hostname")) != m["name"]:
+            raise ValueError("VMID is in use")
+        return {"state": "restored"}
+    if any(PVE_NODES.glob(f"*/*/{vmid}.conf")):
+        raise ValueError("VMID is in use")
+    if m["kind"] == "vm":
+        run("qmrestore", volid, vmid, "--storage", guest, timeout=6 * 3600)
+    else:
+        run("pct", "restore", vmid, volid, "--storage", guest, timeout=6 * 3600)
+    owned(m)
+    return {"state": "restored"}
+
+
+def backup_remove(req):
+    m = req["machine"]
+    vmid = machine(m)
+    volid = req["volid"]
+    if not isinstance(volid, str) or not BACKUP_VOLUME.fullmatch(volid):
+        raise ValueError("invalid backup volume")
+    storage = backup_storage(volid.split(":")[0])
+    found = [b for b in backups(storage, vmid) if b.get("volid") == volid]
+    if not found:
+        return {"state": "absent"}
+    if not str(found[0].get("notes", "")).startswith(FREEZE_NOTE):
+        raise ValueError("not the backup of a frozen machine")
+    if found[0].get("protected"):
+        run("pvesh", "set", f"/nodes/{NODE}/storage/{storage}/content/{volid}", "--protected", 0)
+    run("pvesm", "free", volid, timeout=600)
+    return {"state": "removed"}
+
+
 def main():
     STATE.mkdir(parents=True, exist_ok=True)
     # A start may carry a VM's cloud-init files: user-data with large runcmd
@@ -2072,7 +2166,7 @@ def main():
         console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
-    long = op in ("migrate", "migrate_finish")
+    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
@@ -2127,6 +2221,8 @@ def main():
             out = migrate_finish(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
+        elif op in ("freeze", "thaw", "backup_remove"):
+            out = {"freeze": freeze, "thaw": thaw, "backup_remove": backup_remove}[op](req)
         elif op in ("fetch_start", "fetch_status", "fetch_store", "fetch_clean", "image_delete"):
             if not first_exit_node():
                 raise ValueError("fetches run on the first exit node")

@@ -8,7 +8,7 @@ import (
 // Resolve only resources already visible through this tenant's grants.
 func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 	g := clone(grant)
-	for _, m := range e.S.Objects("machines", n) {
+	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
 		if (g["vmid"] != nil && integer(g["vmid"]) == integer(m["vmid"])) || g["target"] == m["ip"] {
 			g["machine"] = m["name"]
 		}

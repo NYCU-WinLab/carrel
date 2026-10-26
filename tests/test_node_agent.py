@@ -1008,3 +1008,122 @@ def test_rename_sets_the_proxmox_name_of_an_owned_machine(monkeypatch, kind, com
     monkeypatch.setattr(module, "pve_get", lambda *args: {"tags": "other"})
     with pytest.raises(ValueError, match="unowned"):
         module.action({"machine": dict(MACHINE, kind=kind), "action": "rename", "name": "portal"})
+
+
+FROZEN_NOTE = "carrel-freeze op1"
+
+
+def freezer(monkeypatch, tmp_path, *, listing, power="stopped", snapshots=()):
+    """node-agent with a PBS storage and a recorded command line."""
+    module = load("node-agent.py")
+    monkeypatch.setattr(
+        module, "storage_entry", lambda storage: {"type": "pbs"} if storage == "pbs" else {"type": "zfspool"}
+    )
+    monkeypatch.setattr(module, "owned", lambda m, allow_provisioning=False, node=None: {"name": m["name"]})
+    monkeypatch.setattr(module, "power_status", lambda m: power)
+    monkeypatch.setattr(
+        module, "pve_get", lambda path, **kw: [{"name": "current"}, *({"name": n} for n in snapshots)]
+    )
+    commands = []
+
+    def run(*args, **kw):
+        commands.append([str(a) for a in args])
+        if args[0] == "pvesh" and args[1] == "get":
+            return json.dumps(listing(commands))
+        return ""
+
+    monkeypatch.setattr(module, "run", run)
+    return module, commands
+
+
+VOLID = "pbs:backup/vm/10100/2026-10-26T00:00:00Z"
+
+
+def backup(**kw):
+    return {"volid": VOLID, "size": 1 << 30, "protected": 1, "notes": FROZEN_NOTE, **kw}
+
+
+def test_freeze_backs_up_protected_and_verifies(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup()] if any(x[0] == "vzdump" for x in c) else []
+    )
+    out = module.freeze({"machine": dict(MACHINE), "storage": "pbs", "freeze_id": "op1"})
+    assert out == {"volid": VOLID, "size": 1 << 30, "verification": "unverified"}
+    dump = next(c for c in commands if c[0] == "vzdump")
+    assert dump[1:] == [
+        "10100",
+        "--storage",
+        "pbs",
+        "--mode",
+        "stop",
+        "--protected",
+        "1",
+        "--notes-template",
+        FROZEN_NOTE,
+    ]
+
+
+def test_freeze_repeated_takes_no_second_backup(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(verification={"state": "ok"})]
+    )
+    out = module.freeze({"machine": dict(MACHINE), "storage": "pbs", "freeze_id": "op1"})
+    assert out["verification"] == "ok"
+    assert not any(c[0] == "vzdump" for c in commands)
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        backup(protected=0),
+        backup(size=0),
+        backup(verification={"state": "failed"}),
+    ],
+)
+def test_freeze_refuses_a_backup_it_cannot_trust(monkeypatch, tmp_path, listing):
+    module, _ = freezer(monkeypatch, tmp_path, listing=lambda c: [listing])
+    with pytest.raises(module.CommandFailure):
+        module.freeze({"machine": dict(MACHINE), "storage": "pbs", "freeze_id": "op1"})
+
+
+def test_freeze_refuses_a_running_machine_snapshots_and_a_plain_storage(monkeypatch, tmp_path):
+    request = {"machine": dict(MACHINE), "storage": "pbs", "freeze_id": "op1"}
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [], power="running")
+    with pytest.raises(ValueError, match="stopped"):
+        module.freeze(request)
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [], snapshots=["before"])
+    with pytest.raises(ValueError, match="snapshots"):
+        module.freeze(request)
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    with pytest.raises(ValueError, match="Backup Server"):
+        module.freeze({**request, "storage": "local-zfs"})
+    assert not any(c[0] == "vzdump" for c in commands)
+
+
+def test_thaw_restores_once_and_refuses_a_taken_vmid(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    nodes = tmp_path / "nodes"
+    (nodes / "carrel01" / "qemu-server").mkdir(parents=True)
+    monkeypatch.setattr(module, "PVE_NODES", nodes)
+    monkeypatch.setattr(module, "storage_id", lambda: "local-zfs")
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+    assert ["qmrestore", VOLID, "10100", "--storage", "local-zfs"] in [c[:5] for c in commands]
+    # Another machine's configuration holds the VMID.
+    (nodes / "carrel02" / "qemu-server").mkdir(parents=True)
+    (nodes / "carrel02" / "qemu-server" / "10100.conf").write_text("x")
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID})
+
+
+def test_backup_remove_unprotects_then_frees_only_a_freeze_backup(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()])
+    assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "removed"}
+    assert [c[:2] for c in commands if c[0] in ("pvesh", "pvesm")][1:] == [
+        ["pvesh", "set"],
+        ["pvesm", "free"],
+    ]
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup(notes="manual backup")])
+    with pytest.raises(ValueError, match="frozen machine"):
+        module.backup_remove({"machine": dict(MACHINE), "volid": VOLID})
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "absent"}

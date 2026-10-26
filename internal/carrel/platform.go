@@ -17,7 +17,7 @@ import (
 //go:embed contract.json
 var contractJSON string
 var Contract = decode(contractJSON)
-var Units = D{"cpu": "vCPU", "vcpu": "vCPU", "memory_mb": "MiB", "swap_mb": "MiB", "disk_gb": "GiB", "snapshot_gb": "GiB"}
+var Units = D{"cpu": "vCPU", "vcpu": "vCPU", "memory_mb": "MiB", "swap_mb": "MiB", "disk_gb": "GiB", "snapshot_gb": "GiB", "frozen_gb": "GiB"}
 var reservedLabels = []string{"carrel", "www", "auth", "mail", "admin", "api", "mcp", "status", "internal"}
 
 func named(group, name string) bool { return contains(Contract[group], name) }
@@ -239,6 +239,9 @@ func (e *Execution) Tenant(w D, name string) D {
 func (e *Execution) Machine(t D, ref any) D {
 	m := find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return str(m["vmid"]) == str(ref) || str(m["name"]) == str(ref) })
 	if m == nil {
+		if e.frozenMachine(t, ref) != nil {
+			fail("conflict", "The machine is frozen; thaw it with machine_thaw first", D{"recovery": "resolve_prerequisite"})
+		}
 		fail("not_found", "Machine not found in this tenant")
 	}
 	return m
@@ -262,6 +265,11 @@ func (e *Execution) Usage(t D) D {
 	}
 	for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "networks": "networks", "snapshots": "snapshots"} {
 		used[dim] = len(e.S.Objects(kind, n))
+	}
+	// A frozen machine keeps its address and charges its disk to its own quota.
+	for _, f := range e.S.Objects("frozen", n) {
+		used["ips"] = num(used["ips"]) + 1
+		used["frozen_gb"] = num(used["frozen_gb"]) + num(f["disk_gb"])
 	}
 	for _, s := range e.snapshots(n) {
 		used["snapshot_gb"] = num(used["snapshot_gb"]) + float64(s.DiskGB)
@@ -329,7 +337,7 @@ func validateBootstrapArguments(tool string, args D) {
 }
 
 func (e *Execution) MachineSpec(t, a D, dry bool) D {
-	if find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["name"] == a["name"] }) != nil {
+	if find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["name"] == a["name"] }) != nil || e.frozenMachine(t, a["name"]) != nil {
 		fail("conflict", "Machine name is already allocated", D{"recovery": "revise_request", "machine": a["name"]})
 	}
 	if a["iso"] != nil {

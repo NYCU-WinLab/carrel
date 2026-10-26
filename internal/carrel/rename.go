@@ -23,7 +23,7 @@ func (e *Execution) RenameMachine(a, t D) D {
 	if name == old {
 		return D{"machine": e.PublicMachine(m, e.ports(n)), "dry_run": dry}
 	}
-	if find(e.S.Objects("machines", n), func(x D) bool { return x["name"] == name }) != nil {
+	if find(e.S.Objects("machines", n), func(x D) bool { return x["name"] == name }) != nil || e.frozenMachine(t, name) != nil {
 		fail("conflict", "Machine name is already allocated", D{"recovery": "revise_request", "machine": name})
 	}
 	if state := str(m["state"]); state == "provisioning" || state == "deleting" || state == "migrating" {
