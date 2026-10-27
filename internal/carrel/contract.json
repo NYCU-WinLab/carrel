@@ -2721,6 +2721,48 @@
       }
     },
     {
+      "name": "platform_power",
+      "description": "Admin: shut down or start every tenant machine at once, for a planned outage or maintenance, or check the nodes. Nodes and infra CTs stay up, so this tool keeps answering. shutdown and start need two calls (the double check): dry_run true lists the machines and returns confirm, a code for you, this action and this exact list, valid 10 minutes and once; the real call repeats it. A shutdown is graceful (no forced stop) and refused while any machine's power cannot be read; before stopping anything it adds the machines to a restore list. start brings back the machines on that list that are still stopped; an owner's own power action, a deleted or replaced machine, or a suspended tenant keeps a machine off. A partial failure lists what failed; the next dry run lists what is left. check repairs what a node boot can lose (path MTU cache, the tenant MSS clamp, the infra CTs' MTU 1450); with dry_run it only lists what it would repair. start runs it at the end. Follow the operation with operation_get.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "shutdown",
+              "start",
+              "check"
+            ]
+          },
+          "confirm": {
+            "type": "string",
+            "pattern": "^(shutdown|start)-[0-9a-f]{12}$",
+            "description": "The confirm code from a dry run of the same action."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: lists the machines and returns the confirm code, or for check lists what it would repair; nothing changes."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "machine_migrate",
       "description": "Admin: move a machine to another node of the site (PLAN 7.10); without node, carrel picks the node with the most free memory that is not drained. Moves run one at a time. A running VM moves online; a running CT restarts on the target. A VM that is still a linked clone of its node's template moves its disk through the site's shared storage once; later moves copy the disk directly. The VM's stored cloud-init files go to the target first, so cloud-init does not run again. Refused while the machine has snapshots. Waits up to 55 seconds; a disk copy usually takes longer, so follow the operation with operation_get.",
       "inputSchema": {
@@ -4361,6 +4403,7 @@
     "node_list",
     "usage_report",
     "reconcile_run",
+    "platform_power",
     "machine_migrate",
     "node_drain",
     "node_undrain",
@@ -4394,6 +4437,7 @@
     "node_undrain",
     "quota_set",
     "reconcile_run",
+    "platform_power",
     "request_approve",
     "request_list_all",
     "request_reject",
@@ -4444,6 +4488,7 @@
     "quota_request",
     "quota_set",
     "reconcile_run",
+    "platform_power",
     "request_approve",
     "request_reject",
     "snapshot_create",
@@ -4480,6 +4525,7 @@
     "port_close",
     "port_open",
     "reconcile_run",
+    "platform_power",
     "snapshot_create",
     "snapshot_delete",
     "snapshot_rollback",

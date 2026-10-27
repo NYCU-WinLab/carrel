@@ -121,6 +121,8 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 		return D{"status": state}, nil
 	case "metrics":
 		return []D{{"time": 1, "cpu": 0.25, "mem": 512, "maxmem": 1024}}, nil
+	case "platform_check":
+		return D{"node": "carrel01", "repaired": []any{}, "problems": []any{}}, nil
 	case "reconcile":
 		// The exit node reports each tenant's VPN interface, as node-agent does.
 		vpn := D{}
@@ -144,7 +146,14 @@ func (r *recorder) guests(ctx context.Context) {
 			if op["phase"] != "waiting_for_guest" {
 				continue
 			}
-			for _, m := range r.p.Store.Objects("machines", integer(op["tenant_n"])) {
+			machines := r.p.Store.Objects("machines", integer(op["tenant_n"]))
+			// A platform job runs in the admin's tenant, its machines in others.
+			for _, t := range dicts(obj(op["platform"])["targets"]) {
+				if m := r.p.Store.Get("machines", str(t["vmid"])); m != nil {
+					machines = append(machines, m)
+				}
+			}
+			for _, m := range machines {
 				key := str(op["id"]) + "/" + str(m["vmid"])
 				if m["kind"] != "vm" || m["state"] != "initializing" || answered[key] {
 					continue
@@ -193,6 +202,9 @@ func (g *goldenRun) call(step, tool string, args, who D) D {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	// A finished job writes its audit row after it leaves the active list.
+	g.p.writer.Lock()
+	g.p.writer.Unlock()
 	g.record(step, tool, r)
 	return r
 }
@@ -495,6 +507,20 @@ func goldenScenario(g *goldenRun) {
 	call("public", "public_ip_release", D{"address": "203.0.113.11"}, alice)
 	call("public", "public_ip_release", D{}, alice)
 	call("public", "public_ip_list", D{}, alice)
+
+	// Last: a started VM stays initializing until its guest reports, and a
+	// later job waiting for a guest would take that report.
+	// The double check: the real call repeats the dry run's code.
+	off := call("platform", "platform_power", D{"action": "shutdown", "dry_run": true}, admin)
+	call("platform", "platform_power", D{"action": "shutdown", "confirm": "shutdown-000000000000"}, admin)
+	call("platform", "platform_power", D{"action": "shutdown", "confirm": off["confirm"]}, admin)
+	// Spent: the same code does not stop anything a second time.
+	call("platform", "platform_power", D{"action": "shutdown", "confirm": off["confirm"]}, admin)
+	on := call("platform", "platform_power", D{"action": "start", "dry_run": true}, admin)
+	call("platform", "platform_power", D{"action": "start", "confirm": on["confirm"]}, admin)
+	call("platform", "platform_power", D{"action": "check", "dry_run": true}, admin)
+	call("platform", "platform_power", D{"action": "check"}, admin)
+	call("platform", "platform_power", D{"action": "check"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

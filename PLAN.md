@@ -240,7 +240,7 @@ from outside still needs a client-side check.
 ### 4.4 Admin tools
 
 Callable only by `winlab-admin`: `quota_set`, `request_approve`, `request_reject`, `tenant_list`,
-`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `node_undrain`, `machine_migrate`, `reconcile_run`, `image_build`,
+`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `node_undrain`, `machine_migrate`, `reconcile_run`, `platform_power` (section 7.5), `image_build`,
 `issue_triage` (label, merge a duplicate), `issue_resolve` (`id`, `fixed_in`, `note`),
 `machine_import` and `source_add` (section 10.6), `zone_add` and `zone_list` (section 6.10).
 
@@ -924,6 +924,13 @@ use their existing minimal distribution images with `tiny` and zero swap.
 A machine comes back in the state its owner left it. Stopping sets `onboot=0`, starting sets
 `onboot=1`. Boot order: infra first, then tenants in batches with a delay, so a power cut does not
 start everything at once.
+
+`platform_power` (admin) turns the whole platform off and on for a planned outage: `shutdown`
+stops every tenant machine gracefully and records which ones were running, `start` brings back
+exactly those, and `check` repairs what a node boot can lose (path MTU cache, the tenant MSS
+clamp, the infra CTs' MTU 1450; 2026-10-27 outage). Nodes and infra CTs stay up, so the tool keeps
+answering. Both power actions need two calls: a dry run returns a confirm code that the real call
+repeats, and the code changes when the machine list does.
 
 ### 7.6 Self-rescue
 
