@@ -226,8 +226,8 @@ def guest_firewall(m, state, config):
         "OUT DROP -dest ::/0",
         "IN DROP -source ::/0",
         "OUT DROP -source 0.0.0.0",
-        # Path MTU discovery: without it a 1500-byte sender toward this
-        # 1450-byte guest never learns to shrink and the connection stalls.
+        # Path MTU discovery for the guest's own sends. proxmox-firewall's
+        # allow-icmp chain accepts this today; the rule keeps it if that changes.
         "IN ACCEPT -p icmp -icmp-type fragmentation-needed",
         "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
         "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
