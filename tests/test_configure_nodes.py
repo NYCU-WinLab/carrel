@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -127,7 +128,7 @@ def test_bootstrap_runs_only_on_the_first_exit_node_of_the_site(monkeypatch, tmp
 def test_infra_containers_match_the_infra_bridge_mtu(monkeypatch):
     module = load("bootstrap-platform.py")
     calls = []
-    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "status: running")
     real = Path
     # No existing CT config and no cached template; everything else is real.
     monkeypatch.setattr(
@@ -191,3 +192,38 @@ def test_the_pinned_caddy_replaces_the_running_package_caddy(monkeypatch, tmp_pa
     module.caddy(101)
     steps = [a[4:] for a in calls if a[:2] == ("pct", "exec")]
     assert steps.index(("systemctl", "daemon-reload")) < steps.index(("systemctl", "restart", "caddy"))
+
+
+def test_infra_cts_keep_mtu_1450_and_reruns_repair_existing_ones(monkeypatch, tmp_path):
+    module = load("bootstrap-platform.py")
+    calls = []
+
+    def run(*args, capture=False):
+        calls.append(args)
+        return "status: running" if args[:2] == ("pct", "status") else None
+
+    monkeypatch.setattr(module, "run", run)
+    conf = tmp_path / "101.conf"
+    conf.write_text("hostname: carrel-gateway\ntags: carrel-infra\n")
+    monkeypatch.setattr(module, "Path", lambda p: conf if p == "/etc/pve/lxc/101.conf" else Path(p))
+    module.ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, "k", "local", "t")
+    script = next(c[-1] for c in calls if c[:2] == ("pct", "exec") and c[4:6] == ("sh", "-c"))
+    assert ("pct", "exec", "101", "--", "ip", "link", "set", "eth0", "mtu", "1450") in calls
+    # The shell edit itself: adds the line once, under the eth0 stanza.
+    interfaces = tmp_path / "interfaces"
+    interfaces.write_text("auto eth0\niface eth0 inet static\n\taddress 10.200.0.2/24\n")
+    for _ in range(2):
+        subprocess.run(["sh", "-c", script.replace("/etc/network/interfaces", str(interfaces))], check=True)
+    assert (
+        interfaces.read_text() == "auto eth0\niface eth0 inet static\n\tmtu 1450\n\taddress 10.200.0.2/24\n"
+    )
+
+
+def test_infra_mtu_skips_other_bridges_and_stopped_cts(monkeypatch):
+    module = load("bootstrap-platform.py")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, capture=False: calls.append(a) or "status: stopped")
+    module.infra_mtu(103, "vmbr0")
+    assert calls == []
+    module.infra_mtu(103, "t255")
+    assert calls == [("pct", "status", "103")]
