@@ -195,3 +195,55 @@ func refused(t *testing.T, p *Platform, r D, what string) {
 	}
 
 }
+
+func TestPlatformStartFinishesAListedMachineThatAlreadyRuns(t *testing.T) {
+	p, power, mu := powerFixture(t, 10100, 10101)
+	admin := person("alice", true)
+	platformRun(t, p, "shutdown", admin)
+	// A start reached the node but its answer was lost: it runs, still listed.
+	mu.Lock()
+	power[10101] = "running"
+	mu.Unlock()
+	if r := platformRun(t, p, "start", admin); len(arr(r["done"])) != 2 {
+		t.Fatalf("start: %s", encoded(r))
+	}
+	if len(restoreList(p)) != 0 {
+		t.Fatalf("restore list kept: %v", restoreList(p))
+	}
+}
+
+func TestPlatformStartOneSilentGuestDoesNotFailTheOthers(t *testing.T) {
+	p, _, _ := powerFixture(t, 10100, 10101)
+	for _, vmid := range []int{10100, 10101} {
+		m := p.Store.Get("machines", fmt.Sprint(vmid))
+		m["guest_management"] = 1
+		p.Store.Put("machines", vmid, 1, m)
+	}
+	p.sshProbe = func(_ context.Context, m D) bool { return integer(m["vmid"]) == 10101 }
+	admin := person("alice", true)
+	platformRun(t, p, "shutdown", admin)
+	// 10101 reports from its new boot once it starts; 10100 never does.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			if p.Store.Get("machines", "10101")["state"] == "initializing" {
+				p.Store.Put("guest_reports", 10101, 1, D{"vmid": 10101, "boot_id": "new", "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked", "interfaces": []D{}})
+				p.notifyReport(10101)
+				return
+			}
+		}
+	}()
+	r := platformRun(t, p, "start", admin)
+	if len(arr(r["not_ready"])) != 1 || integer(dicts(r["not_ready"])[0]["vmid"]) != 10100 {
+		t.Fatalf("start: %s", encoded(r))
+	}
+	if s := p.Store.Get("machines", "10101")["state"]; s != "ready" {
+		t.Fatalf("the guest that reported ended %s", s)
+	}
+}

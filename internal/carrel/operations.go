@@ -520,7 +520,15 @@ func (e *Execution) CheckBusy(t D) {
 		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine"}, other["phase"]) {
 			continue
 		}
+		// A platform power job waits for every running machine job, and
+		// every job on one of its machines waits for it.
+		if e.Op["tool"] == "platform_power" {
+			panic(Waiting{"waiting_for_machine_operation", now() + 1})
+		}
 		ids := arr(obj(other["deployment"])["machines"])
+		for _, r := range dicts(obj(other["platform"])["targets"]) {
+			ids = append(ids, r["vmid"])
+		}
 		if id := obj(other["machine_target"])["vmid"]; id != nil {
 			ids = append(ids, id)
 		}

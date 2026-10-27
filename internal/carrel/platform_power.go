@@ -118,7 +118,9 @@ func (e *Execution) platformTargets(action string) ([]platformTarget, []D) {
 		}()
 	}
 	wg.Wait()
-	want := map[string]bool{"running": action == "shutdown", "paused": action == "shutdown", "stopped": action == "start"}
+	// A start also takes listed machines that already run: a lost answer
+	// left them on the list, and the start only finishes their record.
+	want := map[string]bool{"running": true, "paused": action == "shutdown", "stopped": action == "start"}
 	out, unknown := []platformTarget{}, []D{}
 	for _, t := range candidates {
 		if t.state == "unknown" {
@@ -304,7 +306,7 @@ func (e *Execution) PerformPlatformPower() {
 				func() {
 					e.P.writer.Lock()
 					defer e.P.writer.Unlock()
-					if current := e.S.Get("machines", str(r["vmid"])); current != nil {
+					if current := e.S.Get("machines", str(r["vmid"])); current != nil && equal(machineIdentity(current), r["identity"]) {
 						// The node agent sets onboot the same way: only running keeps it.
 						current["onboot"] = want == "running"
 						current["state"], current["power_state"], current["ssh_ready"] = want, want, false
@@ -315,11 +317,13 @@ func (e *Execution) PerformPlatformPower() {
 						e.P.notifyReport(integer(current["vmid"]))
 						e.P.invalidateInventory()
 					}
+					// done is saved first: a restart between the two still
+					// waits for readiness, and a later start clears the list.
+					plan["done"] = append(arr(plan["done"]), merge(r, D{"power_state": want}))
+					e.P.Operations.Save(e.Op)
 					if action == "start" {
 						e.platformForget(r["vmid"])
 					}
-					plan["done"] = append(arr(plan["done"]), merge(r, D{"power_state": want}))
-					e.P.Operations.Save(e.Op)
 				}()
 			}
 		}()
@@ -336,32 +340,31 @@ func (e *Execution) PerformPlatformPower() {
 }
 
 // platformAwaitReady waits, as machine_power does, for each started machine
-// to report from its new boot. The clocks start together, so the machines
-// boot side by side and one slow guest does not delay the deadline of the
-// others. A guest that does not become ready is listed, not failed.
+// to report from its new boot. Each machine waits on its own, so one guest
+// that never reports does not use up the time of the others. A guest that
+// does not become ready is listed, not failed.
 func (e *Execution) platformAwaitReady(plan D) {
-	waiting := []D{}
-	e.P.writer.Lock()
+	var wg sync.WaitGroup
 	for _, r := range dicts(plan["done"]) {
 		m := e.S.Get("machines", str(r["vmid"]))
-		if m != nil && equal(machineIdentity(m), r["identity"]) && contains([]string{"initializing", "provisioning"}, m["state"]) {
-			e.readinessDeadline(str(r["vmid"]), "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
-			waiting = append(waiting, r)
-		}
-	}
-	e.P.writer.Unlock()
-	for _, r := range waiting {
-		m := e.S.Get("machines", str(r["vmid"]))
-		if m == nil {
+		if m == nil || !equal(machineIdentity(m), r["identity"]) || !contains([]string{"initializing", "provisioning"}, m["state"]) {
 			continue
 		}
-		if err := attempt(func() { e.WaitReady(m, str(r["boot_id"])) }); err != nil {
-			e.P.writer.Lock()
-			plan["not_ready"] = append(arr(plan["not_ready"]), merge(pick(r, "vmid", "tenant", "machine"), D{"error": describe(err)}))
-			e.P.Operations.Save(e.Op)
-			e.P.writer.Unlock()
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Without the job: its deadlines would be shared and saved from
+			// many goroutines. A restart simply waits the full time again.
+			wait := &Execution{P: e.P, S: e.S, Ctx: e.Ctx}
+			if err := attempt(func() { wait.WaitReady(m, str(r["boot_id"])) }); err != nil {
+				e.P.writer.Lock()
+				plan["not_ready"] = append(arr(plan["not_ready"]), merge(pick(r, "vmid", "tenant", "machine"), D{"error": describe(err)}))
+				e.P.Operations.Save(e.Op)
+				e.P.writer.Unlock()
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // FinishPlatformPower runs under the writer once every action has answered.

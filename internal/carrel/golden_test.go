@@ -146,7 +146,14 @@ func (r *recorder) guests(ctx context.Context) {
 			if op["phase"] != "waiting_for_guest" {
 				continue
 			}
-			for _, m := range r.p.Store.Objects("machines", integer(op["tenant_n"])) {
+			machines := r.p.Store.Objects("machines", integer(op["tenant_n"]))
+			// A platform job runs in the admin's tenant, its machines in others.
+			for _, t := range dicts(obj(op["platform"])["targets"]) {
+				if m := r.p.Store.Get("machines", str(t["vmid"])); m != nil {
+					machines = append(machines, m)
+				}
+			}
+			for _, m := range machines {
 				key := str(op["id"]) + "/" + str(m["vmid"])
 				if m["kind"] != "vm" || m["state"] != "initializing" || answered[key] {
 					continue
@@ -195,6 +202,9 @@ func (g *goldenRun) call(step, tool string, args, who D) D {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	// A finished job writes its audit row after it leaves the active list.
+	g.p.writer.Lock()
+	g.p.writer.Unlock()
 	g.record(step, tool, r)
 	return r
 }
