@@ -664,8 +664,16 @@ def test_tenant_hosts_clamp_forwarded_tcp_to_the_tenant_mtu():
 
 def test_guests_accept_path_mtu_discovery():
     module = load("node-agent.py")
-    m = {"tenant_n": 3, "vmid": 10300, "host": 10, "name": "web", "kind": "vm",
-         "ip": "10.200.3.10", "mac": "02:ca:03:00:00:01", "network_access": "restricted"}
+    m = {
+        "tenant_n": 3,
+        "vmid": 10300,
+        "host": 10,
+        "name": "web",
+        "kind": "vm",
+        "ip": "10.200.3.10",
+        "mac": "02:ca:03:00:00:01",
+        "network_access": "restricted",
+    }
     rules = module.guest_firewall(m, {"ports": [], "domains": [], "peers": []}, {"protected_addresses": []})
     assert "IN ACCEPT -p icmp -icmp-type fragmentation-needed" in rules.splitlines()
 

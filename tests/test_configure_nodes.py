@@ -4,8 +4,8 @@ import hashlib
 import importlib.util
 import io
 import json
-import sys
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -214,7 +214,9 @@ def test_infra_cts_keep_mtu_1450_and_reruns_repair_existing_ones(monkeypatch, tm
     interfaces.write_text("auto eth0\niface eth0 inet static\n\taddress 10.200.0.2/24\n")
     for _ in range(2):
         subprocess.run(["sh", "-c", script.replace("/etc/network/interfaces", str(interfaces))], check=True)
-    assert interfaces.read_text() == "auto eth0\niface eth0 inet static\n\tmtu 1450\n\taddress 10.200.0.2/24\n"
+    assert (
+        interfaces.read_text() == "auto eth0\niface eth0 inet static\n\tmtu 1450\n\taddress 10.200.0.2/24\n"
+    )
 
 
 def test_infra_mtu_skips_other_bridges_and_stopped_cts(monkeypatch):
