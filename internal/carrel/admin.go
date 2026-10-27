@@ -31,6 +31,8 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		return e.PlanMigration(a)
 	case "node_drain", "node_undrain":
 		return e.DrainNode(tool, a, w)
+	case "platform_power":
+		return e.PlatformPower(a, w)
 	case "reconcile_run":
 		if dry {
 			counts := D{}

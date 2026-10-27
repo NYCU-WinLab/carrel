@@ -121,6 +121,8 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 		return D{"status": state}, nil
 	case "metrics":
 		return []D{{"time": 1, "cpu": 0.25, "mem": 512, "maxmem": 1024}}, nil
+	case "platform_check":
+		return D{"node": "carrel01", "repaired": []any{}, "problems": []any{}}, nil
 	case "reconcile":
 		// The exit node reports each tenant's VPN interface, as node-agent does.
 		vpn := D{}
@@ -495,6 +497,17 @@ func goldenScenario(g *goldenRun) {
 	call("public", "public_ip_release", D{"address": "203.0.113.11"}, alice)
 	call("public", "public_ip_release", D{}, alice)
 	call("public", "public_ip_list", D{}, alice)
+
+	// Last: a started VM stays initializing until its guest reports, and a
+	// later job waiting for a guest would take that report.
+	// The double check: the real call repeats the dry run's code.
+	off := call("platform", "platform_power", D{"action": "shutdown", "dry_run": true}, admin)
+	call("platform", "platform_power", D{"action": "shutdown", "confirm": "shutdown-000000000000"}, admin)
+	call("platform", "platform_power", D{"action": "shutdown", "confirm": off["confirm"]}, admin)
+	on := call("platform", "platform_power", D{"action": "start", "dry_run": true}, admin)
+	call("platform", "platform_power", D{"action": "start", "confirm": on["confirm"]}, admin)
+	call("platform", "platform_power", D{"action": "check"}, admin)
+	call("platform", "platform_power", D{"action": "check"}, alice)
 }
 
 func machineRow(g *goldenRun, n int, name string) D {

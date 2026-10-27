@@ -1935,6 +1935,48 @@ def power_status(m):
     return status.get("status", "unknown")
 
 
+INFRA_CTS = (100, 101, 102, 103)
+
+
+def platform_check():
+    """Repairs what a node boot can lose and says what it found.
+
+    Every step is safe to repeat; platform_power runs it after a start and on
+    its own. A finding that cannot be repaired here goes under problems.
+    """
+    out = {"node": NODE, "repaired": [], "problems": []}
+    # A path MTU learned while a link was wrong is kept for 10 minutes and
+    # stalls large packets on a path that is fine again (2026-10-27).
+    run("ip", "route", "flush", "cache")
+    try:
+        forward = run("nft", "list", "chain", "inet", "carrel_tenant_host", "forward")
+    except CommandFailure:
+        forward = ""
+    if "maxseg size set" not in forward:
+        run("systemctl", "reload", "carrel-tenant-host")
+        out["repaired"].append("tenant MSS clamp reloaded")
+    for vmid in INFRA_CTS:
+        conf = Path(f"/etc/pve/nodes/{NODE}/lxc/{vmid}.conf")
+        if not conf.exists() or "carrel-infra" not in conf.read_text():
+            continue
+        net0 = next((x for x in conf.read_text().splitlines() if x.startswith("net0:")), "")
+        if "mtu=1450" not in net0:
+            continue
+        if "status: running" not in run("pct", "status", vmid):
+            out["problems"].append(f"infra CT {vmid} is not running")
+            continue
+        mtu = run("pct", "exec", vmid, "--", "cat", "/sys/class/net/eth0/mtu")
+        if mtu != "1450":
+            run("pct", "exec", vmid, "--", "ip", "link", "set", "eth0", "mtu", "1450")
+            out["repaired"].append(f"infra CT {vmid} eth0 MTU {mtu} -> 1450")
+        # ifupdown2 resets a NIC without an mtu line at the CT's next boot.
+        lines = run("pct", "exec", vmid, "--", "cat", "/etc/network/interfaces")
+        if not any(x.strip() == "mtu 1450" for x in lines.splitlines()):
+            run("pct", "exec", vmid, "--", "sed", "-i", "/^iface eth0 inet static/a\\\tmtu 1450", "/etc/network/interfaces")
+            out["repaired"].append(f"infra CT {vmid} mtu line written")
+    return out
+
+
 def power_action(m, cfg, op):
     # CT suspend uses experimental disk checkpoints, not an in-memory pause.
     if op in ("pause", "resume") and m["kind"] != "vm":
@@ -2101,6 +2143,8 @@ def main():
                 pass
         elif op == "action":
             out = action(req)
+        elif op == "platform_check":
+            out = platform_check()
         elif op == "inventory":
             # Guest maxdisk omits secondary disks. Count all volumes, including
             # templates and unused disks, for conservative admission.
