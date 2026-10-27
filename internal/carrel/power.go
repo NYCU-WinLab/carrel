@@ -83,6 +83,8 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 		m["state"] = bootState(m)
 	}
 	e.Put("machines", m["vmid"], integer(t["n"]), m)
+	// The owner decides now: a platform start must not undo this.
+	e.platformForget(m["vmid"])
 	e.P.invalidateInventory()
 	r := D{"action": action, "changed": boolean(result["changed"]), "resource_changes": boolean(result["changed"]), "machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "quota_after": e.Quota(t)}
 	if state == "paused" {

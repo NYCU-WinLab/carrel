@@ -292,6 +292,7 @@ func (o *Operations) apply(id string) {
 			e.PreparePublication()
 			e.PerformMigration()
 			e.PerformImport()
+			e.PerformPlatformPower()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
@@ -309,6 +310,9 @@ func (o *Operations) apply(id string) {
 				}
 				if op["tool"] == "iso_import" || op["tool"] == "image_import" {
 					result = merge(result, e.FinishImport())
+				}
+				if op["tool"] == "platform_power" && op["platform"] != nil {
+					result = merge(result, e.FinishPlatformPower())
 				}
 				if op["tool"] == "deployment_apply" {
 					e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))

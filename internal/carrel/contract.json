@@ -2722,7 +2722,7 @@
     },
     {
       "name": "platform_power",
-      "description": "Admin: shut down or start every tenant machine at once, for a planned outage or maintenance, or check the nodes. Nodes and infra CTs stay up, so this tool keeps answering. shutdown and start need two calls (the double check): dry_run true lists the machines and returns confirm; the real call repeats that confirm, which changes when the list does. A shutdown is graceful (no forced stop) and records which machines were running; start brings back exactly those that are still stopped, so machines their owners had shut down stay down. Suspended tenants are left alone. check repairs what a node boot can lose (path MTU cache, the tenant MSS clamp, the infra CTs' MTU 1450) and lists what it repaired; start runs it after the machines are up. Follow the operation with operation_get.",
+      "description": "Admin: shut down or start every tenant machine at once, for a planned outage or maintenance, or check the nodes. Nodes and infra CTs stay up, so this tool keeps answering. shutdown and start need two calls (the double check): dry_run true lists the machines and returns confirm, a code for you, this action and this exact list, valid 10 minutes and once; the real call repeats it. A shutdown is graceful (no forced stop) and refused while any machine's power cannot be read; before stopping anything it adds the machines to a restore list. start brings back the machines on that list that are still stopped; an owner's own power action, a deleted or replaced machine, or a suspended tenant keeps a machine off. A partial failure lists what failed; the next dry run lists what is left. check repairs what a node boot can lose (path MTU cache, the tenant MSS clamp, the infra CTs' MTU 1450); with dry_run it only lists what it would repair. start runs it at the end. Follow the operation with operation_get.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2742,7 +2742,7 @@
           "dry_run": {
             "type": "boolean",
             "default": false,
-            "description": "Preview only: lists the machines and returns the confirm code; nothing changes."
+            "description": "Preview only: lists the machines and returns the confirm code, or for check lists what it would repair; nothing changes."
           },
           "idempotency_key": {
             "type": "string",

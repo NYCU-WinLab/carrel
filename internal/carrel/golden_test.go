@@ -504,8 +504,11 @@ func goldenScenario(g *goldenRun) {
 	off := call("platform", "platform_power", D{"action": "shutdown", "dry_run": true}, admin)
 	call("platform", "platform_power", D{"action": "shutdown", "confirm": "shutdown-000000000000"}, admin)
 	call("platform", "platform_power", D{"action": "shutdown", "confirm": off["confirm"]}, admin)
+	// Spent: the same code does not stop anything a second time.
+	call("platform", "platform_power", D{"action": "shutdown", "confirm": off["confirm"]}, admin)
 	on := call("platform", "platform_power", D{"action": "start", "dry_run": true}, admin)
 	call("platform", "platform_power", D{"action": "start", "confirm": on["confirm"]}, admin)
+	call("platform", "platform_power", D{"action": "check", "dry_run": true}, admin)
 	call("platform", "platform_power", D{"action": "check"}, admin)
 	call("platform", "platform_power", D{"action": "check"}, alice)
 }

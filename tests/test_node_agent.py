@@ -1069,16 +1069,26 @@ def test_platform_check_repairs_what_a_boot_loses(monkeypatch, tmp_path):
         return next((v for k, v in answers.items() if args[: len(k)] == k), "")
 
     monkeypatch.setattr(module, "run", run)
+    out = module.platform_check(repair=False)
+    assert not any(c[0] in ("ip", "systemctl") or "set" in c or "sed" in c for c in calls)
+    assert len(out["needs_repair"]) == 4 and out["repaired"] == []
+    calls.clear()
     out = module.platform_check()
     assert calls[0] == ("ip", "route", "flush", "cache")
     assert ("systemctl", "reload", "carrel-tenant-host") in calls
     assert ("pct", "exec", "101", "--", "ip", "link", "set", "eth0", "mtu", "1450") in calls
     assert any(c[:6] == ("pct", "exec", "101", "--", "sed", "-i") for c in calls)
     assert out["problems"] == ["infra CT 103 is not running"]
-    assert len(out["repaired"]) == 3
+    assert len(out["repaired"]) == 4
     # Nothing to repair the second time: CTs absent from this node are skipped.
     calls.clear()
     answers[("nft", "list")] = "tcp option maxseg size set 1410"
     answers[("pct", "exec", "101", "--", "cat", "/sys/class/net/eth0/mtu")] = "1450"
     answers[("pct", "exec", "101", "--", "cat", "/etc/network/interfaces")] = "\tmtu 1450"
-    assert module.platform_check()["repaired"] == []
+    assert module.platform_check()["repaired"] == ["route cache flushed"]
+    # A CT without the static stanza is reported, not claimed as fixed.
+    calls.clear()
+    answers[("pct", "exec", "101", "--", "cat", "/etc/network/interfaces")] = "iface eth0 inet dhcp"
+    out = module.platform_check()
+    assert out["repaired"] == ["route cache flushed"] and not any("sed" in c for c in calls)
+    assert "infra CT 101 has no static eth0 stanza for the mtu line" in out["problems"]
