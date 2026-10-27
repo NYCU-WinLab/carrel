@@ -16,6 +16,8 @@ import subprocess
 # Tenant vnets are t001, t002, ... (node-agent's f"t{n:03d}") and guest taps are tap*.
 # nft has no character classes, so "t" plus a digit is spelled out; a bare "t*" would
 # also drop host interfaces such as tailscale0.
+# 1450 (tenant and infra MTU) minus 40 bytes of IPv4 and TCP headers.
+TENANT_MSS = 1410
 TENANT_IFACES = ", ".join([f'"t{d}*"' for d in range(10)] + ['"tap*"'])
 
 def underlay_rules(interface, address, peers):
@@ -44,6 +46,13 @@ table inet carrel_tenant_host {{
   iifname {{ {TENANT_IFACES} }} counter drop
   iifname "vrf_tenants" counter drop
 {rules}
+ }}
+ chain forward {{
+  type filter hook forward priority mangle; policy accept;
+  # Tenant and infra links run at 1450 (VXLAN). A guest NIC that comes up at
+  # 1500 (ifupdown2 in a CT, Docker in a VM) advertises MSS 1460 and its
+  # peers' full segments are dropped: clamp every forwarded SYN, both ways.
+  tcp flags syn / syn,rst tcp option maxseg size > {TENANT_MSS} tcp option maxseg size set {TENANT_MSS}
  }}
 }}
 """

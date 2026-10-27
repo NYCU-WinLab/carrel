@@ -107,6 +107,13 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12,
         key,
     )
     run("pct", "start", str(vmid))
+    if bridge == "vmbr98" or bridge.startswith("t"):
+        # ifupdown2 in the CT resets a NIC without an mtu line to 1500 at
+        # every boot, over the 1450 that pct sets: write it where it stays.
+        run("pct", "exec", str(vmid), "--", "sh", "-c",
+            "grep -q '^\\s*mtu 1450' /etc/network/interfaces"
+            " || sed -i '/^iface eth0 inet static/a\\\tmtu 1450' /etc/network/interfaces")
+        run("pct", "exec", str(vmid), "--", "ip", "link", "set", "eth0", "mtu", "1450")
     run("pct", "exec", str(vmid), "--", "mkdir", "-p", "/etc/systemd/system/systemd-journald.service.d")
     fix = Path("/tmp/carrel-journald.conf")
     fix.write_text("[Service]\nImportCredential=\n")

@@ -651,7 +651,23 @@ def test_the_fetch_container_reaches_only_public_web_and_the_resolver():
     # Private drops come before the web accepts, so 80/443 to the lab stay closed.
     assert rules.index("OUT DROP -dest 192.168.0.0/16") < rules.index("OUT ACCEPT -p tcp -dport 443")
     assert "OUT DROP -dest 140.113.60.184/32" in rules
-    assert not any("IN ACCEPT" in r for r in rules)
+    # Only path MTU discovery comes in; nothing opens a connection to it.
+    assert [r for r in rules if "IN ACCEPT" in r] == ["IN ACCEPT -p icmp -icmp-type fragmentation-needed"]
+
+
+def test_tenant_hosts_clamp_forwarded_tcp_to_the_tenant_mtu():
+    module = load("install-network.py")
+    rules = module.tenant_host_nft([])
+    assert "hook forward priority mangle" in rules
+    assert "tcp option maxseg size > 1410 tcp option maxseg size set 1410" in rules
+
+
+def test_guests_accept_path_mtu_discovery():
+    module = load("node-agent.py")
+    m = {"tenant_n": 3, "vmid": 10300, "host": 10, "name": "web", "kind": "vm",
+         "ip": "10.200.3.10", "mac": "02:ca:03:00:00:01", "network_access": "restricted"}
+    rules = module.guest_firewall(m, {"ports": [], "domains": [], "peers": []}, {"protected_addresses": []})
+    assert "IN ACCEPT -p icmp -icmp-type fragmentation-needed" in rules.splitlines()
 
 
 def test_fetch_jobs_are_checked_before_anything_runs(monkeypatch, tmp_path):
