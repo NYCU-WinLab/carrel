@@ -29,14 +29,15 @@ type fakeNetBox struct {
 	refuse map[string]bool
 }
 
-var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true}
-var nbChoices = map[string]bool{"status": true, "role": true, "start_on_boot": true}
+var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true, "tunnel": true}
+var nbChoices = map[string]bool{"status": true, "role": true, "start_on_boot": true, "encapsulation": true}
 
 func newFakeNetBox(t *testing.T) (*fakeNetBox, *httptest.Server) {
 	f := &fakeNetBox{objects: map[string][]D{}, next: 100, fields: map[string]bool{"vmid": true}}
 	f.objects["virtualization/clusters/"] = []D{{"id": 1, "name": "carrel"}}
 	f.objects["users/owners/"] = []D{{"id": 7, "name": "carrel"}}
 	f.objects["dcim/devices/"] = []D{{"id": 3, "name": "Carrel01", "cluster": D{"id": 1}}}
+	f.objects["vpn/tunnel-groups/"] = []D{{"id": 9, "name": "Carrel Client VPN"}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -131,6 +132,22 @@ func (f *fakeNetBox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(404, D{"detail": "not found"})
 	case "DELETE":
+		if path == "dcim/interfaces/" {
+			for _, o := range f.objects["vpn/tunnel-terminations/"] {
+				if integer(o["termination_id"]) == id {
+					reply(409, D{"detail": "interface still terminates a tunnel"})
+					return
+				}
+			}
+		}
+		if path == "vpn/tunnels/" {
+			for _, o := range f.objects["vpn/tunnel-terminations/"] {
+				if integer(obj(o["tunnel"])["id"]) == id {
+					reply(409, D{"detail": "tunnel still has ends"})
+					return
+				}
+			}
+		}
 		if path == "ipam/vrfs/" {
 			for _, kind := range []string{"ipam/prefixes/", "ipam/ip-addresses/"} {
 				for _, o := range f.objects[kind] {
@@ -895,5 +912,122 @@ func TestNetBoxFailedVPNClientFailsAlone(t *testing.T) {
 	}
 	if st := p.Store.Get("netbox_sync", "10100"); st != nil && st["last_error"] != nil {
 		t.Fatal("the machine was marked failed for a client address", st)
+	}
+}
+
+// vpnTunnelFixture is a tenant with two clients and phase 2 switched on.
+func vpnTunnelFixture(t *testing.T) (*Platform, *fakeNetBox) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	p.Config["netbox"].(D)["tunnel_group"] = "Carrel Client VPN"
+	key := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
+	for i, name := range []string{"laptop", "agent"} {
+		p.Store.Put("vpn_clients", name, 1, vpnClient{ID: name, TenantN: 1, Name: name, Address: fmt.Sprintf("10.201.1.%d", i+2), PublicKey: key, State: "ready", ExpiresAt: now() + 3600}.D())
+	}
+	return p, f
+}
+
+func TestNetBoxSyncsVPNTunnels(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tunnels := f.all("vpn/tunnels/")
+	if len(tunnels) != 1 {
+		t.Fatal("one tunnel per tenant", tunnels)
+	}
+	tunnel := tunnels[0]
+	if tunnel["name"] != "wg-t001" || refID(tunnel["group"]) != 9 || obj(tunnel["status"])["value"] != "active" || obj(tunnel["encapsulation"])["value"] != "wireguard" {
+		t.Fatal("tunnel wrong", tunnel)
+	}
+	if !strings.Contains(str(tunnel["description"]), "tenant alice") || !strings.Contains(str(tunnel["description"]), "140.113.60.184:31001") || !strings.Contains(fmt.Sprint(tunnel), "owner") {
+		t.Fatal("description or owner wrong", tunnel)
+	}
+	iface := find(f.all("dcim/interfaces/"), func(o D) bool { return o["name"] == "wg-t001" })
+	if iface == nil || refID(iface["device"]) != 3 || !strings.Contains(fmt.Sprint(iface), "owner") {
+		t.Fatal("exit node interface missing or unowned", iface)
+	}
+	ends := f.all("vpn/tunnel-terminations/")
+	if len(ends) != 1 || obj(ends[0]["role"])["value"] != "hub" || ends[0]["termination_type"] != "dcim.interface" || integer(ends[0]["termination_id"]) != integer(iface["id"]) || refID(ends[0]["tunnel"]) != integer(tunnel["id"]) {
+		t.Fatal("hub end wrong", ends)
+	}
+	if strings.Contains(fmt.Sprint(ends[0]), "owner") {
+		t.Fatal("an end has no owner field", ends[0])
+	}
+	// Unchanged state sends no write; the tunnel lives while the tenant has a client.
+	f.reset()
+	if r := syncNetBox(t, p); r.Writes != 0 || len(f.writes) != 0 {
+		t.Fatal("a second pass wrote", f.writes)
+	}
+	p.Store.Remove("vpn_clients", "laptop")
+	syncNetBox(t, p)
+	if len(f.all("vpn/tunnels/")) != 1 {
+		t.Fatal("the tunnel left with a client that was not the last")
+	}
+	p.Store.Remove("vpn_clients", "agent")
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if len(f.all("vpn/tunnels/")) != 0 || len(f.all("vpn/tunnel-terminations/")) != 0 || find(f.all("dcim/interfaces/"), func(o D) bool { return o["name"] == "wg-t001" }) != nil {
+		t.Fatal("the last client left a tunnel behind")
+	}
+	if len(f.all("vpn/tunnel-groups/")) != 1 {
+		t.Fatal("the operator's group was touched")
+	}
+}
+
+func TestNetBoxLeavesTunnelsOutUnlessConfigured(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	delete(p.Config["netbox"].(D), "tunnel_group")
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	for _, path := range []string{"vpn/tunnels/", "vpn/tunnel-terminations/"} {
+		if len(f.all(path)) != 0 {
+			t.Fatal("phase 1 created", path)
+		}
+	}
+	if find(f.all("dcim/interfaces/"), func(o D) bool { return o["name"] == "wg-t001" }) != nil {
+		t.Fatal("phase 1 created an exit node interface")
+	}
+}
+
+func TestNetBoxMissingTunnelGroupCreatesNothingAndKeepsWhatExists(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	syncNetBox(t, p)
+	f.mu.Lock()
+	f.objects["vpn/tunnel-groups/"] = nil
+	f.mu.Unlock()
+	p.Store.Remove("vpn_clients", "laptop")
+	p.Store.Remove("vpn_clients", "agent")
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "tunnel group Carrel Client VPN does not exist") {
+		t.Fatal(r.Errors)
+	}
+	if len(f.all("vpn/tunnels/")) != 1 || len(f.all("vpn/tunnel-terminations/")) != 1 {
+		t.Fatal("a missing group deleted the tunnel")
+	}
+	// A new tenant creates nothing while the group is missing.
+	p.Store.Put("vpn_clients", "x", 2, vpnClient{ID: "x", TenantN: 2, Name: "x", Address: "10.201.2.2", PublicKey: "k", State: "ready", ExpiresAt: now() + 3600}.D())
+	syncNetBox(t, p)
+	if len(f.all("vpn/tunnels/")) != 1 {
+		t.Fatal("a tunnel was created without its group")
+	}
+}
+
+func TestNetBoxTunnelWithoutExitDeviceFailsAlone(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	f.mu.Lock()
+	f.objects["dcim/devices/"] = []D{{"id": 4, "name": "Other", "cluster": D{"id": 1}}}
+	f.mu.Unlock()
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "VPN tunnel wg-t001") || !strings.Contains(r.Errors[0], "no device for the exit node carrel01") {
+		t.Fatal(r.Errors)
+	}
+	if len(f.all("vpn/tunnels/")) != 1 || len(f.all("vpn/tunnel-terminations/")) != 0 {
+		t.Fatal("the tunnel should stand without an end")
+	}
+	if find(f.all("ipam/ip-addresses/"), func(o D) bool { return o["address"] == "10.201.1.2/32" }) == nil || find(f.all("virtualization/virtual-machines/"), func(o D) bool { return o["name"] == "web.alice" }) == nil {
+		t.Fatal("the failing tunnel held back the rest")
 	}
 }

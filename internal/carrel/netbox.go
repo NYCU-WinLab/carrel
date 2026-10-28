@@ -27,6 +27,8 @@ const (
 	nbVMType    = "virtualization.virtualmachine"
 	nbIfaceType = "virtualization.vminterface"
 	nbGroupType = "ipam.fhrpgroup"
+	// nbDeviceIfaceType is the termination type of a device interface.
+	nbDeviceIfaceType = "dcim.interface"
 	// nbPassInterval is the periodic full reconcile that repairs drift.
 	nbPassInterval = 5 * time.Minute
 	nbSettle       = 2 * time.Second
@@ -47,7 +49,10 @@ type nbConfig struct {
 	// ranges that make up the public address pool (PLAN 6.12).
 	PublicTenant string
 	PublicRole   string
-	Marker       nbMarker
+	// TunnelGroup names the NetBox tunnel group that holds the client VPN
+	// tunnels (issue #184, phase 2); empty leaves WireGuard out of NetBox.
+	TunnelGroup string
+	Marker      nbMarker
 }
 
 // nbMarker is the ownership mark every created object carries: the `owner`
@@ -75,6 +80,7 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		Public:       str(p.Config["public_address"]),
 		PublicTenant: textAt(section, "public_tenant", "Carrel"),
 		PublicRole:   textAt(section, "public_role", "User"),
+		TunnelGroup:  str(section["tunnel_group"]),
 		Marker:       nbMarker{Value: str(section["owner"])},
 	}
 	switch {
@@ -305,6 +311,10 @@ type nbIface struct {
 	addresses                   []nbAddress
 }
 
+// nbTunnel is a tenant's client VPN interface as a NetBox tunnel, with the
+// exit node's interface of the same name as its hub (issue #184, phase 2).
+type nbTunnel struct{ name, description string }
+
 type nbService struct {
 	name, protocol, description string
 	port                        int
@@ -340,6 +350,7 @@ type nbTenant struct {
 	vips     []nbVIP
 	// vpnClients are the addresses of the tenant's client VPN (issue #184).
 	vpnClients []nbAddress
+	tunnel     *nbTunnel // nil without clients, or without netbox.tunnel_group
 }
 
 func nbStatus(m D) string {
@@ -408,6 +419,9 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		// tenant segment, so they share its VRF. No interface: a client is not a machine.
 		if len(clients) > 0 {
 			tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, fmt.Sprintf("10.201.%d.0/24", n), "Carrel VPN clients of tenant " + slug})
+		}
+		if len(clients) > 0 && c.TunnelGroup != "" {
+			tn.tunnel = &nbTunnel{vpnInterface(n), fmt.Sprintf("Carrel client VPN of tenant %s, endpoint %s:%d", slug, c.Public, vpnPortBase+n)}
 		}
 		for _, cl := range clients {
 			expires := time.Unix(int64(num(cl["expires_at"])), 0).UTC().Format("2006-01-02")
@@ -533,6 +547,9 @@ func vipsAsD(xs []vipRecord) []any {
 type nbState struct {
 	vrfs, prefixes, ips, ifaces, vms, services, groups, assignments []D
 	platforms, macs, disks                                          []D
+	tunnels, terminations, deviceIfaces                             []D // the client VPN tunnels, their ends, and the exit node's interfaces
+	tunnelGroup, exitDevice                                         int // NetBox ids; 0 when phase 2 is off or the object is missing
+	exitNode                                                        string
 	devices                                                         map[string]int // lower-case node name -> NetBox device id
 	platformIDs                                                     map[string]int // image -> NetBox platform id
 	keep                                                            map[string]map[int]bool
@@ -605,6 +622,11 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 	s.platforms = c.markedList("dcim/platforms/", nil)
 	s.macs = c.markedList("dcim/mac-addresses/", nil)
 	s.disks = c.markedList("virtualization/virtual-disks/", nil)
+	if cfg.TunnelGroup != "" {
+		s.tunnels = c.markedList("vpn/tunnels/", nil)
+		s.terminations = c.list("vpn/tunnel-terminations/", nil)
+		s.deviceIfaces = c.markedList("dcim/interfaces/", nil)
+	}
 	if err := attempt(func() { e.netboxPool(c, cfg) }); err != nil {
 		// The last pool read stays; bound addresses are not touched.
 		fail("public address pool", err)
@@ -617,6 +639,25 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 			node = str(obj(d["custom_fields"])[cfg.DeviceField])
 		}
 		s.devices[strings.ToLower(node)] = integer(d["id"])
+	}
+
+	if cfg.TunnelGroup != "" {
+		// The group is the operator's: a missing one fails phase 2 and creates
+		// nothing, and what NetBox holds stays until the group is back.
+		group := find(c.list("vpn/tunnel-groups/", url.Values{"name": {cfg.TunnelGroup}}), func(o D) bool { return o["name"] == cfg.TunnelGroup })
+		if group == nil {
+			fail("VPN tunnels", "NetBox tunnel group "+cfg.TunnelGroup+" does not exist; the NetBox operator creates it")
+			s.protect("tunnels", s.tunnels, func(D) bool { return true })
+			s.protect("terminations", s.terminations, func(D) bool { return true })
+			s.protect("deviceIfaces", s.deviceIfaces, func(D) bool { return true })
+		} else {
+			s.tunnelGroup = integer(group["id"])
+		}
+		// The exit node is the first node; its device is the operator's.
+		if nodes := e.P.Nodes(); len(nodes) > 0 {
+			s.exitNode = nodes[0].Name
+			s.exitDevice = s.devices[strings.ToLower(s.exitNode)]
+		}
 	}
 
 	wanted := e.netboxWanted(cfg)
@@ -652,6 +693,9 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 			}
 			for _, a := range t.vpnClients {
 				s.protect("ips", s.ips, func(o D) bool { return o["address"] == a.address })
+			}
+			if t.tunnel != nil {
+				netboxProtectTunnel(s, t.tunnel)
 			}
 			for _, m := range t.machines {
 				e.netboxProtectMachine(s, m.name)
@@ -727,6 +771,13 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 			s.protect("ips", s.ips, func(o D) bool { return o["address"] == a.address })
 		}
 	}
+	// A tunnel that fails keeps what NetBox holds and fails alone.
+	if t.tunnel != nil && s.tunnelGroup != 0 {
+		if err := attempt(func() { netboxTunnel(c, s, *t.tunnel) }); err != nil {
+			fail("VPN tunnel "+t.tunnel.name, err)
+			netboxProtectTunnel(s, t.tunnel)
+		}
+	}
 	for _, m := range t.machines {
 		tenantOf[m.vmid] = t.n
 		if err := attempt(func() { e.netboxMachine(c, s, m, vrfIDs, clusterID, cfg, vmNB, ifaceNB) }); err != nil {
@@ -739,6 +790,47 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 		if err := attempt(func() { e.netboxVIP(c, s, v, vrfIDs[v.vrf], ifaceNB) }); err != nil {
 			fail("virtual address "+v.name, err)
 			e.netboxProtectVIP(s, v)
+		}
+	}
+}
+
+// vpnInterface names a tenant's WireGuard interface on the exit node.
+func vpnInterface(n int) string { return fmt.Sprintf("wg-t%03d", n) }
+
+// netboxTunnel syncs one tenant's tunnel: the tunnel in the operator's group,
+// the exit node's interface of the same name, and the hub end that binds them.
+// The tunnel is kept first, so a missing exit node leaves it in place.
+func netboxTunnel(c *nbClient, s *nbState, t nbTunnel) {
+	haveTunnel := one(s.tunnels, func(o D) bool { return o["name"] == t.name && refID(o["group"]) == s.tunnelGroup })
+	tunnel := c.ensure("vpn/tunnels/", haveTunnel, D{"name": t.name, "group": s.tunnelGroup, "status": "active", "encapsulation": "wireguard", "description": t.description})
+	tunnelID := integer(tunnel["id"])
+	s.kept("tunnels", tunnelID)
+	if s.exitDevice == 0 {
+		panic(nbError{Msg: "NetBox has no device for the exit node " + s.exitNode})
+	}
+	haveIface := one(s.deviceIfaces, func(o D) bool { return o["name"] == t.name && refID(o["device"]) == s.exitDevice })
+	iface := c.ensure("dcim/interfaces/", haveIface, D{"device": s.exitDevice, "name": t.name, "type": "virtual", "description": "Carrel client VPN"})
+	ifaceID := integer(iface["id"])
+	s.kept("deviceIfaces", ifaceID)
+	// An end has no owner field: it is carrel's when its tunnel is.
+	end := D{"tunnel": tunnelID, "role": "hub", "termination_type": nbDeviceIfaceType, "termination_id": ifaceID}
+	haveEnd := one(s.terminations, func(o D) bool { return refID(o["tunnel"]) == tunnelID })
+	switch {
+	case haveEnd == nil:
+		haveEnd = c.do("POST", "vpn/tunnel-terminations/", nil, end)
+	case !nbSame(end, haveEnd):
+		haveEnd = c.do("PATCH", fmt.Sprintf("vpn/tunnel-terminations/%d/", integer(haveEnd["id"])), nil, end)
+	}
+	s.kept("terminations", integer(haveEnd["id"]))
+}
+
+// netboxProtectTunnel keeps what NetBox holds for a tunnel that could not be synced.
+func netboxProtectTunnel(s *nbState, t *nbTunnel) {
+	s.protect("tunnels", s.tunnels, func(o D) bool { return o["name"] == t.name && refID(o["group"]) == s.tunnelGroup })
+	s.protect("deviceIfaces", s.deviceIfaces, func(o D) bool { return o["name"] == t.name && refID(o["device"]) == s.exitDevice })
+	for _, tunnel := range s.tunnels {
+		if tunnel["name"] == t.name {
+			s.protect("terminations", s.terminations, func(o D) bool { return refID(o["tunnel"]) == integer(tunnel["id"]) })
 		}
 	}
 }
@@ -983,11 +1075,17 @@ func (e *Execution) netboxPrune(c *nbClient, s *nbState, fail func(string, any) 
 	for _, g := range s.groups {
 		ours[integer(g["id"])] = true
 	}
+	ourTunnels := map[int]bool{}
+	for _, t := range s.tunnels {
+		ourTunnels[integer(t["id"])] = true
+	}
 	steps := []struct {
 		kind, path string
 		objects    []D
 	}{
 		{"services", "ipam/services/", s.services},
+		// An end is ours when its tunnel is.
+		{"terminations", "vpn/tunnel-terminations/", filter(s.terminations, func(o D) bool { return ourTunnels[refID(o["tunnel"])] })},
 		// A membership cannot carry the marker; it is ours when its group is.
 		{"assignments", "ipam/fhrp-group-assignments/", filter(s.assignments, func(o D) bool { return ours[refID(o["group"])] })},
 		{"ips", "ipam/ip-addresses/", s.ips},
@@ -995,6 +1093,8 @@ func (e *Execution) netboxPrune(c *nbClient, s *nbState, fail func(string, any) 
 		{"ifaces", "virtualization/interfaces/", s.ifaces},
 		{"disks", "virtualization/virtual-disks/", s.disks},
 		{"vms", "virtualization/virtual-machines/", s.vms},
+		{"tunnels", "vpn/tunnels/", s.tunnels},
+		{"deviceIfaces", "dcim/interfaces/", s.deviceIfaces},
 		{"platforms", "dcim/platforms/", s.platforms},
 		{"groups", "ipam/fhrp-groups/", s.groups},
 		{"prefixes", "ipam/prefixes/", s.prefixes},

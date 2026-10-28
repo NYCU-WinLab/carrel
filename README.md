@@ -494,6 +494,10 @@ machines first. Every object carrel creates carries the owner, and carrel change
 that owner, so scope the token's permissions with it. PLAN 9.4 has the mapping and the permissions.
 `machine_get` shows `netbox.last_synced` and `netbox.last_error` for each machine.
 
+The client VPN's addresses sync with no more setup. To show each tenant's WireGuard interface as a NetBox
+tunnel too, create a tunnel group, give it carrel's owner, and set `"tunnel_group": "<its name>"`; the token then
+needs the `vpn.*` and `dcim.interface` permissions of PLAN 9.4.
+
 ## License
 
 Private to NYCU WinLab.
