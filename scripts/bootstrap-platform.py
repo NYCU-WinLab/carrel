@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -64,11 +65,27 @@ def ct_template_file(name, digest, site):
     return f"{storage}:vztmpl/{name}"
 
 
+def infra_mtu(vmid, bridge):
+    if not (bridge == "vmbr98" or bridge.startswith("t")):
+        return
+    if "status: running" not in run("pct", "status", str(vmid), capture=True):
+        print(f"CT {vmid} is not running: start it and rerun to set its MTU", file=sys.stderr)
+        return
+    # ifupdown2 in the CT resets a NIC without an mtu line to 1500 at every
+    # boot, over the 1450 that pct sets: write it where it stays.
+    run("pct", "exec", str(vmid), "--", "sh", "-c",
+        "grep -q '^\\s*mtu 1450' /etc/network/interfaces"
+        " || sed -i '/^iface eth0 inet static/a\\\tmtu 1450' /etc/network/interfaces")
+    run("pct", "exec", str(vmid), "--", "ip", "link", "set", "eth0", "mtu", "1450")
+
+
 def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12, nameserver="1.1.1.1", firewall=False):
     config = Path(f"/etc/pve/lxc/{vmid}.conf")
     if config.exists():
         if f"hostname: {name}\n" not in config.read_text() or "carrel-infra" not in config.read_text():
             raise RuntimeError(f"refusing existing unowned CT {vmid}")
+        # A rerun repairs CTs made before this, or a create cut short after start.
+        infra_mtu(vmid, bridge)
         return
     run(
         "pct",
@@ -107,6 +124,7 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12,
         key,
     )
     run("pct", "start", str(vmid))
+    infra_mtu(vmid, bridge)
     run("pct", "exec", str(vmid), "--", "mkdir", "-p", "/etc/systemd/system/systemd-journald.service.d")
     fix = Path("/tmp/carrel-journald.conf")
     fix.write_text("[Service]\nImportCredential=\n")

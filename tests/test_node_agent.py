@@ -651,7 +651,31 @@ def test_the_fetch_container_reaches_only_public_web_and_the_resolver():
     # Private drops come before the web accepts, so 80/443 to the lab stay closed.
     assert rules.index("OUT DROP -dest 192.168.0.0/16") < rules.index("OUT ACCEPT -p tcp -dport 443")
     assert "OUT DROP -dest 140.113.60.184/32" in rules
-    assert not any("IN ACCEPT" in r for r in rules)
+    # Only path MTU discovery comes in; nothing opens a connection to it.
+    assert [r for r in rules if "IN ACCEPT" in r] == ["IN ACCEPT -p icmp -icmp-type fragmentation-needed"]
+
+
+def test_tenant_hosts_clamp_forwarded_tcp_to_the_tenant_mtu():
+    module = load("install-network.py")
+    rules = module.tenant_host_nft([])
+    assert "hook forward priority mangle" in rules
+    assert "tcp option maxseg size > 1410 tcp option maxseg size set 1410" in rules
+
+
+def test_guests_accept_path_mtu_discovery():
+    module = load("node-agent.py")
+    m = {
+        "tenant_n": 3,
+        "vmid": 10300,
+        "host": 10,
+        "name": "web",
+        "kind": "vm",
+        "ip": "10.200.3.10",
+        "mac": "02:ca:03:00:00:01",
+        "network_access": "restricted",
+    }
+    rules = module.guest_firewall(m, {"ports": [], "domains": [], "peers": []}, {"protected_addresses": []})
+    assert "IN ACCEPT -p icmp -icmp-type fragmentation-needed" in rules.splitlines()
 
 
 def test_fetch_jobs_are_checked_before_anything_runs(monkeypatch, tmp_path):
@@ -1357,3 +1381,63 @@ def test_backup_remove_unprotects_then_frees_only_the_freeze_backup(monkeypatch,
         module.backup_remove({"machine": dict(MACHINE), "volid": VOLID})
     module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
     assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "absent"}
+
+
+def test_platform_check_repairs_what_a_boot_loses(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    real = module.Path
+    lxc = tmp_path / "lxc"
+    lxc.mkdir()
+    (lxc / "101.conf").write_text("net0: name=eth0,bridge=vmbr98,mtu=1450,type=veth\ntags: carrel-infra\n")
+    (lxc / "103.conf").write_text("net0: name=eth0,bridge=t255,mtu=1450,type=veth\ntags: carrel-infra\n")
+    monkeypatch.setattr(
+        module,
+        "Path",
+        lambda p: lxc / real(p).name if str(p).startswith("/etc/pve/nodes/carrel01/lxc/") else real(p),
+    )
+    calls = []
+    answers = {
+        ("nft", "list"): "chain forward {\n}",
+        ("pct", "status", "101"): "status: running",
+        ("pct", "status", "103"): "status: stopped",
+        ("pct", "exec", "101", "--", "cat", "/sys/class/net/eth0/mtu"): "1500",
+        (
+            "pct",
+            "exec",
+            "101",
+            "--",
+            "cat",
+            "/etc/network/interfaces",
+        ): "iface eth0 inet static\n\taddress 10.200.0.2/24",
+    }
+
+    def run(*args, **kwargs):
+        args = tuple(str(a) for a in args)
+        calls.append(args)
+        return next((v for k, v in answers.items() if args[: len(k)] == k), "")
+
+    monkeypatch.setattr(module, "run", run)
+    out = module.platform_check(repair=False)
+    assert not any(c[0] in ("ip", "systemctl") or "set" in c or "sed" in c for c in calls)
+    assert len(out["needs_repair"]) == 4 and out["repaired"] == []
+    calls.clear()
+    out = module.platform_check()
+    assert calls[0] == ("ip", "route", "flush", "cache")
+    assert ("systemctl", "reload", "carrel-tenant-host") in calls
+    assert ("pct", "exec", "101", "--", "ip", "link", "set", "eth0", "mtu", "1450") in calls
+    assert any(c[:6] == ("pct", "exec", "101", "--", "sed", "-i") for c in calls)
+    assert out["problems"] == ["infra CT 103 is not running"]
+    assert len(out["repaired"]) == 4
+    # Nothing to repair the second time: CTs absent from this node are skipped.
+    calls.clear()
+    answers[("nft", "list")] = "tcp option maxseg size set 1410"
+    answers[("pct", "exec", "101", "--", "cat", "/sys/class/net/eth0/mtu")] = "1450"
+    answers[("pct", "exec", "101", "--", "cat", "/etc/network/interfaces")] = "\tmtu 1450"
+    assert module.platform_check()["repaired"] == ["route cache flushed"]
+    # A CT without the static stanza is reported, not claimed as fixed.
+    calls.clear()
+    answers[("pct", "exec", "101", "--", "cat", "/etc/network/interfaces")] = "iface eth0 inet dhcp"
+    out = module.platform_check()
+    assert out["repaired"] == ["route cache flushed"] and not any("sed" in c for c in calls)
+    assert "infra CT 101 has no static eth0 stanza for the mtu line" in out["problems"]

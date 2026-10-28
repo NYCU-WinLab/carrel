@@ -226,6 +226,9 @@ def guest_firewall(m, state, config):
         "OUT DROP -dest ::/0",
         "IN DROP -source ::/0",
         "OUT DROP -source 0.0.0.0",
+        # Path MTU discovery for the guest's own sends. proxmox-firewall's
+        # allow-icmp chain accepts this today; the rule keeps it if that changes.
+        "IN ACCEPT -p icmp -icmp-type fragmentation-needed",
         "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
         "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
         "OUT ACCEPT -dest 10.200.0.3 -p tcp -dport 8080",
@@ -1512,6 +1515,7 @@ def fetch_firewall(config):
         "policy_in: DROP", "policy_out: DROP", "",
         "[IPSET ipfilter-net0]", "10.200.255.10", "",
         "[RULES]",
+        "IN ACCEPT -p icmp -icmp-type fragmentation-needed",
         "OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53",
         "OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53",
     ]
@@ -1931,6 +1935,58 @@ def power_status(m):
     return status.get("status", "unknown")
 
 
+INFRA_CTS = (100, 101, 102, 103)
+
+
+def platform_check(repair=True):
+    """Checks, and with repair fixes, what a node boot can lose.
+
+    Every repair is safe to repeat; platform_power runs it after a start and
+    on its own. Without repair it only lists what it would fix.
+    """
+    out = {"node": NODE, "repaired": [], "needs_repair": [], "problems": []}
+
+    def fix(what, *command):
+        if repair:
+            run(*command)
+            out["repaired"].append(what)
+        else:
+            out["needs_repair"].append(what)
+
+    # A path MTU learned while a link was wrong is kept for 10 minutes and
+    # stalls large packets on a path that is fine again (2026-10-27).
+    fix("route cache flushed", "ip", "route", "flush", "cache")
+    try:
+        forward = run("nft", "list", "chain", "inet", "carrel_tenant_host", "forward")
+    except CommandFailure:
+        forward = ""
+    if "maxseg size set" not in forward:
+        fix("tenant MSS clamp reloaded", "systemctl", "reload", "carrel-tenant-host")
+    for vmid in INFRA_CTS:
+        conf = Path(f"/etc/pve/nodes/{NODE}/lxc/{vmid}.conf")
+        if not conf.exists() or "carrel-infra" not in conf.read_text():
+            continue
+        net0 = next((x for x in conf.read_text().splitlines() if x.startswith("net0:")), "")
+        if "mtu=1450" not in net0:
+            continue
+        if "status: running" not in run("pct", "status", vmid):
+            out["problems"].append(f"infra CT {vmid} is not running")
+            continue
+        mtu = run("pct", "exec", vmid, "--", "cat", "/sys/class/net/eth0/mtu")
+        if mtu != "1450":
+            fix(f"infra CT {vmid} eth0 MTU {mtu} -> 1450", "pct", "exec", vmid, "--", "ip", "link", "set", "eth0", "mtu", "1450")
+        # ifupdown2 resets a NIC without an mtu line at the CT's next boot.
+        lines = run("pct", "exec", vmid, "--", "cat", "/etc/network/interfaces")
+        if any(x.strip() == "mtu 1450" for x in lines.splitlines()):
+            continue
+        if not any(x.strip() == "iface eth0 inet static" for x in lines.splitlines()):
+            out["problems"].append(f"infra CT {vmid} has no static eth0 stanza for the mtu line")
+        else:
+            fix(f"infra CT {vmid} mtu line written", "pct", "exec", vmid, "--", "sed", "-i",
+                "/^iface eth0 inet static/a\\\tmtu 1450", "/etc/network/interfaces")
+    return out
+
+
 def power_action(m, cfg, op):
     # CT suspend uses experimental disk checkpoints, not an in-memory pause.
     if op in ("pause", "resume") and m["kind"] != "vm":
@@ -2331,6 +2387,8 @@ def main():
                 pass
         elif op == "action":
             out = action(req)
+        elif op == "platform_check":
+            out = platform_check(req.get("repair") is True)
         elif op == "inventory":
             # Guest maxdisk omits secondary disks. Count all volumes, including
             # templates and unused disks, for conservative admission.

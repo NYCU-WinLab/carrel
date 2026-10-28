@@ -67,6 +67,8 @@ type Platform struct {
 	ctx                context.Context
 	cancel             context.CancelFunc
 	wg                 sync.WaitGroup
+	platformMu         sync.Mutex
+	platformCodes      map[string]D
 	reportMu           sync.Mutex
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex

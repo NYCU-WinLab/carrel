@@ -240,7 +240,7 @@ from outside still needs a client-side check.
 ### 4.4 Admin tools
 
 Callable only by `winlab-admin`: `quota_set`, `request_approve`, `request_reject`, `tenant_list`,
-`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `node_undrain`, `machine_migrate`, `reconcile_run`, `image_build`,
+`tenant_suspend`, `usage_report`, `node_list`, `node_drain`, `node_undrain`, `machine_migrate`, `reconcile_run`, `platform_power` (section 7.5), `image_build`,
 `issue_triage` (label, merge a duplicate), `issue_resolve` (`id`, `fixed_in`, `note`),
 `machine_import` and `source_add` (section 10.6), `zone_add` and `zone_list` (section 6.10).
 
@@ -927,6 +927,13 @@ A machine comes back in the state its owner left it. Stopping sets `onboot=0`, s
 `onboot=1`. Boot order: infra first, then tenants in batches with a delay, so a power cut does not
 start everything at once.
 
+`platform_power` (admin) turns the whole platform off and on for a planned outage: `shutdown`
+stops every tenant machine gracefully and records which ones were running, `start` brings back
+exactly those, and `check` repairs what a node boot can lose (path MTU cache, the tenant MSS
+clamp, the infra CTs' MTU 1450; 2026-10-27 outage). Nodes and infra CTs stay up, so the tool keeps
+answering. Both power actions need two calls: a dry run returns a confirm code that the real call
+repeats, and the code changes when the machine list does.
+
 ### 7.6 Self-rescue
 
 | Tool | Mechanism | Risk and mitigation |
@@ -1299,6 +1306,8 @@ Mapping:
 | machine address, managed NIC address | IP address on its interface, in the shared VRF (a private network's address in that network's VRF); the machine address is the primary IPv4, with DNS name `<machine>.<tenant>.internal` as the infra resolver answers it |
 | tenant segment `10.200.N.0/24` | prefix in the shared VRF |
 | managed private network CIDR | prefix in that network's own VRF |
+| client VPN range `10.201.N.0/24` | prefix in the shared VRF, while the tenant has a client |
+| client VPN client (`vpn_client_add`) | IP address `10.201.N.x/32` in the shared VRF, bound to no interface, description with the client name and the day it expires; an expired or removed client leaves with its record |
 | `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
 | published port, HTTPS route | service on the VM, or on the FHRP group when it targets a virtual address, with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |

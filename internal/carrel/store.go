@@ -297,7 +297,7 @@ func (s *Store) Desired() D {
 		state["public_ips"] = bound
 	}
 	// The same for VPN clients; an expired one is gone before its record.
-	if clients := filter(s.Objects("vpn_clients"), func(o D) bool { return o["state"] != "deleting" && num(o["expires_at"]) > now() }); len(clients) > 0 {
+	if clients := filter(s.Objects("vpn_clients"), vpnClientLive); len(clients) > 0 {
 		state["vpn_clients"] = clients
 	}
 	return state
