@@ -1031,3 +1031,69 @@ func TestNetBoxTunnelWithoutExitDeviceFailsAlone(t *testing.T) {
 		t.Fatal("the failing tunnel held back the rest")
 	}
 }
+
+func TestNetBoxMissingExitDeviceKeepsTheTunnelInterface(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	// The exit node's device stops resolving after the objects exist.
+	f.mu.Lock()
+	f.objects["dcim/devices/"] = []D{{"id": 4, "name": "Other", "cluster": D{"id": 1}}}
+	f.mu.Unlock()
+	f.reset()
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "no device for the exit node carrel01") {
+		t.Fatal(r.Errors)
+	}
+	for _, w := range f.writes {
+		if strings.HasPrefix(w, "DELETE") {
+			t.Fatal("a missing exit device deleted", w)
+		}
+	}
+	if len(f.all("vpn/tunnels/")) != 1 || len(f.all("vpn/tunnel-terminations/")) != 1 || find(f.all("dcim/interfaces/"), func(o D) bool { return o["name"] == "wg-t001" }) == nil {
+		t.Fatal("the tunnel lost an object")
+	}
+}
+
+func TestNetBoxLeavesTheOperatorsTunnelEnds(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	// Ids past a million print as 1e+06 when compared carelessly.
+	f.mu.Lock()
+	f.next = 1_000_000
+	f.mu.Unlock()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tunnelID := integer(f.all("vpn/tunnels/")[0]["id"])
+	hub := f.all("vpn/tunnel-terminations/")[0]
+	f.reset()
+	if r := syncNetBox(t, p); r.Writes != 0 || len(f.writes) != 0 {
+		t.Fatal("a second pass wrote", f.writes)
+	}
+	// The operator adds a spoke for a peer, on an interface carrel does not own.
+	spoke := D{"id": 50, "tunnel": D{"id": tunnelID}, "role": D{"value": "spoke"}, "termination_type": "dcim.interface", "termination_id": 51}
+	f.mu.Lock()
+	f.objects["dcim/interfaces/"] = append(f.objects["dcim/interfaces/"], D{"id": 51, "name": "wg-peer", "device": D{"id": 4}})
+	f.objects["vpn/tunnel-terminations/"] = append(f.objects["vpn/tunnel-terminations/"], spoke)
+	f.mu.Unlock()
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 || len(f.writes) != 0 {
+		t.Fatal("the operator's end was touched", r.Errors, f.writes)
+	}
+	// With carrel's hub gone, carrel makes a new one and leaves the spoke alone.
+	f.mu.Lock()
+	f.objects["vpn/tunnel-terminations/"] = []D{spoke}
+	f.mu.Unlock()
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if len(f.writes) != 1 || f.writes[0] != "POST vpn/tunnel-terminations/" {
+		t.Fatal("the hub should be recreated, not taken from the spoke", f.writes)
+	}
+	ends := f.all("vpn/tunnel-terminations/")
+	if len(ends) != 2 || obj(find(ends, func(o D) bool { return integer(o["id"]) == 50 })["role"])["value"] != "spoke" || integer(find(ends, func(o D) bool { return integer(o["id"]) != 50 })["termination_id"]) != integer(hub["termination_id"]) {
+		t.Fatal("ends wrong", ends)
+	}
+}

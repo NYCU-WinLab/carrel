@@ -570,6 +570,16 @@ func (s *nbState) protect(kind string, objects []D, matches func(D) bool) {
 	}
 }
 
+// ourEnd reports whether carrel made a tunnel end. An end has no owner field:
+// it is carrel's when its tunnel is and it terminates on carrel's interface,
+// so an end the operator adds to carrel's tunnel stays theirs.
+func (s *nbState) ourEnd(o D) bool {
+	if str(o["termination_type"]) != nbDeviceIfaceType || find(s.tunnels, func(t D) bool { return integer(t["id"]) == refID(o["tunnel"]) }) == nil {
+		return false
+	}
+	return find(s.deviceIfaces, func(i D) bool { return integer(i["id"]) == integer(o["termination_id"]) }) != nil
+}
+
 func one(objects []D, f func(D) bool) D { return find(objects, f) }
 
 func refID(v any) int { return integer(obj(v)["id"]) }
@@ -812,13 +822,12 @@ func netboxTunnel(c *nbClient, s *nbState, t nbTunnel) {
 	iface := c.ensure("dcim/interfaces/", haveIface, D{"device": s.exitDevice, "name": t.name, "type": "virtual", "description": "Carrel client VPN"})
 	ifaceID := integer(iface["id"])
 	s.kept("deviceIfaces", ifaceID)
-	// An end has no owner field: it is carrel's when its tunnel is.
 	end := D{"tunnel": tunnelID, "role": "hub", "termination_type": nbDeviceIfaceType, "termination_id": ifaceID}
-	haveEnd := one(s.terminations, func(o D) bool { return refID(o["tunnel"]) == tunnelID })
+	haveEnd := one(s.terminations, func(o D) bool { return refID(o["tunnel"]) == tunnelID && s.ourEnd(o) })
 	switch {
 	case haveEnd == nil:
 		haveEnd = c.do("POST", "vpn/tunnel-terminations/", nil, end)
-	case !nbSame(end, haveEnd):
+	case !nbSame(clone(end), haveEnd):
 		haveEnd = c.do("PATCH", fmt.Sprintf("vpn/tunnel-terminations/%d/", integer(haveEnd["id"])), nil, end)
 	}
 	s.kept("terminations", integer(haveEnd["id"]))
@@ -827,10 +836,14 @@ func netboxTunnel(c *nbClient, s *nbState, t nbTunnel) {
 // netboxProtectTunnel keeps what NetBox holds for a tunnel that could not be synced.
 func netboxProtectTunnel(s *nbState, t *nbTunnel) {
 	s.protect("tunnels", s.tunnels, func(o D) bool { return o["name"] == t.name && refID(o["group"]) == s.tunnelGroup })
-	s.protect("deviceIfaces", s.deviceIfaces, func(o D) bool { return o["name"] == t.name && refID(o["device"]) == s.exitDevice })
+	// Without the exit device, any device's interface of that name may be
+	// the one carrel made: deleting it would cascade to the hub end.
+	s.protect("deviceIfaces", s.deviceIfaces, func(o D) bool {
+		return o["name"] == t.name && (s.exitDevice == 0 || refID(o["device"]) == s.exitDevice)
+	})
 	for _, tunnel := range s.tunnels {
 		if tunnel["name"] == t.name {
-			s.protect("terminations", s.terminations, func(o D) bool { return refID(o["tunnel"]) == integer(tunnel["id"]) })
+			s.protect("terminations", s.terminations, func(o D) bool { return refID(o["tunnel"]) == integer(tunnel["id"]) && s.ourEnd(o) })
 		}
 	}
 }
@@ -1075,17 +1088,12 @@ func (e *Execution) netboxPrune(c *nbClient, s *nbState, fail func(string, any) 
 	for _, g := range s.groups {
 		ours[integer(g["id"])] = true
 	}
-	ourTunnels := map[int]bool{}
-	for _, t := range s.tunnels {
-		ourTunnels[integer(t["id"])] = true
-	}
 	steps := []struct {
 		kind, path string
 		objects    []D
 	}{
 		{"services", "ipam/services/", s.services},
-		// An end is ours when its tunnel is.
-		{"terminations", "vpn/tunnel-terminations/", filter(s.terminations, func(o D) bool { return ourTunnels[refID(o["tunnel"])] })},
+		{"terminations", "vpn/tunnel-terminations/", filter(s.terminations, s.ourEnd)},
 		// A membership cannot carry the marker; it is ours when its group is.
 		{"assignments", "ipam/fhrp-group-assignments/", filter(s.assignments, func(o D) bool { return ours[refID(o["group"])] })},
 		{"ips", "ipam/ip-addresses/", s.ips},
