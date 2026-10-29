@@ -273,7 +273,7 @@ func (o *Operations) apply(id string) {
 					machines = append(machines, m)
 				}
 			}
-			if pub := obj(result["machine"]); pub["name"] != nil {
+			if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" && op["tool"] != "machine_thaw" {
 				m := e.Machine(t, pub["name"])
 				machines = filter(machines, func(v D) bool { return integer(v["vmid"]) != integer(m["vmid"]) })
 				machines = append(machines, m)
@@ -292,6 +292,8 @@ func (o *Operations) apply(id string) {
 			e.PreparePublication()
 			e.PerformMigration()
 			e.PerformImport()
+			e.PerformFreeze()
+			e.PerformThaw()
 			e.PerformPlatformPower()
 		})
 		o.p.writer.Lock()
@@ -307,6 +309,12 @@ func (o *Operations) apply(id string) {
 				}
 				if op["tool"] == "machine_migrate" {
 					result = merge(result, e.FinishMigration(t))
+				}
+				if op["tool"] == "machine_freeze" {
+					result = merge(result, e.FinishFreeze(t))
+				}
+				if op["tool"] == "machine_thaw" {
+					result = merge(result, e.FinishThaw(t))
 				}
 				if op["tool"] == "iso_import" || op["tool"] == "image_import" {
 					result = merge(result, e.FinishImport())
@@ -332,7 +340,7 @@ func (o *Operations) apply(id string) {
 					}
 					result["updated_machines"] = updated
 				}
-				if pub := obj(result["machine"]); pub["name"] != nil {
+				if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" && op["tool"] != "machine_thaw" {
 					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.ports(integer(t["n"])))
 				}
 				op["result"] = merge(D{"ok": true}, result)
@@ -407,7 +415,11 @@ func (o *Operations) saveOutcome(e *Execution) {
 }
 func (e *Execution) BindMachine(t D) bool {
 	op, a := e.Op, obj(e.Op["args"])
-	if a["machine"] == nil {
+	if a["machine"] == nil || op["tool"] == "machine_thaw" {
+		return false
+	}
+	// A frozen machine has no live row to bind: deleting it is its own path.
+	if f := e.frozenMachine(t, a["machine"]); f != nil && op["tool"] == "machine_delete" && e.S.Get("machines", str(f["vmid"])) == nil {
 		return false
 	}
 	bound := obj(op["machine_target"])
@@ -415,7 +427,7 @@ func (e *Execution) BindMachine(t D) bool {
 	if len(bound) > 0 {
 		m = find(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return integer(m["vmid"]) == integer(bound["vmid"]) })
 		if m == nil {
-			if op["tool"] == "machine_delete" {
+			if op["tool"] == "machine_delete" || op["tool"] == "machine_freeze" {
 				return true
 			}
 			fail("not_found", "The operation's original machine no longer exists")
@@ -496,6 +508,10 @@ func (e *Execution) CheckBusy(t D) {
 	if id := obj(e.Op["machine_target"])["vmid"]; id != nil {
 		targets[integer(id)] = true
 	}
+	// A frozen machine has no live row to bind; a thaw may be restoring it.
+	if f := e.frozenMachine(t, obj(e.Op["args"])["machine"]); f != nil && obj(e.Op["args"])["machine"] != nil {
+		targets[integer(f["vmid"])] = true
+	}
 	if e.Op["tool"] == "deployment_apply" {
 		args := obj(e.Op["args"])
 		refs := []any{}
@@ -517,7 +533,7 @@ func (e *Execution) CheckBusy(t D) {
 		}
 	}
 	for _, other := range e.S.ActiveOperations() {
-		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine"}, other["phase"]) {
+		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine", "freezing_machine", "restoring_machine"}, other["phase"]) {
 			continue
 		}
 		// A platform power job waits for every running machine job, and
@@ -534,6 +550,9 @@ func (e *Execution) CheckBusy(t D) {
 		}
 		for vmid := range obj(obj(other["deployment"])["bindings"]) {
 			ids = append(ids, vmid)
+		}
+		if id := obj(other["thaw"])["vmid"]; id != nil {
+			ids = append(ids, id)
 		}
 		for _, m := range e.S.Objects("machines", integer(t["n"])) {
 			if m["operation_id"] == other["id"] {

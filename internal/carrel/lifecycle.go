@@ -16,7 +16,7 @@ func machineIdentity(m D) []any { return []any{m["allocation_id"], m["created_at
 func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
 	n := integer(t["n"])
 	used := map[int]bool{}
-	for _, m := range e.S.Objects("machines", n) {
+	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
 		used[integer(m["vmid"])] = true
 	}
 	slot := 0

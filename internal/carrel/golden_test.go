@@ -113,6 +113,10 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 			return D{"state": "absent"}, nil
 		}
 		return D{"state": "ok"}, nil
+	case "freeze":
+		return D{"volid": fmt.Sprintf("pbs:backup/vm/%v/2026-10-26T00:00:00Z", m["vmid"]), "size": 1 << 30, "verification": "ok", "note": "carrel-freeze test"}, nil
+	case "thaw", "backup_remove":
+		return D{"state": "done"}, nil
 	case "status":
 		state := "running"
 		if current := r.p.Store.Get("machines", str(m["vmid"])); current != nil && contains([]any{"stopped", "paused"}, current["power_state"]) {
@@ -458,6 +462,23 @@ func goldenScenario(g *goldenRun) {
 
 	call("audit", "audit_log", D{}, alice)
 	call("keys", "ssh_key_remove", D{"id": added["id"]}, alice)
+	// Freeze and thaw (issue #190).
+	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "box"}, alice)
+	g.p.Config["backup_storage"] = "pbs"
+	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "box"}, alice)
+	call("freeze", "machine_power", D{"machine": "box", "action": "shutdown"}, alice)
+	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "wrong"}, alice)
+	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "box", "dry_run": true}, alice)
+	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "box"}, alice)
+	call("freeze", "machine_list", D{}, alice)
+	call("freeze", "machine_get", D{"machine": "box"}, alice)
+	call("freeze", "machine_power", D{"machine": "box", "action": "start"}, alice)
+	call("freeze", "machine_create", D{"name": "box"}, alice)
+	call("freeze", "quota_get", D{}, alice)
+	call("freeze", "machine_thaw", D{"machine": "box", "dry_run": true}, alice)
+	call("freeze", "machine_thaw", D{"machine": "box"}, alice)
+	call("freeze", "machine_thaw", D{"machine": "box"}, alice)
+	call("freeze", "machine_get", D{"machine": "box"}, alice)
 	call("delete", "machine_delete", D{"machine": "box", "confirm": "box", "dry_run": true}, alice)
 	call("delete", "machine_delete", D{"machine": "box", "confirm": "box"}, alice)
 	call("admin", "tenant_suspend", D{"tenant": "bob"}, admin)

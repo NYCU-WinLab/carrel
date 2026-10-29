@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -182,6 +183,9 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "machine_list", "machine_get":
 		ms := e.S.Objects("machines", n)
 		if tool == "machine_get" {
+			if f := e.frozenMachine(t, a["machine"]); f != nil && find(ms, func(m D) bool { return m["vmid"] == f["vmid"] }) == nil {
+				return D{"machines": []D{e.PublicFrozen(f)}}
+			}
 			ms = []D{e.Machine(t, a["machine"])}
 		}
 		out := []D{}
@@ -193,6 +197,14 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 				e.ObserveSSH(pub)
 			}
 			out = append(out, pub)
+		}
+		if tool == "machine_list" {
+			for _, f := range e.S.Objects("frozen", n) {
+				// Seen as a machine too while a freeze is being finished.
+				if find(ms, func(m D) bool { return m["vmid"] == f["vmid"] }) == nil {
+					out = append(out, e.PublicFrozen(f))
+				}
+			}
 		}
 		return D{"machines": out}
 	case "machine_create":
@@ -224,6 +236,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return D{"machine": e.PublicMachine(m, []portGrant{grant}), "quota_after": e.Quota(t)}
 	case "machine_power", "machine_delete", "machine_resize", "machine_metrics":
 		return e.MachineAction(tool, a, t)
+	case "machine_freeze":
+		return e.FreezeMachine(a, t)
+	case "machine_thaw":
+		return e.ThawMachine(a, t)
 	case "machine_media":
 		return e.Media(e.Machine(t, a["machine"]), a, t)
 	case "machine_rename":
@@ -263,6 +279,9 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 
 func (e *Execution) MachineAction(tool string, a, t D) D {
 	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	if f := e.frozenMachine(t, a["machine"]); f != nil && tool == "machine_delete" && find(e.S.Objects("machines", n), func(m D) bool { return m["vmid"] == f["vmid"] }) == nil {
+		return e.DeleteFrozen(f, a, t)
+	}
 	m := e.Machine(t, a["machine"])
 	request := D{"op": "action", "machine": m}
 	if tool == "machine_metrics" {
@@ -330,42 +349,18 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		case "machine_delete":
 			m["state"] = "deleting"
 			e.Put("machines", m["vmid"], n, m)
+			// A thaw whose backup could not be removed: the machine is going, so is its backup.
+			if backup := obj(m["thaw_backup"]); len(backup) > 0 {
+				if problem := attempt(func() {
+					e.Call(D{"op": "backup_remove", "machine": m, "volid": backup["volid"], "note": backup["note"]})
+				}); problem != nil {
+					slog.Warn("thaw_backup_not_removed", "vmid", m["vmid"], "volid", backup["volid"])
+				}
+			}
 			e.Reconcile()
 			e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
 			e.Transaction(func(tx *Execution) {
-				for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports", "cloud_init"} {
-					for _, o := range tx.S.Objects(kind, n) {
-						if integer(o["vmid"]) == integer(m["vmid"]) {
-							tx.S.Remove(kind, fallback(o, "id", o["vmid"]))
-						}
-					}
-				}
-				for _, p := range tx.peers() {
-					if p.Target == m["ip"] || p.Source == str(m["ip"])+"/32" {
-						tx.S.Remove("peers", p.ID)
-					}
-				}
-				// A public address stays the tenant's, unbound (issue #91): a
-				// later machine with this VMID must not inherit it.
-				for _, b := range tx.publicIPs(n) {
-					if b.VMID == integer(m["vmid"]) {
-						b.VMID, b.Ports, b.BoundAt = 0, nil, 0
-						tx.Put("public_ips", b.ID, n, b)
-					}
-				}
-				// The address stays reserved for the tenant; only this holder goes.
-				for _, v := range tx.vips(n) {
-					holders := []int{}
-					for _, id := range v.VMIDs {
-						if id != integer(m["vmid"]) {
-							holders = append(holders, id)
-						}
-					}
-					if len(holders) != len(v.VMIDs) {
-						v.VMIDs = holders
-						tx.Put("vips", v.ID, n, v)
-					}
-				}
+				tx.forgetMachine(n, m)
 				tx.S.Remove("machines", m["vmid"])
 			})
 		case "machine_resize":
@@ -410,6 +405,8 @@ func parseExpiry(v string) time.Time {
 func (e *Execution) capabilities() D {
 	c := clone(obj(Contract["capabilities"]))
 	c["custom_image_import"] = boolean(e.P.Config["fetch"])
+	// Freezing needs the PVE storage of the backup server (issue #190).
+	c["machine_freeze"] = str(e.P.Config["backup_storage"]) != ""
 	// Public addresses per machine (issue #91): how many the pool has free.
 	c["public_ips"] = D{"offered": len(e.publicPool()) > 0, "free": len(e.freePublicIPs())}
 	return c

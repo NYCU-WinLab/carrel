@@ -364,9 +364,11 @@ search first, read how it was solved, and file only what is new.
 ### 5.1 Dimensions
 
 `vcpu`, `memory_mb`, `disk_gb`, `machines`, `ips`, `public_ports`, `domains`, `snapshots`,
-`snapshot_gb`, `networks`. Member and project tenants use the same dimensions. `images_gb` is
+`snapshot_gb`, `frozen_gb`, `networks`. Member and project tenants use the same dimensions. `images_gb` is
 reserved for deferred image support and hidden from the current API. Each snapshot reserves the
 machine disk size against `snapshot_gb`; measured retained bytes are reported separately.
+A frozen machine (section 10.1) holds its configured disk size in `frozen_gb` (default: the `disk_gb`
+default) and its address in `ips`, and nothing else.
 Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
 
 ### 5.2 Quota versus admission
@@ -1366,6 +1368,23 @@ A child object is also constrained by its parent's owner, so it cannot be bound 
 
 Proxmox Backup Server on a separate machine. Priority: the carrel database and Keycloak client
 configuration, then infra machines, then tenant machines (opt-in, counted against quota).
+
+Tenant machines are backed up only to be frozen (issue #190). `machine_freeze` takes a stopped
+machine with no disk snapshots and none of the resources on the site's `freeze_release` list
+(default: bound public IPs, fixed public ports, special domains), runs `vzdump --protected 1` to the
+PVE storage named by `backup_storage` in the carrel config, waits until PBS reports the backup verified
+(a missing or pending result keeps the machine), and only then deletes the machine. The copy runs
+outside the writer lock, like a migration: the request is planned under it, the node works without it,
+and the records change under it again after checking that the machine is still stopped. The machine's
+row moves to the `frozen` kind: its VMID, name and internal address stay taken, so the domains,
+ports and peers that point at it stay meaningful, and `vcpu`, `memory_mb`, `disk_gb` and `machines`
+are released. `machine_thaw` checks the normal quota like a creation, restores the backup to the
+same VMID on a node chosen as for a creation, which is kept in the frozen row so a retry or a delete
+finds a half-restored machine; the backup goes only after the live row is committed. `machine_delete` on a frozen
+machine removes the backup. Frozen machines keep one copy on PBS: freezing is not an off-site backup.
+A freeze backup is told apart by its notes and is reused by a retry only while the node's stamp proves
+the machine has not run or changed since; scheduled backups of the cluster are never read, counted or
+removed. Scheduled backups of running machines stay out of scope.
 
 Until then, the control plane sends one archive each night (database, configuration,
 certificates and each node's files) to the SSH target `carrel-backup`: `scripts/backup-target.py`,

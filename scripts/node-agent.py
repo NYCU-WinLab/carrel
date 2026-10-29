@@ -2114,6 +2114,236 @@ def action(req):
     return {"state": "done"}
 
 
+# Freezing a machine (issue #190): vzdump to the PVE storage of the Proxmox
+# Backup Server, then the control plane deletes the machine. The backup is
+# protected, so a prune job on the datastore cannot take it. The cluster may
+# run its own scheduled backups of the same machine into the same storage:
+# the ones this agent made are told apart by their notes alone, and it never
+# reads, reuses or removes any other.
+BACKUP_VOLUME = re.compile(r"[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+-]+")
+FREEZE_NOTE = "carrel-freeze "
+# vzdump and the wait for a verification must end inside the control plane's
+# 4 hour bound on one request.
+VZDUMP_SECONDS = 3 * 3600
+VERIFY_POLL_SECONDS = 20
+
+
+def backup_storage(storage):
+    entry = storage_entry(storage) if isinstance(storage, str) and re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage) else None
+    if entry is None or entry["type"] != "pbs":
+        raise ValueError("backup storage must be a Proxmox Backup Server storage")
+    return storage
+
+
+def backups(storage, vmid):
+    # As root: the reader token has no view of the backup storage.
+    out = run("pvesh", "get", f"/nodes/{NODE}/storage/{storage}/content", "--content", "backup", "--vmid", vmid, "--output-format", "json")
+    return json.loads(out) if out else []
+
+
+def freeze_note(freeze_id):
+    if not isinstance(freeze_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", freeze_id):
+        raise ValueError("invalid freeze id")
+    return FREEZE_NOTE + freeze_id
+
+
+def carrel_backups(storage, vmid):
+    return [b for b in backups(storage, vmid) if str(b.get("notes", "")).strip().startswith(FREEZE_NOTE)]
+
+
+def backup_free(storage, backup):
+    if backup.get("protected"):
+        run("pvesh", "set", f"/nodes/{NODE}/storage/{storage}/content/{backup['volid']}", "--protected", 0)
+    run("pvesm", "free", backup["volid"], timeout=600)
+
+
+def freeze_stamp(m):
+    return STATE / f"freeze-{machine(m)}.json"
+
+
+def config_digest(m):
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    return pve_get(f"/nodes/{NODE}/{kind}/{machine(m)}/config").get("digest")
+
+
+def last_start(m):
+    """The newest start of the machine that PVE recorded, whoever asked for it."""
+    task = "qmstart" if m["kind"] == "vm" else "vzstart"
+    out = run("pvesh", "get", f"/nodes/{NODE}/tasks", "--vmid", machine(m), "--typefilter", task, "--limit", 5, "--output-format", "json")
+    return max((int(t.get("starttime", 0)) for t in (json.loads(out) if out else [])), default=0)
+
+
+def freeze_stamp_valid(m, note):
+    """True when the machine is provably as it was when this backup was made.
+
+    The agent's own requests remove the stamp (main). A start by anything else
+    (the node's boot, HA, an admin in the PVE interface) is a task PVE logs,
+    which changes last_start; the configuration digest covers the rest.
+    """
+    path = freeze_stamp(m)
+    try:
+        stamp = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return (
+        stamp.get("note") == note
+        and stamp.get("digest") is not None
+        and stamp.get("digest") == config_digest(m)
+        and stamp.get("started") == last_start(m)
+    )
+
+
+def freeze(req):
+    m = req["machine"]
+    vmid = machine(m)
+    storage = backup_storage(req["storage"])
+    note = freeze_note(req["freeze_id"])
+    wait = integer(req.get("verify_wait", 1800), 0, 3600)
+    owned(m)
+    if power_status(m) != "stopped":
+        raise ValueError("a machine freezes only when stopped")
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    if any(s["name"] != "current" for s in pve_get(f"/nodes/{NODE}/{kind}/{vmid}/snapshot")):
+        raise ValueError("a machine with snapshots does not freeze")
+
+    def mine():
+        return [b for b in backups(storage, vmid) if str(b.get("notes", "")).strip() == note]
+
+    found = mine()
+    if found and not freeze_stamp_valid(m, note):
+        # A backup of an earlier attempt: the machine may have run since, so
+        # what it holds is not what a freeze must keep.
+        for b in found:
+            backup_free(storage, b)
+        found = []
+    if not found:
+        freeze_stamp(m).unlink(missing_ok=True)
+        # A machine that boots with the node would run again before the retry.
+        if str(pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config").get("onboot", 0)) not in ("0", ""):
+            run("qm" if kind == "qemu" else "pct", "set", vmid, "--onboot", 0)
+        # Taken before the backup: a start after this point differs from it.
+        proof = {"note": note, "digest": config_digest(m), "started": last_start(m)}
+        try:
+            run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--protected", 1, "--notes-template", note, timeout=VZDUMP_SECONDS)
+        except CommandFailure as e:
+            # Another backup job of the cluster holds the guest.
+            if "lock" in str(e):
+                raise CommandFailure("the machine is being backed up by another job; freeze it again later") from e
+            raise
+        write(freeze_stamp(m), json.dumps(proof), 0o600)
+        found = mine()
+    if len(found) != 1:
+        raise CommandFailure("the backup is not on the storage")
+    deadline = time.monotonic() + wait
+    while True:
+        backup = (mine() or [None])[0]
+        if backup is None:
+            raise CommandFailure("the backup is not on the storage")
+        verification = (backup.get("verification") or {}).get("state")
+        if verification in ("ok", "failed") or time.monotonic() >= deadline:
+            break
+        time.sleep(VERIFY_POLL_SECONDS)
+    if verification == "failed":
+        backup_free(storage, backup)
+        freeze_stamp(m).unlink(missing_ok=True)
+        raise CommandFailure("the backup failed its verification and was removed")
+    # The wait above can take minutes: the machine must be what the backup holds.
+    if power_status(m) != "stopped" or not freeze_stamp_valid(m, note):
+        backup_free(storage, backup)
+        freeze_stamp(m).unlink(missing_ok=True)
+        raise CommandFailure("the machine changed while it was backed up; the backup was removed")
+    if verification != "ok":
+        # Kept for the next attempt, which reuses it while the machine is unchanged.
+        raise CommandFailure("the backup was not verified in time; the Proxmox Backup Server must verify new snapshots")
+    if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
+        raise CommandFailure("the backup could not be verified")
+    # Earlier attempts' leftovers: the machine is live, so no other freeze backup of it is wanted.
+    for other in carrel_backups(storage, vmid):
+        if other["volid"] != backup["volid"]:
+            backup_free(storage, other)
+    return {"volid": backup["volid"], "size": int(backup["size"]), "verification": "ok", "note": note}
+
+
+def discard_restore(m, where):
+    """Remove what a restore left on this node: a finished machine or a cut-off half."""
+    vmid = machine(m)
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    cmd = "qm" if m["kind"] == "vm" else "pct"
+    cfg = pve_get(f"/nodes/{where}/{kind}/{vmid}/config")
+    if where != NODE:
+        raise ValueError("machine is on another node")
+    if cfg.get("lock") == "create":
+        # A cut-off restore may not have written its tags yet, but whatever it
+        # did write must be this machine's.
+        name = cfg.get("name", cfg.get("hostname"))
+        tags = cfg.get("tags")
+        if (name is not None and name != m["name"]) or (tags is not None and "carrel" not in tags.split(";")):
+            raise ValueError("VMID is in use")
+        run(cmd, "unlock", vmid)
+    else:
+        owned(m, node=where)
+        if cfg.get("name", cfg.get("hostname")) != m["name"]:
+            raise ValueError("VMID is in use")
+        if "running" in run(cmd, "status", vmid):
+            run(cmd, "stop", vmid)
+    run(cmd, "destroy", vmid, "--purge", "1")
+
+
+def thaw(req):
+    m = req["machine"]
+    vmid = machine(m)
+    volid = req["volid"]
+    if not isinstance(volid, str) or not BACKUP_VOLUME.fullmatch(volid):
+        raise ValueError("invalid backup volume")
+    backup_storage(volid.split(":")[0])
+    guest = storage_id()
+    where = located(m)
+    if req.get("discard"):
+        # Deleting a machine whose thaw was cut off: drop what it restored.
+        if where is None:
+            return {"state": "absent"}
+        discard_restore(m, where)
+        return {"state": "discarded"}
+    if where is not None:
+        kind = "qemu" if m["kind"] == "vm" else "lxc"
+        if where == NODE and pve_get(f"/nodes/{where}/{kind}/{vmid}/config").get("lock") == "create":
+            # A restore that was cut off: PVE leaves its half behind, locked.
+            discard_restore(m, where)
+        else:
+            # A retry after the restore finished; anything else holds the VMID.
+            cfg = owned(m, node=where)
+            if where != NODE or cfg.get("lock") or cfg.get("name", cfg.get("hostname")) != m["name"]:
+                raise ValueError("VMID is in use")
+            return {"state": "restored"}
+    if any(PVE_NODES.glob(f"*/*/{vmid}.conf")):
+        raise ValueError("VMID is in use")
+    if m["kind"] == "vm":
+        run("qmrestore", volid, vmid, "--storage", guest, timeout=VZDUMP_SECONDS)
+    else:
+        run("pct", "restore", vmid, volid, "--storage", guest, timeout=VZDUMP_SECONDS)
+    owned(m)
+    return {"state": "restored"}
+
+
+def backup_remove(req):
+    m = req["machine"]
+    vmid = machine(m)
+    volid = req["volid"]
+    if not isinstance(volid, str) or not BACKUP_VOLUME.fullmatch(volid):
+        raise ValueError("invalid backup volume")
+    storage = backup_storage(volid.split(":")[0])
+    found = [b for b in backups(storage, vmid) if b.get("volid") == volid]
+    if not found:
+        return {"state": "absent"}
+    notes = str(found[0].get("notes", "")).strip()
+    # Never a scheduled or manual backup of the cluster, and never the backup
+    # of another freeze.
+    if not notes.startswith(FREEZE_NOTE) or (req.get("note") and notes != req["note"]):
+        raise ValueError("not the backup of a frozen machine")
+    backup_free(storage, found[0])
+    return {"state": "removed"}
+
+
 def main():
     STATE.mkdir(parents=True, exist_ok=True)
     # A start may carry a VM's cloud-init files: user-data with large runcmd
@@ -2128,12 +2358,16 @@ def main():
         console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
-    long = op in ("migrate", "migrate_finish")
+    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
+        # Anything that may change or start a machine ends the proof that a
+        # freeze backup still matches it (freeze_stamp_valid).
+        if isinstance(req.get("machine"), dict) and op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "freeze", "thaw", "backup_remove"):
+            freeze_stamp(req["machine"]).unlink(missing_ok=True)
         if req.get("request_id") and op in ("create", "action"):
             if not re.fullmatch(r"[a-f0-9]{64}", req["request_id"]):
                 raise ValueError("invalid request ID")
@@ -2185,6 +2419,8 @@ def main():
             out = migrate_finish(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
+        elif op in ("freeze", "thaw", "backup_remove"):
+            out = {"freeze": freeze, "thaw": thaw, "backup_remove": backup_remove}[op](req)
         elif op in ("fetch_start", "fetch_status", "fetch_store", "fetch_clean", "image_delete"):
             if not first_exit_node():
                 raise ValueError("fetches run on the first exit node")

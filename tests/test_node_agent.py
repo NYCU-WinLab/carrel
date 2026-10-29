@@ -1034,6 +1034,355 @@ def test_rename_sets_the_proxmox_name_of_an_owned_machine(monkeypatch, kind, com
         module.action({"machine": dict(MACHINE, kind=kind), "action": "rename", "name": "portal"})
 
 
+FROZEN_NOTE = "carrel-freeze op1"
+VOLID = "pbs:backup/vm/10100/2026-10-26T00:00:00Z"
+OLD_VOLID = "pbs:backup/vm/10100/2026-10-25T00:00:00Z"
+SCHEDULED_VOLID = "pbs:backup/vm/10100/2026-10-24T03:00:00Z"
+
+
+def freezer(monkeypatch, tmp_path, *, listing, power="stopped", snapshots=(), lock=None):
+    """node-agent with a PBS storage, a recorded command line and a node state directory."""
+    module = load("node-agent.py")
+    monkeypatch.setattr(
+        module, "storage_entry", lambda storage: {"type": "pbs"} if storage == "pbs" else {"type": "zfspool"}
+    )
+    monkeypatch.setattr(module, "owned", lambda m, allow_provisioning=False, node=None: {"name": m["name"]})
+    monkeypatch.setattr(module, "power_status", lambda m: power)
+    monkeypatch.setattr(module, "STATE", tmp_path / "state")
+    (tmp_path / "state").mkdir(exist_ok=True)
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    config = {"digest": "d1"}
+
+    def pve_get(path, **kw):
+        if path.endswith("/snapshot"):
+            return [{"name": "current"}, *({"name": n} for n in snapshots)]
+        return dict(config)
+
+    monkeypatch.setattr(module, "pve_get", pve_get)
+    commands = []
+
+    def run(*args, **kw):
+        commands.append([str(a) for a in args])
+        if args[0] == "pvesh" and args[1] == "get":
+            return json.dumps(listing(commands))
+        if args[0] == "vzdump" and lock:
+            raise module.CommandFailure("vzdump 10100 failed: can't lock file '/var/run/vzdump.lock'")
+        return ""
+
+    monkeypatch.setattr(module, "run", run)
+    module.test_config = config
+    return module, commands
+
+
+def backup(**kw):
+    return {
+        "volid": VOLID,
+        "size": 1 << 30,
+        "protected": 1,
+        "notes": FROZEN_NOTE,
+        "verification": {"state": "ok"},
+        **kw,
+    }
+
+
+def freed(commands):
+    return [c[2] for c in commands if c[:2] == ["pvesm", "free"]]
+
+
+def dumped(commands):
+    return any(c[0] == "vzdump" for c in commands)
+
+
+REQUEST = {"machine": dict(MACHINE), "storage": "pbs", "freeze_id": "op1", "verify_wait": 0}
+
+
+def test_freeze_backs_up_protected_and_requires_a_verified_backup(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()] if dumped(c) else [])
+    out = module.freeze(REQUEST)
+    assert out == {"volid": VOLID, "size": 1 << 30, "verification": "ok", "note": FROZEN_NOTE}
+    dump = next(c for c in commands if c[0] == "vzdump")
+    assert dump[1:] == [
+        "10100",
+        "--storage",
+        "pbs",
+        "--mode",
+        "stop",
+        "--protected",
+        "1",
+        "--notes-template",
+        FROZEN_NOTE,
+    ]
+
+
+def test_freeze_waits_for_the_backup_server_to_verify(monkeypatch, tmp_path):
+    polls = []
+
+    def listing(c):
+        polls.append(1)
+        done = len(polls) > 5
+        return [backup(verification={"state": "ok"} if done else {})] if dumped(c) else []
+
+    module, _ = freezer(monkeypatch, tmp_path, listing=listing)
+    assert module.freeze({**REQUEST, "verify_wait": 3600})["verification"] == "ok"
+
+
+def test_freeze_refuses_an_unverified_backup_but_keeps_it_for_a_retry(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(verification=None)] if dumped(c) else []
+    )
+    with pytest.raises(module.CommandFailure, match="not verified"):
+        module.freeze(REQUEST)
+    assert freed(commands) == []
+    # The retry finds it and, the machine being unchanged, takes no second one.
+    module2, commands2 = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()])
+    assert module2.freeze(REQUEST)["verification"] == "ok"
+    assert not dumped(commands2)
+
+
+def test_freeze_removes_a_backup_that_failed_its_verification(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [backup(verification={"state": "failed"})] if dumped(c) else [],
+    )
+    with pytest.raises(module.CommandFailure, match="failed its verification"):
+        module.freeze(REQUEST)
+    assert freed(commands) == [VOLID]
+    assert not module.freeze_stamp(MACHINE).exists()
+
+
+def test_freeze_reuses_its_backup_only_while_the_machine_is_unchanged(monkeypatch, tmp_path):
+    state = {"old_gone": False}
+
+    def listing(c):
+        state["old_gone"] = OLD_VOLID in freed(c)
+        out = [backup(volid=OLD_VOLID)] if not state["old_gone"] else []
+        return out + ([backup()] if dumped(c) else [])
+
+    module, commands = freezer(monkeypatch, tmp_path, listing=listing)
+    # The first attempt made OLD_VOLID and stamped the machine as it was.
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1", "started": 0})
+    )
+    # It was started and written to since: the node's own requests drop the stamp.
+    module.freeze_stamp(MACHINE).unlink()
+    out = module.freeze(REQUEST)
+    assert dumped(commands) and freed(commands) == [OLD_VOLID] and out["volid"] == VOLID
+
+
+def test_freeze_does_not_reuse_a_backup_after_a_configuration_change(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(volid=OLD_VOLID)] if not dumped(c) else [backup()]
+    )
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "other", "started": 0})
+    )
+    module.freeze(REQUEST)
+    assert dumped(commands)
+
+
+def test_freeze_does_not_reuse_a_backup_after_a_start_the_agent_never_saw(monkeypatch, tmp_path):
+    # The node booted and PVE started the machine, or an admin did: no agent request, no config change.
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(volid=OLD_VOLID)] if not dumped(c) else [backup()]
+    )
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1", "started": 0})
+    )
+    monkeypatch.setattr(module, "last_start", lambda m: 1793000000)
+    module.freeze(REQUEST)
+    assert dumped(commands) and OLD_VOLID in freed(commands)
+
+
+def test_freeze_checks_the_machine_again_after_waiting_for_the_verification(monkeypatch, tmp_path):
+    polls = []
+
+    def listing(c):
+        polls.append(1)
+        if len(polls) > 4:
+            # Started and stopped again while PBS was verifying.
+            module.last_start = lambda m: 1793000000
+        return [backup(verification={"state": "ok"} if len(polls) > 4 else {})] if dumped(c) else []
+
+    module, commands = freezer(monkeypatch, tmp_path, listing=listing)
+    with pytest.raises(module.CommandFailure, match="changed while"):
+        module.freeze({**REQUEST, "verify_wait": 3600})
+    assert freed(commands) == [VOLID]
+
+
+def test_freeze_turns_off_start_at_boot_before_the_backup(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()] if dumped(c) else [])
+    module.test_config["onboot"] = 1
+    module.freeze(REQUEST)
+    names = [c[:2] for c in commands]
+    assert ["qm", "set"] in names and names.index(["qm", "set"]) < next(
+        i for i, c in enumerate(commands) if c[0] == "vzdump"
+    )
+
+
+def test_any_request_for_a_machine_drops_the_proof_of_an_unchanged_one(monkeypatch, tmp_path):
+    module, _ = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    monkeypatch.setattr(module, "cloud_init_remove", lambda req: {})
+    module.write(module.freeze_stamp(MACHINE), "{}")
+    request = json.dumps({"op": "cloud_init_remove", "machine": MACHINE}).encode() + b"\n"
+    monkeypatch.setattr(module.sys, "stdin", type("In", (), {"buffer": __import__("io").BytesIO(request)})())
+    module.main()
+    assert not module.freeze_stamp(MACHINE).exists()
+
+
+def test_freeze_leaves_the_clusters_own_backups_alone(monkeypatch, tmp_path):
+    # A scheduled job backs up the same machine into the same storage.
+    scheduled = backup(volid=SCHEDULED_VOLID, notes="box", protected=0, verification={"state": "ok"})
+    leftover = backup(volid=OLD_VOLID, notes="carrel-freeze op0")
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [scheduled, leftover] + ([backup()] if dumped(c) else []),
+    )
+    out = module.freeze(REQUEST)
+    assert out["volid"] == VOLID
+    # An earlier freeze's leftover goes; the scheduled backup is never read as ours.
+    assert freed(commands) == [OLD_VOLID]
+    assert not any(SCHEDULED_VOLID in c for c in commands if c[0] != "pvesh")
+    with pytest.raises(ValueError, match="frozen machine"):
+        module.backup_remove({"machine": dict(MACHINE), "volid": SCHEDULED_VOLID})
+    assert freed(commands) == [OLD_VOLID]
+
+
+def test_freeze_names_a_backup_job_that_holds_the_machine(monkeypatch, tmp_path):
+    module, _ = freezer(monkeypatch, tmp_path, listing=lambda c: [], lock=True)
+    with pytest.raises(module.CommandFailure, match="another job"):
+        module.freeze(REQUEST)
+
+
+@pytest.mark.parametrize("listed", [backup(protected=0), backup(size=0)])
+def test_freeze_refuses_a_backup_it_cannot_trust(monkeypatch, tmp_path, listed):
+    module, _ = freezer(monkeypatch, tmp_path, listing=lambda c: [listed])
+    module.write(
+        module.freeze_stamp(MACHINE), json.dumps({"note": FROZEN_NOTE, "digest": "d1", "started": 0})
+    )
+    with pytest.raises(module.CommandFailure):
+        module.freeze(REQUEST)
+
+
+def test_freeze_refuses_a_running_machine_snapshots_and_a_plain_storage(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [], power="running")
+    with pytest.raises(ValueError, match="stopped"):
+        module.freeze(REQUEST)
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [], snapshots=["before"])
+    with pytest.raises(ValueError, match="snapshots"):
+        module.freeze(REQUEST)
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    with pytest.raises(ValueError, match="Backup Server"):
+        module.freeze({**REQUEST, "storage": "local-zfs"})
+    assert not dumped(commands)
+
+
+def thawer(monkeypatch, tmp_path, config=None):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    nodes = tmp_path / "nodes"
+    (nodes / "carrel01" / "qemu-server").mkdir(parents=True)
+    monkeypatch.setattr(module, "PVE_NODES", nodes)
+    monkeypatch.setattr(module, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    if config is not None:
+        (nodes / "carrel01" / "qemu-server" / "10100.conf").write_text("x")
+        module.test_config.clear()
+        module.test_config.update(config)
+    return module, commands, nodes
+
+
+def test_thaw_restores_once_and_refuses_a_taken_vmid(monkeypatch, tmp_path):
+    module, commands, nodes = thawer(monkeypatch, tmp_path)
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+    assert ["qmrestore", VOLID, "10100", "--storage", "local-zfs"] in [c[:5] for c in commands]
+    (nodes / "carrel02" / "qemu-server").mkdir(parents=True)
+    (nodes / "carrel02" / "qemu-server" / "10100.conf").write_text("x")
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID})
+
+
+def test_thaw_accepts_a_machine_that_an_earlier_attempt_restored(monkeypatch, tmp_path):
+    module, commands, _ = thawer(monkeypatch, tmp_path, config={"name": MACHINE["name"]})
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+    assert not any(c[0] == "qmrestore" for c in commands)
+
+
+def test_thaw_replaces_the_half_of_a_restore_that_was_cut_off(monkeypatch, tmp_path):
+    module, commands, nodes = thawer(monkeypatch, tmp_path, config={"lock": "create"})
+
+    def destroyed(*args, **kw):
+        commands.append([str(a) for a in args])
+        if args[:2] == ("qm", "destroy"):
+            (nodes / "carrel01" / "qemu-server" / "10100.conf").unlink()
+        return ""
+
+    monkeypatch.setattr(module, "run", destroyed)
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+    names = [c[:2] for c in commands]
+    assert ["qm", "unlock"] in names and names.index(["qm", "destroy"]) < names.index(["qmrestore", VOLID])
+
+
+def test_thaw_discard_removes_what_a_thaw_restored(monkeypatch, tmp_path):
+    module, commands, _nodes = thawer(monkeypatch, tmp_path, config={"name": MACHINE["name"]})
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID, "discard": True}) == {"state": "discarded"}
+    assert ["qm", "destroy", "10100", "--purge", "1"] in commands
+
+
+@pytest.mark.parametrize(
+    "config", [{"lock": "create", "name": "someone-else"}, {"lock": "create", "tags": "other"}]
+)
+def test_thaw_never_destroys_a_locked_machine_that_is_not_the_one_being_restored(
+    monkeypatch, tmp_path, config
+):
+    module, commands, _nodes = thawer(monkeypatch, tmp_path, config=config)
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID})
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID, "discard": True})
+    assert not any(c[:2] in (["qm", "destroy"], ["qm", "unlock"]) for c in commands)
+
+
+def test_thaw_replaces_a_cut_off_restore_that_has_no_tags_yet(monkeypatch, tmp_path):
+    module, commands, nodes = thawer(
+        monkeypatch, tmp_path, config={"lock": "create", "name": MACHINE["name"]}
+    )
+
+    def destroyed(*args, **kw):
+        commands.append([str(a) for a in args])
+        if args[:2] == ("qm", "destroy"):
+            (nodes / "carrel01" / "qemu-server" / "10100.conf").unlink()
+        return ""
+
+    monkeypatch.setattr(module, "run", destroyed)
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+
+
+def test_thaw_discard_of_a_machine_that_was_never_restored_does_nothing(monkeypatch, tmp_path):
+    module, commands, _nodes = thawer(monkeypatch, tmp_path)
+    assert module.thaw({"machine": dict(MACHINE), "volid": VOLID, "discard": True}) == {"state": "absent"}
+    assert not any(c[0] in ("qm", "qmrestore") for c in commands)
+
+
+def test_backup_remove_unprotects_then_frees_only_the_freeze_backup(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()])
+    assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": FROZEN_NOTE}) == {
+        "state": "removed"
+    }
+    assert [c[:2] for c in commands if c[0] in ("pvesh", "pvesm")][1:] == [
+        ["pvesh", "set"],
+        ["pvesm", "free"],
+    ]
+    # Not another freeze's backup, and not a backup of the cluster's own.
+    with pytest.raises(ValueError, match="frozen machine"):
+        module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": "carrel-freeze other"})
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup(notes="manual backup")])
+    with pytest.raises(ValueError, match="frozen machine"):
+        module.backup_remove({"machine": dict(MACHINE), "volid": VOLID})
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "absent"}
+
+
 def test_platform_check_repairs_what_a_boot_loses(monkeypatch, tmp_path):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "NODE", "carrel01")

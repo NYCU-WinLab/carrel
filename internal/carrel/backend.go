@@ -88,7 +88,7 @@ func adapterTimeout(op string) time.Duration {
 		return 60 * time.Second
 	case "reconcile":
 		return 300 * time.Second
-	case "migrate", "migrate_finish", "fetch_store":
+	case "migrate", "migrate_finish", "fetch_store", "freeze", "thaw", "backup_remove":
 		// A disk copy at the migration bandwidth limit (PLAN 7.10).
 		return 4 * time.Hour
 	case "sync":
