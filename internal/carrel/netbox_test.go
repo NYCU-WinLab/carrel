@@ -1123,6 +1123,66 @@ func TestNetBoxSyncsVPNTunnels(t *testing.T) {
 	}
 }
 
+// The operator's spokes keep a tunnel alive after the last client (#201).
+func TestNetBoxTunnelWithOperatorSpokesIsDecommissionedNotDeleted(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tunnel := f.all("vpn/tunnels/")[0]
+	id := integer(tunnel["id"])
+	// The operator adds a spoke on a device of their own.
+	f.objects["vpn/tunnel-terminations/"] = append(f.objects["vpn/tunnel-terminations/"], D{"id": 900, "tunnel": D{"id": id}, "role": D{"value": "spoke"}, "termination_type": "dcim.interface", "termination_id": 77})
+	p.Store.Remove("vpn_clients", "laptop")
+	p.Store.Remove("vpn_clients", "agent")
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tunnels := f.all("vpn/tunnels/")
+	if len(tunnels) != 1 || integer(tunnels[0]["id"]) != id || nbScalar(tunnels[0]["status"]) != "decommissioning" {
+		t.Fatal(tunnels)
+	}
+	if find(f.all("vpn/tunnel-terminations/"), func(o D) bool { return integer(o["id"]) == 900 }) == nil {
+		t.Fatal("the operator's spoke went")
+	}
+	f.reset()
+	if r := syncNetBox(t, p); r.Writes != 0 {
+		t.Fatal("a second pass wrote", f.writes)
+	}
+	// A client again: the same tunnel, active.
+	p.Store.Put("vpn_clients", "c", 1, vpnClient{ID: "c", TenantN: 1, Name: "again", Address: "10.201.1.4", PublicKey: "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU=", State: "ready", ExpiresAt: now() + 3600}.D())
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if tunnels := f.all("vpn/tunnels/"); len(tunnels) != 1 || integer(tunnels[0]["id"]) != id || nbScalar(tunnels[0]["status"]) != "active" {
+		t.Fatal(tunnels)
+	}
+	// The spoke gone, the next pass without a client deletes the tunnel.
+	f.objects["vpn/tunnel-terminations/"] = filter(f.objects["vpn/tunnel-terminations/"], func(o D) bool { return integer(o["id"]) != 900 })
+	p.Store.Remove("vpn_clients", "c")
+	syncNetBox(t, p)
+	if len(f.all("vpn/tunnels/")) != 0 {
+		t.Fatal("the tunnel stayed without spokes")
+	}
+}
+
+// A changed tunnel_group moves the tunnel instead of replacing it (#201).
+func TestNetBoxTunnelGroupChangeMovesTheTunnel(t *testing.T) {
+	p, f := vpnTunnelFixture(t)
+	syncNetBox(t, p)
+	id := integer(f.all("vpn/tunnels/")[0]["id"])
+	f.objects["vpn/tunnel-groups/"] = append(f.objects["vpn/tunnel-groups/"], D{"id": 10, "name": "Carrel Client VPN 2"})
+	p.Config.NetBox["tunnel_group"] = "Carrel Client VPN 2"
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tunnels := f.all("vpn/tunnels/")
+	if len(tunnels) != 1 || integer(tunnels[0]["id"]) != id || refID(tunnels[0]["group"]) != 10 || slices.Contains(f.writes, "POST vpn/tunnels/") {
+		t.Fatal(tunnels, f.writes)
+	}
+}
+
 func TestNetBoxLeavesTunnelsOutUnlessConfigured(t *testing.T) {
 	p, f := vpnTunnelFixture(t)
 	delete(p.Config.NetBox, "tunnel_group")
