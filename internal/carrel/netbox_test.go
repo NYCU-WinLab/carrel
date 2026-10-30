@@ -950,9 +950,8 @@ func TestNetBoxWithoutTenancyWritePermissionSyncsTheRest(t *testing.T) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	carol := p.Store.Register("user:carol", "carol")
-	other := seedMachine(p, "api", 10200)
-	other["tenant_n"] = carol["n"]
-	p.Store.Put("machines", 10200, integer(carol["n"]), other)
+	n := integer(carol["n"])
+	p.Store.Put("machines", 10300, n, D{"name": "api", "vmid": 10300, "tenant_n": n, "kind": "vm", "image": "debian-13", "cpu": 1, "memory_mb": 1024, "disk_gb": 10, "state": "ready", "power_state": "stopped", "ip": fmt.Sprintf("10.200.%d.10", n), "mac": "02:ca:03:00:00:01", "nics": []D{}, "node": "carrel01"})
 	f.forbidWrite = map[string]bool{"tenancy/tenants/": true, "vpn/l2vpns/": true}
 	r := syncNetBox(t, p)
 	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "tenants and VNIs") {
