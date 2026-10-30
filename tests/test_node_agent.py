@@ -1469,7 +1469,13 @@ def test_pbs_verify_new_sends_no_token_before_the_fingerprint_matches(monkeypatc
     monkeypatch.setattr(
         module,
         "storage_entry",
-        lambda storage: {"type": "pbs", "server": "pbs.example", "datastore": "d", "username": "u@pbs!t", "fingerprint": "AA:BB"},
+        lambda storage: {
+            "type": "pbs",
+            "server": "pbs.example",
+            "datastore": "d",
+            "username": "u@pbs!t",
+            "fingerprint": "AA:BB",
+        },
     )
     (tmp_path / "pbs.pw").write_text("secret\n")
     monkeypatch.setattr(module, "PBS_SECRETS", tmp_path)
@@ -1497,7 +1503,11 @@ def test_pbs_verify_new_is_unknown_without_a_server_or_secret(monkeypatch, tmp_p
     module = load("node-agent.py")
     monkeypatch.setattr(module, "storage_entry", lambda storage: {"type": "pbs"})
     assert module.pbs_verify_new("pbs") is None
-    monkeypatch.setattr(module, "storage_entry", lambda storage: {"type": "pbs", "server": "pbs.example", "datastore": "d", "username": "u@pbs!t"})
+    monkeypatch.setattr(
+        module,
+        "storage_entry",
+        lambda storage: {"type": "pbs", "server": "pbs.example", "datastore": "d", "username": "u@pbs!t"},
+    )
     monkeypatch.setattr(module, "PBS_SECRETS", tmp_path)
     assert module.pbs_verify_new("pbs") is None
 
@@ -1509,20 +1519,39 @@ def test_backup_sweep_removes_only_old_orphaned_freeze_backups(monkeypatch, tmp_
     listing = [
         backup(volid=VOLID, notes=FROZEN_NOTE, ctime=now - 30 * 86400),  # kept by its row
         backup(volid=OLD_VOLID, notes="carrel-freeze gone", ctime=now - 30 * 86400),  # orphan, old
-        backup(volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z", notes="carrel-freeze fresh", ctime=now - 3600),  # orphan, young
+        backup(
+            volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z", notes="carrel-freeze fresh", ctime=now - 3600
+        ),  # orphan, young
         backup(volid=SCHEDULED_VOLID, notes="nightly", ctime=now - 60 * 86400),  # the cluster's own
         backup(volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze noage"),  # age unknown
-        backup(volid="pbs:backup/vm/10103/2026-10-01T00:00:00Z", notes="carrel-freeze op9 keep", ctime=now - 30 * 86400),  # note edited, volume still named
+        backup(
+            volid="pbs:backup/vm/10103/2026-10-01T00:00:00Z",
+            notes="carrel-freeze op9 keep",
+            ctime=now - 30 * 86400,
+        ),  # note edited, volume still named
     ]
     module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: listing)
     out = module.backup_sweep(
-        {"storage": "pbs", "keep": [FROZEN_NOTE], "keep_volids": ["pbs:backup/vm/10103/2026-10-01T00:00:00Z"], "older_than": 7 * 86400}
+        {
+            "storage": "pbs",
+            "keep": [FROZEN_NOTE],
+            "keep_volids": ["pbs:backup/vm/10103/2026-10-01T00:00:00Z"],
+            "older_than": 7 * 86400,
+        }
     )
     assert out == {
-        "orphans": [OLD_VOLID, "pbs:backup/vm/10101/2026-10-29T00:00:00Z", "pbs:backup/vm/10102/2026-10-20T00:00:00Z"],
+        "orphans": [
+            OLD_VOLID,
+            "pbs:backup/vm/10101/2026-10-29T00:00:00Z",
+            "pbs:backup/vm/10102/2026-10-20T00:00:00Z",
+        ],
         "removed": [OLD_VOLID],
     }
     assert freed(commands) == [OLD_VOLID]
-    assert ["pvesh", "set", f"/nodes/carrel01/storage/pbs/content/{OLD_VOLID}", "--protected", "0"] in commands or any(
-        c[:2] == ["pvesh", "set"] for c in commands
-    )
+    assert [
+        "pvesh",
+        "set",
+        f"/nodes/carrel01/storage/pbs/content/{OLD_VOLID}",
+        "--protected",
+        "0",
+    ] in commands or any(c[:2] == ["pvesh", "set"] for c in commands)
