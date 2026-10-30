@@ -28,10 +28,12 @@ type fakeNetBox struct {
 	fields  map[string]bool
 	// refuse names IP addresses NetBox rejects, as it does a duplicate.
 	refuse map[string]bool
+	// forbid names paths the token has no permission for (403).
+	forbid map[string]bool
 }
 
-var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true, "tunnel": true}
-var nbChoices = map[string]bool{"status": true, "role": true, "start_on_boot": true, "encapsulation": true}
+var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true, "tunnel": true, "tenant": true}
+var nbChoices = map[string]bool{"status": true, "role": true, "start_on_boot": true, "encapsulation": true, "type": true}
 
 func newFakeNetBox(t *testing.T) (*fakeNetBox, *httptest.Server) {
 	f := &fakeNetBox{objects: map[string][]D{}, next: 100, fields: map[string]bool{"vmid": true}}
@@ -59,6 +61,10 @@ func (f *fakeNetBox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if n, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
 			id, path = n, strings.TrimSuffix(path, strconv.Itoa(n)+"/")
 		}
+	}
+	if f.forbid[path] {
+		reply(403, D{"detail": "You do not have permission to perform this action."})
+		return
 	}
 	var body D
 	if r.Method == "POST" || r.Method == "PATCH" {
@@ -860,6 +866,73 @@ func TestNetBoxUnownedObjectAtAPoolAddressKeepsItOutOfTheFreeList(t *testing.T) 
 	// The object made by hand is still the only one at that address.
 	if n := len(filter(f.all("ipam/ip-addresses/"), func(o D) bool { return strings.HasPrefix(str(o["address"]), "140.113.60.164/") })); n != 1 {
 		t.Fatalf("%d objects at .164", n)
+	}
+}
+
+// Each carrel tenant is a NetBox tenant its objects carry, and each VXLAN
+// segment an L2VPN with the VNI as identifier (#181).
+func TestNetBoxSyncsTenantsAndVNIs(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tenant := find(f.all("tenancy/tenants/"), func(o D) bool { return o["slug"] == "carrel-alice" })
+	if tenant == nil || tenant["name"] != "Carrel: Alice" {
+		t.Fatal(tenant)
+	}
+	id := integer(tenant["id"])
+	for _, path := range []string{"ipam/vrfs/", "ipam/prefixes/", "ipam/ip-addresses/", "virtualization/virtual-machines/", "vpn/l2vpns/"} {
+		for _, o := range f.all(path) {
+			if shared := path == "ipam/vrfs/" && o["name"] == "Carrel"; refID(o["tenant"]) != id && !shared || shared && o["tenant"] != nil {
+				t.Fatalf("%s %v carries tenant %v", path, o["id"], o["tenant"])
+			}
+		}
+	}
+	want := map[string][2]any{"carrel-t001": {100001, "vxlan-evpn"}, "carrel-p00101": {200101, "vxlan"}, "carrel-p00102": {200102, "vxlan"}}
+	l2vpns := f.all("vpn/l2vpns/")
+	if len(l2vpns) != len(want) {
+		t.Fatal(l2vpns)
+	}
+	for _, o := range l2vpns {
+		w := want[str(o["slug"])]
+		if integer(o["identifier"]) != w[0] || nbScalar(o["type"]) != w[1] || !strings.HasSuffix(str(o["name"]), ".alice") {
+			t.Fatal(o)
+		}
+	}
+	// A second pass writes nothing.
+	if r := syncNetBox(t, p); r.Writes != 0 || len(r.Errors) > 0 {
+		t.Fatal(r)
+	}
+	// The tenant's last object leaves: VNIs and the tenant go, the tenant last.
+	p.Store.Exec("DELETE FROM objects WHERE tenant=1")
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if len(f.all("vpn/l2vpns/")) != 0 || len(f.all("tenancy/tenants/")) != 0 {
+		t.Fatal(f.all("vpn/l2vpns/"), f.all("tenancy/tenants/"))
+	}
+	if last := f.writes[len(f.writes)-1]; last != "DELETE tenancy/tenants/" {
+		t.Fatal(f.writes)
+	}
+}
+
+// A token without the tenancy permissions (#181) syncs everything else, with no
+// tenant on the objects and one error that names the gap.
+func TestNetBoxWithoutTenancyPermissionSyncsTheRest(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.forbid = map[string]bool{"tenancy/tenants/": true}
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "tenants and VNIs") {
+		t.Fatal(r.Errors)
+	}
+	vm := find(f.all("virtualization/virtual-machines/"), func(o D) bool { return o["name"] == "web.alice" })
+	if vm == nil || vm["tenant"] != nil {
+		t.Fatal(vm)
+	}
+	if len(f.all("vpn/l2vpns/")) != 0 {
+		t.Fatal("VNIs recorded without the tenant permission")
 	}
 }
 
