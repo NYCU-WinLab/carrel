@@ -225,6 +225,41 @@ func (e *Execution) freezeChecks(n int, m D) {
 	if held := e.freezeHeld(n, m); len(held) > 0 {
 		fail("conflict", "Release "+str(held[0]["name"])+" first: it is a shared resource that a frozen machine cannot keep", D{"recovery": "resolve_prerequisite", "held": held})
 	}
+	// The site's cap on frozen disk space across every tenant (#192).
+	if limit := num(e.P.Config["frozen_total_gb"]); limit > 0 && frozenDisks(e.S.Objects("frozen"))+num(m["disk_gb"]) > limit {
+		fail("quota_exceeded", "The site's space for frozen machines is used up", D{"dimension": "frozen_total_gb", "recovery": "contact_administrator"})
+	}
+}
+
+// backupSweepAge is how old a freeze backup that no record names must be
+// before the sweep removes it: a freeze or thaw in flight is far younger.
+const backupSweepAge = 7 * 24 * time.Hour
+
+// SweepBackups lists the freeze backups on the site's backup storage that no
+// frozen row, thawed machine or running freeze names, and removes those
+// older than backupSweepAge (#192). Nothing can thaw such a backup: its
+// record is gone. Scheduled backups of the cluster are never touched.
+func (e *Execution) SweepBackups() D {
+	storage := str(e.P.Config["backup_storage"])
+	nodes := e.P.Nodes()
+	if storage == "" || len(nodes) == 0 {
+		return nil
+	}
+	keep := []string{}
+	for _, f := range e.S.Objects("frozen") {
+		keep = append(keep, str(f["backup_note"]))
+	}
+	for _, m := range e.S.Objects("machines") {
+		if b := obj(m["thaw_backup"]); len(b) > 0 {
+			keep = append(keep, str(b["note"]))
+		}
+	}
+	for _, op := range e.S.ActiveOperations() {
+		if op["tool"] == "machine_freeze" {
+			keep = append(keep, "carrel-freeze "+str(op["id"]))
+		}
+	}
+	return obj(e.Call(D{"op": "backup_sweep", "storage": storage, "keep": keep, "older_than": int(backupSweepAge.Seconds())}, nodes[0].Target))
 }
 
 // PerformFreeze takes the backup without the writer lock. The machine stays

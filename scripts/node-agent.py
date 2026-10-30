@@ -2157,6 +2157,45 @@ def backup_free(storage, backup):
     run("pvesm", "free", backup["volid"], timeout=600)
 
 
+PBS_SECRETS = Path("/etc/pve/priv/storage")
+
+
+def pbs_verify_new(storage):
+    """Whether the datastore behind a PBS storage verifies new snapshots.
+
+    True or False from the backup server's own configuration; None when it
+    cannot be read (no server, token or permission), which changes nothing.
+    A freeze that waits 30 minutes for a verification that never comes is
+    the symptom this check pre-empts (#192).
+    """
+    entry = storage_entry(storage) or {}
+    server, datastore, username = entry.get("server"), entry.get("datastore"), entry.get("username")
+    secret_file = PBS_SECRETS / f"{storage}.pw"
+    if not (server and datastore and username and secret_file.exists()):
+        return None
+    try:
+        context = ssl.create_default_context()
+        if entry.get("fingerprint"):
+            # PVE pins the server by fingerprint; so does this read.
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        connection = http.client.HTTPSConnection(server, int(entry.get("port", 8007)), context=context, timeout=15)
+        connection.request("GET", f"/api2/json/config/datastore/{urllib.parse.quote(datastore, safe='')}",
+                           headers={"Authorization": f"PBSAPIToken={username}:{secret_file.read_text().strip()}"})
+        response = connection.getresponse()
+        if entry.get("fingerprint"):
+            cert = connection.sock.getpeercert(binary_form=True)
+            seen = ":".join(f"{b:02X}" for b in hashlib.sha256(cert).digest())
+            if seen.lower() != entry["fingerprint"].lower():
+                return None
+        if response.status != 200:
+            return None
+        data = json.loads(response.read(1 << 20)).get("data") or {}
+        return bool(data.get("verify-new"))
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def freeze_stamp(m):
     return STATE / f"freeze-{machine(m)}.json"
 
@@ -2217,6 +2256,8 @@ def freeze(req):
             backup_free(storage, b)
         found = []
     if not found:
+        if pbs_verify_new(storage) is False:
+            raise CommandFailure(f"the backup server does not verify new snapshots on datastore {storage_entry(storage).get('datastore')}; enable Verify New Snapshots on it first")
         freeze_stamp(m).unlink(missing_ok=True)
         # A machine that boots with the node would run again before the retry.
         if str(pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config").get("onboot", 0)) not in ("0", ""):
@@ -2274,10 +2315,11 @@ def discard_restore(m, where):
         raise ValueError("machine is on another node")
     if cfg.get("lock") == "create":
         # A cut-off restore may not have written its tags yet, but whatever it
-        # did write must be this machine's.
+        # did write must be this machine's: its name, and the carrel and
+        # tenant tags (#192).
         name = cfg.get("name", cfg.get("hostname"))
         tags = cfg.get("tags")
-        if (name is not None and name != m["name"]) or (tags is not None and "carrel" not in tags.split(";")):
+        if (name is not None and name != m["name"]) or (tags is not None and not {"carrel", f"tenant-{m['tenant_n']}"} <= set(tags.split(";"))):
             raise ValueError("VMID is in use")
         run(cmd, "unlock", vmid)
     else:
@@ -2342,6 +2384,33 @@ def backup_remove(req):
         raise ValueError("not the backup of a frozen machine")
     backup_free(storage, found[0])
     return {"state": "removed"}
+
+
+def backup_sweep(req):
+    """List the freeze backups no record names; remove those older than older_than seconds.
+
+    keep holds the notes of every backup a frozen row, a thawed machine or a
+    running freeze still names. Nothing can thaw a backup outside it: its
+    record is gone. The cluster's own backups are not freeze backups and
+    are never read as such (#192).
+    """
+    storage = backup_storage(req["storage"])
+    keep = set(req.get("keep") or [])
+    if not all(isinstance(k, str) for k in keep):
+        raise ValueError("invalid keep list")
+    older_than = integer(req.get("older_than", 7 * 86400), 3600, 365 * 86400)
+    out = json.loads(run("pvesh", "get", f"/nodes/{NODE}/storage/{storage}/content", "--content", "backup", "--output-format", "json") or "[]")
+    orphans, removed = [], []
+    for b in out:
+        notes = str(b.get("notes", "")).strip()
+        if not notes.startswith(FREEZE_NOTE) or notes in keep or not BACKUP_VOLUME.fullmatch(str(b.get("volid"))):
+            continue
+        orphans.append(b["volid"])
+        # Only a backup whose age is known goes.
+        if isinstance(b.get("ctime"), int) and b["ctime"] < time.time() - older_than:
+            backup_free(storage, b)
+            removed.append(b["volid"])
+    return {"orphans": orphans, "removed": removed}
 
 
 def main():
@@ -2421,6 +2490,8 @@ def main():
             out = cloud_init_remove(req)
         elif op in ("freeze", "thaw", "backup_remove"):
             out = {"freeze": freeze, "thaw": thaw, "backup_remove": backup_remove}[op](req)
+        elif op == "backup_sweep":
+            out = backup_sweep(req)
         elif op in ("fetch_start", "fetch_status", "fetch_store", "fetch_clean", "image_delete"):
             if not first_exit_node():
                 raise ValueError("fetches run on the first exit node")

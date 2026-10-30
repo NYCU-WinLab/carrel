@@ -43,7 +43,11 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		}
 		r := e.Reconcile()
 		e.RefreshStorage()
-		return D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit(), "disk_volumes_collected": e.CollectDiskVolumes()}
+		out := D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit(), "disk_volumes_collected": e.CollectDiskVolumes()}
+		if swept := e.SweepBackups(); swept != nil {
+			out["backups_swept"] = swept
+		}
+		return out
 	case "zone_add", "zone_list", "zone_remove":
 		return e.ZoneAction(tool, a, w)
 	case "domain_proxy":

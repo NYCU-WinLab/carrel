@@ -1386,7 +1386,11 @@ finds a half-restored machine; the backup goes only after the live row is commit
 machine removes the backup. Frozen machines keep one copy on PBS: freezing is not an off-site backup.
 A freeze backup is told apart by its notes and is reused by a retry only while the node's stamp proves
 the machine has not run or changed since; scheduled backups of the cluster are never read, counted or
-removed. Scheduled backups of running machines stay out of scope.
+removed. Before a new backup the node asks the backup server whether the datastore verifies new
+snapshots and refuses at once if it does not. The site may cap frozen disk space across all
+tenants with `frozen_total_gb`. Admin `reconcile_run` sweeps freeze backups that no frozen row,
+thawed machine or running freeze names: it lists them and removes those older than 7 days.
+Scheduled backups of running machines stay out of scope.
 
 Until then, the control plane sends one archive each night (database, configuration,
 certificates and each node's files) to the SSH target `carrel-backup`: `scripts/backup-target.py`,

@@ -1441,3 +1441,56 @@ def test_platform_check_repairs_what_a_boot_loses(monkeypatch, tmp_path):
     out = module.platform_check()
     assert out["repaired"] == ["route cache flushed"] and not any("sed" in c for c in calls)
     assert "infra CT 101 has no static eth0 stanza for the mtu line" in out["problems"]
+
+
+def test_thaw_never_destroys_a_cut_off_restore_of_another_tenant(monkeypatch, tmp_path):
+    # lock=create with tags written already, but another tenant's (#192).
+    module, commands, _nodes = thawer(
+        monkeypatch, tmp_path, config={"lock": "create", "name": MACHINE["name"], "tags": "carrel;tenant-9"}
+    )
+    with pytest.raises(ValueError, match="in use"):
+        module.thaw({"machine": dict(MACHINE), "volid": VOLID, "discard": True})
+    assert not any(c[:2] in (["qm", "destroy"], ["qm", "unlock"]) for c in commands)
+
+
+def test_freeze_refuses_at_once_when_the_backup_server_does_not_verify_new_snapshots(monkeypatch, tmp_path):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()] if dumped(c) else [])
+    monkeypatch.setattr(module, "pbs_verify_new", lambda storage: False)
+    with pytest.raises(module.CommandFailure, match="Verify New Snapshots"):
+        module.freeze(REQUEST)
+    assert not dumped(commands)
+    # Unknown: the freeze proceeds and the verification wait decides.
+    monkeypatch.setattr(module, "pbs_verify_new", lambda storage: None)
+    assert module.freeze(REQUEST)["verification"] == "ok"
+
+
+def test_pbs_verify_new_is_unknown_without_a_server_or_secret(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "storage_entry", lambda storage: {"type": "pbs"})
+    assert module.pbs_verify_new("pbs") is None
+    monkeypatch.setattr(module, "storage_entry", lambda storage: {"type": "pbs", "server": "pbs.example", "datastore": "d", "username": "u@pbs!t"})
+    monkeypatch.setattr(module, "PBS_SECRETS", tmp_path)
+    assert module.pbs_verify_new("pbs") is None
+
+
+def test_backup_sweep_removes_only_old_orphaned_freeze_backups(monkeypatch, tmp_path):
+    import time as _time
+
+    now = int(_time.time())
+    listing = [
+        backup(volid=VOLID, notes=FROZEN_NOTE, ctime=now - 30 * 86400),  # kept by its row
+        backup(volid=OLD_VOLID, notes="carrel-freeze gone", ctime=now - 30 * 86400),  # orphan, old
+        backup(volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z", notes="carrel-freeze fresh", ctime=now - 3600),  # orphan, young
+        backup(volid=SCHEDULED_VOLID, notes="nightly", ctime=now - 60 * 86400),  # the cluster's own
+        backup(volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze noage"),  # age unknown
+    ]
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: listing)
+    out = module.backup_sweep({"storage": "pbs", "keep": [FROZEN_NOTE], "older_than": 7 * 86400})
+    assert out == {
+        "orphans": [OLD_VOLID, "pbs:backup/vm/10101/2026-10-29T00:00:00Z", "pbs:backup/vm/10102/2026-10-20T00:00:00Z"],
+        "removed": [OLD_VOLID],
+    }
+    assert freed(commands) == [OLD_VOLID]
+    assert ["pvesh", "set", f"/nodes/carrel01/storage/pbs/content/{OLD_VOLID}", "--protected", "0"] in commands or any(
+        c[:2] == ["pvesh", "set"] for c in commands
+    )

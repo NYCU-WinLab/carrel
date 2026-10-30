@@ -473,3 +473,81 @@ func TestDeletingAThawedMachineWhoseBackupRemainedRemovesTheBackup(t *testing.T)
 		t.Fatalf("the backup stayed: %v", *seen)
 	}
 }
+
+// A delete of a machine whose thaw is restoring it waits for the thaw
+// (CheckBusy), so the restore is never cut off under it (#192, item 1).
+func TestDeleteWaitsForAThawInProgress(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	var deleted D
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "thaw" && r["discard"] == nil {
+			deleted = member(p, "machine_delete", D{"machine": "box", "confirm": "box", "wait_seconds": 0})
+			time.Sleep(300 * time.Millisecond)
+		}
+		return nil, nil, false
+	})
+	assertOK(t, member(p, "machine_thaw", D{"machine": "box"}))
+	assertOK(t, deleted)
+	if frozenOps(*seen, "thaw") != 1 {
+		t.Fatalf("a discard ran under the thaw: %v", *seen)
+	}
+	awaitState(t, p, opOf(deleted), "succeeded")
+	if p.Store.Get("machines", "10100") != nil || p.Store.Get("frozen", "10100") != nil {
+		t.Fatal("the machine survived its delete")
+	}
+}
+
+// A resize during a freeze waits for the freeze and then finds no live
+// machine, so the frozen row keeps the size the backup holds (#192, item 2).
+func TestResizeDuringAFreezeIsHeld(t *testing.T) {
+	p, b, seen := freezeSite(t)
+	var resized D
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "freeze" {
+			resized = member(p, "machine_resize", D{"machine": "box", "disk_gb": 40, "wait_seconds": 0})
+			time.Sleep(300 * time.Millisecond)
+		}
+		return nil, nil, false
+	})
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	if frozenOps(*seen, "action:resize") != 0 {
+		t.Fatalf("the machine was resized while frozen: %v", *seen)
+	}
+	awaitState(t, p, opOf(resized), "failed")
+	if f := p.Store.Get("frozen", "10100"); f == nil || num(f["disk_gb"]) == 40 {
+		t.Fatalf("frozen row: %s", encoded(f))
+	}
+}
+
+func TestFreezeRespectsTheSiteWideCap(t *testing.T) {
+	p, _, _ := freezeSite(t)
+	p.Config["frozen_total_gb"] = 5
+	r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box"})
+	if failure(r)["code"] != "quota_exceeded" {
+		t.Fatalf("freeze over the cap: %s", encoded(r))
+	}
+	p.Config["frozen_total_gb"] = 100
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+}
+
+// reconcile_run sweeps freeze backups that no record names, and names the
+// ones that must stay (#192).
+func TestReconcileRunSweepsOrphanedBackups(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	var sweep D
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "backup_sweep" {
+			sweep = r
+			return D{"orphans": []string{"pbs:backup/vm/10200/old"}, "removed": []string{"pbs:backup/vm/10200/old"}}, nil, true
+		}
+		return nil, nil, false
+	})
+	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
+	assertOK(t, r)
+	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
+	if sweep == nil || sweep["storage"] != "pbs" || !contains(arr(sweep["keep"]), "carrel-freeze test") || len(arr(obj(result["backups_swept"])["removed"])) != 1 {
+		t.Fatalf("sweep %s result %s", encoded(sweep), encoded(result))
+	}
+}
