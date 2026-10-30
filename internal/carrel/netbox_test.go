@@ -838,7 +838,7 @@ func TestNetBoxUnownedObjectAtAPoolAddressKeepsItOutOfTheFreeList(t *testing.T) 
 		{"id": 1, "start_address": "140.113.60.163/27", "end_address": "140.113.60.165/27", "tenant": D{"name": "Carrel"}, "role": D{"name": "User"}, "status": D{"value": "active"}},
 	}
 	f.objects["ipam/ip-addresses/"] = append(f.objects["ipam/ip-addresses/"], D{"id": 9001, "address": "140.113.60.164/27", "status": D{"value": "active"}, "description": "the network team's"})
-	p.Config["public_address"] = "140.113.60.184"
+	p.Config.PublicAddress = "140.113.60.184"
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
 	}
