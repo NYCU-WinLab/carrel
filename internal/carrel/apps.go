@@ -33,9 +33,9 @@ const (
 
 func appID(n int, name string) string { return fmt.Sprintf("%d-%s", n, name) }
 
-func (p *Platform) appsDir() string { return textAt(p.Config, "apps_dir", "/var/lib/carrel/apps") }
+func (p *Platform) appsDir() string { return p.Config.AppsDir }
 func (p *Platform) appOrigin() string {
-	return strings.TrimRight(textAt(p.Config, "origin", "https://carrel.winlab.tw"), "/")
+	return strings.TrimRight(p.Config.Origin, "/")
 }
 func (p *Platform) releasePath(app, release string) string {
 	return filepath.Join(p.appsDir(), app, release+".tar.gz")
@@ -309,7 +309,7 @@ func (p *Platform) reserveUpload(e *Execution, app D, size int64) func() {
 	must(os.MkdirAll(p.appsDir(), 0700))
 	var fs syscall.Statfs_t
 	must(syscall.Statfs(p.appsDir(), &fs))
-	headroom := int64(num(fallback(p.Config, "apps_disk_headroom_bytes", float64(diskHeadroom))))
+	headroom := p.Config.AppsHeadroom()
 	if free := int64(fs.Bavail) * int64(fs.Bsize); free-all-size < headroom {
 		fail("capacity_exhausted", "carrel has no room for this release now")
 	}

@@ -19,9 +19,9 @@ func TestGoldenSpecialDomains(t *testing.T) {
 	t.Cleanup(func() { randomSource = saved })
 	p, b, _ := originFixture(t)
 	dns := &statefulDNS{records: map[string][]D{}, list: true, zones: []D{{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "token": "zone-token-0123456789abcdef"}}}
-	p.Config["cloudflare_api"] = dns.serve(t).URL
-	p.Config["cloudflare_token"] = "test"
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.CloudflareAPI = dns.serve(t).URL
+	p.Config.CloudflareToken = "test"
+	p.Config.ZoneDir = t.TempDir()
 	p.sshProbe = func(context.Context, D) bool { return true }
 	e := p.execution(context.Background())
 	// Issuance as the control plane would leave it: a pair for the grant.

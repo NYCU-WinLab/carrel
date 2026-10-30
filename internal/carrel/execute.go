@@ -68,7 +68,7 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 	dry := boolean(a["dry_run"])
 	switch tool {
 	case "catalog_get":
-		return D{"service": D{"name": "carrel", "version": Version}, "images": Contract["images"], "vm_environment": fallback(e.P.Config, "vm_environment", D{}), "sizes": Contract["sizes"], "units": Units, "capabilities": e.capabilities(), "machine_kinds": D{"vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.", "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation."}}, nil
+		return D{"service": D{"name": "carrel", "version": Version}, "images": Contract["images"], "vm_environment": e.P.Config.VMEnvironment, "sizes": Contract["sizes"], "units": Units, "capabilities": e.capabilities(), "machine_kinds": D{"vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.", "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation."}}, nil
 	case "capacity_get":
 		return D{"capacity": e.Capacity(nil, true)}, nil
 	}
@@ -404,9 +404,9 @@ func parseExpiry(v string) time.Time {
 // imports need the fetch container (PLAN 7.8).
 func (e *Execution) capabilities() D {
 	c := clone(obj(Contract["capabilities"]))
-	c["custom_image_import"] = boolean(e.P.Config["fetch"])
+	c["custom_image_import"] = e.P.Config.Fetch
 	// Freezing needs the PVE storage of the backup server (issue #190).
-	c["machine_freeze"] = str(e.P.Config["backup_storage"]) != ""
+	c["machine_freeze"] = e.P.Config.BackupStorage != ""
 	// Public addresses per machine (issue #91): how many the pool has free.
 	c["public_ips"] = D{"offered": len(e.publicPool()) > 0, "free": len(e.freePublicIPs())}
 	return c

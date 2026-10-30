@@ -84,7 +84,7 @@ func (e *Execution) VPNAction(tool string, a, t D) D {
 		client.State = "deleted"
 		return D{"vpn_client": e.publicVPNClient(client, t), "dry_run": dry}
 	}
-	if str(e.P.Config["public_address"]) == "" {
+	if e.P.Config.PublicAddress == "" {
 		fail("conflict", "This site has no public address for a VPN endpoint")
 	}
 	key := str(a["public_key"])
@@ -148,7 +148,7 @@ func (e *Execution) publicVPNClient(c vpnClient, t D) D {
 	if s, ok := rowOf[vpnServer](e.S, "vpn_servers", str(n)); ok && c.State == "ready" {
 		// The address, not the origin's name: that name may one day sit
 		// behind a proxy that carries no UDP.
-		endpoint := fmt.Sprintf("%s:%d", str(e.P.Config["public_address"]), s.Port)
+		endpoint := fmt.Sprintf("%s:%d", e.P.Config.PublicAddress, s.Port)
 		out["endpoint"], out["server_public_key"] = endpoint, s.PublicKey
 		out["config"] = fmt.Sprintf("[Interface]\nPrivateKey = <the private key of %s>\nAddress = %s/32\nMTU = %d\n\n[Peer]\nPublicKey = %s\nEndpoint = %s\nAllowedIPs = 10.200.%d.0/24\nPersistentKeepalive = 25\n",
 			c.Name, c.Address, vpnClientMTU, s.PublicKey, endpoint, n)

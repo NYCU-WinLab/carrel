@@ -60,7 +60,7 @@ func (e *Execution) ConsoleURL(a, w, t D) D {
 	token := random(32)
 	expires := now() + consoleLinkTTL
 	e.S.Put("consoles", digest(token), n, D{"id": digest(token), "tenant_n": n, "vmid": m["vmid"], "sub": w["sub"], "expires": expires})
-	origin := strings.TrimRight(textAt(e.P.Config, "origin", ""), "/")
+	origin := strings.TrimRight(e.P.Config.Origin, "/")
 	return D{"url": origin + "/console/" + token, "expires_at": expires, "single_use": true, "opens_for": "the WinLab account that asked for it"}
 }
 

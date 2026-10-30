@@ -70,10 +70,8 @@ func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
 	p, b := fixture(t)
 	dns := &fakeDNS{records: map[string][]D{}}
 	cf := dns.server(t)
-	for k, v := range map[string]any{"cloudflare_api": cf.URL, "cloudflare_zone": "test", "certificate_dir": t.TempDir(),
-		"origin": "https://carrel.winlab.tw"} {
-		p.Config[k] = v
-	}
+	p.Config.CloudflareAPI, p.Config.CloudflareZone, p.Config.CertificateDir = cf.URL, "test", t.TempDir()
+	p.Config.Origin = "https://carrel.winlab.tw"
 	crt, key := testPair(t)
 	p.issue = func(context.Context, string) ([]byte, []byte, error) { return crt, key, nil }
 	p.execution(context.Background()).storeCertificate(originLineage, crt, key)
@@ -120,7 +118,7 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 		return D{}, nil
 	}
 	// Start without a pair: the first pass issues.
-	live := filepath.Join(str(p.Config["certificate_dir"]), "live", originLineage)
+	live := filepath.Join(p.Config.CertificateDir, "live", originLineage)
 	must(os.Remove(live))
 	e := p.execution(context.Background())
 	e.MaintainOrigin()
@@ -182,14 +180,14 @@ func TestARenewedPairReplacesTheLiveOneWhole(t *testing.T) {
 	if _, err := tls.LoadX509KeyPair(crt, key); err != nil {
 		t.Fatal("the live pair does not match")
 	}
-	generations, err := os.ReadDir(filepath.Join(str(p.Config["certificate_dir"]), "archive", originLineage))
+	generations, err := os.ReadDir(filepath.Join(p.Config.CertificateDir, "archive", originLineage))
 	if err != nil || len(generations) != 3 {
 		t.Fatalf("kept %d generations", len(generations))
 	}
 	if _, err := os.Stat(before); !os.IsNotExist(err) || beforeKey == key {
 		t.Fatal("kept the oldest generation")
 	}
-	link, err := os.Readlink(filepath.Join(str(p.Config["certificate_dir"]), "live", originLineage))
+	link, err := os.Readlink(filepath.Join(p.Config.CertificateDir, "live", originLineage))
 	if err != nil || filepath.IsAbs(link) {
 		t.Fatalf("live link %q must be relative for restored backups", link)
 	}

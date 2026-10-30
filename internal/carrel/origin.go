@@ -38,7 +38,7 @@ func (e *Execution) gatewayHolds(name, path string) bool {
 func (e *Execution) EnsureOriginCertificate() D {
 	e.P.certificates.Lock()
 	defer e.P.certificates.Unlock()
-	host := originHost(e.P.Config)
+	host := e.P.Config.OriginHost()
 	if host == "" {
 		fail("conflict", "The control-plane origin is not configured")
 	}
@@ -70,8 +70,8 @@ func (e *Execution) MaintainOrigin() {
 	if !e.gatewayHolds("_origin", crt) {
 		return
 	}
-	host := originHost(e.P.Config)
-	address := str(e.P.Config["public_address"])
+	host := e.P.Config.OriginHost()
+	address := e.P.Config.PublicAddress
 	records := dicts(e.CF("GET", "?name="+host, nil)["result"])
 	switch {
 	case len(records) == 0:

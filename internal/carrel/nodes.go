@@ -2,10 +2,8 @@ package carrel
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"regexp"
 	"sync"
 	"time"
@@ -17,42 +15,13 @@ type nodeRef struct{ Name, Target string }
 
 var nodeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-// ValidateNodes rejects a site configuration that could route a machine to
-// the wrong adapter or publish on a wrong address; the control plane refuses
-// to start with it. The first node is the exit node: it holds the infra
-// gateway and the public address.
-func ValidateNodes(c D) error {
-	if ip, err := netip.ParseAddr(str(c["public_address"])); err != nil || !ip.Is4() {
-		return errors.New("public_address must be an IPv4 address")
-	}
-	if originHost(c) == "" {
-		return errors.New("origin is required")
-	}
-	if list, ok := c["nodes"].([]any); !ok || len(list) == 0 {
-		return errors.New("nodes must list at least one node")
-	}
-	names, targets := map[string]bool{}, map[string]bool{}
-	for _, v := range arr(c["nodes"]) {
-		n, ok := v.(map[string]any)
-		name, target := str(n["name"]), str(n["target"])
-		if !ok || !nodeName.MatchString(name) || !nodeName.MatchString(target) {
-			return errors.New("each node needs a name and an SSH target")
-		}
-		if names[name] || targets[target] {
-			return fmt.Errorf("duplicate node %s", name)
-		}
-		names[name], targets[target] = true, true
-	}
-	return nil
-}
-
 // UnplacedMachines names machine records whose node is not configured. The
 // control plane refuses to start with any: a request for such a machine
 // would fail and its capacity would count nowhere.
-func UnplacedMachines(s *Store, c D) []string {
+func UnplacedMachines(s *Store, c Config) []string {
 	names := map[string]bool{}
-	for _, n := range dicts(c["nodes"]) {
-		names[str(n["name"])] = true
+	for _, n := range c.Nodes {
+		names[n.Name] = true
 	}
 	out := []string{}
 	for _, m := range s.Objects("machines") {
@@ -65,8 +34,8 @@ func UnplacedMachines(s *Store, c D) []string {
 
 func (p *Platform) Nodes() []nodeRef {
 	out := []nodeRef{}
-	for _, v := range dicts(p.Config["nodes"]) {
-		out = append(out, nodeRef{str(v["name"]), str(v["target"])})
+	for _, n := range p.Config.Nodes {
+		out = append(out, nodeRef{n.Name, n.Target})
 	}
 	return out
 }

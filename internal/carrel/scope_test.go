@@ -68,7 +68,7 @@ func TestScopeOfflineNIC(t *testing.T) {
 		for _, state := range []string{"stopped", "paused"} {
 			t.Run(mode+"_"+state, func(t *testing.T) {
 				p, b := fixture(t)
-				p.Config["guest_ready_timeout"] = 1
+				p.Config.GuestReadyTimeout = 1
 				m := seedMachine(p, "offline", 10100)
 				m["state"], m["power_state"], m["ssh_ready"] = state, state, false
 				p.Store.Put("machines", 10100, 1, m)
@@ -110,7 +110,7 @@ func TestScopeApplicationWarmup(t *testing.T) {
 	for _, healthy := range []bool{true, false} {
 		t.Run(str(healthy), func(t *testing.T) {
 			p, b := fixture(t)
-			p.Config["application_ready_timeout"] = 1
+			p.Config.ApplicationReadyTimeout = 1
 			b.call = func(r D, _ string) (any, error) {
 				if r["op"] == "inventory" {
 					return baseInventory(), nil

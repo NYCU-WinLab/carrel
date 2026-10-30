@@ -31,16 +31,12 @@ func main() {
 		slog.Error("read configuration", "error", err)
 		os.Exit(1)
 	}
-	var cfg carrel.D
-	if json.Unmarshal(content, &cfg) != nil {
-		slog.Error("invalid configuration")
+	cfg, err := carrel.LoadConfig(content)
+	if err != nil {
+		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-	if err := carrel.ValidateNodes(cfg); err != nil {
-		slog.Error("invalid node configuration", "error", err)
-		os.Exit(1)
-	}
-	store, err := carrel.OpenStore(cfg["database"].(string))
+	store, err := carrel.OpenStore(cfg.Database)
 	if err != nil {
 		slog.Error("open database", "error", err)
 		os.Exit(1)
@@ -51,8 +47,8 @@ func main() {
 		os.Exit(1)
 	}
 	backend := &carrel.SSHBackend{Config: "/etc/carrel/ssh_config"}
-	if path, ok := cfg["ssh_config"].(string); ok {
-		backend.Config = path
+	if cfg.SSHConfig != "" {
+		backend.Config = cfg.SSHConfig
 	}
 	platform := carrel.NewPlatform(store, backend, cfg)
 	if *backup {

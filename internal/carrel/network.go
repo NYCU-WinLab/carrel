@@ -2,7 +2,6 @@ package carrel
 
 import (
 	"fmt"
-	"net/url"
 	"sort"
 	"sync"
 )
@@ -412,7 +411,7 @@ func (e *Execution) Reconcile() D {
 	// Every node reconciles: SDN and guest firewalls are cluster-wide, while
 	// rate limits and connection tracking live on each node. The first
 	// node goes first; it holds the infra gateway and creates new VNets.
-	if boolean(e.P.Config["fetch"]) {
+	if e.P.Config.Fetch {
 		// The fetch network and its container's firewall (PLAN 7.8).
 		state["fetch"] = true
 	}
@@ -504,13 +503,4 @@ func (e *Execution) RefreshStorage() {
 			e.Put("storage_usage", t, t, sample)
 		}
 	})
-}
-
-// originHost is the host name of carrel's public origin, such as carrel.winlab.tw.
-func originHost(c D) string {
-	u, err := url.Parse(str(c["origin"]))
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
 }

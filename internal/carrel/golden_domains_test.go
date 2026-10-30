@@ -113,9 +113,9 @@ func TestGoldenDomainEdges(t *testing.T) {
 	t.Cleanup(func() { randomSource = saved })
 	p, b, _ := originFixture(t)
 	dns := &statefulDNS{records: map[string][]D{}}
-	p.Config["cloudflare_api"] = dns.serve(t).URL
+	p.Config.CloudflareAPI = dns.serve(t).URL
 	p.sshProbe = func(context.Context, D) bool { return true }
-	p.Config["cloudflare_token"] = "test"
+	p.Config.CloudflareToken = "test"
 	for _, slug := range []string{"alice", "bob"} {
 		crt, key := testPair(t, "*."+slug+".winlab.tw")
 		p.execution(context.Background()).storeCertificate(slug, crt, key)

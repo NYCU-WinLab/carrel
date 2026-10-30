@@ -43,7 +43,7 @@ const publicPoolLimit = 256
 // publicPool is the addresses NetBox assigns to carrel as last read, in order.
 func (e *Execution) publicPool() []string {
 	out := []string{}
-	shared := str(e.P.Config["public_address"])
+	shared := e.P.Config.PublicAddress
 	for _, r := range dicts(obj(e.S.SiteGet("public_pool", "netbox"))["ranges"]) {
 		start, err1 := netip.ParsePrefix(str(r["start"]))
 		end, err2 := netip.ParsePrefix(str(r["end"]))

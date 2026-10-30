@@ -10,12 +10,12 @@ import hashlib
 import ipaddress
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
 import urllib.request
+from pathlib import Path
 
 # The gateway's Caddy: Debian's package gives the unit and the user; the
 # official release (older ones reject stream_close_delay) is the binary.

@@ -70,8 +70,8 @@ func fixture(t *testing.T) (*Platform, *fakeBackend) {
 	s.Register("user:bob", "bob")
 	s.Register("winlab-projects/shared", "shared")
 	b := &fakeBackend{inventory: baseInventory()}
-	p := NewPlatform(s, b, D{"origin": "https://carrel.test", "issuer": "https://issuer.test", "guest_poll_interval": 1, "guest_ready_timeout": 3,
-		"public_address": "140.113.60.184", "nodes": []any{D{"name": "carrel01", "target": "carrel-node"}}})
+	p := NewPlatform(s, b, Config{Origin: "https://carrel.test", Issuer: "https://issuer.test", GuestPollInterval: 1, GuestReadyTimeout: 3,
+		PublicAddress: "140.113.60.184", Nodes: []NodeConfig{{Name: "carrel01", Target: "carrel-node"}}}.WithDefaults())
 	p.sshProbe = func(context.Context, D) bool { return false }
 	t.Cleanup(func() { p.Close(); s.DB.Close() })
 	return p, b

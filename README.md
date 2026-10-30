@@ -468,7 +468,10 @@ Several nodes are listed in `/etc/carrel/config.json` as
 `/etc/carrel/ssh_config`. A new machine goes to the node that admits it with the most admission
 memory left, and the new machines of one deployment share a node. Each machine record keeps its
 node, and every machine request goes to that node. The first node must reconcile; the others catch
-up on the next pass. The configuration also needs `"public_address": "<IPv4>"` and `origin`. The
+up on the next pass. The configuration also needs `"public_address": "<IPv4>"`, `origin`, `issuer`
+and `database`; it is decoded into a typed `Config` at startup, so a misspelt or unknown key stops
+the control plane with an error instead of acting as an empty value (`internal/carrel/config.go`
+lists every key and its default). The
 first node terminates TLS and publishes ports on that address. The control plane issues carrel's
 own certificate (live pair `_origin` under `certificate_dir`) through DNS-01. A DNS record points at
 the public address only after the gateway confirmed it holds the matching certificate.

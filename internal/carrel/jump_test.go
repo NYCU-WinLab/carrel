@@ -31,7 +31,7 @@ func TestJumpKeysOpenOnlyTheirTenantsMachines(t *testing.T) {
 
 func TestAMachineWithoutAPublicPortConnectsThroughTheJumpHost(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["ssh_jump"] = true
+	p.Config.SSHJump = true
 	m := seedMachine(p, "web", 10100)
 	e := p.execution(context.Background())
 	pub := e.PublicMachine(m, nil)
@@ -65,7 +65,7 @@ func TestMachinesWithoutPublicSSHUseNoPort(t *testing.T) {
 	if f := attempt(func() { e.MachineSpec(tenant, spec, false) }); f == nil {
 		t.Fatal("a site without a jump host accepted public_ssh false")
 	}
-	p.Config["ssh_jump"] = true
+	p.Config.SSHJump = true
 	// More machines than the tenant's 10 public ports.
 	for i := range 12 {
 		s := merge(spec, D{"name": fmt.Sprintf("hidden%d", i)})

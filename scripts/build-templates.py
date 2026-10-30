@@ -4,10 +4,10 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import subprocess
 import urllib.request
+from pathlib import Path
 
 
 def run(*args):

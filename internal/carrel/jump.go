@@ -74,7 +74,7 @@ func jumpAuthorizedKeys(s *Store) string {
 	return b.String()
 }
 
-func (e *Execution) jumpEnabled() bool { return boolean(e.P.Config["ssh_jump"]) }
+func (e *Execution) jumpEnabled() bool { return e.P.Config.SSHJump }
 
 // maxSavedKeys bounds ssh_key_add, which also keeps the jump file small.
 const maxSavedKeys = 50

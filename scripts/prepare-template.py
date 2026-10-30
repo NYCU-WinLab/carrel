@@ -8,11 +8,11 @@ The output manifest is consumed by build-templates.py --prepared-dir on the node
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import subprocess
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 
 
 def run(*args):
@@ -110,7 +110,7 @@ def main():
         "source_sha256": args.sha256, "prepared": True,
         "environment": "minimal" if minimal else "development", "disk_gb": 10,
         "packages": packages, **node_metadata,
-        "built_at": datetime.now(timezone.utc).isoformat(),
+        "built_at": datetime.now(UTC).isoformat(),
     }
     if node:
         node.unlink()

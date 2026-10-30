@@ -193,9 +193,9 @@ func (e *Execution) acmeClient(ctx context.Context) (*acme.Client, error) {
 	} else {
 		return nil, err
 	}
-	client := &acme.Client{Key: key, DirectoryURL: textAt(e.P.Config, "acme_directory", acme.LetsEncryptURL), HTTPClient: e.P.HTTP}
+	client := &acme.Client{Key: key, DirectoryURL: e.P.Config.ACMEDirectory, HTTPClient: e.P.HTTP}
 	account := &acme.Account{}
-	if email := str(e.P.Config["acme_email"]); email != "" {
+	if email := e.P.Config.ACMEEmail; email != "" {
 		account.Contact = []string{"mailto:" + email}
 	}
 	// Registering an existing key is a lookup; it costs one request per issuance.

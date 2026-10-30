@@ -210,7 +210,7 @@ func (f *fakeNetBox) reset() {
 func netboxPlatform(t *testing.T) (*Platform, *fakeNetBox, *httptest.Server) {
 	p, _ := fixture(t)
 	f, srv := newFakeNetBox(t)
-	p.Config["netbox"] = D{"enabled": true, "url": srv.URL, "token": "nbt_secret", "cluster": "carrel", "owner": "carrel"}
+	p.Config.NetBox = D{"enabled": true, "url": srv.URL, "token": "nbt_secret", "cluster": "carrel", "owner": "carrel"}
 	return p, f, srv
 }
 
@@ -244,7 +244,7 @@ func TestNetBoxStaysOffUnlessConfigured(t *testing.T) {
 	if _, ok, err := p.netboxConfig(); ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	p.Config["netbox"] = D{"enabled": true, "url": "https://nb.test"}
+	p.Config.NetBox = D{"enabled": true, "url": "https://nb.test"}
 	if _, ok, err := p.netboxConfig(); ok || err == nil {
 		t.Fatal("an incomplete section was accepted")
 	}
@@ -523,7 +523,7 @@ func TestNetBoxNeedsAnExistingOwner(t *testing.T) {
 	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "owner carrel does not exist") || len(f.writes) != 0 {
 		t.Fatal(r.Errors, f.writes)
 	}
-	delete(obj(p.Config["netbox"]), "owner")
+	delete(p.Config.NetBox, "owner")
 	if _, ok, err := p.netboxConfig(); ok || err == nil {
 		t.Fatal("a section without an owner was accepted")
 	}
@@ -560,7 +560,7 @@ func TestNetBoxOutageNeverBreaksMachineOperations(t *testing.T) {
 	// NetBox comes back and the next pass catches up.
 	back := httptest.NewServer(f)
 	defer back.Close()
-	p.Config["netbox"] = merge(obj(p.Config["netbox"]), D{"url": back.URL})
+	p.Config.NetBox = merge(p.Config.NetBox, D{"url": back.URL})
 	if r := syncNetBox(t, p); len(r.Errors) > 0 || len(f.all("virtualization/virtual-machines/")) != 2 {
 		t.Fatal(r.Errors)
 	}
@@ -585,7 +585,7 @@ func TestNetBoxDeviceMatchesTheConfiguredField(t *testing.T) {
 	if device() != nil {
 		t.Fatal("a device matched by name although its name is not the node", device())
 	}
-	obj(p.Config["netbox"])["device_field"] = "hostname"
+	p.Config.NetBox["device_field"] = "hostname"
 	syncNetBox(t, p)
 	if integer(obj(device())["id"]) != 3 {
 		t.Fatal(device())
@@ -800,7 +800,7 @@ func TestNetBoxReadsThePoolAndRecordsBoundAddresses(t *testing.T) {
 		{"id": 2, "start_address": "140.113.60.171/27", "end_address": "140.113.60.174/27", "tenant": D{"name": "Lab"}, "role": D{"name": "User"}, "status": D{"value": "active"}},
 		{"id": 3, "start_address": "140.113.60.175/27", "end_address": "140.113.60.176/27", "tenant": D{"name": "Carrel"}, "role": D{"name": "User"}, "status": D{"value": "reserved"}},
 	}
-	p.Config["public_address"] = "140.113.60.184"
+	p.Config.PublicAddress = "140.113.60.184"
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
 	}
@@ -961,7 +961,7 @@ func TestNetBoxFailedVPNClientFailsAlone(t *testing.T) {
 func vpnTunnelFixture(t *testing.T) (*Platform, *fakeNetBox) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
-	p.Config["netbox"].(D)["tunnel_group"] = "Carrel Client VPN"
+	p.Config.NetBox["tunnel_group"] = "Carrel Client VPN"
 	key := "x3Fh2Y0pB0Hq9gYc0vXo4m1kQfN6aT8rW5sLdJ2eCzU="
 	for i, name := range []string{"laptop", "agent"} {
 		p.Store.Put("vpn_clients", name, 1, vpnClient{ID: name, TenantN: 1, Name: name, Address: fmt.Sprintf("10.201.1.%d", i+2), PublicKey: key, State: "ready", ExpiresAt: now() + 3600}.D())
@@ -1020,7 +1020,7 @@ func TestNetBoxSyncsVPNTunnels(t *testing.T) {
 
 func TestNetBoxLeavesTunnelsOutUnlessConfigured(t *testing.T) {
 	p, f := vpnTunnelFixture(t)
-	delete(p.Config["netbox"].(D), "tunnel_group")
+	delete(p.Config.NetBox, "tunnel_group")
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
 	}

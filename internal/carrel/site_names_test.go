@@ -13,9 +13,9 @@ import (
 func TestSiteSpecialNames(t *testing.T) {
 	p, b, _ := originFixture(t)
 	dns := &statefulDNS{records: map[string][]D{}, list: true}
-	p.Config["cloudflare_api"] = dns.serve(t).URL
-	p.Config["cloudflare_token"] = "test"
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.CloudflareAPI = dns.serve(t).URL
+	p.Config.CloudflareToken = "test"
+	p.Config.ZoneDir = t.TempDir()
 	p.sshProbe = func(context.Context, D) bool { return true }
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec
@@ -80,9 +80,9 @@ func TestSiteSpecialNames(t *testing.T) {
 func TestZoneApexExact(t *testing.T) {
 	p, b, _ := originFixture(t)
 	dns := &statefulDNS{records: map[string][]D{}, list: true, zones: []D{{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "token": "zone-token-0123456789abcdef"}}}
-	p.Config["cloudflare_api"] = dns.serve(t).URL
-	p.Config["cloudflare_token"] = "test"
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.CloudflareAPI = dns.serve(t).URL
+	p.Config.CloudflareToken = "test"
+	p.Config.ZoneDir = t.TempDir()
 	p.sshProbe = func(context.Context, D) bool { return true }
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec

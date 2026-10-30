@@ -15,7 +15,7 @@ func TestEnsureCertificateIssuesAndBundlesTheLivePair(t *testing.T) {
 	p, _ := fixture(t)
 	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"success":true,"result":[]}`)) }))
 	defer cf.Close()
-	p.Config["cloudflare_api"], p.Config["cloudflare_zone"], p.Config["certificate_dir"] = cf.URL, "test", t.TempDir()
+	p.Config.CloudflareAPI, p.Config.CloudflareZone, p.Config.CertificateDir = cf.URL, "test", t.TempDir()
 	crt, key := testPair(t)
 	domains := []string{}
 	p.issue = func(_ context.Context, domain string) ([]byte, []byte, error) {
@@ -40,7 +40,7 @@ func TestEnsureCertificateIssuesAndBundlesTheLivePair(t *testing.T) {
 	}
 	p.issue = func(context.Context, string) ([]byte, []byte, error) { return nil, nil, errors.New("rate limited") }
 	// A renewal that fails keeps the pair it would have replaced.
-	must(os.Remove(filepath.Join(str(p.Config["certificate_dir"]), "live", str(tenant["slug"]))))
+	must(os.Remove(filepath.Join(p.Config.CertificateDir, "live", str(tenant["slug"]))))
 	if f := attempt(func() { e.EnsureCertificate(tenant) }); f == nil || obj(failureResult(f)["error"])["backend_code"] != "certificate_issuance_failed" {
 		t.Fatal("an ACME failure must fail the issuance", f)
 	}
@@ -58,7 +58,7 @@ func TestCertificatePreparationDoesNotBlockUnrelatedPower(t *testing.T) {
 		w.Write([]byte(`{"success":true,"result":[]}`))
 	}))
 	defer cf.Close()
-	p.Config["cloudflare_api"], p.Config["cloudflare_zone"], p.Config["certificate_dir"] = cf.URL, "test", t.TempDir()
+	p.Config.CloudflareAPI, p.Config.CloudflareZone, p.Config.CertificateDir = cf.URL, "test", t.TempDir()
 	// The stub below stands in for issuance; the gateway still needs the pair.
 	crt, key := testPair(t, "*.alice.winlab.tw")
 	p.execution(context.Background()).storeCertificate("alice", crt, key)

@@ -2,10 +2,10 @@
 """Fixed, owner-visible boot reporter. No remote commands or command output leave the VM."""
 
 import json
-from pathlib import Path
 import socket
 import subprocess
 import urllib.request
+from pathlib import Path
 
 
 def collect(config):

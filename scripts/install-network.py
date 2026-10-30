@@ -8,10 +8,9 @@ EVPN and VXLAN peers, the exit nodes and the underlay filter for every node.
 import argparse
 import ipaddress
 import json
-from pathlib import Path
 import socket
 import subprocess
-
+from pathlib import Path
 
 # Tenant vnets are t001, t002, ... (node-agent's f"t{n:03d}") and guest taps are tap*.
 # nft has no character classes, so "t" plus a digit is spelled out; a bare "t*" would

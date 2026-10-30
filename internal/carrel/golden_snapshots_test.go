@@ -48,7 +48,7 @@ func snapshotSetup(t *testing.T) (*goldenRun, *flakyBackend, *fakeBackend) {
 	t.Cleanup(func() { randomSource = saved })
 	p, b, _ := originFixture(t)
 	p.sshProbe = func(context.Context, D) bool { return true }
-	p.Config["cloudflare_token"] = "test"
+	p.Config.CloudflareToken = "test"
 	crt, key := testPair(t, "*.alice.winlab.tw")
 	p.execution(context.Background()).storeCertificate("alice", crt, key)
 	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})

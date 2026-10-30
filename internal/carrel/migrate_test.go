@@ -155,7 +155,7 @@ func TestNodeDrainMovesEveryMachineOneAtATime(t *testing.T) {
 		}
 		return inner(r, target)
 	}
-	p.Config["migration_slot_retry_seconds"] = 0.1
+	p.Config.MigrationSlotRetrySeconds = 0.1
 	a := seedMachine(p, "a", 10100)
 	b2 := seedMachine(p, "b", 10101)
 	b2["ip"], b2["host"], b2["mac"] = "10.200.1.11", 11, "02:ca:01:01:00:01"
@@ -204,7 +204,7 @@ func awaitStateWithin(t *testing.T, p *Platform, id, state string, limit time.Du
 
 func TestDrainingTwiceMovesEachMachineOnce(t *testing.T) {
 	p, b, _ := nodeFixture(t)
-	p.Config["migration_slot_retry_seconds"] = 0.1
+	p.Config.MigrationSlotRetrySeconds = 0.1
 	inner := b.call
 	var mu sync.Mutex
 	moved := map[string]int{}
