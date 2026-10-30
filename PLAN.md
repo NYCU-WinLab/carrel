@@ -964,6 +964,11 @@ README says exactly that.
 - `carrel-deployd` (section 7.9) runs whatever release carrel hands it, so installing it is the
   owner's choice, made over the owner's own SSH. It cannot change the start command, and removing
   it ends the delivery.
+- carrel-keys (issue #209) is the same kind of choice. The guest pulls its tenant's saved keys from
+  `/internal/guest-keys` with its readiness token, so group members reach existing machines without
+  the guest agent writing files. Each line is type, key and a `carrel:<member>` comment, never
+  options. Installing it gives up this section's promise for that machine: whoever can save a key
+  in the tenant gets in.
 - Machines from custom images (section 7.8) keep whatever guest agent settings the tenant's image
   has. carrel reads `guest-info` on first boot and shows in `machine_get` whether `guest-exec` and
   the file commands are enabled.

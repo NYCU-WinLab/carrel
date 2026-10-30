@@ -3,7 +3,6 @@ package carrel
 import (
 	"bufio"
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/netip"
@@ -364,10 +363,7 @@ func probeSSH(ctx context.Context, m D) bool {
 	return strings.HasPrefix(string(line), "SSH-")
 }
 func (e *Execution) GuestReport(body D, source string) {
-	m := e.S.Get("machines", str(body["vmid"]))
-	if m == nil || source != str(m["ip"]) || str(m["readiness_token"]) == "" || subtle.ConstantTimeCompare([]byte(str(body["token"])), []byte(str(m["readiness_token"]))) != 1 {
-		fail("forbidden", "Invalid guest report")
-	}
+	m := e.guestMachine(body, source)
 	init, app := str(body["initialization_status"]), str(body["application_status"])
 	if !contains([]string{"running", "complete", "failed"}, init) || !contains([]string{"pending", "healthy", "failed", "not_checked"}, app) {
 		fail("invalid", "Invalid guest status")

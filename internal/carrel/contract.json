@@ -1123,7 +1123,7 @@
     },
     {
       "name": "ssh_key_add",
-      "description": "Save a public SSH key once in this tenant for future machine_create calls that omit ssh_keys. Repeated registration of the same key is safe. Never pass private keys. Inline creation keys are not saved automatically.",
+      "description": "Save a public SSH key once in this tenant for future machine_create calls that omit ssh_keys. Existing machines whose owner installed carrel-keys accept saved keys within a minute, so members of a group tenant reach its machines this way. Repeated registration of the same key is safe. Never pass private keys. Inline creation keys are not saved automatically.",
       "inputSchema": {
         "type": "object",
         "properties": {

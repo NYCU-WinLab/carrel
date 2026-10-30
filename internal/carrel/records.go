@@ -7,6 +7,8 @@ import "encoding/json"
 // bytes; TestRecordFieldsAreSorted holds the order.
 
 type sshKey struct {
+	// By is the member who saved the key, shown in a guest's authorized_keys (#209).
+	By  string `json:"by,omitempty"`
 	ID  string `json:"id"`
 	Key string `json:"key"`
 }

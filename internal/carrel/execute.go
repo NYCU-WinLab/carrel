@@ -170,7 +170,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			fail("quota_exceeded", fmt.Sprintf("A tenant saves at most %d keys", maxSavedKeys), D{"recovery": "revise_request"})
 		}
 		if !dry {
-			e.Put("keys", fmt.Sprintf("%d-%s", n, id), n, D{"id": id, "key": a["key"]})
+			e.Put("keys", fmt.Sprintf("%d-%s", n, id), n, D{"id": id, "key": a["key"], "by": w["username"]})
 			e.syncJumpNow()
 		}
 		return D{"id": id, "dry_run": dry, "quota_after": e.Quota(t)}
