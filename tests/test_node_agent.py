@@ -1464,6 +1464,35 @@ def test_freeze_refuses_at_once_when_the_backup_server_does_not_verify_new_snaps
     assert module.freeze(REQUEST)["verification"] == "ok"
 
 
+def test_pbs_verify_new_sends_no_token_before_the_fingerprint_matches(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(
+        module,
+        "storage_entry",
+        lambda storage: {"type": "pbs", "server": "pbs.example", "datastore": "d", "username": "u@pbs!t", "fingerprint": "AA:BB"},
+    )
+    (tmp_path / "pbs.pw").write_text("secret\n")
+    monkeypatch.setattr(module, "PBS_SECRETS", tmp_path)
+    sent = []
+
+    class Connection:
+        def __init__(self, *a, **kw):
+            self.sock = type("S", (), {"getpeercert": lambda self, binary_form=True: b"other-cert"})()
+
+        def connect(self):
+            pass
+
+        def close(self):
+            pass
+
+        def request(self, *a, **kw):
+            sent.append(kw.get("headers", {}))
+
+    monkeypatch.setattr(module.http.client, "HTTPSConnection", Connection)
+    assert module.pbs_verify_new("pbs") is None
+    assert sent == []
+
+
 def test_pbs_verify_new_is_unknown_without_a_server_or_secret(monkeypatch, tmp_path):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "storage_entry", lambda storage: {"type": "pbs"})
@@ -1483,9 +1512,12 @@ def test_backup_sweep_removes_only_old_orphaned_freeze_backups(monkeypatch, tmp_
         backup(volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z", notes="carrel-freeze fresh", ctime=now - 3600),  # orphan, young
         backup(volid=SCHEDULED_VOLID, notes="nightly", ctime=now - 60 * 86400),  # the cluster's own
         backup(volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze noage"),  # age unknown
+        backup(volid="pbs:backup/vm/10103/2026-10-01T00:00:00Z", notes="carrel-freeze op9 keep", ctime=now - 30 * 86400),  # note edited, volume still named
     ]
     module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: listing)
-    out = module.backup_sweep({"storage": "pbs", "keep": [FROZEN_NOTE], "older_than": 7 * 86400})
+    out = module.backup_sweep(
+        {"storage": "pbs", "keep": [FROZEN_NOTE], "keep_volids": ["pbs:backup/vm/10103/2026-10-01T00:00:00Z"], "older_than": 7 * 86400}
+    )
     assert out == {
         "orphans": [OLD_VOLID, "pbs:backup/vm/10101/2026-10-29T00:00:00Z", "pbs:backup/vm/10102/2026-10-20T00:00:00Z"],
         "removed": [OLD_VOLID],

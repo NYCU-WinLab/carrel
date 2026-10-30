@@ -547,7 +547,7 @@ func TestReconcileRunSweepsOrphanedBackups(t *testing.T) {
 	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
 	assertOK(t, r)
 	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
-	if sweep == nil || sweep["storage"] != "pbs" || !contains(arr(sweep["keep"]), "carrel-freeze test") || len(arr(obj(result["backups_swept"])["removed"])) != 1 {
+	if sweep == nil || sweep["storage"] != "pbs" || !contains(arr(sweep["keep"]), "carrel-freeze test") || !contains(arr(sweep["keep_volids"]), "pbs:backup/vm/10100/2026-10-26T00:00:00Z") || len(arr(obj(result["backups_swept"])["removed"])) != 1 {
 		t.Fatalf("sweep %s result %s", encoded(sweep), encoded(result))
 	}
 }

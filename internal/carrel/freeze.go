@@ -245,21 +245,28 @@ func (e *Execution) SweepBackups() D {
 	if storage == "" || len(nodes) == 0 {
 		return nil
 	}
-	keep := []string{}
+	// Both the notes and the volumes the records name: a note an operator
+	// edited on the backup server must not cost a frozen machine its copy.
+	keep, volids := []string{}, []string{}
 	for _, f := range e.S.Objects("frozen") {
 		keep = append(keep, str(f["backup_note"]))
+		volids = append(volids, str(f["backup_volid"]))
 	}
 	for _, m := range e.S.Objects("machines") {
 		if b := obj(m["thaw_backup"]); len(b) > 0 {
 			keep = append(keep, str(b["note"]))
+			volids = append(volids, str(b["volid"]))
 		}
 	}
 	for _, op := range e.S.ActiveOperations() {
 		if op["tool"] == "machine_freeze" {
 			keep = append(keep, "carrel-freeze "+str(op["id"]))
+			if b := obj(obj(op["freeze"])["backup"]); b["volid"] != nil {
+				volids = append(volids, str(b["volid"]))
+			}
 		}
 	}
-	return obj(e.Call(D{"op": "backup_sweep", "storage": storage, "keep": keep, "older_than": int(backupSweepAge.Seconds())}, nodes[0].Target))
+	return obj(e.Call(D{"op": "backup_sweep", "storage": storage, "keep": keep, "keep_volids": volids, "older_than": int(backupSweepAge.Seconds())}, nodes[0].Target))
 }
 
 // PerformFreeze takes the backup without the writer lock. The machine stays

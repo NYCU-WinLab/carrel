@@ -2180,20 +2180,27 @@ def pbs_verify_new(storage):
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
         connection = http.client.HTTPSConnection(server, int(entry.get("port", 8007)), context=context, timeout=15)
+        # The handshake first, and the fingerprint checked on it, before
+        # anything that carries the token is sent.
+        connection.connect()
+        if entry.get("fingerprint") and not pbs_fingerprint_matches(connection.sock, entry["fingerprint"]):
+            connection.close()
+            return None
         connection.request("GET", f"/api2/json/config/datastore/{urllib.parse.quote(datastore, safe='')}",
                            headers={"Authorization": f"PBSAPIToken={username}:{secret_file.read_text().strip()}"})
         response = connection.getresponse()
-        if entry.get("fingerprint"):
-            cert = connection.sock.getpeercert(binary_form=True)
-            seen = ":".join(f"{b:02X}" for b in hashlib.sha256(cert).digest())
-            if seen.lower() != entry["fingerprint"].lower():
-                return None
         if response.status != 200:
             return None
         data = json.loads(response.read(1 << 20)).get("data") or {}
         return bool(data.get("verify-new"))
     except (OSError, ValueError, KeyError):
         return None
+
+
+def pbs_fingerprint_matches(sock, fingerprint):
+    cert = sock.getpeercert(binary_form=True)
+    seen = ":".join(f"{b:02x}" for b in hashlib.sha256(cert).digest())
+    return seen == fingerprint.strip().lower()
 
 
 def freeze_stamp(m):
@@ -2390,20 +2397,23 @@ def backup_sweep(req):
     """List the freeze backups no record names; remove those older than older_than seconds.
 
     keep holds the notes of every backup a frozen row, a thawed machine or a
-    running freeze still names. Nothing can thaw a backup outside it: its
-    record is gone. The cluster's own backups are not freeze backups and
-    are never read as such (#192).
+    running freeze still names, and keep_volids the volumes those records
+    point at; a backup matching either stays, whatever its notes say now.
+    Nothing can thaw a backup outside both: its record is gone. The
+    cluster's own backups are not freeze backups and are never read as
+    such (#192).
     """
     storage = backup_storage(req["storage"])
     keep = set(req.get("keep") or [])
-    if not all(isinstance(k, str) for k in keep):
+    keep_volids = set(req.get("keep_volids") or [])
+    if not all(isinstance(k, str) for k in keep | keep_volids):
         raise ValueError("invalid keep list")
     older_than = integer(req.get("older_than", 7 * 86400), 3600, 365 * 86400)
     out = json.loads(run("pvesh", "get", f"/nodes/{NODE}/storage/{storage}/content", "--content", "backup", "--output-format", "json") or "[]")
     orphans, removed = [], []
     for b in out:
         notes = str(b.get("notes", "")).strip()
-        if not notes.startswith(FREEZE_NOTE) or notes in keep or not BACKUP_VOLUME.fullmatch(str(b.get("volid"))):
+        if not notes.startswith(FREEZE_NOTE) or notes in keep or str(b.get("volid")) in keep_volids or not BACKUP_VOLUME.fullmatch(str(b.get("volid"))):
             continue
         orphans.append(b["volid"])
         # Only a backup whose age is known goes.
