@@ -315,6 +315,46 @@ func TestDelegatedConcurrentAsksShareAnswer(t *testing.T) {
 	}
 }
 
+// A grant transferred (route removed, names dropped, tenant changed) while
+// its old target is being asked: the answer is void, and no name row is
+// left under the old tenant (#186).
+func TestDelegatedAskDuringTransferLeavesNoRow(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config["zone_dir"] = t.TempDir()
+	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1, 2}})
+	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
+	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})
+	p.Store.Put("domains", "dg0", 1, D{"id": "dg0", "tenant_n": 1, "vmid": 10100, "grant": "g0", "name": "*.a.lab.example", "slug": "alice", "target_port": 8443, "state": "ready", "ready_at": 1})
+	p.tenantAsk = func(string, int, string) bool {
+		// What domain_remove then domain_transfer do to the store.
+		p.Store.Remove("domains", "dg0")
+		for _, n := range rowsOf[delegatedName](p.Store, "delegated_names") {
+			p.Store.Remove("delegated_names", n.ID)
+		}
+		g, _ := rowOf[domainGrant](p.Store, "domain_grants", "g0")
+		g.TenantN = 2
+		p.Store.Put("domain_grants", g.ID, g.TenantN, g.D())
+		return true
+	}
+	ok, why := p.execution(context.Background()).AskDelegated("shop.a.lab.example")
+	if ok || why != "released" {
+		t.Fatalf("ask during transfer answered %v %q", ok, why)
+	}
+	if rows := rowsOf[delegatedName](p.Store, "delegated_names"); len(rows) != 0 {
+		t.Fatalf("name rows left after transfer: %+v", rows)
+	}
+	// The grant lost only its route: the reservation is refused as well.
+	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})
+	p.Store.Put("domains", "dg0", 1, D{"id": "dg0", "tenant_n": 1, "vmid": 10100, "grant": "g0", "name": "*.a.lab.example", "slug": "alice", "target_port": 8443, "state": "ready", "ready_at": 1})
+	p.tenantAsk = func(string, int, string) bool { p.Store.Remove("domains", "dg0"); return true }
+	if ok, why := p.execution(context.Background()).AskDelegated("blog.a.lab.example"); ok || why != "released" {
+		t.Fatalf("ask after route removal answered %v %q", ok, why)
+	}
+	if rows := rowsOf[delegatedName](p.Store, "delegated_names"); len(rows) != 0 {
+		t.Fatalf("name rows left after route removal: %+v", rows)
+	}
+}
+
 // The gateway answers delegated names agreed to before itself, so a restart
 // while the control plane is down keeps their sites (#166).
 func TestGatewayAnswersKnownDelegatedNames(t *testing.T) {
