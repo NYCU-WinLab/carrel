@@ -551,3 +551,21 @@ func TestReconcileRunSweepsOrphanedBackups(t *testing.T) {
 		t.Fatalf("sweep %s result %s", encoded(sweep), encoded(result))
 	}
 }
+
+// A backup server that does not answer the sweep does not fail the
+// reconcile that ran before it (#192 review).
+func TestReconcileRunSurvivesASweepFailure(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "backup_sweep" {
+			return nil, errors.New("pbs unreachable"), true
+		}
+		return nil, nil, false
+	})
+	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
+	assertOK(t, r)
+	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
+	if result["result"] == nil || obj(result["backups_swept"])["error"] == nil {
+		t.Fatalf("result %s", encoded(result))
+	}
+}

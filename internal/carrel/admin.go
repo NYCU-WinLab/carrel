@@ -44,7 +44,13 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		r := e.Reconcile()
 		e.RefreshStorage()
 		out := D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit(), "disk_volumes_collected": e.CollectDiskVolumes()}
-		if swept := e.SweepBackups(); swept != nil {
+		// The sweep is a side task: a backup server that does not answer
+		// must not fail a reconcile that already ran.
+		var swept D
+		if problem := attempt(func() { swept = e.SweepBackups() }); problem != nil {
+			swept = D{"error": describe(problem)}
+		}
+		if swept != nil {
 			out["backups_swept"] = swept
 		}
 		return out
