@@ -1320,6 +1320,8 @@ Mapping:
 | client VPN client (`vpn_client_add`) | IP address `10.201.N.x/32` in the shared VRF, bound to no interface, description with the client name and the day it expires; an expired or removed client leaves with its record |
 | tenant's client VPN interface `wg-tNNN` (with `tunnel_group`) | tunnel `wg-tNNN` in that group while the tenant has a client: encapsulation WireGuard, `active`, the description names the tenant and the endpoint `<public_address>:<31000+N>`. One per tenant, not one per client, because the interface is the tunnel and the clients are its peers |
 | the exit node's side of that tunnel | interface `wg-tNNN` (type virtual, owned by carrel) on the NetBox device of the first node, found like a machine's device, and a hub tunnel termination on it. A first node with no device fails the tunnel's end only: the tunnel stands without it |
+| tenant | tenant `Carrel: <Tenant>`, slug `carrel-<tenant>`, that every prefix, address, virtual machine, L2VPN and private network VRF of the tenant carries (issue #181); the shared VRF belongs to no tenant; one with that slug carrel did not create is an error |
+| primary network VNI `100000 + N`, private network VNI `200000 + N * 100 + k` | L2VPN `tNNN.<tenant>` of type `vxlan-evpn`, and `pNNNkk.<tenant>` of type `vxlan`, with the VNI as identifier and the tenant set, so a VNI seen on the wire leads to its tenant and network (issue #181). A token without the tenancy and L2VPN permissions syncs the rest without a tenant and reports one error |
 | `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
 | published port, HTTPS route | service on the VM, or on the FHRP group when it targets a virtual address, with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
@@ -1369,6 +1371,8 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | virtualization.virtualdisk | yes | yes | yes | yes |
 | dcim.device | yes | no | no | no |
 | ipam.fhrpgroupassignment | yes | yes | no | yes |
+| tenancy.tenant | yes | yes | yes | yes |
+| vpn.l2vpn | yes | yes | yes | yes |
 | vpn.tunnel (with `tunnel_group`) | yes | yes | yes | yes |
 | vpn.tunnelgroup (with `tunnel_group`) | yes | no | no | no |
 | vpn.tunneltermination (with `tunnel_group`) | yes | yes | no | yes |

@@ -342,6 +342,7 @@ type nbVIP struct {
 
 type nbTenant struct {
 	n        int
+	slug     string
 	vrf      string // the shared VRF of the tenant segment
 	vrfs     []string
 	oldVRF   map[string][]string // VRF name -> the names it had before names read like words
@@ -351,6 +352,14 @@ type nbTenant struct {
 	// vpnClients are the addresses of the tenant's client VPN (issue #184).
 	vpnClients []nbAddress
 	tunnel     *nbTunnel // nil without clients, or without netbox.tunnel_group
+	// vnis are the tenant's VXLAN segments: the primary network and each private network (#181).
+	vnis []nbVNI
+}
+
+// nbVNI is one VXLAN segment as a NetBox L2VPN.
+type nbVNI struct {
+	name, slug, kind, description string
+	vni                           int
 }
 
 func nbStatus(m D) string {
@@ -412,8 +421,10 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 && len(clients) == 0 {
 			continue
 		}
-		tn := nbTenant{n: n, vrf: c.VRF, oldVRF: map[string][]string{c.VRF: {strings.ToLower(c.VRF)}}}
+		tn := nbTenant{n: n, slug: slug, vrf: c.VRF, oldVRF: map[string][]string{c.VRF: {strings.ToLower(c.VRF)}}}
 		used := map[string]bool{tn.vrf: true}
+		// The VNIs as node-agent numbers them (PLAN 6.2): the tenants zone is EVPN, the private zone plain VXLAN.
+		tn.vnis = append(tn.vnis, nbVNI{name: fmt.Sprintf("t%03d.%s", n, slug), slug: fmt.Sprintf("carrel-t%03d", n), kind: "vxlan-evpn", vni: 100000 + n, description: "Carrel tenant segment of " + slug})
 		tn.prefixes = append(tn.prefixes, nbPrefix{tn.vrf, fmt.Sprintf("10.200.%d.0/24", n), "Carrel tenant " + slug})
 		// Client VPN addresses come from 10.201.N.0/24 and are as unique as the
 		// tenant segment, so they share its VRF. No interface: a client is not a machine.
@@ -433,6 +444,9 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		names, netVRF := map[string]string{}, map[string]string{}
 		for _, nw := range networks {
 			names[str(nw["id"])] = str(nw["name"])
+			if k := integer(nw["serial"]); k > 0 {
+				tn.vnis = append(tn.vnis, nbVNI{name: fmt.Sprintf("%s.%s", nw["id"], slug), slug: "carrel-" + str(nw["id"]), kind: "vxlan", vni: 200000 + n*100 + k, description: fmt.Sprintf("Carrel private network %s of tenant %s (%s)", nw["name"], slug, nw["mode"])})
+			}
 			// A raw_l2 segment has no carrel-managed addressing: only the attachment is recorded.
 			if cidr := str(nw["cidr"]); cidr != "" && nw["mode"] == "managed" {
 				if p, err := netip.ParsePrefix(cidr); err == nil {
@@ -547,12 +561,23 @@ func vipsAsD(xs []vipRecord) []any {
 type nbState struct {
 	vrfs, prefixes, ips, ifaces, vms, services, groups, assignments []D
 	platforms, macs, disks                                          []D
-	tunnels, terminations, deviceIfaces                             []D // the client VPN tunnels, their ends, and the exit node's interfaces
-	tunnelGroup, exitDevice                                         int // NetBox ids; 0 when phase 2 is off or the object is missing
+	tunnels, terminations, deviceIfaces                             []D  // the client VPN tunnels, their ends, and the exit node's interfaces
+	tenants, l2vpns                                                 []D  // the NetBox tenants and the VNIs (#181)
+	tenancy                                                         bool // the token may read tenants and L2VPNs; off, objects carry no tenant
+	tenantRef                                                       any  // the NetBox tenant of the carrel tenant being synced
+	tunnelGroup, exitDevice                                         int  // NetBox ids; 0 when phase 2 is off or the object is missing
 	exitNode                                                        string
 	devices                                                         map[string]int // lower-case node name -> NetBox device id
 	platformIDs                                                     map[string]int // image -> NetBox platform id
 	keep                                                            map[string]map[int]bool
+}
+
+// tenanted adds the NetBox tenant to an object's wanted fields while tenancy is on.
+func (s *nbState) tenanted(d D) D {
+	if s.tenancy {
+		d["tenant"] = s.tenantRef
+	}
+	return d
 }
 
 func (s *nbState) kept(kind string, id int) {
@@ -632,6 +657,15 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 	s.platforms = c.markedList("dcim/platforms/", nil)
 	s.macs = c.markedList("dcim/mac-addresses/", nil)
 	s.disks = c.markedList("virtualization/virtual-disks/", nil)
+	// Tenants and VNIs need permissions the token may lack (#181): then the
+	// pass records the error and syncs everything else without a tenant.
+	if err := attempt(func() {
+		s.tenants = c.markedList("tenancy/tenants/", nil)
+		s.l2vpns = c.markedList("vpn/l2vpns/", nil)
+		s.tenancy = true
+	}); err != nil {
+		fail("tenants and VNIs", err)
+	}
 	if cfg.TunnelGroup != "" {
 		s.tunnels = c.markedList("vpn/tunnels/", nil)
 		s.terminations = c.list("vpn/tunnel-terminations/", nil)
@@ -685,6 +719,10 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 				}
 			}
 			// Everything of the tenant stays as it is until the next pass.
+			s.protect("tenants", s.tenants, func(o D) bool { return o["slug"] == "carrel-"+t.slug })
+			for _, v := range t.vnis {
+				s.protect("l2vpns", s.l2vpns, func(o D) bool { return o["slug"] == v.slug })
+			}
 			for _, name := range t.vrfs {
 				v := nbFindVRF(s.vrfs, name, t.oldVRF[name])
 				if v == nil {
@@ -749,6 +787,11 @@ func nbFindVRF(vrfs []D, name string, old []string) D {
 }
 
 func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID int, cfg nbConfig, synced map[int]string, tenantOf map[int]int, vmNB map[int]int, ifaceNB map[string]int, fail func(string, any) string) {
+	s.tenantRef = nil
+	if s.tenancy {
+		s.tenantRef = e.netboxTenancy(c, s, t)
+	}
+	defer func() { s.tenantRef = nil }()
 	vrfIDs := map[string]int{}
 	for _, name := range t.vrfs {
 		vrf := nbFindVRF(s.vrfs, name, t.oldVRF[name])
@@ -756,7 +799,13 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 			panic(nbError{Msg: "NetBox VRF " + name + " exists but carrel did not create it"})
 		}
 		created := vrf == nil
-		vrf = c.ensure("ipam/vrfs/", vrf, D{"name": name, "description": "Carrel"})
+		want := D{"name": name, "description": "Carrel"}
+		if name != t.vrf {
+			// The shared VRF holds every tenant's segment; only a private
+			// network's VRF belongs to one tenant.
+			want = s.tenanted(want)
+		}
+		vrf = c.ensure("ipam/vrfs/", vrf, want)
 		if created {
 			s.vrfs = append(s.vrfs, vrf)
 		}
@@ -766,15 +815,24 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 	for _, p := range t.prefixes {
 		vrfID := vrfIDs[p.vrf]
 		have := one(s.prefixes, func(o D) bool { return o["prefix"] == p.prefix && refID(o["vrf"]) == vrfID })
-		got := c.ensure("ipam/prefixes/", have, D{"prefix": p.prefix, "vrf": vrfID, "status": "active", "description": p.description})
+		got := c.ensure("ipam/prefixes/", have, s.tenanted(D{"prefix": p.prefix, "vrf": vrfID, "status": "active", "description": p.description}))
 		s.kept("prefixes", integer(got["id"]))
+	}
+	// A VNI that fails keeps what NetBox holds and fails alone.
+	if s.tenancy {
+		for _, v := range t.vnis {
+			if err := attempt(func() { netboxVNI(c, s, v) }); err != nil {
+				fail("VNI "+v.name, err)
+				s.protect("l2vpns", s.l2vpns, func(o D) bool { return o["slug"] == v.slug })
+			}
+		}
 	}
 	// A client address that fails keeps what NetBox holds and fails alone.
 	for _, a := range t.vpnClients {
 		if err := attempt(func() {
 			vrfID := vrfIDs[a.vrf]
 			haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
-			ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "description": a.description})
+			ip := c.ensure("ipam/ip-addresses/", haveIP, s.tenanted(D{"address": a.address, "vrf": vrfID, "status": "active", "description": a.description}))
 			s.kept("ips", integer(ip["id"]))
 		}); err != nil {
 			fail("VPN client "+a.address, err)
@@ -848,6 +906,32 @@ func netboxProtectTunnel(s *nbState, t *nbTunnel) {
 	}
 }
 
+// netboxTenancy makes the NetBox tenant of a carrel tenant (#181). The name
+// starts with "Carrel: " and the slug with "carrel-", like a platform, so a
+// tenant the network team keeps by hand is never met; one with that slug that
+// carrel did not create is an error.
+func (e *Execution) netboxTenancy(c *nbClient, s *nbState, t *nbTenant) int {
+	slug := "carrel-" + t.slug
+	have := one(s.tenants, func(o D) bool { return o["slug"] == slug })
+	if have == nil && len(c.list("tenancy/tenants/", url.Values{"slug": {slug}})) > 0 {
+		panic(nbError{Msg: "NetBox tenant " + slug + " exists but carrel did not create it"})
+	}
+	got := c.ensure("tenancy/tenants/", have, D{"name": "Carrel: " + nbTitle(t.slug), "slug": slug, "description": fmt.Sprintf("Carrel tenant %s, segment 10.200.%d.0/24", t.slug, t.n)})
+	id := integer(got["id"])
+	s.kept("tenants", id)
+	return id
+}
+
+// netboxVNI records one VXLAN segment as an L2VPN with the VNI as its identifier (#181).
+func netboxVNI(c *nbClient, s *nbState, v nbVNI) {
+	have := one(s.l2vpns, func(o D) bool { return o["slug"] == v.slug })
+	if have == nil && len(c.list("vpn/l2vpns/", url.Values{"slug": {v.slug}})) > 0 {
+		panic(nbError{Msg: "NetBox L2VPN " + v.slug + " exists but carrel did not create it"})
+	}
+	got := c.ensure("vpn/l2vpns/", have, s.tenanted(D{"name": v.name, "slug": v.slug, "type": v.kind, "identifier": v.vni, "description": v.description}))
+	s.kept("l2vpns", integer(got["id"]))
+}
+
 func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs map[string]int, clusterID int, cfg nbConfig, vmNB map[int]int, ifaceNB map[string]int) {
 	// The VMID first: a renamed machine keeps its NetBox object, history and
 	// all (machine_rename). The name finds objects from before the field.
@@ -867,7 +951,7 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 		device = id
 	}
 	// The disk size comes from the virtual disk below; NetBox sums it into the machine.
-	want := D{"name": m.name, "cluster": clusterID, "status": m.status, "vcpus": m.cpu, "memory": m.memoryMB, "start_on_boot": m.onBoot, "platform": platform, "device": device, "description": m.comment, "custom_fields": D{cfg.VMIDField: m.vmid}}
+	want := s.tenanted(D{"name": m.name, "cluster": clusterID, "status": m.status, "vcpus": m.cpu, "memory": m.memoryMB, "start_on_boot": m.onBoot, "platform": platform, "device": device, "description": m.comment, "custom_fields": D{cfg.VMIDField: m.vmid}})
 	vm := c.ensure("virtualization/virtual-machines/", have, want)
 	vmID := integer(vm["id"])
 	s.kept("vms", vmID)
@@ -910,7 +994,7 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 		for _, a := range f.addresses {
 			vrfID := vrfIDs[a.vrf]
 			haveIP := one(s.ips, func(o D) bool { return o["address"] == a.address && refID(o["vrf"]) == vrfID })
-			ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": a.address, "vrf": vrfID, "status": "active", "assigned_object_type": nbIfaceType, "assigned_object_id": ifaceID, "description": a.description, "dns_name": a.dns})
+			ip := c.ensure("ipam/ip-addresses/", haveIP, s.tenanted(D{"address": a.address, "vrf": vrfID, "status": "active", "assigned_object_type": nbIfaceType, "assigned_object_id": ifaceID, "description": a.description, "dns_name": a.dns}))
 			s.kept("ips", integer(ip["id"]))
 			if a.address == m.primary.address {
 				primaryID = integer(ip["id"])
@@ -924,7 +1008,7 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 		// A bound public address is the outside of its machine's primary
 		// address, 1:1 NAT as the exit node does it (issue #91).
 		haveIP := one(s.ips, func(o D) bool { return o["address"] == m.publicIP && o["vrf"] == nil })
-		ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": m.publicIP, "status": "active", "nat_inside": primaryID, "description": "Carrel public address of " + m.name})
+		ip := c.ensure("ipam/ip-addresses/", haveIP, s.tenanted(D{"address": m.publicIP, "status": "active", "nat_inside": primaryID, "description": "Carrel public address of " + m.name}))
 		s.kept("ips", integer(ip["id"]))
 	}
 	netboxServices(c, s, m.services, nbVMType, vmID)
@@ -985,7 +1069,7 @@ func (e *Execution) netboxVIP(c *nbClient, s *nbState, v nbVIP, vrfID int, iface
 	groupID := integer(group["id"])
 	s.kept("groups", groupID)
 	haveIP := one(s.ips, func(o D) bool { return o["address"] == v.address && refID(o["vrf"]) == vrfID })
-	ip := c.ensure("ipam/ip-addresses/", haveIP, D{"address": v.address, "vrf": vrfID, "status": "active", "role": "vip", "assigned_object_type": nbGroupType, "assigned_object_id": groupID, "description": "Carrel virtual address " + v.name})
+	ip := c.ensure("ipam/ip-addresses/", haveIP, s.tenanted(D{"address": v.address, "vrf": vrfID, "status": "active", "role": "vip", "assigned_object_type": nbGroupType, "assigned_object_id": groupID, "description": "Carrel virtual address " + v.name}))
 	s.kept("ips", integer(ip["id"]))
 	for _, vmid := range v.vmids {
 		ifaceID := ifaceNB[fmt.Sprintf("%d/eth0", vmid)]
@@ -1123,6 +1207,9 @@ func (e *Execution) netboxPrune(c *nbClient, s *nbState, fail func(string, any) 
 		{"groups", "ipam/fhrp-groups/", s.groups},
 		{"prefixes", "ipam/prefixes/", s.prefixes},
 		{"vrfs", "ipam/vrfs/", s.vrfs},
+		{"l2vpns", "vpn/l2vpns/", s.l2vpns},
+		// Last: NetBox refuses to delete a tenant that still has objects.
+		{"tenants", "tenancy/tenants/", s.tenants},
 	}
 	for _, step := range steps {
 		for _, o := range step.objects {
