@@ -65,7 +65,7 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	srv.Config.Handler = mux
 	srv.Start()
 	defer srv.Close()
-	p.Config["origin"] = origin
+	p.Config.Origin = origin
 	seedMachine(p, "web", 10100)
 	e := p.execution(context.Background())
 	link := str(e.ConsoleURL(D{"machine": "web"}, D{"sub": "alice"}, p.Store.TenantN(1))["url"])

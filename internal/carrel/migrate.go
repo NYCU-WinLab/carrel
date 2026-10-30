@@ -37,7 +37,7 @@ func (e *Execution) PlanMigration(a D) D {
 	if e.Op != nil {
 		for _, other := range e.S.ActiveOperations() {
 			if other["id"] != e.Op["id"] && other["tool"] == "machine_migrate" && other["migration"] != nil {
-				panic(Waiting{"waiting_for_migration_slot", now() + num(fallback(e.P.Config, "migration_slot_retry_seconds", 15))})
+				panic(Waiting{"waiting_for_migration_slot", now() + e.P.Config.MigrationSlotRetrySeconds})
 			}
 		}
 	}
@@ -109,7 +109,7 @@ func (e *Execution) PerformMigration() {
 		e.Op["phase"] = "moving_machine"
 		e.P.Operations.Save(e.Op)
 	}()
-	bw := intAt(e.P.Config, "migration_bwlimit_kib", 51200)
+	bw := e.P.Config.MigrationBwlimitKiB
 	e.Call(D{"op": "migrate_prepare", "machine": m, "cloud_init": e.cloudInitFiles(m)}, to.Target)
 	e.Call(D{"op": "migrate", "machine": m, "target": to.Name, "bwlimit": bw}, from.Target)
 	// The machine runs on the target now: record it before the disk goes

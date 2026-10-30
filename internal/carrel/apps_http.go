@@ -59,7 +59,7 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /apps/v1/carrel-deployd", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
-		http.ServeFile(w, r, textAt(p.Config, "deployd_binary", "/usr/local/lib/carrel/carrel-deployd"))
+		http.ServeFile(w, r, p.Config.DeploydBinary)
 	})
 	mux.Handle("POST /apps/v1/{tenant}/{app}/releases", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.githubClaims(r)

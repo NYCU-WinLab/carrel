@@ -12,11 +12,7 @@ import (
 func nodeFixture(t *testing.T) (*Platform, *fakeBackend, *sync.Map) {
 	t.Helper()
 	p, b := fixture(t)
-	p.Config["nodes"] = []any{
-		D{"name": "carrel01", "target": "node-01"},
-		D{"name": "carrel02", "target": "node-02"},
-		D{"name": "carrel03", "target": "node-03"},
-	}
+	p.Config.Nodes = []NodeConfig{{"carrel01", "node-01"}, {"carrel02", "node-02"}, {"carrel03", "node-03"}}
 	used := map[string]float64{"node-01": 100, "node-02": 20, "node-03": 60}
 	targets := &sync.Map{}
 	b.call = func(r D, target string) (any, error) {
@@ -45,21 +41,30 @@ func nodeFixture(t *testing.T) (*Platform, *fakeBackend, *sync.Map) {
 
 func TestValidateNodes(t *testing.T) {
 	for _, tc := range []struct {
-		nodes []any
+		nodes []NodeConfig
 		ok    bool
 	}{
 		{nil, false},
-		{[]any{}, false},
-		{[]any{D{"name": "carrel01", "target": "carrel-node"}, D{"name": "carrel02", "target": "node-02"}}, true},
-		{[]any{D{"name": "carrel01", "target": "a"}, D{"name": "carrel01", "target": "b"}}, false},
-		{[]any{D{"name": "carrel01", "target": "a"}, D{"name": "carrel02", "target": "a"}}, false},
-		{[]any{D{"name": "../x", "target": "a"}}, false},
-		{[]any{D{"name": "carrel01"}}, false},
-		{[]any{"carrel01"}, false},
+		{[]NodeConfig{}, false},
+		{[]NodeConfig{{"carrel01", "carrel-node"}, {"carrel02", "node-02"}}, true},
+		{[]NodeConfig{{"carrel01", "a"}, {"carrel01", "b"}}, false},
+		{[]NodeConfig{{"carrel01", "a"}, {"carrel02", "a"}}, false},
+		{[]NodeConfig{{"../x", "a"}}, false},
+		{[]NodeConfig{{"carrel01", ""}}, false},
 	} {
-		if err := ValidateNodes(D{"nodes": tc.nodes, "public_address": "140.113.60.184", "origin": "https://carrel.winlab.tw"}); (err == nil) != tc.ok {
+		c := Config{Nodes: tc.nodes, PublicAddress: "140.113.60.184", Origin: "https://carrel.winlab.tw", Database: "x.db"}
+		if err := c.Validate(); (err == nil) != tc.ok {
 			t.Fatalf("%v: %v", tc.nodes, err)
 		}
+	}
+	// A list that is not a list, or an unknown key, is refused at load.
+	for _, text := range []string{`{"nodes": "carrel01"}`, `{"origin": "https://c.test", "issuer": "x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}], "cloudflare_tokne": "x"}`} {
+		if _, err := LoadConfig([]byte(text)); err == nil {
+			t.Fatalf("accepted %s", text)
+		}
+	}
+	if c, err := LoadConfig([]byte(`{"origin": "https://c.test", "issuer": "x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}]}`)); err != nil || c.ZoneDir != defaultZoneDir || c.GuestReadyTimeout != defaultGuestReady {
+		t.Fatalf("defaults: %+v %v", c, err)
 	}
 }
 
@@ -190,9 +195,6 @@ func TestUnknownNodeRecordsAndUnreachableNodesDoNotStopObservations(t *testing.T
 	if node, _ := e.Place(1, 1024, 10); node.Name != "carrel02" {
 		t.Fatalf("placed on %s", node.Name)
 	}
-	if err := ValidateNodes(D{"nodes": "carrel01"}); err == nil {
-		t.Fatal("accepted a node list that is not a list")
-	}
 }
 func TestReconcileRunsOnEveryNodeFirstNodeFirst(t *testing.T) {
 	p, b, _ := nodeFixture(t)
@@ -284,13 +286,13 @@ func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
 }
 
 func TestValidateNodesNeedsTheSiteAddressAndOrigin(t *testing.T) {
-	nodes := []any{D{"name": "carrel01", "target": "carrel-node"}}
-	if err := ValidateNodes(D{"nodes": nodes, "public_address": "140.113.60.184", "origin": "https://carrel.winlab.tw"}); err != nil {
+	nodes := []NodeConfig{{"carrel01", "carrel-node"}}
+	if err := (Config{Nodes: nodes, PublicAddress: "140.113.60.184", Origin: "https://carrel.winlab.tw", Database: "x.db"}).Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []D{{"nodes": nodes, "origin": "https://carrel.winlab.tw"}, {"nodes": nodes, "public_address": "fe80::1", "origin": "https://carrel.winlab.tw"}, {"nodes": nodes, "public_address": "x", "origin": "https://carrel.winlab.tw"}, {"nodes": nodes, "public_address": "140.113.60.184"}} {
-		if err := ValidateNodes(c); err == nil {
-			t.Fatalf("accepted %v", c)
+	for _, c := range []Config{{Nodes: nodes, Origin: "https://carrel.winlab.tw", Database: "x.db"}, {Nodes: nodes, PublicAddress: "fe80::1", Origin: "https://carrel.winlab.tw", Database: "x.db"}, {Nodes: nodes, PublicAddress: "x", Origin: "https://carrel.winlab.tw", Database: "x.db"}, {Nodes: nodes, PublicAddress: "140.113.60.184", Database: "x.db"}, {Nodes: nodes, PublicAddress: "140.113.60.184", Origin: "https://carrel.winlab.tw"}} {
+		if err := c.Validate(); err == nil {
+			t.Fatalf("accepted %+v", c)
 		}
 	}
 }

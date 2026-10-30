@@ -13,7 +13,7 @@ import (
 func freezeSite(t *testing.T) (*Platform, *fakeBackend, *[]string) {
 	t.Helper()
 	p, b := fixture(t)
-	p.Config["backup_storage"] = "pbs"
+	p.Config.BackupStorage = "pbs"
 	seen := &[]string{}
 	b.call = func(r D, target string) (any, error) {
 		op := str(r["op"])
@@ -91,7 +91,7 @@ func TestFreezeRefusals(t *testing.T) {
 		{"frozen quota", func(p *Platform, b *fakeBackend) {
 			p.Store.Exec(`UPDATE tenants SET quota='{"frozen_gb":10}' WHERE n=1`)
 		}, "quota_exceeded", "quota"},
-		{"no backup storage", func(p *Platform, b *fakeBackend) { delete(p.Config, "backup_storage") }, "backend_unavailable", "not set up"},
+		{"no backup storage", func(p *Platform, b *fakeBackend) { p.Config.BackupStorage = "" }, "backend_unavailable", "not set up"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, b, seen := freezeSite(t)
@@ -226,12 +226,12 @@ func TestFrozenQuotaDefaultsToTheDiskQuota(t *testing.T) {
 func TestFreezeReleaseListComesFromTheConfig(t *testing.T) {
 	p, _, _ := freezeSite(t)
 	p.Store.Put("public_ips", "ip1", 1, D{"id": "ip1", "address": "140.113.1.1", "tenant_n": 1, "vmid": 10100})
-	p.Config["freeze_release"] = []any{"nothing"}
+	p.Config.FreezeRelease = []string{"nothing"}
 	if f := failure(member(p, "machine_freeze", D{"machine": "box", "confirm": "box", "dry_run": true})); f["code"] != "invalid" {
 		t.Fatalf("an unknown resource kind was accepted: %s", encoded(f))
 	}
 	// A public IP is not on this site's list, so the machine freezes.
-	p.Config["freeze_release"] = []any{"special_ports"}
+	p.Config.FreezeRelease = []string{"special_ports"}
 	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
 }
 
@@ -522,12 +522,12 @@ func TestResizeDuringAFreezeIsHeld(t *testing.T) {
 
 func TestFreezeRespectsTheSiteWideCap(t *testing.T) {
 	p, _, _ := freezeSite(t)
-	p.Config["frozen_total_gb"] = 5
+	p.Config.FrozenTotalGB = 5
 	r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box"})
 	if failure(r)["code"] != "quota_exceeded" {
 		t.Fatalf("freeze over the cap: %s", encoded(r))
 	}
-	p.Config["frozen_total_gb"] = 100
+	p.Config.FrozenTotalGB = 100
 	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
 }
 

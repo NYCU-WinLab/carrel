@@ -28,7 +28,7 @@ func (e *Execution) cfIn(z zoneAccess, method, path string, body any) D {
 
 // cloudflare calls the Cloudflare API with token.
 func (e *Execution) cloudflare(token, method, path string, body any) D {
-	base := textAt(e.P.Config, "cloudflare_api", "https://api.cloudflare.com/client/v4")
+	base := e.P.Config.CloudflareAPI
 	var data io.Reader
 	if body != nil {
 		data = bytes.NewReader(encoded(body))
@@ -52,7 +52,7 @@ func (e *Execution) cloudflare(token, method, path string, body any) D {
 	return d
 }
 func (e *Execution) Reserved() map[string]bool {
-	if str(e.P.Config["cloudflare_token"]) == "" || str(e.P.Config["cloudflare_zone"]) == "" {
+	if e.P.Config.CloudflareToken == "" || e.P.Config.CloudflareZone == "" {
 		fail("conflict", "DNS ownership checks are not configured; registration is paused")
 	}
 	data := e.CF("GET", "?per_page=5000", nil)
@@ -76,7 +76,7 @@ func (e *Execution) DomainRecord(t D, remove bool) {
 	if len(records) > 0 && (len(records) != 1 || records[0]["comment"] != owner) {
 		fail("conflict", "Refusing DNS record owned outside carrel")
 	}
-	address := str(e.P.Config["public_address"])
+	address := e.P.Config.PublicAddress
 	if remove && len(records) > 0 {
 		e.CF("DELETE", "/"+str(records[0]["id"]), nil)
 	} else if !remove && len(records) == 0 {
@@ -94,7 +94,7 @@ func (e *Execution) tenantCertificateHeld(t D) bool {
 }
 
 func (e *Execution) CertificateDir() string {
-	return textAt(e.P.Config, "certificate_dir", "/var/lib/carrel/certificates")
+	return e.P.Config.CertificateDir
 }
 func (e *Execution) EnsureCertificate(t D) D {
 	// One issuance at a time, apart from the infrastructure writer, so DNS

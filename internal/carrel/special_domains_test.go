@@ -78,7 +78,7 @@ func TestGatewayRefusesInvalidGrants(t *testing.T) {
 func TestGrantRecordAdoptsOnlyWhenAllowed(t *testing.T) {
 	p, _, _ := originFixture(t)
 	dns := &statefulDNS{records: map[string][]D{}}
-	p.Config["cloudflare_api"] = dns.serve(t).URL
+	p.Config.CloudflareAPI = dns.serve(t).URL
 	e := p.execution(context.Background())
 	g := domainGrant{ID: "g1", TenantN: 1, Kind: "exact", Name: "video.winlab.tw"}
 	dns.records[g.Name] = []D{{"id": "old", "type": "A", "name": g.Name, "content": "140.113.194.229"}}
@@ -113,7 +113,7 @@ func TestGrantRecordAdoptsOnlyWhenAllowed(t *testing.T) {
 // go to that zone.
 func TestZoneOfPicksTheLongestManagedZone(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.ZoneDir = t.TempDir()
 	e := p.execution(context.Background())
 	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
 	p.Store.SitePut("zone", "deep.lab2.example", D{"id": "fedcba9876543210fedcba9876543210", "name": "deep.lab2.example"})
@@ -144,7 +144,7 @@ func TestZoneOfPicksTheLongestManagedZone(t *testing.T) {
 // the public origin, the endpoint refuses (delegated.go).
 func TestGatewayAskIsTheGatewaysAlone(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["origin"] = "https://carrel.winlab.tw"
+	p.Config.Origin = "https://carrel.winlab.tw"
 	app := NewApp(p, nil)
 	for _, c := range []struct {
 		remote, host string
@@ -168,7 +168,7 @@ func TestGatewayAskIsTheGatewaysAlone(t *testing.T) {
 // before the tenant is asked, so no more than the budget get through.
 func TestDelegatedBudgetHoldsUnderConcurrentAsks(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.ZoneDir = t.TempDir()
 	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
 	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
 	for i, base := range []string{"a.lab.example", "b.lab.example"} {
@@ -209,7 +209,7 @@ func TestDelegatedBudgetHoldsUnderConcurrentAsks(t *testing.T) {
 // the gateway endpoint answers a recent refusal without asking again (#166).
 func TestDelegatedAsksAreBounded(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.ZoneDir = t.TempDir()
 	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
 	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
 	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})
@@ -271,7 +271,7 @@ func TestDelegatedAsksAreBounded(t *testing.T) {
 // instead of failing, and the tenant is asked once (#166).
 func TestDelegatedConcurrentAsksShareAnswer(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.ZoneDir = t.TempDir()
 	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1}})
 	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
 	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})
@@ -320,7 +320,7 @@ func TestDelegatedConcurrentAsksShareAnswer(t *testing.T) {
 // left under the old tenant (#186).
 func TestDelegatedAskDuringTransferLeavesNoRow(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["zone_dir"] = t.TempDir()
+	p.Config.ZoneDir = t.TempDir()
 	p.Store.SitePut("zone", "lab.example", D{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "tenants": []int{1, 2}})
 	p.Store.Put("machines", "10100", 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "ip": "10.200.1.10"})
 	p.Store.Put("domain_grants", "g0", 1, D{"id": "g0", "tenant_n": 1, "kind": "delegated", "name": "*.a.lab.example", "zone": "lab.example", "granted_at": 1, "request_id": "r"})

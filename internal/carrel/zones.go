@@ -39,7 +39,7 @@ var zonePattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a
 
 // siteZone is the site's own zone.
 func (e *Execution) siteZone() zoneAccess {
-	return zoneAccess{Name: specialZone, ID: str(e.P.Config["cloudflare_zone"]), Token: str(e.P.Config["cloudflare_token"])}
+	return zoneAccess{Name: specialZone, ID: e.P.Config.CloudflareZone, Token: e.P.Config.CloudflareToken}
 }
 
 func (e *Execution) zones() []zoneRecord {
@@ -52,7 +52,7 @@ func (e *Execution) zones() []zoneRecord {
 	return out
 }
 
-func (e *Execution) zoneDir() string { return textAt(e.P.Config, "zone_dir", "/var/lib/carrel/zones") }
+func (e *Execution) zoneDir() string { return e.P.Config.ZoneDir }
 
 func (e *Execution) zoneTokenPath(name string) string {
 	return filepath.Join(e.zoneDir(), name+".token")

@@ -46,7 +46,7 @@ func validateKeys(keys any) {
 type Platform struct {
 	Store        *Store
 	Backend      Backend
-	Config       D
+	Config       Config
 	HTTP         *http.Client
 	writer       sync.Mutex
 	originRetry  backoff
@@ -89,7 +89,7 @@ type Execution struct {
 	placement           nodeRef
 }
 
-func NewPlatform(s *Store, b Backend, c D) *Platform {
+func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, netboxKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)

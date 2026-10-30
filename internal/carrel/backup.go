@@ -24,7 +24,7 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 			err = errors.New("control backup failed")
 		}
 	}()
-	folder, e := os.MkdirTemp(filepath.Dir(str(p.Config["database"])), "backup-")
+	folder, e := os.MkdirTemp(filepath.Dir(p.Config.Database), "backup-")
 	if e != nil {
 		return nil, e
 	}

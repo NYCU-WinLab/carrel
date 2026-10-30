@@ -174,7 +174,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 	}
 	id := str(original["vmid"])
 	e.P.writer.Lock()
-	deadline := e.readinessDeadline(id, "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
+	deadline := e.readinessDeadline(id, "guest", e.P.Config.GuestReadyTimeout)
 	e.P.writer.Unlock()
 	identity := machineIdentity(original)
 	appDeadline := num(obj(obj(e.Op)["readiness_deadlines"])[id+":application"])
@@ -227,7 +227,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 			latest["ssh_ready"], latest["ssh_checked_at"] = ssh, now()
 			if init == "complete" && (app == "failed" || app == "pending") {
 				if appDeadline == 0 {
-					appDeadline = e.readinessDeadline(id, "application", intAt(e.P.Config, "application_ready_timeout", 120))
+					appDeadline = e.readinessDeadline(id, "application", e.P.Config.ApplicationReadyTimeout)
 				}
 			}
 			appExpired := appDeadline > 0 && now() >= appDeadline && !contains([]string{"healthy", "not_checked"}, app)
@@ -256,7 +256,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		if m["state"] == "ready" {
 			return
 		}
-		timer := time.NewTimer(time.Duration(intAt(e.P.Config, "guest_poll_interval", 3)) * time.Second)
+		timer := time.NewTimer(time.Duration(e.P.Config.GuestPollInterval) * time.Second)
 		select {
 		case <-e.Ctx.Done():
 			timer.Stop()
@@ -287,7 +287,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 func (e *Execution) waitServicePort(original D) {
 	id := str(original["vmid"])
 	e.P.writer.Lock()
-	deadline := e.readinessDeadline(id, "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
+	deadline := e.readinessDeadline(id, "guest", e.P.Config.GuestReadyTimeout)
 	e.P.writer.Unlock()
 	identity := machineIdentity(original)
 	probe := probeServicePort
@@ -325,7 +325,7 @@ func (e *Execution) waitServicePort(original D) {
 			settle("ready", "")
 			return
 		}
-		timer := time.NewTimer(time.Duration(intAt(e.P.Config, "guest_poll_interval", 3)) * time.Second)
+		timer := time.NewTimer(time.Duration(e.P.Config.GuestPollInterval) * time.Second)
 		select {
 		case <-e.Ctx.Done():
 			timer.Stop()

@@ -21,10 +21,10 @@ It never prints a key or a secret, and keeps every config.json key it does not o
 import ipaddress
 import json
 import os
-from pathlib import Path
 import re
 import socket
 import subprocess
+from pathlib import Path
 
 SITE = Path("/etc/carrel/site.json")
 PROGRAMS = ["node-agent.py", "guest-report.py"]

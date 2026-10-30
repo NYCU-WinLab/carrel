@@ -87,7 +87,7 @@ func (e *Execution) DomainProxy(a, w D) D {
 // gatewayRecord is the grant's own A record once it points at the site.
 func (e *Execution) gatewayRecord(z zoneAccess, g domainGrant) D {
 	for _, r := range dicts(e.cfIn(z, "GET", "?name="+url.QueryEscape(g.Name), nil)["result"]) {
-		if r["comment"] == g.owner() && r["type"] == "A" && r["content"] == e.P.Config["public_address"] {
+		if r["comment"] == g.owner() && r["type"] == "A" && r["content"] == e.P.Config.PublicAddress {
 			return r
 		}
 	}
@@ -119,7 +119,7 @@ func (e *Execution) probeProxied(name, token string) string {
 	if e.P.proxyProbe != nil {
 		return e.P.proxyProbe(name, token)
 	}
-	address := str(e.P.Config["public_address"])
+	address := e.P.Config.PublicAddress
 	// Cloudflare's own resolver answers the proxied record at once; the
 	// local one may still hold the old address for its TTL.
 	resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {

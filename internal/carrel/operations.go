@@ -61,7 +61,7 @@ func (o *Operations) Find(t D, id string) D {
 func (o *Operations) CheckQueue(t D, tool string) {
 	pending := o.p.Store.ActiveOperations()
 	mine := filter(pending, func(v D) bool { return integer(v["tenant_n"]) == integer(t["n"]) })
-	if tool != "tenant_suspend" && (len(pending) >= intAt(o.p.Config, "max_pending_operations", 256) || len(mine) >= intAt(o.p.Config, "max_tenant_pending_operations", 16)) {
+	if tool != "tenant_suspend" && (len(pending) >= o.p.Config.MaxPendingOperations || len(mine) >= o.p.Config.MaxTenantPendingOperations) {
 		fail("conflict", "Operation queue is full; wait for an existing operation", D{"retryable": true})
 	}
 }

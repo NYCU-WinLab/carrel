@@ -9,11 +9,11 @@ import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 HOSTS = Path("/etc/carrel-hosts")
 CADDY = Path("/etc/caddy/Caddyfile")
@@ -47,7 +47,7 @@ def certificates(bundles):
     directories, which go only after Caddy accepted the new routes.
     """
     if not isinstance(bundles, dict):
-        raise ValueError("expected certificate bundles")
+        raise ValueError("expected certificate bundles")  # noqa: TRY004  the caller maps ValueError to invalid_request
     private_directory(CERTS)
     digest = hashlib.sha256()
     for name in sorted(bundles):

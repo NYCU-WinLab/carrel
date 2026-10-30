@@ -323,7 +323,7 @@ class CommandFailure(RuntimeError):
 
 
 def run(*args, timeout=180, input=None):
-    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout, input=input)
+    p = subprocess.run([str(a) for a in args], capture_output=True, text=True, timeout=timeout, input=input, check=False)
     if p.returncode:
         raise CommandFailure(f"{args[0]} {args[1]} failed: {p.stderr[-1200:]}")
     return p.stdout.strip()
@@ -591,7 +591,7 @@ def conntrack_flush(address):
     arrived for it (DNAT) and those that left from it (SNAT)."""
     ipaddress.IPv4Address(address)
     for selector in ("--orig-dst", "--reply-dst"):
-        p = subprocess.run(["conntrack", "-D", selector, address], capture_output=True, text=True, timeout=60)
+        p = subprocess.run(["conntrack", "-D", selector, address], capture_output=True, text=True, timeout=60, check=False)
         # conntrack exits 1 when nothing matched.
         if p.returncode and "flow entries have been deleted" not in p.stderr:
             raise CommandFailure(f"conntrack -D failed: {p.stderr[-300:]}")
@@ -2482,9 +2482,7 @@ def main():
             out = create(req["machine"])
             try:
                 out = {**out, **disk_volume(req["machine"], allow_provisioning=True)}
-            except Exception:
-                # Only NetBox's disk name depends on it (issue #175): a
-                # machine that was created must not fail here.
+            except Exception:  # noqa: BLE001, S110  the machine was created; only NetBox's disk name (issue #175) depends on this
                 pass
         elif op == "action":
             out = action(req)
@@ -2569,7 +2567,7 @@ if __name__ == "__main__":
         sys.exit(0)
     try:
         main()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  the adapter's only error boundary: every failure becomes a JSON error line
         code = "adapter_internal"
         if isinstance(e, ValueError):
             code = "invalid_request"

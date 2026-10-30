@@ -129,8 +129,8 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "etc")
 	must(os.MkdirAll(config, 0700))
-	p.Config["database"] = filepath.Join(root, "state.db")
-	p.Config["certificate_dir"] = filepath.Join(root, "certificates")
+	p.Config.Database = filepath.Join(root, "state.db")
+	p.Config.CertificateDir = filepath.Join(root, "certificates")
 	for _, name := range []string{"config.json", "node_key", "node_key.pub", "ssh_config", "known_hosts"} {
 		must(os.WriteFile(filepath.Join(config, name), []byte("fixture"), 0600))
 	}

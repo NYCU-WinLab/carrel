@@ -287,7 +287,7 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 	p.sshProbe = func(context.Context, D) bool { return true }
 	// Domains: a token for the DNS stub, and the tenant's wildcard pair as
 	// issuance would leave it.
-	p.Config["cloudflare_token"] = "test"
+	p.Config.CloudflareToken = "test"
 	crt, key := testPair(t, "*.alice.winlab.tw")
 	p.execution(context.Background()).storeCertificate("alice", crt, key)
 	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})
@@ -464,7 +464,7 @@ func goldenScenario(g *goldenRun) {
 	call("keys", "ssh_key_remove", D{"id": added["id"]}, alice)
 	// Freeze and thaw (issue #190).
 	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "box"}, alice)
-	g.p.Config["backup_storage"] = "pbs"
+	g.p.Config.BackupStorage = "pbs"
 	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "box"}, alice)
 	call("freeze", "machine_power", D{"machine": "box", "action": "shutdown"}, alice)
 	call("freeze", "machine_freeze", D{"machine": "box", "confirm": "wrong"}, alice)

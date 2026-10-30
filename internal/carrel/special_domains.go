@@ -193,7 +193,7 @@ func (e *Execution) checkName(t D, kind, name, ignore, ignoreGrant string) (stri
 	labels := relativeLabels(name)
 	top := labels[len(labels)-1]
 	site := kind == "exact" && name == siteHost
-	if (contains(reservedLabels, top) && !site) || name == originHost(e.P.Config) || under(name, originHost(e.P.Config)) {
+	if (contains(reservedLabels, top) && !site) || name == e.P.Config.OriginHost() || under(name, e.P.Config.OriginHost()) {
 		fail("conflict", "This name is reserved for the platform", D{"recovery": "revise_request"})
 	}
 	for _, other := range e.S.Tenants() {
@@ -419,7 +419,7 @@ func (e *Execution) GrantRecord(g domainGrant, remove bool) {
 		}
 		return
 	}
-	address := str(e.P.Config["public_address"])
+	address := e.P.Config.PublicAddress
 	if len(ours) == 1 && len(foreign) == 0 && ours[0]["type"] == "A" && ours[0]["content"] == address && boolean(ours[0]["proxied"]) == g.Proxied {
 		return
 	}
@@ -717,7 +717,7 @@ func (e *Execution) srvRecord(g domainGrant, remove bool) {
 		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", r["content"], "type", "SRV")
 	}
-	data := D{"priority": 0, "weight": 0, "port": port, "target": originHost(e.P.Config)}
+	data := D{"priority": 0, "weight": 0, "port": port, "target": e.P.Config.OriginHost()}
 	for i, r := range ours {
 		if i == 0 {
 			if current := obj(r["data"]); integer(current["port"]) != port || current["target"] != data["target"] {

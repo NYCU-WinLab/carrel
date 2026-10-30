@@ -167,7 +167,7 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 			return D{"image": r.public()}
 		}
 	}
-	if !boolean(e.P.Config["fetch"]) {
+	if !e.P.Config.Fetch {
 		fail("invalid", "This site has no image fetcher", D{"recovery": "revise_request"})
 	}
 	kind := "iso"
@@ -218,7 +218,7 @@ func (e *Execution) PlanImport(tool string, a, t D) D {
 		return D{"image": merge(r.public(), D{"state": "planned"}), "dry_run": true, "images_gb": e.imageUsage(t)}
 	}
 	refused := []any{}
-	if ip, err := netip.ParseAddr(str(e.P.Config["public_address"])); err == nil {
+	if ip, err := netip.ParseAddr(e.P.Config.PublicAddress); err == nil {
 		refused = append(refused, ip.String()+"/32")
 	}
 	e.Put("images", r.ID, n, r)

@@ -10,7 +10,7 @@ import (
 
 func TestAnISOImportFetchesStoresAndCounts(t *testing.T) {
 	p, b := fixture(t)
-	p.Config["fetch"] = true
+	p.Config.Fetch = true
 	sum := strings.Repeat("ab", 32)
 	var mu sync.Mutex
 	state := D{}
@@ -96,7 +96,7 @@ func awaitStateWithinMs(t *testing.T, p *Platform, id, state string) D {
 
 func TestAnImportCutByARestartDoesNotReportSuccess(t *testing.T) {
 	p, b := fixture(t)
-	p.Config["fetch"] = true
+	p.Config.Fetch = true
 	ctx, cancel := context.WithCancel(context.Background())
 	e := p.execution(ctx)
 	e.Op = D{"id": "op1", "tool": "iso_import", "tenant_n": 1}

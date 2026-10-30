@@ -65,7 +65,7 @@ type nbMarker struct {
 // netboxConfig reads the "netbox" section. Sync is off unless it is enabled
 // and complete; the second result says why an enabled section is unusable.
 func (p *Platform) netboxConfig() (nbConfig, bool, error) {
-	section := obj(p.Config["netbox"])
+	section := p.Config.NetBox
 	if !boolean(section["enabled"]) {
 		return nbConfig{}, false, nil
 	}
@@ -77,7 +77,7 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		VRF:          textAt(section, "vrf", "Carrel"),
 		VMIDField:    textAt(section, "vmid_field", "vmid"),
 		DeviceField:  str(section["device_field"]),
-		Public:       str(p.Config["public_address"]),
+		Public:       p.Config.PublicAddress,
 		PublicTenant: textAt(section, "public_tenant", "Carrel"),
 		PublicRole:   textAt(section, "public_role", "User"),
 		TunnelGroup:  str(section["tunnel_group"]),

@@ -37,8 +37,9 @@ func push(repo, id, branch string) GitHubClaims {
 func appFixture(t *testing.T) (*Platform, *App, string) {
 	t.Helper()
 	p, _ := fixture(t)
-	p.Config["apps_dir"] = t.TempDir()
-	p.Config["apps_disk_headroom_bytes"] = 0
+	p.Config.AppsDir = t.TempDir()
+	noHeadroom := int64(0)
+	p.Config.AppsDiskHeadroomBytes = &noHeadroom
 	seedMachine(p, "web", 10100)
 	a := NewApp(p, nil)
 	a.github = fakeGitHub{

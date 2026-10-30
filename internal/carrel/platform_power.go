@@ -422,7 +422,7 @@ func (e *Execution) platformAwaitReady(plan D) {
 	// then reads them without writing to the shared job.
 	e.P.writer.Lock()
 	for _, r := range waiting {
-		e.readinessDeadline(str(r["vmid"]), "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
+		e.readinessDeadline(str(r["vmid"]), "guest", e.P.Config.GuestReadyTimeout)
 	}
 	e.P.writer.Unlock()
 	for _, r := range waiting {

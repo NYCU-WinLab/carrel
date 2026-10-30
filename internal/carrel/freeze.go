@@ -83,7 +83,7 @@ func (e *Execution) PublicFrozen(f D) D {
 }
 
 func (e *Execution) backupStorage() string {
-	storage := str(e.P.Config["backup_storage"])
+	storage := e.P.Config.BackupStorage
 	if storage == "" {
 		fail("backend_unavailable", "Freezing machines is not set up on this site", D{"recovery": "contact_administrator"})
 	}
@@ -94,13 +94,13 @@ func (e *Execution) backupStorage() string {
 // released before it freezes.
 func (e *Execution) freezeRelease() []string {
 	list := freezeReleasable
-	if v, ok := e.P.Config["freeze_release"]; ok {
+	if e.P.Config.FreezeRelease != nil {
 		list = nil
-		for _, k := range arr(v) {
-			if !contains(freezeReleasable, str(k)) {
+		for _, k := range e.P.Config.FreezeRelease {
+			if !contains(freezeReleasable, k) {
 				fail("invalid", "freeze_release names an unknown resource kind", D{"resource": k})
 			}
-			list = append(list, str(k))
+			list = append(list, k)
 		}
 	}
 	return list
@@ -166,7 +166,7 @@ func thawDelta(f D) D {
 
 // freezeWait is how long the agent waits for the backup server to verify the
 // new backup.
-func (e *Execution) freezeWait() int { return intAt(e.P.Config, "freeze_verify_wait", 1800) }
+func (e *Execution) freezeWait() int { return e.P.Config.FreezeVerifyWait }
 
 // freezeCommitted reports that this operation already wrote its frozen row:
 // the backup it names is the machine's only copy and must not be touched.
@@ -226,7 +226,7 @@ func (e *Execution) freezeChecks(n int, m D) {
 		fail("conflict", "Release "+str(held[0]["name"])+" first: it is a shared resource that a frozen machine cannot keep", D{"recovery": "resolve_prerequisite", "held": held})
 	}
 	// The site's cap on frozen disk space across every tenant (#192).
-	if limit := num(e.P.Config["frozen_total_gb"]); limit > 0 && frozenDisks(e.S.Objects("frozen"))+num(m["disk_gb"]) > limit {
+	if limit := e.P.Config.FrozenTotalGB; limit > 0 && frozenDisks(e.S.Objects("frozen"))+num(m["disk_gb"]) > limit {
 		fail("quota_exceeded", "The site's space for frozen machines is used up", D{"dimension": "frozen_total_gb", "recovery": "contact_administrator"})
 	}
 }
@@ -240,7 +240,7 @@ const backupSweepAge = 7 * 24 * time.Hour
 // older than backupSweepAge (#192). Nothing can thaw such a backup: its
 // record is gone. Scheduled backups of the cluster are never touched.
 func (e *Execution) SweepBackups() D {
-	storage := str(e.P.Config["backup_storage"])
+	storage := e.P.Config.BackupStorage
 	nodes := e.P.Nodes()
 	if storage == "" || len(nodes) == 0 {
 		return nil

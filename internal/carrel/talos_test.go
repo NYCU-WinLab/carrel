@@ -9,7 +9,7 @@ import (
 // An image imported with ports runs no SSH and no cloud-config (issue #94).
 func TestAVMFromAnImageWithPortsHasNoSSH(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config["ssh_jump"] = true
+	p.Config.SSHJump = true
 	e := p.execution(context.Background())
 	tenant := p.Store.TenantN(1)
 	vol := "rs822rp1:import/carrel-t001-talos-cdcdcdcdcdcd.qcow2"
@@ -125,7 +125,7 @@ func TestCapabilitiesFollowTheSite(t *testing.T) {
 	if e.capabilities()["custom_image_import"] != false {
 		t.Fatal("imports without a fetcher")
 	}
-	p.Config["fetch"] = true
+	p.Config.Fetch = true
 	if e.capabilities()["custom_image_import"] != true || obj(Contract["capabilities"])["custom_image_import"] != false {
 		t.Fatal("the site's fetcher is not reported, or the contract changed")
 	}

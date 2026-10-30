@@ -10,9 +10,9 @@ port a machine without SSH declares (issue #94), which its firewall admits.
 import fcntl
 import hashlib
 import json
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 KEYS = Path("/etc/carrel-jump/jump")
 STATE = Path("/var/lib/carrel-jump")

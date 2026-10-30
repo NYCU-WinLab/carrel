@@ -30,8 +30,8 @@ type App struct {
 }
 
 func NewApp(p *Platform, verifier IdentityVerifier) *App {
-	origin := strings.TrimRight(str(p.Config["origin"]), "/")
-	issuer := strings.TrimRight(str(p.Config["issuer"]), "/")
+	origin := strings.TrimRight(p.Config.Origin, "/")
+	issuer := strings.TrimRight(p.Config.Issuer, "/")
 	if verifier == nil {
 		verifier = NewVerifier(issuer)
 	}
@@ -89,9 +89,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		return servers[boolean(obj(r.Context().Value(identityKey{}))["admin"])]
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 262144})
 	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: "carrel-mcp", Hosted: []string{}, Verifier: verifier, HTTP: &http.Client{Timeout: 15 * time.Second}}
-	for _, v := range arr(p.Config["hosted_redirects"]) {
-		oauth.Hosted = append(oauth.Hosted, str(v))
-	}
+	oauth.Hosted = append(oauth.Hosted, p.Config.HostedRedirects...)
 	mux := http.NewServeMux()
 	console := consoleHandler{p: p, o: oauth}
 	oauth.Console = console.finish
