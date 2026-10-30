@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -116,7 +117,23 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			jsonResponse(w, 200, D{"ok": true})
 		}
 	})
+	mux.HandleFunc("POST /internal/guest-keys", func(w http.ResponseWriter, r *http.Request) {
+		var body D
+		var keys string
+		err := attempt(func() {
+			must(json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body))
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			keys = p.execution(r.Context()).GuestKeys(body, host)
+		})
+		if err != nil {
+			jsonResponse(w, 403, D{"ok": false})
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(keys))
+	})
 	a.appRoutes(mux)
+	a.keysRoutes(mux)
 	a.statusRoute(mux, p)
 	a.askRoute(mux, p)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +159,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	}))
 	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/gateway/ask"
+		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/internal/guest-keys" || r.URL.Path == "/gateway/ask"
 		if internal && !strings.HasPrefix(host, "10.200.") {
 			jsonResponse(w, 403, D{"error": "forbidden"})
 			return

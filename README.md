@@ -153,6 +153,21 @@ Save the client's chosen public key once with `ssh_key_add` to omit `ssh_keys` o
 If no saved key is known, read only the known default public key and pass it inline. Do not inspect
 unrelated SSH aliases or scan private keys. Inline public keys are not saved automatically.
 
+### Shared machines in a group tenant
+
+A machine trusts only its creator's key at first. To let every member of the tenant in, the owner
+installs carrel-keys once over SSH:
+
+```sh
+f=$(mktemp) && curl -fsSL https://carrel.winlab.tw/keys/v1/install.sh -o "$f" && sudo sh "$f"; rm -f "$f"
+```
+
+Every minute the machine pulls the keys saved in its tenant with `ssh_key_add`. sshd accepts them
+for `user`, next to `~/.ssh/authorized_keys`. A removed key stops working within a minute. Each
+line names the member who saved it. Pass `--user NAME` for another login user, and `--remove` to
+uninstall. Installing it means trusting Carrel with the machine's logins: a key saved in the tenant
+gets in.
+
 Use `whoami` for the running `service.version`, your default tenant, capabilities and all personal/project quotas, including
 used, limit and remaining. `catalog_get` also returns the version, images, size presets and VM/CT restrictions; `capacity_get` reports
 shared physical capacity and admission headroom without exposing other tenants' machines.
@@ -554,7 +569,8 @@ Unsetting `tunnel_group` later leaves the tunnels carrel made in NetBox; the Net
 
 Private to NYCU WinLab.
 
-Saved SSH keys apply to future creations; removing one does not rotate existing guest keys.
+Saved SSH keys apply to future creations, and to existing machines only where carrel-keys is
+installed; elsewhere removing one does not rotate existing guest keys.
 Lost-key console recovery remains unavailable. Control backups include SQLite, configuration and
 certificates, not tenant disks. Full tenant disaster restoration and install-from-scratch acceptance
 remain separate release gates.
