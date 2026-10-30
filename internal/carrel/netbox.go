@@ -875,7 +875,9 @@ func vpnInterface(n int) string { return fmt.Sprintf("wg-t%03d", n) }
 // the exit node's interface of the same name, and the hub end that binds them.
 // The tunnel is kept first, so a missing exit node leaves it in place.
 func netboxTunnel(c *nbClient, s *nbState, t nbTunnel) {
-	haveTunnel := one(s.tunnels, func(o D) bool { return o["name"] == t.name && refID(o["group"]) == s.tunnelGroup })
+	// By name alone: a changed tunnel_group moves the tunnel (PATCH) instead
+	// of making a new one, which would drop the operator's spokes (#201).
+	haveTunnel := one(s.tunnels, func(o D) bool { return o["name"] == t.name })
 	tunnel := c.ensure("vpn/tunnels/", haveTunnel, D{"name": t.name, "group": s.tunnelGroup, "status": "active", "encapsulation": "wireguard", "description": t.description})
 	tunnelID := integer(tunnel["id"])
 	s.kept("tunnels", tunnelID)
@@ -899,7 +901,7 @@ func netboxTunnel(c *nbClient, s *nbState, t nbTunnel) {
 
 // netboxProtectTunnel keeps what NetBox holds for a tunnel that could not be synced.
 func netboxProtectTunnel(s *nbState, t *nbTunnel) {
-	s.protect("tunnels", s.tunnels, func(o D) bool { return o["name"] == t.name && refID(o["group"]) == s.tunnelGroup })
+	s.protect("tunnels", s.tunnels, func(o D) bool { return o["name"] == t.name })
 	// Without the exit device, any device's interface of that name may be
 	// the one carrel made: deleting it would cascade to the hub end.
 	s.protect("deviceIfaces", s.deviceIfaces, func(o D) bool {
@@ -1198,6 +1200,22 @@ func (e *Execution) netboxPrune(c *nbClient, s *nbState, fail func(string, any) 
 	ours := map[int]bool{}
 	for _, g := range s.groups {
 		ours[integer(g["id"])] = true
+	}
+	// A tunnel the operator hung spokes on does not go with the tenant's last
+	// client, which would take the spokes with it: it is marked
+	// decommissioning and stays until they leave (#201). A new client sets it
+	// active again.
+	for _, tunnel := range s.tunnels {
+		id := integer(tunnel["id"])
+		if s.keep["tunnels"][id] || find(s.terminations, func(o D) bool { return refID(o["tunnel"]) == id && !s.ourEnd(o) }) == nil {
+			continue
+		}
+		if str(nbScalar(tunnel["status"])) != "decommissioning" {
+			if err := attempt(func() { c.do("PATCH", fmt.Sprintf("vpn/tunnels/%d/", id), nil, D{"status": "decommissioning"}) }); err != nil {
+				fail("tunnel "+str(tunnel["name"]), err)
+			}
+		}
+		s.kept("tunnels", id)
 	}
 	steps := []struct {
 		kind, path string
