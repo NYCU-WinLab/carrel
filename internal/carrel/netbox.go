@@ -1015,7 +1015,23 @@ func (e *Execution) netboxPool(c *nbClient, cfg nbConfig) {
 			ranges = append(ranges, D{"start": r["start_address"], "end": r["end_address"]})
 		}
 	}
-	e.S.SitePut("public_pool", "netbox", D{"ranges": ranges, "read_at": now()})
+	// Pool addresses that already have an address object carrel does not
+	// own (the network team's, say): not free, or the bind would create a
+	// second object and fail under ENFORCE_GLOBAL_UNIQUE (#180).
+	taken := []any{}
+	for _, r := range ranges {
+		start, err := netip.ParsePrefix(str(obj(r)["start"]))
+		if err != nil {
+			continue
+		}
+		for _, o := range c.list("ipam/ip-addresses/", url.Values{"parent": {start.Masked().String()}}) {
+			a, _, found := strings.Cut(str(o["address"]), "/")
+			if found && !c.marked(o) && !contains(taken, a) {
+				taken = append(taken, a)
+			}
+		}
+	}
+	e.S.SitePut("public_pool", "netbox", D{"ranges": ranges, "taken": taken, "read_at": now()})
 }
 
 // publicIPPrefix is a pool address with the length of its NetBox range.

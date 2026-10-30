@@ -61,17 +61,30 @@ func (e *Execution) publicPool() []string {
 	return out
 }
 
-// freePublicIPs is the pool less the addresses held.
+// freePublicIPs is the pool less the addresses held, and less those NetBox
+// holds an address object for that carrel does not own (#180).
 func (e *Execution) freePublicIPs() []string {
 	held := map[string]bool{}
 	for _, b := range e.publicIPs() {
 		held[b.Address] = true
+	}
+	for _, a := range e.publicIPsTaken() {
+		held[a] = true
 	}
 	out := []string{}
 	for _, a := range e.publicPool() {
 		if !held[a] {
 			out = append(out, a)
 		}
+	}
+	return out
+}
+
+// publicIPsTaken lists the pool addresses an unowned NetBox object sits at.
+func (e *Execution) publicIPsTaken() []string {
+	out := []string{}
+	for _, a := range arr(obj(e.S.SiteGet("public_pool", "netbox"))["taken"]) {
+		out = append(out, str(a))
 	}
 	return out
 }
@@ -119,7 +132,12 @@ func (e *Execution) approvePublicIP(tool string, a, w, r, t D) D {
 	if tool == "request_approve" {
 		free := e.freePublicIPs()
 		if len(free) == 0 {
-			fail("conflict", "No public address of the pool is free", D{"recovery": "resolve_prerequisite"})
+			detail := D{"recovery": "resolve_prerequisite"}
+			if taken := e.publicIPsTaken(); len(taken) > 0 {
+				detail["taken_in_netbox"] = taken
+				fail("conflict", "No public address of the pool is free; NetBox holds an address object carrel does not own at "+strings.Join(taken, ", ")+": the network team removes it or hands it to carrel", detail)
+			}
+			fail("conflict", "No public address of the pool is free", detail)
 		}
 		b = publicIP{ID: randomID()[:16], TenantN: n, Address: free[0], RequestID: str(r["id"]), GrantedAt: time.Now().Unix()}
 	}
