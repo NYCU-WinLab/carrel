@@ -1298,6 +1298,7 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `owner` | name of the NetBox owner (NetBox 4.5+) every created object carries. It must exist; the NetBox operator creates it, since an owner needs a group. Use a different owner for each carrel installation that shares a NetBox |
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
 | `device_field` | custom field of a NetBox device that holds the Proxmox node name, for devices named differently from their node (`serverQ10` for `carrel01`). Empty, the default, matches the device name |
+| `tunnel_group` | name of an existing NetBox tunnel group for the client VPN tunnels (issue #184, phase 2). Empty, the default, leaves WireGuard out of NetBox: no tunnel, no interface, and the token needs none of the permissions below for them. The NetBox operator creates the group and gives it carrel's owner; carrel only reads it, so installations that share a NetBox each name their own. A missing group fails the tunnels with an error and creates nothing; what NetBox already holds stays |
 | `vrf` | name of the shared VRF, default `Carrel`; a private network's VRF is `<vrf> <Tenant> <network name>` (`Carrel Alice back`). A VRF that carrel created under the old form (`carrel-alice-back`) is found by that exact name and renamed in place |
 
 Mapping:
@@ -1314,6 +1315,8 @@ Mapping:
 | managed private network CIDR | prefix in that network's own VRF |
 | client VPN range `10.201.N.0/24` | prefix in the shared VRF, while the tenant has a client |
 | client VPN client (`vpn_client_add`) | IP address `10.201.N.x/32` in the shared VRF, bound to no interface, description with the client name and the day it expires; an expired or removed client leaves with its record |
+| tenant's client VPN interface `wg-tNNN` (with `tunnel_group`) | tunnel `wg-tNNN` in that group while the tenant has a client: encapsulation WireGuard, `active`, the description names the tenant and the endpoint `<public_address>:<31000+N>`. One per tenant, not one per client, because the interface is the tunnel and the clients are its peers |
+| the exit node's side of that tunnel | interface `wg-tNNN` (type virtual, owned by carrel) on the NetBox device of the first node, found like a machine's device, and a hub tunnel termination on it. A first node with no device fails the tunnel's end only: the tunnel stands without it |
 | `raw_l2` private network | nothing but the attachment: the NIC's interface description names the network and its mode; no prefix, VRF or address |
 | published port, HTTPS route | service on the VM, or on the FHRP group when it targets a virtual address, with `port_mappings` `<proto>/<target port>` (`public-<proto>-<public port>`, or the domain URL as the name) |
 | virtual address | IP address with role `vip` on an FHRP group (protocol `other`) named `<name>.<tenant>`, with the primary interface of every allowed machine as a member |
@@ -1333,8 +1336,8 @@ Behavior:
    unchanged database sends no write. Passes run every 5 minutes (drift repair, backfill of
    machines that existed before the feature was enabled) and 2 seconds after any operation
    changes, merged into one. There is no dry run.
-2. Deletion goes dependents first: services, memberships, IPs, interfaces, VMs, groups, prefixes,
-   VRFs, because NetBox refuses to delete a referenced object.
+2. Deletion goes dependents first: services, tunnel ends, memberships, IPs, interfaces, VMs,
+   tunnels, exit node interfaces, groups, prefixes, VRFs, because NetBox refuses to delete a referenced object.
 3. The pass takes no part in `writer` and no machine operation waits for it. Failures retry with
    backoff (15 seconds up to 5 minutes) and the next pass catches up.
 4. A machine that fails (a foreign VM with its name, a missing custom field, a rejected value)
@@ -1363,10 +1366,14 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | virtualization.virtualdisk | yes | yes | yes | yes |
 | dcim.device | yes | no | no | no |
 | ipam.fhrpgroupassignment | yes | yes | no | yes |
+| vpn.tunnel (with `tunnel_group`) | yes | yes | yes | yes |
+| vpn.tunnelgroup (with `tunnel_group`) | yes | no | no | no |
+| vpn.tunneltermination (with `tunnel_group`) | yes | yes | no | yes |
+| dcim.interface (with `tunnel_group`) | yes | yes | yes | yes |
 | virtualization.cluster | yes | no | no | no |
 | users.owner | yes | no | no | no |
 
-A child object is also constrained by its parent's owner, so it cannot be bound to a foreign parent. Interfaces and virtual disks add their machine's cluster (`virtual_machine__cluster__owner__users`), addresses and prefixes add their VRF (`vrf__owner__users`), each next to their own `owner__users` in the same constraint, because NetBox requires every key of one constraint. FHRP group assignments have no owner, so they have only their group's (`group__owner__users`). An owner that names user groups needs a second constraint with `__user_groups__users` in place of `__users` in every key, because NetBox accepts any one of several constraints.
+A child object is also constrained by its parent's owner, so it cannot be bound to a foreign parent. Interfaces and virtual disks add their machine's cluster (`virtual_machine__cluster__owner__users`), addresses and prefixes add their VRF (`vrf__owner__users`), each next to their own `owner__users` in the same constraint, because NetBox requires every key of one constraint. FHRP group assignments have no owner, so they have only their group's (`group__owner__users`). A tunnel adds its group (`group__owner__users`) next to `owner__users`, so carrel manages tunnels only in a tunnel group that carries its owner. A tunnel termination has no owner either, so it has only its tunnel's and the tunnel group's (`tunnel__owner__users` and `tunnel__group__owner__users`), and carrel deletes one only when its tunnel is carrel's. The exit node's interface is a device interface carrel creates on a device that is the operator's, so it has only its own `owner__users`: NetBox cannot say that it belongs on that one device. Turning `tunnel_group` off stops the sync of tunnels without deleting them; the NetBox operator removes them. An owner that names user groups needs a second constraint with `__user_groups__users` in place of `__users` in every key, because NetBox accepts any one of several constraints.
 
 ## 10. Maintenance
 
