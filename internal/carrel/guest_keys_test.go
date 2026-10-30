@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -64,5 +65,36 @@ func TestGuestKeysStopForAnInactiveTenant(t *testing.T) {
 		p.execution(context.Background()).GuestKeys(D{"vmid": 10100, "token": "test-token"}, str(m["ip"]))
 	}) == nil {
 		t.Fatal("a suspended tenant's machine still gets keys")
+	}
+}
+
+func TestKeysInstallScriptIsOnAGatewayRoutedPath(t *testing.T) {
+	p, _ := fixture(t)
+	a := NewApp(p, nil)
+	code, out := do(t, a, "GET", "/apps/v1/keys/install.sh", "", nil)
+	if code != 200 || !strings.Contains(str(out["body"]), "https://carrel.test/apps/v1/keys/install.sh") {
+		t.Fatalf("install script: %d %v", code, out)
+	}
+	routed := false
+	for _, c := range controlPaths {
+		routed = routed || (strings.HasSuffix(c, "/*") && strings.HasPrefix("/apps/v1/keys/install.sh", strings.TrimSuffix(c, "*")))
+	}
+	if !routed {
+		t.Fatal("the gateway does not send the install script path to control")
+	}
+}
+
+func TestGuestKeysHTTPRefusesAForgedGuest(t *testing.T) {
+	p, _ := fixture(t)
+	m := seedMachine(p, "box", 10100)
+	a := NewApp(p, nil)
+	for token, want := range map[string]int{"wrong": 403, "test-token": 200} {
+		req := httptest.NewRequest("POST", "http://10.200.0.3:8080/internal/guest-keys", strings.NewReader(`{"vmid":10100,"token":"`+token+`"}`))
+		req.RemoteAddr = str(m["ip"]) + ":40000"
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, req)
+		if w.Code != want {
+			t.Fatalf("token %q: status %d, want %d", token, w.Code, want)
+		}
 	}
 }

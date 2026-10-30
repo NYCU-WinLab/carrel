@@ -159,12 +159,13 @@ A machine trusts only its creator's key at first. To let every member of the ten
 installs carrel-keys once over SSH:
 
 ```sh
-f=$(mktemp) && curl -fsSL https://carrel.winlab.tw/keys/v1/install.sh -o "$f" && sudo sh "$f"; rm -f "$f"
+f=$(mktemp) && curl -fsSL https://carrel.winlab.tw/apps/v1/keys/install.sh -o "$f" && sudo sh "$f"; rm -f "$f"
 ```
 
 Every minute the machine pulls the keys saved in its tenant with `ssh_key_add`. sshd accepts them
-for `user`, next to `~/.ssh/authorized_keys`. A removed key stops working within a minute. Each
-line names the member who saved it. Pass `--user NAME` for another login user, and `--remove` to
+for `user`, after the key files it already reads. A key removed with `ssh_key_remove` stops working
+within a minute, unless it is also in `~/.ssh/authorized_keys`: the keys a machine got at creation
+live there, and only the owner removes them. Each line names the member who saved it. Pass `--user NAME` for another login user, and `--remove` to
 uninstall. Installing it means trusting Carrel with the machine's logins: a key saved in the tenant
 gets in.
 

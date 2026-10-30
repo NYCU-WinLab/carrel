@@ -126,7 +126,13 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			keys = p.execution(r.Context()).GuestKeys(body, host)
 		})
 		if err != nil {
-			jsonResponse(w, 403, D{"ok": false})
+			// Only a refused guest gets 403, which clears its keys; a server
+			// fault must not log members out.
+			status := 500
+			if obj(failureResult(err)["error"])["code"] == "forbidden" {
+				status = 403
+			}
+			jsonResponse(w, status, D{"ok": false})
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

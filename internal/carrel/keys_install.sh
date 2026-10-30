@@ -1,8 +1,8 @@
 #!/bin/sh
 # Installs carrel-keys (issue #209). Run by the machine owner over SSH:
-#   f=$(mktemp) && curl -fsSL @ORIGIN@/keys/v1/install.sh -o "$f" && sudo sh "$f"; rm -f "$f"
+#   f=$(mktemp) && curl -fsSL @ORIGIN@/apps/v1/keys/install.sh -o "$f" && sudo sh "$f"; rm -f "$f"
 # Every minute the machine pulls the keys saved in its tenant (ssh_key_add)
-# and sshd accepts them for the login user, next to ~/.ssh/authorized_keys.
+# and sshd accepts them for the login user, after the key files it reads today.
 # Remove with: sudo sh "$f" --remove
 set -eu
 
@@ -16,6 +16,7 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 case "$user" in
+root) echo "carrel-keys does not serve root: tenant keys would log in as root" >&2; exit 2 ;;
 [a-z_]*) ;;
 *) echo "invalid user: $user" >&2; exit 2 ;;
 esac
@@ -66,6 +67,11 @@ with os.fdopen(fd, "w") as f:
     f.write("".join(l + "\n" for l in lines))
 os.chmod(path, 0o644)
 os.replace(path, TARGET)
+# Only the current user's file stays: a file left by an earlier --user, or
+# by a crashed run, would never be updated or revoked again.
+for name in os.listdir("$dir"):
+    if name != USER:
+        os.remove(os.path.join("$dir", name))
 EOF
 chmod 755 /usr/local/sbin/carrel-keys
 
@@ -87,19 +93,23 @@ OnUnitActiveSec=1min
 WantedBy=timers.target
 EOF
 
-# The first AuthorizedKeysFile wins, so this file sorts before cloud-init's.
-printf 'AuthorizedKeysFile .ssh/authorized_keys %s/%%u\n' "$dir" > "$conf"
-/usr/local/sbin/carrel-keys
-if ! sshd -t; then
+# Keep every key file sshd reads today and add ours after them. The first
+# AuthorizedKeysFile wins, so this file sorts before cloud-init's.
+rm -f "$conf"
+current=$(sshd -T | awk '$1 == "authorizedkeysfile" { $1 = ""; print substr($0, 2) }')
+case "$current" in
+"") want=".ssh/authorized_keys .ssh/authorized_keys2 $dir/%u" ;; # sshd defaults
+none) want="$dir/%u" ;; # The owner turned key files off: only ours is read.
+*) want="$current $dir/%u" ;;
+esac
+/usr/local/sbin/carrel-keys || echo "warning: the first pull failed; the timer retries every minute" >&2
+{ printf 'AuthorizedKeysFile '; printf '%s\n' "$want"; } > "$conf"
+if ! sshd -t || [ "$(sshd -T | awk '$1 == "authorizedkeysfile" { $1 = ""; print substr($0, 2) }')" != "$want" ]; then
 	rm -f "$conf"
-	echo "sshd rejected the configuration; nothing changed" >&2
+	echo "sshd did not take the key file setting; nothing changed" >&2
 	exit 1
 fi
 systemctl daemon-reload
 systemctl enable --now carrel-keys.timer >/dev/null
 systemctl reload ssh
-if ! sshd -T | grep -qx "authorizedkeysfile .ssh/authorized_keys $dir/%u"; then
-	echo "warning: another sshd setting chose AuthorizedKeysFile first; saved keys are not active" >&2
-	exit 1
-fi
-echo "carrel-keys installed: $(grep -c . "$dir/$user" || true) saved key(s) for $user"
+echo "carrel-keys installed: $(grep -c . "$dir/$user" 2>/dev/null || true) saved key(s) for $user"

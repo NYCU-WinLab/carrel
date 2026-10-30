@@ -58,7 +58,8 @@ func (e *Execution) GuestKeys(body D, source string) string {
 
 func (a *App) keysRoutes(mux *http.ServeMux) {
 	p := a.Platform
-	mux.HandleFunc("GET /keys/v1/install.sh", func(w http.ResponseWriter, r *http.Request) {
+	// Under /apps/: the gateway and the edge already send that prefix to control.
+	mux.HandleFunc("GET /apps/v1/keys/install.sh", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		_, _ = w.Write([]byte(strings.ReplaceAll(keysInstallScript, "@ORIGIN@", p.appOrigin())))
 	})
