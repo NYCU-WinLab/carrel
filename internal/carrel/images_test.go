@@ -188,7 +188,7 @@ func TestAVMBootsATenantCloudImage(t *testing.T) {
 	p.Store.Put("images", "img2", 1, decode(string(encoded(imageRecord{ID: "img2", TenantN: 1, Name: "noble", Kind: "qcow2", SHA256: strings.Repeat("cd", 32), Size: 600 << 20, VirtualSize: 12 << 30, State: "ready", Volume: vol}))))
 	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
 	m := e.MachineSpec(tenant, D{"name": "vm1", "image": "tenant:noble", "ssh_keys": []any{key}}, false)
-	if m["import_volume"] != vol || m["import_sha256"] != strings.Repeat("cd", 32) || integer(m["disk_gb"]) != 12 || m["image"] != "tenant:noble" {
+	if m["import_volume"] != vol || m["import_sha256"] != strings.Repeat("cd", 32) || integer(m["disk_gb"]) != 12 || m["image"] != "tenant:image:noble" {
 		t.Fatal(m)
 	}
 	if f := attempt(func() {
@@ -216,7 +216,16 @@ func TestAVMBootsATenantCloudImage(t *testing.T) {
 		t.Fatal("deleted under a creation", r)
 	}
 	p.Store.Remove("machines", 10109)
-	for _, bad := range []string{"tenant:missing", "tenant:netinst", "tenant:nosize"} {
+	// The two-axis spelling (#182) names the same image; an ISO is not an image.
+	if m2 := e.MachineSpec(tenant, D{"name": "vm3", "image": "tenant:image:noble", "ssh_keys": []any{key}}, false); m2["image"] != "tenant:image:noble" || m2["import_volume"] != vol {
+		t.Fatal(m2)
+	}
+	if f := attempt(func() {
+		e.MachineSpec(tenant, D{"name": "vm4", "image": "tenant:iso:netinst", "ssh_keys": []any{key}}, false)
+	}); f == nil || !strings.Contains(describe(f), "attached with iso") {
+		t.Fatal(f)
+	}
+	for _, bad := range []string{"tenant:missing", "tenant:netinst", "tenant:nosize", "tenant:image:missing"} {
 		if f := attempt(func() { e.MachineSpec(tenant, D{"name": "vm3", "image": bad, "ssh_keys": []any{key}}, false) }); f == nil {
 			t.Fatal("accepted", bad)
 		}

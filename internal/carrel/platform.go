@@ -348,7 +348,8 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	kind := textAt(a, "kind", "vm")
 	defaultImage := find(dicts(Contract["images"]), func(i D) bool { return i["kind"] == kind && boolean(i["default"]) })
 	image := textAt(a, "image", str(defaultImage["name"]))
-	tenantImage := strings.HasPrefix(image, "tenant:")
+	ref := parseImage(image)
+	tenantImage := ref.scope == "tenant"
 	if tenantImage {
 		if kind != "vm" {
 			fail("invalid", "Only a VM boots a cloud image", D{"recovery": "revise_request"})

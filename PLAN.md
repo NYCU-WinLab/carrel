@@ -186,7 +186,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `quota_request` | `tenant`, `dimension`, `amount`, `reason`, `until` |
 | | `request_list` | own requests and their state |
 | Catalog | `catalog_get` | platform images with version, end of support date and default flag, the size presets `tiny`, `small`, `medium`, `large`, and the installed environments |
-| Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
+| Machines | `machine_create` | `kind`, `name`, `image` (platform, `tenant:image:<name>`) or `iso`, `size` or `cpu` + `memory_mb` + `disk_gb`, `networks[]`, `ssh_keys[]`, `packages[]`, `runcmd[]`, `nested_virt`, `swap_mb`, `firmware`, `tpm`, `tags[]` |
 | | `machine_get`, `machine_list` | state, primary address, SSH line, image support status |
 | | `machine_resize` | CPU/RAM may shrink while stopped; disk only grows |
 | | `machine_power` | `start \| stop \| shutdown \| reboot` |
@@ -1044,6 +1044,12 @@ key injection, the SSH check and graceful shutdown.
   neither learns what the other imported. A machine created from a cloud image gets its own copy
   on the guest storage, so `image_delete` frees the file at once. An ISO stays while a machine
   has it attached; `image_delete` refuses it until `machine_media` ejects it.
+- **Names** (issue #182): a machine's `image` has two axes, scope and kind. A catalog image is
+  bare (`debian-13`); a tenant's is `tenant:image:<name>` (a cloud image, `image_import`) or
+  `tenant:iso:<name>` (an ISO, `iso_import`, which a machine gets through `iso`, never through
+  `image`). The platform keeps no shared ISOs, so the catalog has one kind. The spelling from
+  before, `tenant:<name>`, is still accepted and means `tenant:image:<name>`; stored machines
+  are read either way and never migrated.
 - **When the shared storage is down**: the NAS is a network service outside the cluster, and the
   mount is `hard`, so a read waits for the server forever. Before any action that reads the
   storage (CT creation from a template, `import-from`, ISO attach, starting or migrating a machine
