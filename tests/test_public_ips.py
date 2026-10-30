@@ -193,3 +193,36 @@ def test_an_unusable_address_is_skipped_not_fatal(address):
     assert module.public_bindings(s, ["140.113.60.170/32"]) == []
     # Every machine's firewall still builds.
     module.guest_firewall(OTHER, s, {"protected_addresses": ["140.113.60.170/32"]})
+
+
+def test_a_node_that_is_no_longer_the_first_exit_node_drops_its_addresses(tmp_path, monkeypatch):
+    module = load()
+    calls = []
+    held = {"140.113.60.163", "140.113.60.164"}
+
+    def run(*a, **k):
+        calls.append(a)
+        if a[:3] == ("ip", "address", "del"):
+            held.discard(a[3].split("/")[0])
+        if a[:3] == ("ip", "-4", "-j"):
+            return json.dumps([{"addr_info": [{"local": x} for x in held]}])
+        return ""
+
+    flushed = []
+    monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module, "conntrack_flush", flushed.append)
+    monkeypatch.setattr(module, "public_interface", lambda: "vmbr0.60")
+    monkeypatch.setattr(module.Path, "exists", lambda self: True)
+    monkeypatch.setattr(module, "PUBLIC_IPS", tmp_path / "public-ips.json")
+    (tmp_path / "public-ips.json").write_text(
+        json.dumps({"140.113.60.163": "10.200.3.11", "140.113.60.164": "10.200.3.12"})
+    )
+    module.public_addresses_release()
+    assert ("ip", "address", "del", "140.113.60.163/32", "dev", "vmbr0.60") in calls
+    assert ("ip", "address", "del", "140.113.60.164/32", "dev", "vmbr0.60") in calls
+    assert flushed == ["140.113.60.163", "140.113.60.164"]
+    assert json.loads((tmp_path / "public-ips.json").read_text()) == {}
+    # Nothing recorded: nothing to do, and no command is run.
+    calls.clear()
+    module.public_addresses_release()
+    assert calls == []

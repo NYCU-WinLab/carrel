@@ -832,7 +832,9 @@ not list) keeps it; it records the addresses it added, and each one's machine, i
 `/etc/carrel/public-ips.json` before it adds them and removes only those, checking that the
 interface no longer holds one. An address that leaves or moves to another machine loses its
 tracked connections (`conntrack -D`, every zone), since a NAT mapping outlives its rule.
-`carrel-ports.service` puts the addresses back at boot. The guest needs no change, the shared
+`carrel-ports.service` puts the addresses back at boot. A node that is not the first exit node
+drops every address its file records on reconcile, with their connections, so a change in the
+order of `exit_nodes` leaves no second node answering ARP for them. The guest needs no change, the shared
 VRF stays (6.11), and no anti-spoofing rules are needed. Routing the public address into the
 guest (a second NIC or an extra address on `net0`) is not offered. carrel's own machines cannot
 reach a bound address (the DNAT matches only the uplink), as there is no hairpin for it.
@@ -852,7 +854,8 @@ its binding working, but the address cannot be bound again and is not handed out
 
 **Objects and tools.** Like special ports, approval grants and the member applies.
 `public_ip_request` (reason) creates a request; an administrator answers it with
-`request_approve`, which takes the first free address of the pool for the tenant, or
+`request_approve`, which takes the first free address of the pool for the tenant (an address at
+which NetBox holds an object carrel does not own is not free: the approval names it), or
 `request_reject`. `public_ip_bind` (machine, optional address, ports) points a held address at a
 machine of the tenant; binding again moves it or changes its ports. A machine holds at most one.
 `public_ip_release` returns the address to the pool; a release whose

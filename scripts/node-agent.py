@@ -13,7 +13,6 @@ import http.client
 import ipaddress
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import socket
@@ -23,6 +22,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from pathlib import Path
 
 STATE = Path("/var/lib/carrel")
 NODE = socket.gethostname().split(".")[0]
@@ -564,6 +564,24 @@ def public_addresses(bindings):
     write(PUBLIC_IPS, json.dumps(dict(sorted(bindings.items()))))
 
 
+def public_addresses_release():
+    """Drop every bound public address this node holds: only the first exit
+    node holds them, and exit_nodes may have changed order (#179). The
+    file is the record; without one there is nothing to drop."""
+    if not PUBLIC_IPS.exists():
+        return
+    old = json.loads(PUBLIC_IPS.read_text())
+    if not old:
+        return
+    if not Path(f"/sys/class/net/{public_interface()}").exists():
+        # The interface went with the role: only the connections remain.
+        for a in sorted(old):
+            conntrack_flush(a)
+        write(PUBLIC_IPS, "{}")
+        return
+    public_addresses({})
+
+
 def held_addresses(iface):
     return {i["local"] for x in json.loads(run("ip", "-4", "-j", "address", "show", "dev", iface)) for i in x.get("addr_info", [])}
 
@@ -1057,6 +1075,10 @@ table inet carrel_conntrack {{
             write(f"/etc/pve/firewall/{FETCH_CT}.fw", fetch_firewall(config))
     private_dhcp(state, serve=first_exit_node())
     address = public_ingress()
+    if not address:
+        # Not the first exit node: a public address it still holds from
+        # when it was answers ARP beside the current one (#179).
+        public_addresses_release()
     if address:
         bindings = public_bindings(state, config.get("protected_addresses", []))
         rules = ports_nft(state, address, bindings)

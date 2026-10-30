@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -174,6 +175,12 @@ func (f *fakeNetBox) matches(o D, q map[string][]string) bool {
 	for k, v := range q {
 		switch {
 		case k == "limit" || k == "offset":
+		case k == "parent":
+			prefix, err := netip.ParsePrefix(v[0])
+			address, _, _ := strings.Cut(str(o["address"]), "/")
+			if a, aerr := netip.ParseAddr(address); err != nil || aerr != nil || !prefix.Contains(a) {
+				return false
+			}
 		case strings.HasSuffix(k, "_id"):
 			field := strings.TrimSuffix(k, "_id")
 			if str(nbScalar(o[field])) != v[0] && strconv.Itoa(integer(nbScalar(o[field]))) != v[0] {
@@ -818,6 +825,41 @@ func TestNetBoxReadsThePoolAndRecordsBoundAddresses(t *testing.T) {
 	}
 	if find(f.all("ipam/ip-addresses/"), func(o D) bool { return o["address"] == "140.113.60.163/27" }) != nil {
 		t.Fatal("an unbound address stayed in NetBox")
+	}
+}
+
+// A pool address that already has an address object carrel does not own
+// is not free: the network team's object stays, and no second one is made
+// (#180).
+func TestNetBoxUnownedObjectAtAPoolAddressKeepsItOutOfTheFreeList(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.objects["ipam/ip-ranges/"] = []D{
+		{"id": 1, "start_address": "140.113.60.163/27", "end_address": "140.113.60.165/27", "tenant": D{"name": "Carrel"}, "role": D{"name": "User"}, "status": D{"value": "active"}},
+	}
+	f.objects["ipam/ip-addresses/"] = append(f.objects["ipam/ip-addresses/"], D{"id": 9001, "address": "140.113.60.164/27", "status": D{"value": "active"}, "description": "the network team's"})
+	p.Config["public_address"] = "140.113.60.184"
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	e := p.execution(context.Background())
+	if free := e.freePublicIPs(); strings.Join(free, " ") != "140.113.60.163 140.113.60.165" {
+		t.Fatal(free)
+	}
+	// With the other two held, an approval names the taken address.
+	for i, a := range []string{"140.113.60.163", "140.113.60.165"} {
+		p.Store.Put("public_ips", fmt.Sprint("b", i), 1, publicIP{ID: fmt.Sprint("b", i), TenantN: 1, Address: a}.D())
+	}
+	r := p.Execute(context.Background(), "public_ip_request", D{"reason": "demo"}, person("alice", false))
+	assertOK(t, r)
+	id := str(obj(r["request"])["id"])
+	denied := p.Execute(context.Background(), "request_approve", D{"id": id}, person("alice", true))
+	if boolean(denied["ok"]) || !strings.Contains(str(obj(denied["error"])["message"]), "140.113.60.164") {
+		t.Fatalf("approval: %s", encoded(denied))
+	}
+	// The object made by hand is still the only one at that address.
+	if n := len(filter(f.all("ipam/ip-addresses/"), func(o D) bool { return strings.HasPrefix(str(o["address"]), "140.113.60.164/") })); n != 1 {
+		t.Fatalf("%d objects at .164", n)
 	}
 }
 
