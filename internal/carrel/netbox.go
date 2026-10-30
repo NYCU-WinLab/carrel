@@ -787,9 +787,15 @@ func nbFindVRF(vrfs []D, name string, old []string) D {
 }
 
 func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID int, cfg nbConfig, synced map[int]string, tenantOf map[int]int, vmNB map[int]int, ifaceNB map[string]int, fail func(string, any) string) {
+	// A token that reads tenants but cannot write them (the grant of #181
+	// not yet made) turns tenancy off for the rest of the pass with one
+	// error: every tenant still syncs, without a tenant on its objects.
 	s.tenantRef = nil
 	if s.tenancy {
-		s.tenantRef = e.netboxTenancy(c, s, t)
+		if err := attempt(func() { s.tenantRef = e.netboxTenancy(c, s, t) }); err != nil {
+			fail("tenants and VNIs", err)
+			s.tenancy, s.tenantRef = false, nil
+		}
 	}
 	defer func() { s.tenantRef = nil }()
 	vrfIDs := map[string]int{}

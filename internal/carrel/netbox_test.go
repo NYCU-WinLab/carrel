@@ -28,8 +28,9 @@ type fakeNetBox struct {
 	fields  map[string]bool
 	// refuse names IP addresses NetBox rejects, as it does a duplicate.
 	refuse map[string]bool
-	// forbid names paths the token has no permission for (403).
-	forbid map[string]bool
+	// forbid names paths the token has no permission for (403); forbidWrite
+	// those it may read but not write.
+	forbid, forbidWrite map[string]bool
 }
 
 var nbRefs = map[string]bool{"cluster": true, "vrf": true, "virtual_machine": true, "group": true, "primary_ip4": true, "platform": true, "device": true, "primary_mac_address": true, "nat_inside": true, "tunnel": true, "tenant": true}
@@ -62,7 +63,7 @@ func (f *fakeNetBox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			id, path = n, strings.TrimSuffix(path, strconv.Itoa(n)+"/")
 		}
 	}
-	if f.forbid[path] {
+	if f.forbid[path] || f.forbidWrite[path] && r.Method != "GET" {
 		reply(403, D{"detail": "You do not have permission to perform this action."})
 		return
 	}
@@ -937,6 +938,31 @@ func TestNetBoxWithoutTenancyPermissionSyncsTheRest(t *testing.T) {
 	vm := find(f.all("virtualization/virtual-machines/"), func(o D) bool { return o["name"] == "web.alice" })
 	if vm == nil || vm["tenant"] != nil {
 		t.Fatal(vm)
+	}
+	if len(f.all("vpn/l2vpns/")) != 0 {
+		t.Fatal("VNIs recorded without the tenant permission")
+	}
+}
+
+// A token that reads tenants but cannot create them (#181, before the grant)
+// syncs every tenant's machines without a tenant and reports one error.
+func TestNetBoxWithoutTenancyWritePermissionSyncsTheRest(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	carol := p.Store.Register("user:carol", "carol")
+	other := seedMachine(p, "api", 10200)
+	other["tenant_n"] = carol["n"]
+	p.Store.Put("machines", 10200, integer(carol["n"]), other)
+	f.forbidWrite = map[string]bool{"tenancy/tenants/": true, "vpn/l2vpns/": true}
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "tenants and VNIs") {
+		t.Fatal(r.Errors)
+	}
+	for _, name := range []string{"web.alice", "api.carol"} {
+		vm := find(f.all("virtualization/virtual-machines/"), func(o D) bool { return o["name"] == name })
+		if vm == nil || vm["tenant"] != nil {
+			t.Fatal(name, vm)
+		}
 	}
 	if len(f.all("vpn/l2vpns/")) != 0 {
 		t.Fatal("VNIs recorded without the tenant permission")
