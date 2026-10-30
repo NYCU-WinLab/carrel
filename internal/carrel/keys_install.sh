@@ -102,6 +102,8 @@ case "$current" in
 none) want="$dir/%u" ;; # The owner turned key files off: only ours is read.
 *) want="$current $dir/%u" ;;
 esac
+# Files of an earlier --user go now, even if Carrel cannot be reached.
+find "$dir" -mindepth 1 ! -name "$user" -exec rm -rf {} +
 /usr/local/sbin/carrel-keys || echo "warning: the first pull failed; the timer retries every minute" >&2
 { printf 'AuthorizedKeysFile '; printf '%s\n' "$want"; } > "$conf"
 if ! sshd -t || [ "$(sshd -T | awk '$1 == "authorizedkeysfile" { $1 = ""; print substr($0, 2) }')" != "$want" ]; then
