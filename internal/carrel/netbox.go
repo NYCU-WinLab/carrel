@@ -934,12 +934,17 @@ func (e *Execution) netboxMachine(c *nbClient, s *nbState, m nbMachine, vrfIDs m
 // pass. carrel creates and owns these, keyed by slug so a rename of the name
 // follows; an unowned platform with the same slug or name is not touched.
 func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string) int {
-	// Tenant and ISO images ("tenant:" or "iso:" prefix) belong to one tenant, so
-	// each tenant gets its own platform; catalog images are shared and get
-	// "catalog:" so no catalog name can share a slug with them.
-	label := tenant + "/" + image
-	if !strings.Contains(image, ":") {
-		label = "catalog:" + image
+	// A tenant's images and ISOs belong to one tenant, so each tenant gets its
+	// own platform; catalog images are shared and get "catalog:" so no catalog
+	// name can share a slug with them. The label keeps the spelling from
+	// before #182 ("tenant:<name>", "iso:<name>") so the slugs stay.
+	ref := parseImage(image)
+	label := "catalog:" + image
+	if ref.scope == "tenant" {
+		label = tenant + "/" + ref.kind + ":" + ref.name
+		if ref.kind == "image" {
+			label = tenant + "/tenant:" + ref.name
+		}
 	}
 	if id, ok := s.platformIDs[label]; ok {
 		return id
@@ -951,9 +956,9 @@ func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string
 	// old slug and renamed in place.
 	old := nbSlug(label)
 	slug, name := "carrel-"+old, "Carrel: "+nbTitle(strings.ReplaceAll(image, "-", " "))
-	if kind, rest, ok := strings.Cut(image, ":"); ok {
-		name = "Carrel: " + nbTitle(tenant) + "/" + rest
-		if kind == "iso" {
+	if ref.scope == "tenant" {
+		name = "Carrel: " + nbTitle(tenant) + "/" + ref.name
+		if ref.kind == "iso" {
 			name += " (ISO)"
 		}
 	}
@@ -965,8 +970,8 @@ func (e *Execution) netboxPlatform(c *nbClient, s *nbState, tenant, image string
 		panic(nbError{Msg: "a NetBox platform with slug " + slug + " exists but carrel did not create it"})
 	}
 	created := have == nil
-	description := "Carrel image " + image
-	if strings.Contains(image, ":") {
+	description := "Carrel image " + imageName(image)
+	if ref.scope == "tenant" {
 		description += " of tenant " + tenant
 	}
 	got := c.ensure("dcim/platforms/", have, D{"name": name, "slug": slug, "description": description})

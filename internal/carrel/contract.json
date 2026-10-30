@@ -82,7 +82,7 @@
             ]
           },
           "image": {
-            "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04. Or \"tenant:<name>\" for one of this tenant's imported cloud images (image_import); the disk is at least the image's virtual size.",
+            "description": "Default VM: debian-13-minimal. Debian/Ubuntu development images remain available. CTs use debian-13 or ubuntu-24.04. Or \"tenant:image:<name>\" for one of this tenant's imported cloud images (image_import); the disk is at least the image's virtual size. (\"tenant:<name>\" still means the same.) An ISO is attached with iso, not here.",
             "anyOf": [
               {
                 "enum": [
@@ -93,7 +93,7 @@
               },
               {
                 "type": "string",
-                "pattern": "^tenant:[a-z][a-z0-9-]{0,31}$"
+                "pattern": "^tenant:(image:)?[a-z][a-z0-9-]{0,31}$"
               }
             ]
           },
@@ -2233,7 +2233,7 @@
     },
     {
       "name": "image_import",
-      "description": "Download a cloud disk image (qcow2 or raw) into this tenant's images, from a public http(s) URL with its SHA-256, to boot VMs from with machine_create image \"tenant:<name>\". The image needs cloud-init and python3 (Debian and Ubuntu cloud images have both) for keys, addresses and readiness, unless it is imported with ports: then it runs no SSH and no cloud-config (Talos), its VMs take user_data as their own document, are ready when the first port answers, and are reached on those ports through the jump host. carrel's fetch container downloads it, refuses images that name a backing file or data file, are encrypted, claim another format or exceed 1000 GB, and stores it read-only on the site's shared storage, private to the tenant. Same limits and waiting as iso_import.",
+      "description": "Download a cloud disk image (qcow2 or raw) into this tenant's images, from a public http(s) URL with its SHA-256, to boot VMs from with machine_create image \"tenant:image:<name>\". The image needs cloud-init and python3 (Debian and Ubuntu cloud images have both) for keys, addresses and readiness, unless it is imported with ports: then it runs no SSH and no cloud-config (Talos), its VMs take user_data as their own document, are ready when the first port answers, and are reached on those ports through the jump host. carrel's fetch container downloads it, refuses images that name a backing file or data file, are encrypted, claim another format or exceed 1000 GB, and stores it read-only on the site's shared storage, private to the tenant. Same limits and waiting as iso_import.",
       "inputSchema": {
         "type": "object",
         "properties": {

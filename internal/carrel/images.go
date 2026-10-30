@@ -128,7 +128,7 @@ func (e *Execution) imageWanted(n int, name string) bool {
 			continue
 		}
 		for _, a := range specs {
-			if a["image"] == "tenant:"+name || a["iso"] == name {
+			if ref := parseImage(str(a["image"])); ref.scope == "tenant" && ref.kind == "image" && ref.name == name || a["iso"] == name {
 				return true
 			}
 		}
@@ -155,8 +155,9 @@ func (e *Execution) imageNamed(n int, name string) (imageRecord, bool) {
 // tenantImageServesPorts reports whether a["image"] names one of the
 // tenant's images imported with ports (no SSH, no saved keys needed).
 func (e *Execution) tenantImageServesPorts(t, a D) bool {
-	r, ok := e.imageNamed(integer(t["n"]), strings.TrimPrefix(str(a["image"]), "tenant:"))
-	return ok && len(r.Ports) > 0
+	ref := parseImage(str(a["image"]))
+	r, ok := e.imageNamed(integer(t["n"]), ref.name)
+	return ok && ref.scope == "tenant" && ref.kind == "image" && len(r.Ports) > 0
 }
 
 // PlanImport checks and reserves an import under the writer lock.
@@ -345,7 +346,7 @@ func (e *Execution) ISOMachineSpec(t, a D) D {
 		fail("invalid", "A TPM needs firmware uefi")
 	}
 	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", "small")]), pick(a, "cpu", "memory_mb", "disk_gb"))
-	m := merge(spec, D{"name": a["name"], "kind": "vm", "image": "iso:" + r.Name, "iso": r.Name, "iso_volume": r.Volume, "firmware": firmware, "tpm": boolean(a["tpm"]), "ssh_keys": []any{}, "nested_virt": boolean(a["nested_virt"]), "swap_mb": 0, "packages": []any{}, "runcmd": []any{}, "health_checks": []any{}, "network_access": textAt(a, "network_access", "tenant"), "guest_management": 0, "nics": []D{}})
+	m := merge(spec, D{"name": a["name"], "kind": "vm", "image": "tenant:iso:" + r.Name, "iso": r.Name, "iso_volume": r.Volume, "firmware": firmware, "tpm": boolean(a["tpm"]), "ssh_keys": []any{}, "nested_virt": boolean(a["nested_virt"]), "swap_mb": 0, "packages": []any{}, "runcmd": []any{}, "health_checks": []any{}, "network_access": textAt(a, "network_access", "tenant"), "guest_management": 0, "nics": []D{}})
 	if a["public_ssh"] == false {
 		if !e.jumpEnabled() {
 			fail("invalid", "This site has no SSH jump host; every machine needs a public SSH port", D{"recovery": "revise_request"})
@@ -452,15 +453,59 @@ func servicePortsOf(m D) []int {
 	return out
 }
 
+// imageRef is a machine image name taken apart (#182): the scope (catalog or
+// tenant) and the kind (image or iso) are two axes. A catalog image is bare
+// ("debian-13"); a tenant's is "tenant:image:<name>" or "tenant:iso:<name>".
+// The spellings from before, "tenant:<name>" for a tenant image and
+// "iso:<name>" for an ISO, are still read, from arguments and from stored
+// machines alike, and never written again.
+type imageRef struct{ scope, kind, name string }
+
+func parseImage(s string) imageRef {
+	parts := strings.Split(s, ":")
+	switch {
+	case s == "":
+		return imageRef{}
+	case len(parts) == 1:
+		return imageRef{"catalog", "image", s}
+	case len(parts) == 2 && parts[0] == "tenant":
+		return imageRef{"tenant", "image", parts[1]}
+	case len(parts) == 2 && parts[0] == "iso":
+		return imageRef{"tenant", "iso", parts[1]}
+	case len(parts) == 3 && parts[0] == "tenant" && (parts[1] == "image" || parts[1] == "iso"):
+		return imageRef{"tenant", parts[1], parts[2]}
+	}
+	return imageRef{}
+}
+
+// String is the spelling written from now on.
+func (r imageRef) String() string {
+	if r.scope != "tenant" {
+		return r.name
+	}
+	return r.scope + ":" + r.kind + ":" + r.name
+}
+
+// imageName normalizes a stored or given image name; an unknown spelling stays as it is.
+func imageName(s string) string {
+	if r := parseImage(s); r.scope != "" {
+		return r.String()
+	}
+	return s
+}
+
 // ImportedMachineSpec is a VM whose boot disk is one of the tenant's cloud
-// images (image "tenant:<name>"). A managed one needs cloud-init and
+// images (image "tenant:image:<name>"). A managed one needs cloud-init and
 // python3 in the image for keys, addresses and readiness reports. One
 // imported with ports (Talos, issue #94) runs no SSH and no cloud-config:
 // carrel writes its network file, passes the member's user_data unchanged
 // (Talos reads it as its machine config) and probes the first port.
 func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
-	name := strings.TrimPrefix(str(a["image"]), "tenant:")
-	r, ok := e.imageNamed(integer(t["n"]), name)
+	ref := parseImage(str(a["image"]))
+	if ref.kind == "iso" {
+		fail("invalid", "An ISO is attached with iso, not named as image", D{"recovery": "revise_request"})
+	}
+	r, ok := e.imageNamed(integer(t["n"]), ref.name)
 	if !ok || r.Kind == "iso" || r.State != "ready" || r.VirtualSize <= 0 {
 		fail("not_found", "No ready cloud image with that name in this tenant; import one with image_import")
 	}
@@ -474,7 +519,7 @@ func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 	if integer(m["disk_gb"]) < least {
 		m["disk_gb"] = least
 	}
-	m["image"], m["import_volume"], m["import_sha256"] = "tenant:"+r.Name, r.Volume, r.SHA256
+	m["image"], m["import_volume"], m["import_sha256"] = "tenant:image:"+r.Name, r.Volume, r.SHA256
 	if len(r.Ports) == 0 {
 		if a["user_data"] != nil {
 			fail("invalid", "user_data applies only to an image imported with ports", D{"recovery": "revise_request"})

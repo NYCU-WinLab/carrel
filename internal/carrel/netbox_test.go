@@ -663,11 +663,18 @@ func TestNetBoxTenantImageAndISOOfOneNameGetOwnPlatforms(t *testing.T) {
 	p, f, _ := netboxPlatform(t)
 	seedNetBoxWorld(p)
 	web := p.Store.Get("machines", "10100")
+	// One machine from before #182 and one after: the same two platforms.
 	web["image"] = "tenant:win11"
 	p.Store.Put("machines", 10100, 1, web)
 	iso := seedMachine(p, "app", 10200)
 	iso["image"] = "iso:win11"
 	p.Store.Put("machines", 10200, 1, iso)
+	newer := seedMachine(p, "app2", 10201)
+	newer["image"] = "tenant:iso:win11"
+	p.Store.Put("machines", 10201, 1, newer)
+	newest := seedMachine(p, "app3", 10202)
+	newest["image"] = "tenant:image:win11"
+	p.Store.Put("machines", 10202, 1, newest)
 	if r := syncNetBox(t, p); len(r.Errors) > 0 {
 		t.Fatal(r.Errors)
 	}
