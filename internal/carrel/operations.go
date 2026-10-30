@@ -15,6 +15,9 @@ var terminal = []string{"succeeded", "failed", "rolled_back", "cleanup_failed"}
 
 func publicOperation(o D) D {
 	r := pick(o, "id", "tool", "state", "phase", "created_at", "updated_at", "attempts", "result", "error", "reserved", "resource_changes", "cleanup", "current_resource", "ready_at")
+	if o["state"] == "waiting" && o["waiting_for"] != nil {
+		r["waiting_for"] = o["waiting_for"]
+	}
 	if contains(terminal, o["state"]) {
 		r["poll_after_seconds"] = nil
 	} else {
@@ -537,8 +540,10 @@ func (e *Execution) CheckBusy(t D) {
 			continue
 		}
 		// A platform power job waits for every running machine job, and
-		// every job on one of its machines waits for it.
+		// every job on one of its machines waits for it. The job it waits
+		// for is in the operation, for the admin (#195).
 		if e.Op["tool"] == "platform_power" {
+			e.Op["waiting_for"] = pick(other, "id", "tool", "phase", "current_resource")
 			panic(Waiting{"waiting_for_machine_operation", now() + 1})
 		}
 		ids := arr(obj(other["deployment"])["machines"])
