@@ -247,3 +247,74 @@ func TestPlatformStartOneSilentGuestDoesNotFailTheOthers(t *testing.T) {
 		t.Fatalf("the guest that reported ended %s", s)
 	}
 }
+
+// A paused VM is shut down with the rest, but a start leaves it stopped:
+// its memory is gone, and its owner decides whether it runs (#195).
+func TestPlatformStartLeavesAPausedMachineStopped(t *testing.T) {
+	p, power, mu := powerFixture(t, 10100, 10101)
+	mu.Lock()
+	power[10101] = "paused"
+	mu.Unlock()
+	admin := person("alice", true)
+	if r := platformRun(t, p, "shutdown", admin); len(arr(r["done"])) != 2 {
+		t.Fatalf("shutdown: %s", encoded(r))
+	}
+	r := platformRun(t, p, "start", admin)
+	if len(arr(r["done"])) != 1 || len(arr(r["skipped"])) != 1 || integer(dicts(r["skipped"])[0]["vmid"]) != 10101 {
+		t.Fatalf("start: %s", encoded(r))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if power[10100] != "running" || power[10101] != "stopped" {
+		t.Fatalf("power after start: %v", power)
+	}
+	if len(restoreList(p)) != 0 {
+		t.Fatalf("restore list kept: %v", restoreList(p))
+	}
+}
+
+// A machine whose shutdown failed was not stopped by the platform: it is
+// not listed, so a later start never boots it (#195).
+func TestPlatformFailedShutdownIsNotListed(t *testing.T) {
+	p, power, mu := powerFixture(t, 10100, 10101)
+	mu.Lock()
+	power[10101] = "stuck"
+	mu.Unlock()
+	admin := person("alice", true)
+	r := platformRun(t, p, "shutdown", admin)
+	if len(arr(r["failed"])) != 1 || boolean(r["complete"]) {
+		t.Fatalf("shutdown: %s", encoded(r))
+	}
+	if !equal(restoreList(p), []int{10100}) {
+		t.Fatalf("restore list: %v", restoreList(p))
+	}
+}
+
+// The restore list expires: an entry older than platformRestoreTTL is not
+// a shutdown's doing any more (#195).
+func TestPlatformRestoreListExpires(t *testing.T) {
+	p, power, mu := powerFixture(t, 10100, 10101)
+	admin := person("alice", true)
+	platformRun(t, p, "shutdown", admin)
+	power2 := obj(p.Store.SiteGet("platform", "power"))
+	for _, r := range dicts(power2["restore"]) {
+		if integer(r["vmid"]) == 10101 {
+			r["at"] = now() - platformRestoreTTL.Seconds() - 1
+		}
+	}
+	p.Store.SitePut("platform", "power", power2)
+	dry := p.Execute(context.Background(), "platform_power", D{"action": "start", "dry_run": true}, admin)
+	assertOK(t, dry)
+	if integer(dry["count"]) != 1 {
+		t.Fatalf("dry run: %s", encoded(dry))
+	}
+	r := platformRun(t, p, "start", admin)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(arr(r["done"])) != 1 || power[10100] != "running" || power[10101] != "stopped" {
+		t.Fatalf("start: %s, power %v", encoded(r), power)
+	}
+	if s := obj(p.Store.SiteGet("platform", "power")); s["state"] != "on" || len(dicts(s["restore"])) != 0 {
+		t.Fatalf("record after start: %s", encoded(s))
+	}
+}

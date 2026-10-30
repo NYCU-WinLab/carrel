@@ -48,6 +48,10 @@ func (e *Execution) PlatformPower(a, w D) D {
 	if action == "shutdown" && len(unknown) > 0 {
 		fail("conflict", "Some machines' power could not be read", D{"unknown": unknown})
 	}
+	onList := map[string]D{}
+	for _, r := range e.platformRestore() {
+		onList[platformKey(r)] = r
+	}
 	plan := []any{}
 	for _, t := range targets {
 		r := t.record()
@@ -55,6 +59,8 @@ func (e *Execution) PlatformPower(a, w D) D {
 			// Saved before the start is sent, so the old boot's report cannot
 			// pass for the new one.
 			r["boot_id"] = e.S.guestReport(t.m["vmid"]).BootID
+			// How the shutdown found it.
+			r["was"] = onList[platformKey(r)]["power_state"]
 		}
 		plan = append(plan, r)
 	}
@@ -81,8 +87,12 @@ func (t platformTarget) public() D {
 }
 
 func (t platformTarget) record() D {
-	return D{"vmid": t.m["vmid"], "tenant_n": t.n, "tenant": t.slug, "machine": t.m["name"], "identity": machineIdentity(t.m)}
+	return D{"vmid": t.m["vmid"], "tenant_n": t.n, "tenant": t.slug, "machine": t.m["name"], "identity": machineIdentity(t.m), "power_state": t.state}
 }
+
+// platformRestoreTTL bounds the restore list: an entry older than this is
+// no longer a shutdown's doing (#195).
+const platformRestoreTTL = 7 * 24 * time.Hour
 
 // platformTargets reads each machine's power from its node: a shutdown takes
 // the running and paused ones, a start the stopped ones on the restore list.
@@ -96,7 +106,7 @@ func (e *Execution) platformTargets(action string) ([]platformTarget, []D) {
 		}
 	}
 	restore := map[string]bool{}
-	for _, r := range dicts(obj(e.S.SiteGet("platform", "power"))["restore"]) {
+	for _, r := range e.platformRestore() {
 		restore[platformKey(r)] = true
 	}
 	candidates := []platformTarget{}
@@ -183,19 +193,54 @@ func (p *Platform) platformSpend(code string, w D, action, plan string) {
 
 func platformKey(r D) string { return str(r["vmid"]) + "|" + string(encoded(r["identity"])) }
 
+// platformRestore is the restore list without its expired entries.
+func (e *Execution) platformRestore() []D {
+	out := []D{}
+	for _, r := range dicts(obj(e.S.SiteGet("platform", "power"))["restore"]) {
+		if r["at"] == nil || num(r["at"]) > now()-platformRestoreTTL.Seconds() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func (e *Execution) platformRemember(plan []any, w D) {
-	power := obj(e.S.SiteGet("platform", "power"))
-	restore := dicts(power["restore"])
+	restore := e.platformRestore()
 	seen := map[string]bool{}
 	for _, r := range restore {
 		seen[platformKey(r)] = true
 	}
 	for _, r := range plan {
 		if !seen[platformKey(obj(r))] {
-			restore = append(restore, obj(r))
+			restore = append(restore, merge(obj(r), D{"at": now()}))
 		}
 	}
 	e.S.SitePut("platform", "power", D{"state": "off", "restore": restore, "at": now(), "by": w["sub"], "operation": e.Op["id"]})
+}
+
+// platformRestored ends a start: only the machines it failed to start stay
+// listed, for the next dry run. Everything else on the list is the owners'
+// now (#195).
+func (e *Execution) platformRestored(plan D) {
+	power := e.S.SiteGet("platform", "power")
+	if power == nil {
+		return
+	}
+	failed := map[string]bool{}
+	for _, r := range dicts(plan["failed"]) {
+		failed[platformKey(r)] = true
+	}
+	restore := []D{}
+	for _, r := range e.platformRestore() {
+		if failed[platformKey(r)] {
+			restore = append(restore, r)
+		}
+	}
+	power["restore"] = restore
+	if len(restore) == 0 {
+		power["state"] = "on"
+	}
+	e.S.SitePut("platform", "power", power)
 }
 
 // platformForget takes a machine off the restore list: its owner acted on it
@@ -223,7 +268,7 @@ func (e *Execution) platformForget(vmid any) {
 }
 
 func (e *Execution) platformListed(r D) bool {
-	for _, x := range dicts(obj(e.S.SiteGet("platform", "power"))["restore"]) {
+	for _, x := range e.platformRestore() {
 		if platformKey(x) == platformKey(r) {
 			return true
 		}
@@ -286,6 +331,16 @@ func (e *Execution) PerformPlatformPower() {
 				case action == "start" && !e.platformListed(r):
 					record("skipped", r, D{"reason": "its owner acted on it after the shutdown"})
 					continue
+				case action == "start" && r["was"] == "paused":
+					// Its memory did not survive the shutdown: a boot now
+					// would run what its owner had held still (#195).
+					record("skipped", r, D{"reason": "it was paused: the shutdown lost its memory, so its owner starts it"})
+					func() {
+						e.P.writer.Lock()
+						defer e.P.writer.Unlock()
+						e.platformForget(r["vmid"])
+					}()
+					continue
 				}
 				request := D{"op": "action", "machine": m, "action": action}
 				if action == "start" {
@@ -301,6 +356,14 @@ func (e *Execution) PerformPlatformPower() {
 						extra["error"] = describe(err)
 					}
 					record("failed", r, extra)
+					if action == "shutdown" {
+						// Not stopped by this shutdown: nothing to restore (#195).
+						func() {
+							e.P.writer.Lock()
+							defer e.P.writer.Unlock()
+							e.platformForget(r["vmid"])
+						}()
+					}
 					continue
 				}
 				func() {
@@ -334,6 +397,7 @@ func (e *Execution) PerformPlatformPower() {
 		nodes := e.platformCheck(true)
 		e.P.writer.Lock()
 		plan["nodes"] = nodes
+		e.platformRestored(plan)
 		e.P.Operations.Save(e.Op)
 		e.P.writer.Unlock()
 	}
@@ -345,17 +409,28 @@ func (e *Execution) PerformPlatformPower() {
 // does not become ready is listed, not failed.
 func (e *Execution) platformAwaitReady(plan D) {
 	var wg sync.WaitGroup
+	waiting := []D{}
 	for _, r := range dicts(plan["done"]) {
 		m := e.S.Get("machines", str(r["vmid"]))
 		if m == nil || !equal(machineIdentity(m), r["identity"]) || !contains([]string{"initializing", "provisioning"}, m["state"]) {
 			continue
 		}
+		waiting = append(waiting, merge(r, D{"m": m}))
+	}
+	// The deadlines are in the job, set once for all before the waits run,
+	// so a control plane restart waits only what is left (#195). Each wait
+	// then reads them without writing to the shared job.
+	e.P.writer.Lock()
+	for _, r := range waiting {
+		e.readinessDeadline(str(r["vmid"]), "guest", intAt(e.P.Config, "guest_ready_timeout", 900))
+	}
+	e.P.writer.Unlock()
+	for _, r := range waiting {
+		m := obj(r["m"])
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Without the job: its deadlines would be shared and saved from
-			// many goroutines. A restart simply waits the full time again.
-			wait := &Execution{P: e.P, S: e.S, Ctx: e.Ctx}
+			wait := &Execution{P: e.P, S: e.S, Ctx: e.Ctx, Op: D{"id": e.Op["id"], "tool": e.Op["tool"], "readiness_deadlines": e.Op["readiness_deadlines"]}}
 			if err := attempt(func() { wait.WaitReady(m, str(r["boot_id"])) }); err != nil {
 				e.P.writer.Lock()
 				plan["not_ready"] = append(arr(plan["not_ready"]), merge(pick(r, "vmid", "tenant", "machine"), D{"error": describe(err)}))
