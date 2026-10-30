@@ -200,6 +200,12 @@ func (e *Execution) askDelegated(name string) (bool, string) {
 	if !held || !n.Pending || n.Grant != g.ID {
 		return false, "released"
 	}
+	if !e.grantStillServes(g) {
+		// The grant moved to another tenant, or lost its route, while the
+		// old target was being asked (#186): its answer is void.
+		e.S.Remove("delegated_names", name)
+		return false, "released"
+	}
 	if !agreed {
 		e.S.Remove("delegated_names", name)
 		// Before the lock is released, so an ask waiting for this one
@@ -250,8 +256,28 @@ func (e *Execution) reserveDelegated(g domainGrant, name string) (bool, string) 
 	if recent >= delegatedWeeklyNames {
 		return false, "weekly_budget"
 	}
+	if !e.grantStillServes(g) {
+		return false, "released"
+	}
 	e.S.Put("delegated_names", name, g.TenantN, decode(string(encoded(delegatedName{ID: name, Grant: g.ID, TenantN: g.TenantN, Zone: g.zone(), FirstAt: time.Now().Unix(), Pending: true}))))
 	return true, "reserved"
+}
+
+// grantStillServes re-reads g under P.delegated: the grant, route and
+// target were read without the writer lock, and domain_remove or
+// domain_transfer may have landed since (#186). A name row written for g
+// must still belong to the tenant and route the ask was made for.
+func (e *Execution) grantStillServes(g domainGrant) bool {
+	current, ok := rowOf[domainGrant](e.S, "domain_grants", g.ID)
+	if !ok || current.Kind != "delegated" || current.TenantN != g.TenantN || current.Name != g.Name {
+		return false
+	}
+	for _, d := range e.grantDomains(current) {
+		if d.State == "ready" && d.Name == current.Name {
+			return true
+		}
+	}
+	return false
 }
 
 // tenantAgrees asks the tenant's ask_url, on the route's target.
