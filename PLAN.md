@@ -693,9 +693,11 @@ once is answered from its record, so renewals spend no budget.
 The Cloudflare proxy switch is built too: admin `domain_proxy` with `name` and `proxied` turns it on
 or off for an exact grant one label under its zone (the record gets Cloudflare's automatic TTL).
 The DNS tokens cannot read a zone's SSL mode, so after turning it on carrel resolves the name
-through 1.1.1.1 until Cloudflare answers for it and asks `https://<name>/` there; a 52x, no answer,
-or the gateway's redirect back to the same URL (Flexible mode) turns the proxy off again. With all
-of this, section 6.10 is built.
+through 1.1.1.1 until Cloudflare answers for it and asks `https://<name>/.well-known/carrel/probe`
+there, a path every exact grant's site answers with its grant id; a 52x, no answer, a redirect
+(Flexible mode) or any body but the id turns the proxy off again. The check runs outside the writer
+lock. The gateway's servers run with `strict_sni_host`, so a request's Host must be the name its
+TLS handshake was for. With all of this, section 6.10 is built.
 
 A grant can change tenants: admin `domain_transfer` with `name` and `tenant` moves it, for a name
 filed in a personal tenant that belongs to a project. The grant keeps its id, so its certificate

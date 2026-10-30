@@ -57,7 +57,7 @@ type Platform struct {
 	// delegatedAsks bounds the work Caddy's on-demand asks cause.
 	delegatedAsks askLimiter
 	// proxyProbe replaces the check through Cloudflare in tests.
-	proxyProbe func(name string) string
+	proxyProbe func(name, token string) string
 	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
 	tenantAsk          func(address string, port int, name string) bool
 	netboxKick         chan struct{}

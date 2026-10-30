@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -69,7 +70,12 @@ func (e *Execution) DomainProxy(a, w D) D {
 		}
 	}()
 	e.patchProxied(z, record, true)
-	if why := e.probeProxied(name); why != "" {
+	// The check takes up to 40 s; other writes go on meanwhile (#166).
+	// storeProxied re-reads the grant afterwards.
+	e.P.writer.Unlock()
+	why := e.probeProxied(name, g.ID)
+	e.P.writer.Lock()
+	if why != "" {
 		fail("conflict", "Through Cloudflare the name did not reach the gateway ("+why+"); the proxy is off again. Set the zone's SSL mode to Full (strict) first", D{"recovery": "resolve_prerequisite"})
 	}
 	e.storeProxied(g, true)
@@ -105,11 +111,13 @@ func (e *Execution) storeProxied(g domainGrant, on bool) {
 	e.S.Put("domain_grants", current.ID, current.TenantN, current.D())
 }
 
-// probeProxied asks https://name through Cloudflare and says why it failed,
-// or "" when Cloudflare answered from the gateway.
-func (e *Execution) probeProxied(name string) string {
+// probeProxied asks https://name/.well-known/carrel/probe through Cloudflare
+// and says why it failed, or "" when Cloudflare answered with the grant's
+// id, which only the gateway serves: an old host behind Cloudflare that a
+// resolver still caches for the name cannot pass (#166).
+func (e *Execution) probeProxied(name, token string) string {
 	if e.P.proxyProbe != nil {
-		return e.P.proxyProbe(name)
+		return e.P.proxyProbe(name, token)
 	}
 	address := str(e.P.Config["public_address"])
 	// Cloudflare's own resolver answers the proxied record at once; the
@@ -142,10 +150,11 @@ func (e *Execution) probeProxied(name string) string {
 			},
 		},
 	}
-	resp, err := client.Get("https://" + name + "/")
+	resp, err := client.Get("https://" + name + probePath)
 	if err != nil {
 		return "no answer from Cloudflare"
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	resp.Body.Close()
 	// Only Cloudflare's edge sets cf-ray: an old host the name still points
 	// at proves nothing.
@@ -159,10 +168,13 @@ func (e *Execution) probeProxied(name string) string {
 	if resp.Header.Get("Cf-Mitigated") != "" {
 		return "Cloudflare answered with a challenge"
 	}
-	// The gateway's own redirect, back to the very URL asked for; an app's
-	// redirect elsewhere on the name is an answer.
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.Header.Get("Location") == "https://"+name+"/" {
+	// The gateway's own redirect, back to the very URL asked for, is what
+	// Flexible mode makes of the plain-HTTP connection Cloudflare opens.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		return "a redirect to itself, as Flexible mode makes"
+	}
+	if resp.StatusCode != 200 || strings.TrimSpace(string(body)) != token {
+		return "the answer did not come from the gateway"
 	}
 	return ""
 }

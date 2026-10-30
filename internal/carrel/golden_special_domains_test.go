@@ -107,7 +107,7 @@ func specialDomainScenario(g *goldenRun, dns *statefulDNS) {
 	call("r", "request_list", D{}, alice)
 
 	probes := 0
-	g.p.proxyProbe = func(name string) string {
+	g.p.proxyProbe = func(name, token string) string {
 		// The first check fails, as a zone in Flexible mode would.
 		probes++
 		if probes > 1 {

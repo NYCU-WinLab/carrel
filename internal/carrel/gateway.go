@@ -150,7 +150,9 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 	for _, b := range bundles {
 		byName[str(b["slug"])] = b
 	}
-	lines := []string{"{", " auto_https off", "}", "http:// {", " redir https://{host}{uri} 308", "}"}
+	// strict_sni_host: a request's Host must be the name its TLS handshake
+	// was for, so a connection made for one site cannot ask another (#166).
+	lines := []string{"{", " auto_https off", " servers {", "  strict_sni_host on", " }", "}", "http:// {", " redir https://{host}{uri} 308", "}"}
 	certificates := map[string]D{}
 	if origin != "" && originBundle != nil {
 		if !originPattern.MatchString(origin) {
@@ -242,6 +244,11 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		certificates[lineage] = checkedPair(bundle, probe)
 		lines = append(lines, "https://"+g.Name+" {", " tls "+gatewayCerts+"/"+lineage+"/fullchain.pem "+gatewayCerts+"/"+lineage+"/privkey.pem")
+		if g.Kind == "exact" {
+			// domain_proxy's check through Cloudflare reads this: only the
+			// gateway knows the grant's id, so a stale host cannot pass (#166).
+			lines = append(lines, " handle "+probePath+" {", "  respond \""+g.ID+"\" 200", " }")
+		}
 		fallback := "  respond 404"
 		for _, r := range grantRoutes[id] {
 			upstream := fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
@@ -290,6 +297,9 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 
 // controlAddress is where the gateway reaches the control plane.
 const controlAddress = "10.200.0.3:8080"
+
+// probePath is where an exact grant's site answers with its grant id.
+const probePath = "/.well-known/carrel/probe"
 
 // askAddress is the gateway's own answer to Caddy's on-demand question.
 const askAddress = "127.0.0.1:2020"
