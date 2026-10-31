@@ -977,6 +977,22 @@ func TestNetBoxFailedTenantGroupJoinDeletesNothing(t *testing.T) {
 	}
 }
 
+// A token that reads tenants but not L2VPNs deletes no tenant (#212 review).
+func TestNetBoxUnreadableVNIsKeepTheTenants(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	p.Store.Exec("DELETE FROM objects WHERE tenant=1")
+	f.forbid = map[string]bool{"vpn/l2vpns/": true}
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) != 1 {
+		t.Fatal(r.Errors)
+	}
+	if slices.Contains(f.writes, "DELETE tenancy/tenants/") || len(f.all("tenancy/tenants/")) != 1 {
+		t.Fatal(f.writes)
+	}
+}
+
 // A missing tenant group turns tenancy off with one error and creates no tenant.
 func TestNetBoxMissingTenantGroupCreatesNoTenant(t *testing.T) {
 	p, f, _ := netboxPlatform(t)

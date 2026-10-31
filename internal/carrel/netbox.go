@@ -678,6 +678,8 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 		s.tenancy = true
 	}); err != nil {
 		fail("tenants and VNIs", err)
+		// Tenants read before the failure stay: this pass syncs none of them.
+		s.protect("tenants", s.tenants, func(D) bool { return true })
 	}
 	if cfg.TunnelGroup != "" {
 		s.tunnels = c.markedList("vpn/tunnels/", nil)
