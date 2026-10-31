@@ -944,6 +944,39 @@ func TestNetBoxTenantsJoinTheTenantGroup(t *testing.T) {
 	}
 }
 
+// A tenant that cannot join the group (#212 review) keeps its VNIs: the failed
+// PATCH stops tenancy for the pass and deletes nothing, and a later pass joins it.
+func TestNetBoxFailedTenantGroupJoinDeletesNothing(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	l2vpns := len(f.all("vpn/l2vpns/"))
+	f.objects["tenancy/tenant-groups/"] = []D{{"id": 7, "name": "Carrel Users"}}
+	p.Config.NetBox["tenant_group"] = "Carrel Users"
+	f.forbidWrite = map[string]bool{"tenancy/tenants/": true}
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) != 1 {
+		t.Fatal(r.Errors)
+	}
+	for _, w := range f.writes {
+		if strings.HasPrefix(w, "DELETE") {
+			t.Fatal(f.writes)
+		}
+	}
+	if len(f.all("tenancy/tenants/")) != 1 || len(f.all("vpn/l2vpns/")) != l2vpns {
+		t.Fatal(f.all("tenancy/tenants/"), f.all("vpn/l2vpns/"))
+	}
+	f.forbidWrite = nil
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if tenant := f.all("tenancy/tenants/")[0]; refID(tenant["group"]) != 7 {
+		t.Fatal(tenant)
+	}
+}
+
 // A missing tenant group turns tenancy off with one error and creates no tenant.
 func TestNetBoxMissingTenantGroupCreatesNoTenant(t *testing.T) {
 	p, f, _ := netboxPlatform(t)

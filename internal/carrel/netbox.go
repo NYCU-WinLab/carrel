@@ -808,6 +808,10 @@ func (e *Execution) netboxTenant(c *nbClient, s *nbState, t *nbTenant, clusterID
 		if err := attempt(func() { s.tenantRef = e.netboxTenancy(c, s, t) }); err != nil {
 			fail("tenants and VNIs", err)
 			s.tenancy, s.tenantRef = false, nil
+			// What NetBox holds stays: a failed write must not turn the
+			// tenants and VNIs this pass no longer syncs into deletions.
+			s.protect("tenants", s.tenants, func(D) bool { return true })
+			s.protect("l2vpns", s.l2vpns, func(D) bool { return true })
 		}
 	}
 	defer func() { s.tenantRef = nil }()
