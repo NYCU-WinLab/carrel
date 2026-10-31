@@ -1313,6 +1313,7 @@ Configuration, in `config.json` (omitted or `enabled` false means no sync, no go
 | `vmid_field` | integer custom field on the NetBox VM for the Proxmox VMID, default `vmid`. The NetBox operator creates it |
 | `device_field` | custom field of a NetBox device that holds the Proxmox node name, for devices named differently from their node (`serverQ10` for `carrel01`). Empty, the default, matches the device name |
 | `tunnel_group` | name of an existing NetBox tunnel group for the client VPN tunnels (issue #184, phase 2). Empty, the default, leaves WireGuard out of NetBox: no tunnel, no interface, and the token needs none of the permissions below for them. The NetBox operator creates the group and gives it carrel's owner; carrel only reads it, so installations that share a NetBox each name their own. A missing group fails the tunnels with an error and creates nothing; what NetBox already holds stays |
+| `tenant_group` | name of an existing NetBox tenant group that every carrel tenant joins. Empty, the default, leaves tenants out of a group. Set it when the token's tenant permission is constrained by the group's owner (`group__owner__users`): a tenant outside the group is then refused. The NetBox operator creates the group; a missing one fails tenants and VNIs with an error and creates none |
 | `vrf` | name of the shared VRF, default `Carrel`; a private network's VRF is `<vrf> <Tenant> <network name>` (`Carrel Alice back`). A VRF that carrel created under the old form (`carrel-alice-back`) is found by that exact name and renamed in place |
 
 Mapping:
@@ -1384,6 +1385,7 @@ the first pass. Permissions the token needs, each constrained to the owner where
 | dcim.device | yes | no | no | no |
 | ipam.fhrpgroupassignment | yes | yes | no | yes |
 | tenancy.tenant | yes | yes | yes | yes |
+| tenancy.tenantgroup (with `tenant_group`) | yes | no | no | no |
 | vpn.l2vpn | yes | yes | yes | yes |
 | vpn.tunnel (with `tunnel_group`) | yes | yes | yes | yes |
 | vpn.tunnelgroup (with `tunnel_group`) | yes | no | no | no |

@@ -52,6 +52,9 @@ type nbConfig struct {
 	// TunnelGroup names the NetBox tunnel group that holds the client VPN
 	// tunnels (issue #184, phase 2); empty leaves WireGuard out of NetBox.
 	TunnelGroup string
+	// TenantGroup names the NetBox tenant group carrel's tenants join; empty
+	// leaves them out of a group. A token scoped by the group's owner needs it.
+	TenantGroup string
 	Marker      nbMarker
 }
 
@@ -81,6 +84,7 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		PublicTenant: textAt(section, "public_tenant", "Carrel"),
 		PublicRole:   textAt(section, "public_role", "User"),
 		TunnelGroup:  str(section["tunnel_group"]),
+		TenantGroup:  str(section["tenant_group"]),
 		Marker:       nbMarker{Value: str(section["owner"])},
 	}
 	switch {
@@ -565,6 +569,7 @@ type nbState struct {
 	tenants, l2vpns                                                 []D  // the NetBox tenants and the VNIs (#181)
 	tenancy                                                         bool // the token may read tenants and L2VPNs; off, objects carry no tenant
 	tenantRef                                                       any  // the NetBox tenant of the carrel tenant being synced
+	tenantGroup                                                     int  // NetBox id of netbox.tenant_group; 0 without one
 	tunnelGroup, exitDevice                                         int  // NetBox ids; 0 when phase 2 is off or the object is missing
 	exitNode                                                        string
 	devices                                                         map[string]int // lower-case node name -> NetBox device id
@@ -660,6 +665,14 @@ func (e *Execution) netboxPass(c *nbClient, cfg nbConfig) nbResult {
 	// Tenants and VNIs need permissions the token may lack (#181): then the
 	// pass records the error and syncs everything else without a tenant.
 	if err := attempt(func() {
+		if cfg.TenantGroup != "" {
+			// The group is the operator's, like the tunnel group.
+			group := find(c.list("tenancy/tenant-groups/", url.Values{"name": {cfg.TenantGroup}}), func(o D) bool { return o["name"] == cfg.TenantGroup })
+			if group == nil {
+				panic(nbError{Msg: "NetBox tenant group " + cfg.TenantGroup + " does not exist; the NetBox operator creates it"})
+			}
+			s.tenantGroup = integer(group["id"])
+		}
 		s.tenants = c.markedList("tenancy/tenants/", nil)
 		s.l2vpns = c.markedList("vpn/l2vpns/", nil)
 		s.tenancy = true
@@ -924,7 +937,11 @@ func (e *Execution) netboxTenancy(c *nbClient, s *nbState, t *nbTenant) int {
 	if have == nil && len(c.list("tenancy/tenants/", url.Values{"slug": {slug}})) > 0 {
 		panic(nbError{Msg: "NetBox tenant " + slug + " exists but carrel did not create it"})
 	}
-	got := c.ensure("tenancy/tenants/", have, D{"name": "Carrel: " + nbTitle(t.slug), "slug": slug, "description": fmt.Sprintf("Carrel tenant %s, segment 10.200.%d.0/24", t.slug, t.n)})
+	want := D{"name": "Carrel: " + nbTitle(t.slug), "slug": slug, "description": fmt.Sprintf("Carrel tenant %s, segment 10.200.%d.0/24", t.slug, t.n)}
+	if s.tenantGroup != 0 {
+		want["group"] = s.tenantGroup
+	}
+	got := c.ensure("tenancy/tenants/", have, want)
 	id := integer(got["id"])
 	s.kept("tenants", id)
 	return id
