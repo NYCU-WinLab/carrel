@@ -565,6 +565,8 @@ The client VPN's addresses sync with no more setup. To show each tenant's WireGu
 tunnel too, create a tunnel group, give it carrel's owner, and set `"tunnel_group": "<its name>"`; the token then
 needs the `vpn.*` and `dcim.interface` permissions of PLAN 9.4.
 Unsetting `tunnel_group` later leaves the tunnels carrel made in NetBox; the NetBox operator removes them.
+When the token may create tenants only inside a tenant group, set `"tenant_group": "<its name>"` so each
+carrel tenant joins that group.
 
 ## License
 

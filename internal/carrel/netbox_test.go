@@ -925,6 +925,88 @@ func TestNetBoxSyncsTenantsAndVNIs(t *testing.T) {
 	}
 }
 
+// With netbox.tenant_group, every tenant joins that group: a token scoped by
+// the group's owner can create tenants only inside it.
+func TestNetBoxTenantsJoinTheTenantGroup(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.objects["tenancy/tenant-groups/"] = []D{{"id": 7, "name": "Carrel Users"}}
+	p.Config.NetBox["tenant_group"] = "Carrel Users"
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tenant := find(f.all("tenancy/tenants/"), func(o D) bool { return o["slug"] == "carrel-alice" })
+	if tenant == nil || refID(tenant["group"]) != 7 {
+		t.Fatal(tenant)
+	}
+	if r := syncNetBox(t, p); r.Writes != 0 || len(r.Errors) > 0 {
+		t.Fatal(r)
+	}
+}
+
+// A tenant that cannot join the group (#212 review) keeps its VNIs: the failed
+// PATCH stops tenancy for the pass and deletes nothing, and a later pass joins it.
+func TestNetBoxFailedTenantGroupJoinDeletesNothing(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	l2vpns := len(f.all("vpn/l2vpns/"))
+	f.objects["tenancy/tenant-groups/"] = []D{{"id": 7, "name": "Carrel Users"}}
+	p.Config.NetBox["tenant_group"] = "Carrel Users"
+	f.forbidWrite = map[string]bool{"tenancy/tenants/": true}
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) != 1 {
+		t.Fatal(r.Errors)
+	}
+	for _, w := range f.writes {
+		if strings.HasPrefix(w, "DELETE") {
+			t.Fatal(f.writes)
+		}
+	}
+	if len(f.all("tenancy/tenants/")) != 1 || len(f.all("vpn/l2vpns/")) != l2vpns {
+		t.Fatal(f.all("tenancy/tenants/"), f.all("vpn/l2vpns/"))
+	}
+	f.forbidWrite = nil
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	if tenant := f.all("tenancy/tenants/")[0]; refID(tenant["group"]) != 7 {
+		t.Fatal(tenant)
+	}
+}
+
+// A token that reads tenants but not L2VPNs deletes no tenant (#212 review).
+func TestNetBoxUnreadableVNIsKeepTheTenants(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	syncNetBox(t, p)
+	p.Store.Exec("DELETE FROM objects WHERE tenant=1")
+	f.forbid = map[string]bool{"vpn/l2vpns/": true}
+	f.reset()
+	if r := syncNetBox(t, p); len(r.Errors) != 1 {
+		t.Fatal(r.Errors)
+	}
+	if slices.Contains(f.writes, "DELETE tenancy/tenants/") || len(f.all("tenancy/tenants/")) != 1 {
+		t.Fatal(f.writes)
+	}
+}
+
+// A missing tenant group turns tenancy off with one error and creates no tenant.
+func TestNetBoxMissingTenantGroupCreatesNoTenant(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	p.Config.NetBox["tenant_group"] = "Carrel Users"
+	r := syncNetBox(t, p)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "tenant group Carrel Users does not exist") {
+		t.Fatal(r.Errors)
+	}
+	if len(f.all("tenancy/tenants/")) != 0 || len(f.all("vpn/l2vpns/")) != 0 {
+		t.Fatal(f.all("tenancy/tenants/"), f.all("vpn/l2vpns/"))
+	}
+}
+
 // A token without the tenancy permissions (#181) syncs everything else, with no
 // tenant on the objects and one error that names the gap.
 func TestNetBoxWithoutTenancyPermissionSyncsTheRest(t *testing.T) {
