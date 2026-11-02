@@ -516,10 +516,10 @@ const consentStyle = `
 @font-face { font-family: Inter; src: url(/fonts/inter-latin.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "Noto Sans TC"; src: url(/fonts/noto-sans-tc-consent.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
 :root { color-scheme: light dark; font-family: Inter, "Noto Sans TC", sans-serif; font-size: 16px; line-height: 1.5rem;
-  --background: oklch(1 0 0); --foreground: oklch(0.145 0 0); --muted: oklch(0.97 0 0); --muted-foreground: oklch(0.556 0 0);
-  --primary: oklch(0.378 0.182 262.5); --primary-foreground: oklch(0.985 0 0); --border: oklch(0.922 0 0); --ring: oklch(0.708 0 0); }
+  --background: oklch(0.97 0.005 85); --foreground: oklch(0.25 0 0); --muted: oklch(0.93 0.005 85); --muted-foreground: oklch(0.52 0 0);
+  --primary: oklch(0.378 0.182 262.5); --primary-foreground: oklch(0.985 0 0); --border: oklch(0.89 0.005 85); --ring: oklch(0.708 0 0); }
 @media (prefers-color-scheme: dark) {
-  :root { --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0);
+  :root { --background: oklch(0.17 0 0); --foreground: oklch(0.88 0 0); --muted: oklch(0.26 0 0); --muted-foreground: oklch(0.62 0 0);
     --primary: oklch(0.68 0.168 262.5); --primary-foreground: oklch(0.145 0 0); --border: oklch(1 0 0 / 10%); --ring: oklch(0.556 0 0); }
 }
 * { box-sizing: border-box; margin: 0; }
