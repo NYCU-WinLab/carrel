@@ -283,6 +283,14 @@ cleans up only resources introduced by a deployment; `keep` preserves them for d
 cleanup retains allocations and reports the remaining resources. Retry `cleanup_failed` to finish
 cleanup, then retry the resulting `rolled_back` job if a fresh deployment is wanted.
 
+A successful result may carry `suggestions`: at most one Carrel feature that fits the task but is
+not in use yet, as `{tool, why, args}`. The rules live in `internal/carrel/suggestions.go`:
+
+| Trigger | Suggestion |
+| --- | --- |
+| `domain_add` or `machine_get` on a machine that serves HTTPS and has no app | `app_link` |
+| `machine_create` with an inline key that is not saved | `ssh_key_add` |
+
 Each machine also returns `ssh_config` and `ssh_short`. For a local CLI agent, completing a creation
 or connection request includes installing this stanza in the client's `~/.ssh/config` (or an included
 file), preserving existing entries. Use the returned tenant-qualified alias, check its HostName/User/Port

@@ -54,7 +54,9 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 		if !named("admin_tools", tool) || tool == "machine_migrate" {
 			op = p.Operations.Wait(ctx, t, str(op["id"]), intAt(a, "wait_seconds", 55))
 		}
-		return D{"ok": true, "operation": op}
+		r := D{"ok": true, "operation": op}
+		e.addSuggestions(tool, a, integer(t["n"]), r)
+		return r
 	}
 	if named("mutations", tool) && !boolean(a["dry_run"]) && tool != "operation_retry" {
 		p.writer.Lock()
@@ -62,7 +64,9 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 	}
 	r, n := e.Dispatch(tool, a, w)
 	e.S.Log(str(w["sub"]), n, tool, a, "ok")
-	return merge(D{"ok": true}, r)
+	result = merge(D{"ok": true}, r)
+	e.addSuggestions(tool, a, integer(n), result)
+	return result
 }
 func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 	dry := boolean(a["dry_run"])
