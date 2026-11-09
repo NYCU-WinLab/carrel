@@ -13,7 +13,9 @@ jobs:
           go-version: "1.27.1"
       - run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
-      - run: go test -race ./... -count=1
+      # The race detector doubles the test time (127 s against 63 s on the sandbox):
+      # pull requests skip it, every push to main still runs it.
+      - run: go test ${{ github.event_name == 'push' && '-race' || '' }} ./... -count=1
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-deployd ./cmd/carrel-deployd
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-fetch ./cmd/carrel-fetch
