@@ -2350,6 +2350,11 @@ def freeze(req):
         backup = (mine() or [None])[0]
         if backup is None:
             raise CommandFailure("the backup is not on the storage")
+        # Protecting can wait on the server too: the same check once more.
+        if power_status(m) != "stopped" or not freeze_stamp_valid(m, note):
+            backup_free(storage, backup)
+            freeze_stamp(m).unlink(missing_ok=True)
+            raise CommandFailure("the machine changed while it was backed up; the backup was removed")
     if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
         raise CommandFailure("the backup could not be verified")
     # Earlier attempts' leftovers: the machine is live, so no other freeze backup of it is wanted.

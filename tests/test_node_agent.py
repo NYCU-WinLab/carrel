@@ -1144,6 +1144,27 @@ def test_freeze_tries_again_while_the_backup_server_still_holds_the_snapshot(mon
     assert len(protect_calls(commands)) == 3
 
 
+def test_freeze_checks_the_machine_again_after_protecting_the_backup(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [backup(protected=int(bool(protect_calls(c))))] if dumped(c) else [],
+    )
+    run = module.run
+
+    def slow(*args, **kw):
+        out = run(*args, **kw)
+        if args[:2] == ("pvesh", "set") and args[-2:] == ("--protected", 1):
+            # Started and stopped again while the server held the snapshot.
+            monkeypatch.setattr(module, "last_start", lambda m: 1793000000)
+        return out
+
+    monkeypatch.setattr(module, "run", slow)
+    with pytest.raises(module.CommandFailure, match="changed while"):
+        module.freeze(REQUEST)
+    assert freed(commands) == [VOLID] and not module.freeze_stamp(MACHINE).exists()
+
+
 def test_freeze_keeps_the_machine_when_the_backup_cannot_be_protected(monkeypatch, tmp_path):
     module, commands = freezer(
         monkeypatch, tmp_path, listing=lambda c: [backup(protected=0)] if dumped(c) else []
