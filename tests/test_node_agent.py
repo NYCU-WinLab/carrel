@@ -1093,25 +1093,74 @@ def dumped(commands):
     return any(c[0] == "vzdump" for c in commands)
 
 
+def protect_calls(commands):
+    return [c for c in commands if c[:2] == ["pvesh", "set"] and c[-2:] == ["--protected", "1"]]
+
+
 REQUEST = {"machine": dict(MACHINE), "storage": "pbs", "freeze_id": "op1", "verify_wait": 0}
 
 
-def test_freeze_backs_up_protected_and_requires_a_verified_backup(monkeypatch, tmp_path):
-    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()] if dumped(c) else [])
+def test_freeze_protects_the_backup_after_it_is_verified(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [backup(protected=int(bool(protect_calls(c))))] if dumped(c) else [],
+    )
     out = module.freeze(REQUEST)
     assert out == {"volid": VOLID, "size": 1 << 30, "verification": "ok", "note": FROZEN_NOTE}
     dump = next(c for c in commands if c[0] == "vzdump")
-    assert dump[1:] == [
-        "10100",
-        "--storage",
-        "pbs",
-        "--mode",
-        "stop",
-        "--protected",
-        "1",
-        "--notes-template",
-        FROZEN_NOTE,
+    # No --protected here: the backup server refuses the flag while it verifies the new snapshot.
+    assert dump[1:] == ["10100", "--storage", "pbs", "--mode", "stop", "--notes-template", FROZEN_NOTE]
+    assert protect_calls(commands) == [
+        ["pvesh", "set", f"/nodes/{module.NODE}/storage/pbs/content/{VOLID}", "--protected", "1"]
     ]
+
+
+def test_freeze_does_not_protect_a_backup_that_is_not_verified(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(protected=0, verification=None)] if dumped(c) else []
+    )
+    with pytest.raises(module.CommandFailure, match="not verified"):
+        module.freeze(REQUEST)
+    assert protect_calls(commands) == []
+
+
+def test_freeze_tries_again_while_the_backup_server_still_holds_the_snapshot(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [backup(protected=int(len(protect_calls(c)) > 2))] if dumped(c) else [],
+    )
+    run = module.run
+
+    def locked(*args, **kw):
+        out = run(*args, **kw)
+        if args[:2] == ("pvesh", "set") and len(protect_calls(commands)) <= 2:
+            raise module.CommandFailure("unable to set protected flag - 400 Bad Request")
+        return out
+
+    monkeypatch.setattr(module, "run", locked)
+    assert module.freeze(REQUEST)["verification"] == "ok"
+    assert len(protect_calls(commands)) == 3
+
+
+def test_freeze_keeps_the_machine_when_the_backup_cannot_be_protected(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(protected=0)] if dumped(c) else []
+    )
+    run = module.run
+
+    def locked(*args, **kw):
+        out = run(*args, **kw)
+        if args[:2] == ("pvesh", "set"):
+            raise module.CommandFailure("unable to set protected flag - 400 Bad Request")
+        return out
+
+    monkeypatch.setattr(module, "run", locked)
+    with pytest.raises(module.CommandFailure, match="could not be protected"):
+        module.freeze(REQUEST)
+    # Kept, with the proof that the machine is unchanged, for the retry.
+    assert freed(commands) == [] and module.freeze_stamp(MACHINE).exists()
 
 
 def test_freeze_waits_for_the_backup_server_to_verify(monkeypatch, tmp_path):
