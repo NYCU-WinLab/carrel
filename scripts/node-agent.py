@@ -2370,7 +2370,9 @@ def freeze(req):
             backup_free(storage, backup)
             freeze_stamp(m).unlink(missing_ok=True)
             raise CommandFailure("the machine changed while it was backed up; the backup was removed")
-    if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
+    # As the storage lists it now: a later verification may have failed.
+    verified = (backup.get("verification") or {}).get("state") == "ok"
+    if not verified or not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
         raise CommandFailure("the backup could not be verified")
     # Earlier attempts' leftovers: the machine is live, so no other freeze backup of it is wanted.
     for other in carrel_backups(storage, vmid):

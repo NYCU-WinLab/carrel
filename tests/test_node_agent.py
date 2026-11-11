@@ -1217,6 +1217,20 @@ def test_freeze_returns_the_backup_it_protected(monkeypatch, tmp_path):
     assert module.freeze(REQUEST)["volid"] == VOLID
 
 
+@pytest.mark.parametrize("later", [{"state": "failed"}, None])
+def test_freeze_refuses_a_backup_whose_verification_changed_while_it_was_protected(
+    monkeypatch, tmp_path, later
+):
+    def listing(c):
+        if not dumped(c):
+            return []
+        return [backup(protected=0)] if not protect_calls(c) else [backup(protected=1, verification=later)]
+
+    module, _ = freezer(monkeypatch, tmp_path, listing=listing)
+    with pytest.raises(module.CommandFailure, match="could not be verified"):
+        module.freeze(REQUEST)
+
+
 def test_a_freeze_fits_the_control_planes_bound_on_one_request():
     module = load("node-agent.py")
     longest = (
