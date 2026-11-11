@@ -1693,10 +1693,14 @@ def test_backup_sweep_removes_only_old_orphaned_freeze_backups(monkeypatch, tmp_
         backup(volid=VOLID, notes=FROZEN_NOTE, ctime=now - 30 * 86400),  # kept by its row
         backup(volid=OLD_VOLID, notes="carrel-freeze b09 gone", ctime=now - 30 * 86400),  # orphan, old
         backup(
-            volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z", notes="carrel-freeze b09 fresh", ctime=now - 3600
+            volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z",
+            notes="carrel-freeze b09 fresh",
+            ctime=now - 3600,
         ),  # orphan, young
         backup(volid=SCHEDULED_VOLID, notes="nightly", ctime=now - 60 * 86400),  # the cluster's own
-        backup(volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze b09 noage"),  # age unknown
+        backup(
+            volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze b09 noage"
+        ),  # age unknown
         backup(
             volid="pbs:backup/vm/10103/2026-10-01T00:00:00Z",
             notes="carrel-freeze b09 op9 keep",
@@ -1768,12 +1772,16 @@ def test_backup_sweep_reads_only_this_sites_notes(monkeypatch, tmp_path):
 
 def test_backup_remove_without_a_note_takes_only_this_sites_backup(monkeypatch, tmp_path):
     for notes in ("carrel-freeze b10 op1", "carrel-freeze op1"):
-        module, commands = freezer(monkeypatch, tmp_path, listing=lambda c, notes=notes: [backup(notes=notes)])
+        module, commands = freezer(
+            monkeypatch, tmp_path, listing=lambda c, notes=notes: [backup(notes=notes)]
+        )
         with pytest.raises(ValueError, match="frozen machine"):
             module.backup_remove({"machine": dict(MACHINE), "volid": VOLID})
         assert freed(commands) == []
         # The record that names it still removes a backup written before #202.
-        assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": notes}) == {"state": "removed"}
+        assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": notes}) == {
+            "state": "removed"
+        }
     module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()])
     assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "removed"}
 
