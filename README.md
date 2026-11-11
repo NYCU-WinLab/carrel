@@ -379,7 +379,7 @@ namespace, and never delete its backups by hand: `machine_delete` and `machine_t
 
 The cluster may also run scheduled backups of the same machines, into this storage or another. carrel
 tells its own backups apart by their notes (`carrel-freeze <site> <operation>`, the site named in
-`/etc/carrel/site.json`, so two sites can share a datastore) and never reads, reuses, counts
+`/etc/carrel/site.json`, so two sites can share a datastore as long as their site names differ) and never reads, reuses, counts
 or removes any other: scheduled backups of a frozen machine stay as they are, outside `frozen_gb`, and
 follow the retention of their job. A freeze always takes a backup of its own of the stopped machine, and
 fails with "being backed up by another job" while a scheduled run holds the machine; freeze it again then.

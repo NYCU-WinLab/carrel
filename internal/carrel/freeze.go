@@ -263,6 +263,8 @@ func (e *Execution) SweepBackups() D {
 	for _, op := range e.S.ActiveOperations() {
 		if op["tool"] == "machine_freeze" {
 			ids = append(ids, str(op["id"]))
+			// A node agent from before #202 reads no ids and wrote this note.
+			keep = append(keep, "carrel-freeze "+str(op["id"]))
 			if b := obj(obj(op["freeze"])["backup"]); b["volid"] != nil {
 				volids = append(volids, str(b["volid"]))
 			}
