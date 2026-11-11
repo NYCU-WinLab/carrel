@@ -1060,9 +1060,11 @@ def freezer(monkeypatch, tmp_path, *, listing, power="stopped", snapshots=(), lo
 
     monkeypatch.setattr(module, "pve_get", pve_get)
     commands = []
+    module.test_timeouts = {}
 
     def run(*args, **kw):
         commands.append([str(a) for a in args])
+        module.test_timeouts[str(args[0])] = kw.get("timeout")
         if args[0] == "pvesh" and args[1] == "get":
             return json.dumps(listing(commands))
         if args[0] == "vzdump" and lock:
@@ -1111,6 +1113,8 @@ def test_freeze_protects_the_backup_after_it_is_verified(monkeypatch, tmp_path):
     dump = next(c for c in commands if c[0] == "vzdump")
     # No --protected here: the backup server refuses the flag while it verifies the new snapshot.
     assert dump[1:] == ["10100", "--storage", "pbs", "--mode", "stop", "--notes-template", FROZEN_NOTE]
+    # The backup's limit leaves room for the verification wait inside one request.
+    assert module.test_timeouts["vzdump"] == module.FREEZE_DUMP_SECONDS < module.VZDUMP_SECONDS
     assert protect_calls(commands) == [
         ["pvesh", "set", f"/nodes/{module.NODE}/storage/pbs/content/{VOLID}", "--protected", "1"]
     ]
@@ -1174,7 +1178,7 @@ def test_freeze_reports_a_refused_protection_at_once(monkeypatch, tmp_path):
     def refused(*args, **kw):
         out = run(*args, **kw)
         if args[:2] == ("pvesh", "set"):
-            raise module.CommandFailure("pvesh set failed: 403 Permission check failed")
+            raise module.CommandFailure("pvesh set failed: 403 Forbidden: permission check failed")
         return out
 
     monkeypatch.setattr(module, "run", refused)
@@ -1182,6 +1186,27 @@ def test_freeze_reports_a_refused_protection_at_once(monkeypatch, tmp_path):
         module.freeze(REQUEST)
     # One try, and the backup stays for the retry after the permission is fixed.
     assert len(protect_calls(commands)) == 1 and freed(commands) == []
+
+
+def test_freeze_does_not_take_a_number_in_the_volume_name_for_a_refusal(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [backup(protected=int(len(protect_calls(c)) > 1))] if dumped(c) else [],
+    )
+    run = module.run
+
+    def locked(*args, **kw):
+        out = run(*args, **kw)
+        if args[:2] == ("pvesh", "set") and len(protect_calls(commands)) == 1:
+            raise module.CommandFailure(
+                "pvesh set failed: vm/10403/2026-11-12T04:01:03Z: unable to set protected flag - 400 Bad Request"
+            )
+        return out
+
+    monkeypatch.setattr(module, "run", locked)
+    assert module.freeze(REQUEST)["verification"] == "ok"
+    assert len(protect_calls(commands)) == 2
 
 
 def test_freeze_tries_again_when_protecting_times_out(monkeypatch, tmp_path):

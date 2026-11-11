@@ -2151,13 +2151,13 @@ VZDUMP_SECONDS = 3 * 3600
 VERIFY_POLL_SECONDS = 20
 VERIFY_WAIT_MAX = 3600
 PROTECT_TRIES = 6
-PROTECT_SECONDS = 20
+PROTECT_SECONDS = 60
 # A freeze is a backup, the longest wait for its verification and every try
-# to protect it; the backup gets what the bound leaves, less 5 minutes for
-# the listings in between.
-FREEZE_DUMP_SECONDS = 4 * 3600 - VERIFY_WAIT_MAX - PROTECT_TRIES * (PROTECT_SECONDS + VERIFY_POLL_SECONDS) - 300
+# to protect it; the backup gets what the bound leaves, less 15 minutes for
+# the listings and checks in between.
+FREEZE_DUMP_SECONDS = 4 * 3600 - VERIFY_WAIT_MAX - PROTECT_TRIES * (PROTECT_SECONDS + VERIFY_POLL_SECONDS) - 900
 # The backup server's answers that no later try changes.
-PROTECT_REFUSED = ("401", "403", "permission")
+PROTECT_REFUSED = ("401 unauthorized", "403 forbidden", "permission check failed")
 
 
 def backup_storage(storage):
