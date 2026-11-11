@@ -1165,6 +1165,68 @@ def test_freeze_checks_the_machine_again_after_protecting_the_backup(monkeypatch
     assert freed(commands) == [VOLID] and not module.freeze_stamp(MACHINE).exists()
 
 
+def test_freeze_reports_a_refused_protection_at_once(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch, tmp_path, listing=lambda c: [backup(protected=0)] if dumped(c) else []
+    )
+    run = module.run
+
+    def refused(*args, **kw):
+        out = run(*args, **kw)
+        if args[:2] == ("pvesh", "set"):
+            raise module.CommandFailure("pvesh set failed: 403 Permission check failed")
+        return out
+
+    monkeypatch.setattr(module, "run", refused)
+    with pytest.raises(module.CommandFailure, match="refused to protect"):
+        module.freeze(REQUEST)
+    # One try, and the backup stays for the retry after the permission is fixed.
+    assert len(protect_calls(commands)) == 1 and freed(commands) == []
+
+
+def test_freeze_tries_again_when_protecting_times_out(monkeypatch, tmp_path):
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [backup(protected=int(len(protect_calls(c)) > 1))] if dumped(c) else [],
+    )
+    run = module.run
+
+    def slow(*args, **kw):
+        out = run(*args, **kw)
+        if args[:2] == ("pvesh", "set") and len(protect_calls(commands)) == 1:
+            assert kw["timeout"] == module.PROTECT_SECONDS
+            raise module.subprocess.TimeoutExpired("pvesh", kw["timeout"])
+        return out
+
+    monkeypatch.setattr(module, "run", slow)
+    assert module.freeze(REQUEST)["verification"] == "ok"
+    assert len(protect_calls(commands)) == 2
+
+
+def test_freeze_returns_the_backup_it_protected(monkeypatch, tmp_path):
+    # Two backups carry the note; only the one this freeze protected may be returned.
+    other = backup(volid=OLD_VOLID, protected=1)
+
+    def listing(c):
+        if not dumped(c):
+            return []
+        return [backup(protected=0)] if not protect_calls(c) else [other, backup(protected=1)]
+
+    module, _ = freezer(monkeypatch, tmp_path, listing=listing)
+    assert module.freeze(REQUEST)["volid"] == VOLID
+
+
+def test_a_freeze_fits_the_control_planes_bound_on_one_request():
+    module = load("node-agent.py")
+    longest = (
+        module.FREEZE_DUMP_SECONDS
+        + module.VERIFY_WAIT_MAX
+        + module.PROTECT_TRIES * (module.PROTECT_SECONDS + module.VERIFY_POLL_SECONDS)
+    )
+    assert longest < 4 * 3600 and module.FREEZE_DUMP_SECONDS > 2 * 3600
+
+
 def test_freeze_keeps_the_machine_when_the_backup_cannot_be_protected(monkeypatch, tmp_path):
     module, commands = freezer(
         monkeypatch, tmp_path, listing=lambda c: [backup(protected=0)] if dumped(c) else []
