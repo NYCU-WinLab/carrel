@@ -2145,11 +2145,19 @@ def action(req):
 # reads, reuses or removes any other.
 BACKUP_VOLUME = re.compile(r"[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+-]+")
 FREEZE_NOTE = "carrel-freeze "
-# vzdump and the wait for a verification must end inside the control plane's
-# 4 hour bound on one request.
+# One request to the node ends inside the control plane's 4 hour bound
+# (adapterTimeout in backend.go). A thaw is one restore.
 VZDUMP_SECONDS = 3 * 3600
 VERIFY_POLL_SECONDS = 20
+VERIFY_WAIT_MAX = 3600
 PROTECT_TRIES = 6
+PROTECT_SECONDS = 60
+# A freeze is a backup, the longest wait for its verification and every try
+# to protect it; the backup gets what the bound leaves, less 15 minutes for
+# the listings and checks in between.
+FREEZE_DUMP_SECONDS = 4 * 3600 - VERIFY_WAIT_MAX - PROTECT_TRIES * (PROTECT_SECONDS + VERIFY_POLL_SECONDS) - 900
+# The backup server's answers that no later try changes.
+PROTECT_REFUSED = ("401 unauthorized", "403 forbidden", "permission check failed")
 
 
 def backup_storage(storage):
@@ -2181,16 +2189,22 @@ def backup_protect(storage, backup):
     Not with vzdump --protected: a datastore that verifies new snapshots
     locks the snapshot the moment the backup ends, the flag is refused with
     "400 Bad Request" and vzdump fails after a good backup. The lock can
-    outlast the verification result by a moment, so this tries again.
+    outlast the verification result by a moment, so this tries again; a
+    refusal for lack of permission is final and reported at once.
     """
+    kept = "it is kept for the next attempt"
     for attempt in range(PROTECT_TRIES):
         try:
-            run("pvesh", "set", f"/nodes/{NODE}/storage/{storage}/content/{backup['volid']}", "--protected", 1)
+            run("pvesh", "set", f"/nodes/{NODE}/storage/{storage}/content/{backup['volid']}", "--protected", 1, timeout=PROTECT_SECONDS)
             return
-        except CommandFailure:
-            if attempt == PROTECT_TRIES - 1:
-                raise CommandFailure("the backup could not be protected; it is kept for the next attempt") from None
-            time.sleep(VERIFY_POLL_SECONDS)
+        except CommandFailure as e:
+            if any(word in str(e).lower() for word in PROTECT_REFUSED):
+                raise CommandFailure(f"the backup server refused to protect the backup; {kept}") from None
+        except subprocess.TimeoutExpired:
+            pass
+        if attempt == PROTECT_TRIES - 1:
+            raise CommandFailure(f"the backup could not be protected; {kept}")
+        time.sleep(VERIFY_POLL_SECONDS)
 
 
 def backup_free(storage, backup):
@@ -2286,7 +2300,7 @@ def freeze(req):
     vmid = machine(m)
     storage = backup_storage(req["storage"])
     note = freeze_note(req["freeze_id"])
-    wait = integer(req.get("verify_wait", 1800), 0, 3600)
+    wait = integer(req.get("verify_wait", 1800), 0, VERIFY_WAIT_MAX)
     owned(m)
     if power_status(m) != "stopped":
         raise ValueError("a machine freezes only when stopped")
@@ -2314,7 +2328,7 @@ def freeze(req):
         # Taken before the backup: a start after this point differs from it.
         proof = {"note": note, "digest": config_digest(m), "started": last_start(m)}
         try:
-            run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--notes-template", note, timeout=VZDUMP_SECONDS)
+            run("vzdump", vmid, "--storage", storage, "--mode", "stop", "--notes-template", note, timeout=FREEZE_DUMP_SECONDS)
         except CommandFailure as e:
             # Another backup job of the cluster holds the guest.
             if "lock" in str(e):
@@ -2347,7 +2361,8 @@ def freeze(req):
         raise CommandFailure("the backup was not verified in time; the Proxmox Backup Server must verify new snapshots")
     if not backup.get("protected"):
         backup_protect(storage, backup)
-        backup = (mine() or [None])[0]
+        # The one just protected, not whatever else carries the note.
+        backup = next((b for b in mine() if b.get("volid") == backup["volid"]), None)
         if backup is None:
             raise CommandFailure("the backup is not on the storage")
         # Protecting can wait on the server too: the same check once more.
@@ -2355,7 +2370,9 @@ def freeze(req):
             backup_free(storage, backup)
             freeze_stamp(m).unlink(missing_ok=True)
             raise CommandFailure("the machine changed while it was backed up; the backup was removed")
-    if not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
+    # As the storage lists it now: a later verification may have failed.
+    verified = (backup.get("verification") or {}).get("state") == "ok"
+    if not verified or not backup.get("protected") or int(backup.get("size", 0)) <= 0 or not BACKUP_VOLUME.fullmatch(str(backup.get("volid"))):
         raise CommandFailure("the backup could not be verified")
     # Earlier attempts' leftovers: the machine is live, so no other freeze backup of it is wanted.
     for other in carrel_backups(storage, vmid):
