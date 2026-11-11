@@ -1405,9 +1405,10 @@ configuration, then infra machines, then tenant machines (opt-in, counted agains
 
 Tenant machines are backed up only to be frozen (issue #190). `machine_freeze` takes a stopped
 machine with no disk snapshots and none of the resources on the site's `freeze_release` list
-(default: bound public IPs, fixed public ports, special domains), runs `vzdump --protected 1` to the
+(default: bound public IPs, fixed public ports, special domains), runs `vzdump` to the
 PVE storage named by `backup_storage` in the carrel config, waits until PBS reports the backup verified
-(a missing or pending result keeps the machine), and only then deletes the machine. The copy runs
+(a missing or pending result keeps the machine), marks the backup protected (after the verification:
+PBS refuses the flag while it verifies a new snapshot), and only then deletes the machine. The copy runs
 outside the writer lock, like a migration: the request is planned under it, the node works without it,
 and the records change under it again after checking that the machine is still stopped. The machine's
 row moves to the `frozen` kind: its VMID, name and internal address stay taken, so the domains,

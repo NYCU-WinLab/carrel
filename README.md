@@ -374,7 +374,7 @@ restart the control service:
 
 `freeze_release` is optional and lists what a machine must have released first (these three by default).
 `freeze_verify_wait` is how many seconds a freeze waits for the verification (1800 by default, at most 3600).
-carrel makes each backup protected, so PBS prune jobs skip it; still keep prune jobs off the frozen
+carrel marks each backup protected once PBS has verified it, so PBS prune jobs skip it from then on; still keep prune jobs off the frozen
 namespace, and never delete its backups by hand: `machine_delete` and `machine_thaw` remove them.
 
 The cluster may also run scheduled backups of the same machines, into this storage or another. carrel
@@ -388,7 +388,7 @@ included; the node also turns off start-at-boot before the backup); otherwise th
 a new one. The machine is checked again once PBS has verified the backup, and a machine that ran in between
 keeps running: the backup is removed. Power, resize and delete requests for the machine wait while a freeze
 or a thaw is copying. The backup of a
-freeze that was never retried stays protected on PBS with the note above; an admin may remove it there.
+freeze that was never retried stays on PBS with the note above, not protected; an admin may remove it there.
 
 A freeze or a thaw copies for minutes to hours without holding carrel's writer lock, so other tenants'
 requests go on. A thaw that is cut off is finished by retrying it (`operation_retry`), on the node where it
