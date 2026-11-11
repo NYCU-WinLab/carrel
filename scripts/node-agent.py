@@ -2142,9 +2142,12 @@ def action(req):
 # it. The cluster may
 # run its own scheduled backups of the same machine into the same storage:
 # the ones this agent made are told apart by their notes alone, and it never
-# reads, reuses or removes any other.
+# reads, reuses or removes any other. The notes name the site
+# (carrel-freeze <site> <operation>): another carrel site may freeze into the
+# same datastore, even a machine with the same VMID (#202).
 BACKUP_VOLUME = re.compile(r"[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+-]+")
 FREEZE_NOTE = "carrel-freeze "
+SITE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 # One request to the node ends inside the control plane's 4 hour bound
 # (adapterTimeout in backend.go). A thaw is one restore.
 VZDUMP_SECONDS = 3 * 3600
@@ -2173,14 +2176,32 @@ def backups(storage, vmid):
     return json.loads(out) if out else []
 
 
+def site_note():
+    """The start of every freeze note of this site."""
+    name = site().get("site") if SITE.exists() else None
+    if not isinstance(name, str) or not SITE_NAME.fullmatch(name):
+        raise ValueError('the site file names no site; set "site" in /etc/carrel/site.json')
+    return f"{FREEZE_NOTE}{name} "
+
+
 def freeze_note(freeze_id):
     if not isinstance(freeze_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", freeze_id):
         raise ValueError("invalid freeze id")
-    return FREEZE_NOTE + freeze_id
+    return site_note() + freeze_id
+
+
+def site_backup(b, prefix):
+    """Whether a backup carries a freeze note of this site.
+
+    A note without a site (carrel-freeze <operation>, written before #202)
+    belongs to no site here: only the record that names it removes it.
+    """
+    return str(b.get("notes", "")).strip().startswith(prefix)
 
 
 def carrel_backups(storage, vmid):
-    return [b for b in backups(storage, vmid) if str(b.get("notes", "")).strip().startswith(FREEZE_NOTE)]
+    prefix = site_note()
+    return [b for b in backups(storage, vmid) if site_backup(b, prefix)]
 
 
 def backup_protect(storage, backup):
@@ -2455,8 +2476,9 @@ def backup_remove(req):
         return {"state": "absent"}
     notes = str(found[0].get("notes", "")).strip()
     # Never a scheduled or manual backup of the cluster, and never the backup
-    # of another freeze.
-    if not notes.startswith(FREEZE_NOTE) or (req.get("note") and notes != req["note"]):
+    # of another freeze or another site: the record's note, or this site's.
+    note = req.get("note")
+    if not notes.startswith(FREEZE_NOTE) or (notes != note if note else not site_backup(found[0], site_note())):
         raise ValueError("not the backup of a frozen machine")
     backup_free(storage, found[0])
     return {"state": "removed"}
@@ -2465,24 +2487,28 @@ def backup_remove(req):
 def backup_sweep(req):
     """List the freeze backups no record names; remove those older than older_than seconds.
 
-    keep holds the notes of every backup a frozen row, a thawed machine or a
-    running freeze still names, and keep_volids the volumes those records
-    point at; a backup matching either stays, whatever its notes say now.
-    Nothing can thaw a backup outside both: its record is gone. The
-    cluster's own backups are not freeze backups and are never read as
-    such (#192).
+    keep holds the notes of every backup a frozen row or a thawed machine
+    still names, keep_ids the running freezes, and keep_volids the volumes
+    those records point at; a backup matching any stays, whatever its notes
+    say now. Nothing can thaw a backup outside them: its record is gone.
+    Only this site's notes count: the cluster's own backups and the freeze
+    backups of another site on the same datastore are never read as
+    orphans (#192, #202).
     """
     storage = backup_storage(req["storage"])
+    prefix = site_note()
     keep = set(req.get("keep") or [])
+    keep_ids = req.get("keep_ids") or []
     keep_volids = set(req.get("keep_volids") or [])
-    if not all(isinstance(k, str) for k in keep | keep_volids):
+    if not all(isinstance(k, str) for k in keep | keep_volids) or not isinstance(keep_ids, list):
         raise ValueError("invalid keep list")
+    keep |= {freeze_note(i) for i in keep_ids}
     older_than = integer(req.get("older_than", 7 * 86400), 3600, 365 * 86400)
     out = json.loads(run("pvesh", "get", f"/nodes/{NODE}/storage/{storage}/content", "--content", "backup", "--output-format", "json") or "[]")
     orphans, removed = [], []
     for b in out:
         notes = str(b.get("notes", "")).strip()
-        if not notes.startswith(FREEZE_NOTE) or notes in keep or str(b.get("volid")) in keep_volids or not BACKUP_VOLUME.fullmatch(str(b.get("volid"))):
+        if not site_backup(b, prefix) or notes in keep or str(b.get("volid")) in keep_volids or not BACKUP_VOLUME.fullmatch(str(b.get("volid"))):
             continue
         orphans.append(b["volid"])
         # Only a backup whose age is known goes.

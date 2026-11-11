@@ -247,7 +247,9 @@ func (e *Execution) SweepBackups() D {
 	}
 	// Both the notes and the volumes the records name: a note an operator
 	// edited on the backup server must not cost a frozen machine its copy.
-	keep, volids := []string{}, []string{}
+	// A running freeze goes by its id: the node writes the note, with the
+	// site's name in it (#202).
+	keep, ids, volids := []string{}, []string{}, []string{}
 	for _, f := range e.S.Objects("frozen") {
 		keep = append(keep, str(f["backup_note"]))
 		volids = append(volids, str(f["backup_volid"]))
@@ -260,13 +262,15 @@ func (e *Execution) SweepBackups() D {
 	}
 	for _, op := range e.S.ActiveOperations() {
 		if op["tool"] == "machine_freeze" {
+			ids = append(ids, str(op["id"]))
+			// A node agent from before #202 reads no ids and wrote this note.
 			keep = append(keep, "carrel-freeze "+str(op["id"]))
 			if b := obj(obj(op["freeze"])["backup"]); b["volid"] != nil {
 				volids = append(volids, str(b["volid"]))
 			}
 		}
 	}
-	return obj(e.Call(D{"op": "backup_sweep", "storage": storage, "keep": keep, "keep_volids": volids, "older_than": int(backupSweepAge.Seconds())}, nodes[0].Target))
+	return obj(e.Call(D{"op": "backup_sweep", "storage": storage, "keep": keep, "keep_ids": ids, "keep_volids": volids, "older_than": int(backupSweepAge.Seconds())}, nodes[0].Target))
 }
 
 // PerformFreeze takes the backup without the writer lock. The machine stays

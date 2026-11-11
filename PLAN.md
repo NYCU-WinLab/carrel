@@ -1417,12 +1417,13 @@ are released. `machine_thaw` checks the normal quota like a creation, restores t
 same VMID on a node chosen as for a creation, which is kept in the frozen row so a retry or a delete
 finds a half-restored machine; the backup goes only after the live row is committed. `machine_delete` on a frozen
 machine removes the backup. Frozen machines keep one copy on PBS: freezing is not an off-site backup.
-A freeze backup is told apart by its notes and is reused by a retry only while the node's stamp proves
+A freeze backup is told apart by its notes, which name the site (`carrel-freeze <site> <operation>`, #202:
+two sites may share a datastore and a VMID), and is reused by a retry only while the node's stamp proves
 the machine has not run or changed since; scheduled backups of the cluster are never read, counted or
 removed. Before a new backup the node asks the backup server whether the datastore verifies new
 snapshots and refuses at once if it does not. The site may cap frozen disk space across all
 tenants with `frozen_total_gb`. Admin `reconcile_run` sweeps freeze backups that no frozen row,
-thawed machine or running freeze names: it lists them and removes those older than 7 days.
+thawed machine or running freeze names: it lists this site's and removes those older than 7 days.
 Scheduled backups of running machines stay out of scope.
 
 Until then, the control plane sends one archive each night (database, configuration,

@@ -1034,7 +1034,7 @@ def test_rename_sets_the_proxmox_name_of_an_owned_machine(monkeypatch, kind, com
         module.action({"machine": dict(MACHINE, kind=kind), "action": "rename", "name": "portal"})
 
 
-FROZEN_NOTE = "carrel-freeze op1"
+FROZEN_NOTE = "carrel-freeze b09 op1"
 VOLID = "pbs:backup/vm/10100/2026-10-26T00:00:00Z"
 OLD_VOLID = "pbs:backup/vm/10100/2026-10-25T00:00:00Z"
 SCHEDULED_VOLID = "pbs:backup/vm/10100/2026-10-24T03:00:00Z"
@@ -1050,6 +1050,8 @@ def freezer(monkeypatch, tmp_path, *, listing, power="stopped", snapshots=(), lo
     monkeypatch.setattr(module, "power_status", lambda m: power)
     monkeypatch.setattr(module, "STATE", tmp_path / "state")
     (tmp_path / "state").mkdir(exist_ok=True)
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    (tmp_path / "site.json").write_text(json.dumps({"site": "b09"}))
     monkeypatch.setattr(module.time, "sleep", lambda s: None)
     config = {"digest": "d1"}
 
@@ -1404,7 +1406,7 @@ def test_any_request_for_a_machine_drops_the_proof_of_an_unchanged_one(monkeypat
 def test_freeze_leaves_the_clusters_own_backups_alone(monkeypatch, tmp_path):
     # A scheduled job backs up the same machine into the same storage.
     scheduled = backup(volid=SCHEDULED_VOLID, notes="box", protected=0, verification={"state": "ok"})
-    leftover = backup(volid=OLD_VOLID, notes="carrel-freeze op0")
+    leftover = backup(volid=OLD_VOLID, notes="carrel-freeze b09 op0")
     module, commands = freezer(
         monkeypatch,
         tmp_path,
@@ -1546,7 +1548,7 @@ def test_backup_remove_unprotects_then_frees_only_the_freeze_backup(monkeypatch,
     ]
     # Not another freeze's backup, and not a backup of the cluster's own.
     with pytest.raises(ValueError, match="frozen machine"):
-        module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": "carrel-freeze other"})
+        module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": "carrel-freeze b09 other"})
     module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup(notes="manual backup")])
     with pytest.raises(ValueError, match="frozen machine"):
         module.backup_remove({"machine": dict(MACHINE), "volid": VOLID})
@@ -1689,15 +1691,19 @@ def test_backup_sweep_removes_only_old_orphaned_freeze_backups(monkeypatch, tmp_
     now = int(_time.time())
     listing = [
         backup(volid=VOLID, notes=FROZEN_NOTE, ctime=now - 30 * 86400),  # kept by its row
-        backup(volid=OLD_VOLID, notes="carrel-freeze gone", ctime=now - 30 * 86400),  # orphan, old
+        backup(volid=OLD_VOLID, notes="carrel-freeze b09 gone", ctime=now - 30 * 86400),  # orphan, old
         backup(
-            volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z", notes="carrel-freeze fresh", ctime=now - 3600
+            volid="pbs:backup/vm/10101/2026-10-29T00:00:00Z",
+            notes="carrel-freeze b09 fresh",
+            ctime=now - 3600,
         ),  # orphan, young
         backup(volid=SCHEDULED_VOLID, notes="nightly", ctime=now - 60 * 86400),  # the cluster's own
-        backup(volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze noage"),  # age unknown
+        backup(
+            volid="pbs:backup/vm/10102/2026-10-20T00:00:00Z", notes="carrel-freeze b09 noage"
+        ),  # age unknown
         backup(
             volid="pbs:backup/vm/10103/2026-10-01T00:00:00Z",
-            notes="carrel-freeze op9 keep",
+            notes="carrel-freeze b09 op9 keep",
             ctime=now - 30 * 86400,
         ),  # note edited, volume still named
     ]
@@ -1726,3 +1732,69 @@ def test_backup_sweep_removes_only_old_orphaned_freeze_backups(monkeypatch, tmp_
         "--protected",
         "0",
     ] in commands or any(c[:2] == ["pvesh", "set"] for c in commands)
+
+
+def test_freeze_leaves_another_sites_backup_of_the_same_vmid(monkeypatch, tmp_path):
+    # Two sites freeze into one datastore and both have a machine 10100 (#202).
+    theirs = backup(volid=OLD_VOLID, notes="carrel-freeze b10 op0")
+    unsited = backup(volid=SCHEDULED_VOLID, notes="carrel-freeze op0")
+    module, commands = freezer(
+        monkeypatch,
+        tmp_path,
+        listing=lambda c: [theirs, unsited] + ([backup()] if dumped(c) else []),
+    )
+    assert module.freeze(REQUEST)["note"] == FROZEN_NOTE
+    assert freed(commands) == []
+    assert not protect_calls(commands)
+
+
+def test_backup_sweep_reads_only_this_sites_notes(monkeypatch, tmp_path):
+    import time as _time
+
+    old = int(_time.time()) - 30 * 86400
+    running = "pbs:backup/vm/10104/2026-10-01T00:00:00Z"
+    listing = [
+        backup(volid=VOLID, notes="carrel-freeze b10 gone", ctime=old),  # another site's
+        backup(volid=OLD_VOLID, notes="carrel-freeze b091 gone", ctime=old),  # a longer site name
+        backup(volid=SCHEDULED_VOLID, notes="carrel-freeze gone", ctime=old),  # written before #202
+        backup(volid=running, notes="carrel-freeze b09 op7", ctime=old),  # a running freeze
+    ]
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: listing)
+    out = module.backup_sweep({"storage": "pbs", "keep": [], "keep_ids": ["op7"], "keep_volids": []})
+    assert out == {"orphans": [], "removed": []}
+    assert freed(commands) == []
+    assert module.backup_sweep({"storage": "pbs"}) == {"orphans": [running], "removed": [running]}
+    with pytest.raises(ValueError, match="invalid freeze id"):
+        module.backup_sweep({"storage": "pbs", "keep_ids": ["op 7"]})
+    with pytest.raises(ValueError, match="invalid keep list"):
+        module.backup_sweep({"storage": "pbs", "keep_ids": "op7"})
+
+
+def test_backup_remove_without_a_note_takes_only_this_sites_backup(monkeypatch, tmp_path):
+    for notes in ("carrel-freeze b10 op1", "carrel-freeze op1"):
+        module, commands = freezer(
+            monkeypatch, tmp_path, listing=lambda c, notes=notes: [backup(notes=notes)]
+        )
+        with pytest.raises(ValueError, match="frozen machine"):
+            module.backup_remove({"machine": dict(MACHINE), "volid": VOLID})
+        assert freed(commands) == []
+        # The record that names it still removes a backup written before #202.
+        assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID, "note": notes}) == {
+            "state": "removed"
+        }
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [backup()])
+    assert module.backup_remove({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "removed"}
+
+
+@pytest.mark.parametrize("content", [None, {}, {"site": "B09"}, {"site": "b09 x"}, {"site": 9}])
+def test_freeze_needs_a_site_name(monkeypatch, tmp_path, content):
+    module, commands = freezer(monkeypatch, tmp_path, listing=lambda c: [])
+    if content is None:
+        (tmp_path / "site.json").unlink()
+    else:
+        (tmp_path / "site.json").write_text(json.dumps(content))
+    with pytest.raises(ValueError, match="names no site"):
+        module.freeze(REQUEST)
+    with pytest.raises(ValueError, match="names no site"):
+        module.backup_sweep({"storage": "pbs"})
+    assert not dumped(commands) and freed(commands) == []
