@@ -10,10 +10,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -46,16 +48,30 @@ func usage() {
 }
 
 type common struct {
-	root, firecracker, kernel, run string
+	root, firecracker, jailer, kernel string
+	uidBase, gid                      int
 }
 
 func commonFlags(flags *flag.FlagSet) *common {
 	c := &common{}
 	flags.StringVar(&c.root, "root", "/var/lib/carrel-fn", "directory that holds every function")
 	flags.StringVar(&c.firecracker, "firecracker", "/usr/local/bin/firecracker", "firecracker executable")
-	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-fn/vmlinux", "guest kernel")
-	flags.StringVar(&c.run, "run", "/run/carrel-fn", "directory for API sockets")
+	flags.StringVar(&c.jailer, "jailer", "/usr/local/bin/jailer", "Firecracker jailer executable")
+	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-fn/vmlinux", "guest kernel, on the file system of -root")
+	flags.IntVar(&c.uidBase, "uid-base", 300000, "first of the user IDs instances run as, one per slot")
+	flags.IntVar(&c.gid, "gid", 300000, "group ID that reads function files")
 	return c
+}
+
+// config places jails under the functions' directory: a jail holds hard
+// links to function files, which need one file system.
+func (c *common) config(prefix string, first, slots int) fn.Config {
+	return fn.Config{
+		Firecracker: c.firecracker, Jailer: c.jailer, Kernel: c.kernel,
+		JailBase: filepath.Join(c.root, ".jail"),
+		Prefix:   prefix, First: first, Slots: slots,
+		UIDBase: c.uidBase, GID: c.gid,
+	}
 }
 
 func serve(args []string) error {
@@ -65,7 +81,7 @@ func serve(args []string) error {
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
 	_ = flags.Parse(args)
 
-	runtime, err := fn.NewFirecracker(c.firecracker, c.kernel, c.run, "cfn", *slots)
+	runtime, err := fn.NewFirecracker(c.config("cfn", 0, *slots))
 	if err != nil {
 		return err
 	}
@@ -113,8 +129,12 @@ func build(args []string) error {
 		return errors.New("build needs -name and -image")
 	}
 
-	// One namespace of its own, so a build never takes a slot from the router.
-	runtime, err := fn.NewFirecracker(c.firecracker, c.kernel, c.run, "cfnbuild-"+f.Name+"-", 1)
+	// One slot of its own, so a build never takes a slot from the router.
+	// Its number comes from the name: two builds of one function collide,
+	// builds of different functions almost never do.
+	hash := fnv.New32a()
+	hash.Write([]byte(f.Name))
+	runtime, err := fn.NewFirecracker(c.config("cfnb", 100000+int(hash.Sum32()%100000), 1))
 	if err != nil {
 		return err
 	}

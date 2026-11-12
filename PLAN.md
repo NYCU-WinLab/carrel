@@ -1231,9 +1231,10 @@ back to sleep when it is idle. The measurements behind the design are in
 
 Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the router, the snapshot
 build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
-writable overlay. They run by hand on one test host. Nothing is connected to the control plane,
-the gateway or MCP, and the jailer and the egress filter do not exist yet, so no tenant code may
-run on it.
+writable overlay, and the jailer around every Firecracker process. They run by hand on one test
+host. Nothing is connected to the control plane, the gateway or MCP. A function has no route out
+of its network namespace yet, and the egress filter that must come with that route does not exist,
+so no tenant code may run on it.
 
 **Why carrel offers it**
 
@@ -1303,7 +1304,8 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
 **Isolation**
 
 - Instances are Firecracker microVMs started through its jailer (a private root directory, a
-  system call filter, a cgroup and an unprivileged user).
+  system call filter, a cgroup and an unprivileged user). Each slot has its own user ID, so one
+  Firecracker process cannot signal or read another.
 - They run on function hosts: platform-owned VMs with nested virtualization in the infra range.
   An escape from a microVM lands in a function host, not on a node. A function host holds one
   token that reads function versions and nothing else.
@@ -1374,7 +1376,13 @@ to tenant networks, one instance per `reuse` function.
 1. A function host image and the router, with `fresh` and `reuse`, on one host. The router is
    built. Measured through it on the test host: a request that wakes a `reuse` function p95
    162 ms (15 runs), a `fresh` request p95 168 ms (30 runs), a request to an awake function p95
-   3 ms (200 runs). Still open in this step: the jailer, the egress filter and the host image.
+   3 ms (200 runs). The jailer is built: each instance has its own user, root directory, mount,
+   PID and network namespace, a seccomp filter, no capabilities, and a cgroup that limits memory
+   to the guest's memory plus 128 MiB and processes to 64. Function files are owned by root and
+   read-only to the jails' group, because every instance of a function maps the same snapshot. A
+   build's snapshot is taken out of the jail only after its Firecracker process ended. With the
+   jailer the same requests measure p95 176 ms, 192 ms and 3 ms. Still open in this step: the
+   egress filter and the host image.
 2. The deploy pipeline and the member tools.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.

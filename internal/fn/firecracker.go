@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -33,32 +34,68 @@ const (
 	controlPort = 1
 	bootArgs    = "console=ttyS0 quiet loglevel=0 reboot=k panic=1 pci=off ro init=/.fn/init " +
 		"i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd random.trust_cpu=on"
+
+	// Paths inside a jail. A snapshot records the path of its root file
+	// system, so the build and every wake use the same ones.
+	jailDir      = "/fn"
+	jailRootfs   = jailDir + "/rootfs.ext4"
+	jailKernel   = jailDir + "/vmlinux"
+	jailState    = jailDir + "/snap.state"
+	jailMemory   = jailDir + "/snap.mem"
+	jailSocket   = "/api.sock"
+	cgroupParent = "carrel-fn"
+	cgroupRoot   = "/sys/fs/cgroup"
+	// Memory a Firecracker process may use beyond its guest's memory.
+	overheadMB = 128
+	maxPIDs    = 64
 )
 
+// Config locates what a function host needs to run microVMs.
+type Config struct {
+	Firecracker string // firecracker executable
+	Jailer      string // jailer executable
+	Kernel      string // guest kernel, used when a snapshot is built
+	// JailBase holds one directory per running instance. It must be on the
+	// file system of the functions, because a jail gets hard links to them.
+	JailBase string
+	// Prefix and First name the network namespaces: <prefix><first>, ...
+	Prefix string
+	First  int
+	Slots  int
+	// UIDBase + slot index is the user a slot's Firecracker runs as, so one
+	// instance cannot signal or read another. GID is shared: it reads the
+	// function files.
+	UIDBase int
+	GID     int
+}
+
 // Firecracker wakes functions by restoring Firecracker snapshots. Each
-// instance runs in its own network namespace, so every guest can use the
-// same address.
+// instance runs under the jailer (PLAN 7.11): its own root directory, user,
+// cgroup, PID namespace and network namespace.
 type Firecracker struct {
-	Binary string // firecracker executable
-	Kernel string // guest kernel, used when a snapshot is built
-	RunDir string // API sockets
-	slots  chan *slot
+	cfg   Config
+	slots chan *slot
 }
 
 type slot struct {
 	name string
+	uid  int
 	ns   *os.File
 }
 
-// NewFirecracker prepares `slots` network namespaces named <prefix>0, <prefix>1, ...
-func NewFirecracker(binary, kernel, runDir, prefix string, slots int) (*Firecracker, error) {
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
+// NewFirecracker prepares the cgroup and one network namespace per slot.
+func NewFirecracker(cfg Config) (*Firecracker, error) {
+	if err := os.MkdirAll(cfg.JailBase, 0o711); err != nil {
 		return nil, err
 	}
-	fc := &Firecracker{Binary: binary, Kernel: kernel, RunDir: runDir, slots: make(chan *slot, slots)}
-	for i := range slots {
-		s, err := newSlot(prefix + strconv.Itoa(i))
+	if err := prepareCgroup(); err != nil {
+		return nil, err
+	}
+	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
+	for i := range cfg.Slots {
+		s, err := newSlot(cfg.Prefix+strconv.Itoa(cfg.First+i), cfg.UIDBase+cfg.First+i, cfg.GID)
 		if err != nil {
+			fc.Close()
 			return nil, err
 		}
 		fc.slots <- s
@@ -66,12 +103,27 @@ func NewFirecracker(binary, kernel, runDir, prefix string, slots int) (*Firecrac
 	return fc, nil
 }
 
-func newSlot(name string) (*slot, error) {
+// prepareCgroup makes the parent cgroup whose children the jailer limits.
+func prepareCgroup() error {
+	parent := filepath.Join(cgroupRoot, cgroupParent)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
+	// The root usually delegates these already; only the parent must.
+	_ = os.WriteFile(filepath.Join(cgroupRoot, "cgroup.subtree_control"), []byte("+memory +pids"), 0o644)
+	if err := os.WriteFile(filepath.Join(parent, "cgroup.subtree_control"), []byte("+memory +pids"), 0o644); err != nil {
+		return fmt.Errorf("enable memory and pids limits for %s: %w", parent, err)
+	}
+	return nil
+}
+
+func newSlot(name string, uid, gid int) (*slot, error) {
 	_ = exec.Command("ip", "netns", "del", name).Run() // left over from an earlier run
 	steps := [][]string{
 		{"netns", "add", name},
 		{"-n", name, "link", "set", "lo", "up"},
-		{"-n", name, "tuntap", "add", "dev", "tap0", "mode", "tap"},
+		// The slot's user owns the tap, so Firecracker opens it without any capability.
+		{"-n", name, "tuntap", "add", "dev", "tap0", "mode", "tap", "user", strconv.Itoa(uid), "group", strconv.Itoa(gid)},
 		{"-n", name, "link", "set", "tap0", "address", hostMAC},
 		{"-n", name, "addr", "add", hostCIDR, "dev", "tap0"},
 		{"-n", name, "link", "set", "tap0", "up"},
@@ -86,7 +138,7 @@ func newSlot(name string) (*slot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &slot{name: name, ns: ns}, nil
+	return &slot{name: name, uid: uid, ns: ns}, nil
 }
 
 // Close removes the namespaces. Call it after every instance stopped.
@@ -103,7 +155,7 @@ func (fc *Firecracker) Close() {
 }
 
 // inNamespace runs do on a thread that is inside the slot's network
-// namespace. Sockets and child processes created there stay in it.
+// namespace. Sockets created there stay in it.
 func (s *slot) inNamespace(do func() error) error {
 	runtime.LockOSThread()
 	original, err := os.Open("/proc/thread-self/ns/net")
@@ -141,53 +193,115 @@ func (s *slot) dial(ctx context.Context, port int) (net.Conn, error) {
 }
 
 type vm struct {
-	fc   *Firecracker
-	slot *slot
-	port int
-	cmd  *exec.Cmd
-	sock string
-	api  *http.Client
-	done chan struct{}
-	stop sync.Once
+	fc    *Firecracker
+	slot  *slot
+	port  int
+	root  string // the jail's root directory on the host
+	pidfd int
+	api   *http.Client
+	done  chan struct{}
+	dead  sync.Once
+	stop  sync.Once
 }
 
-// start launches a Firecracker process in a free slot. The caller configures
+// jail describes what one Firecracker process may see.
+type jail struct {
+	memoryMB int
+	// files maps a path inside the jail to the host file it is a hard link of.
+	files map[string]string
+	// writable lets the process create files in /fn: only a build needs it.
+	writable bool
+}
+
+func (fc *Firecracker) jailPath(s *slot) string {
+	return filepath.Join(fc.cfg.JailBase, filepath.Base(fc.cfg.Firecracker), s.name)
+}
+
+// start launches a jailed Firecracker in a free slot. The caller configures
 // it through the API and must call Stop.
-func (fc *Firecracker) start(ctx context.Context, logPath string, port int) (*vm, error) {
+func (fc *Firecracker) start(ctx context.Context, logPath string, port int, j jail) (*vm, error) {
 	var s *slot
 	select {
 	case s = <-fc.slots:
 	default:
 		return nil, ErrBusy
 	}
-	sock := filepath.Join(fc.RunDir, s.name+".sock")
-	_ = os.Remove(sock)
+	v, err := fc.launch(ctx, s, logPath, port, j)
+	if err != nil {
+		fc.cleanup(s)
+		fc.slots <- s
+		return nil, err
+	}
+	return v, nil
+}
+
+func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port int, j jail) (*vm, error) {
+	fc.cleanup(s) // whatever an earlier run left in this slot
+	root := filepath.Join(fc.jailPath(s), "root")
+	dir := filepath.Join(root, jailDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return nil, err
+	}
+	owner := 0
+	if j.writable {
+		owner = s.uid
+	}
+	if err := os.Chown(dir, owner, fc.cfg.GID); err != nil {
+		return nil, err
+	}
+	for inside, host := range j.files {
+		if err := os.Link(host, filepath.Join(root, inside)); err != nil {
+			return nil, fmt.Errorf("link %s into the jail: %w", host, err)
+		}
+	}
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		fc.slots <- s
 		return nil, err
 	}
 	defer log.Close()
-	cmd := exec.Command(fc.Binary, "--api-sock", sock)
+	cmd := exec.CommandContext(ctx, fc.cfg.Jailer,
+		"--id", s.name,
+		"--exec-file", fc.cfg.Firecracker,
+		"--uid", strconv.Itoa(s.uid),
+		"--gid", strconv.Itoa(fc.cfg.GID),
+		"--chroot-base-dir", fc.cfg.JailBase,
+		"--netns", "/run/netns/"+s.name,
+		"--new-pid-ns",
+		"--cgroup-version", "2",
+		"--parent-cgroup", cgroupParent,
+		"--cgroup", "memory.max="+strconv.Itoa((j.memoryMB+overheadMB)<<20),
+		"--cgroup", "memory.swap.max=0",
+		"--cgroup", "pids.max="+strconv.Itoa(maxPIDs),
+		"--", "--api-sock", jailSocket)
 	cmd.Stdout = log
 	cmd.Stderr = log
-	// No Pdeathsig: it follows the starting thread, not the process, and
-	// Go may discard a thread that could not leave the namespace.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := s.inNamespace(cmd.Start); err != nil {
-		fc.slots <- s
-		return nil, err
+	// With a new PID namespace the jailer forks and ends: Firecracker is its
+	// child, and the jailer leaves the child's PID in a file.
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("jailer: %w", err)
 	}
-	v := &vm{fc: fc, slot: s, port: port, cmd: cmd, sock: sock, done: make(chan struct{})}
+	pidFile := filepath.Join(root, filepath.Base(fc.cfg.Firecracker)+".pid")
+	content, err := os.ReadFile(pidFile)
+	if err != nil {
+		return nil, fmt.Errorf("jailer left no PID: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || pid <= 1 {
+		return nil, fmt.Errorf("jailer PID file: %q", content)
+	}
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return nil, fmt.Errorf("firecracker ended at once: %w", err)
+	}
+	v := &vm{fc: fc, slot: s, port: port, root: root, pidfd: pidfd, done: make(chan struct{})}
+	sock := filepath.Join(root, jailSocket)
 	v.api = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
 		},
 	}}
-	go func() {
-		_ = cmd.Wait()
-		close(v.done)
-	}()
+	go v.watch()
 	// The socket file appears before Firecracker listens on it.
 	err = retry(ctx, v.done, time.Millisecond, func() error {
 		conn, err := net.Dial("unix", sock)
@@ -197,10 +311,46 @@ func (fc *Firecracker) start(ctx context.Context, logPath string, port int) (*vm
 		return err
 	})
 	if err != nil {
-		v.Stop()
+		v.kill()
 		return nil, fmt.Errorf("firecracker API: %w", err)
 	}
 	return v, nil
+}
+
+// watch closes done when the Firecracker process ends. It is not this
+// process's child, so it is watched through its pidfd.
+func (v *vm) watch() {
+	fds := []unix.PollFd{{Fd: int32(v.pidfd), Events: unix.POLLIN}}
+	for {
+		_, err := unix.Poll(fds, -1)
+		if err == nil || !errors.Is(err, unix.EINTR) {
+			close(v.done)
+			return
+		}
+	}
+}
+
+// kill ends the Firecracker process and returns when it is gone.
+func (v *vm) kill() {
+	v.dead.Do(func() {
+		_ = unix.PidfdSendSignal(v.pidfd, unix.SIGKILL, nil, 0)
+		<-v.done
+		unix.Close(v.pidfd)
+		v.api.CloseIdleConnections()
+	})
+}
+
+// cleanup removes a slot's jail directory and cgroup.
+func (fc *Firecracker) cleanup(s *slot) {
+	_ = os.RemoveAll(fc.jailPath(s))
+	cgroup := filepath.Join(cgroupRoot, cgroupParent, s.name)
+	for range 50 { // the kernel empties the cgroup shortly after the process ends
+		err := os.Remove(cgroup)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 func (v *vm) Dial(ctx context.Context) (net.Conn, error) { return v.slot.dial(ctx, v.port) }
@@ -208,10 +358,8 @@ func (v *vm) Done() <-chan struct{}                      { return v.done }
 
 func (v *vm) Stop() {
 	v.stop.Do(func() {
-		_ = v.cmd.Process.Kill()
-		<-v.done
-		v.api.CloseIdleConnections()
-		_ = os.Remove(v.sock)
+		v.kill()
+		v.fc.cleanup(v.slot)
 		v.fc.slots <- v.slot
 	})
 }
@@ -276,13 +424,20 @@ func retry(ctx context.Context, dead <-chan struct{}, pause time.Duration, try f
 
 // Wake restores the function's snapshot and brings the guest up to date.
 func (fc *Firecracker) Wake(ctx context.Context, f Function) (Instance, error) {
-	v, err := fc.start(ctx, filepath.Join(filepath.Dir(filepath.Dir(f.Dir)), "log"), f.Port)
+	v, err := fc.start(ctx, filepath.Join(filepath.Dir(filepath.Dir(f.Dir)), "log"), f.Port, jail{
+		memoryMB: f.MemoryMB,
+		files: map[string]string{
+			jailRootfs: filepath.Join(f.Dir, "rootfs.ext4"),
+			jailState:  filepath.Join(f.Dir, "snap.state"),
+			jailMemory: filepath.Join(f.Dir, "snap.mem"),
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
 	err = v.call(ctx, http.MethodPut, "/snapshot/load", map[string]any{
-		"snapshot_path": filepath.Join(f.Dir, "snap.state"),
-		"mem_backend":   map[string]string{"backend_type": "File", "backend_path": filepath.Join(f.Dir, "snap.mem")},
+		"snapshot_path": jailState,
+		"mem_backend":   map[string]string{"backend_type": "File", "backend_path": jailMemory},
 		"resume_vm":     true,
 	})
 	if err == nil {
@@ -314,10 +469,27 @@ func (v *vm) setClock(ctx context.Context) error {
 	})
 }
 
+// protect makes a function file readable by the jails' group and writable
+// by nobody: every instance of a function shares these files.
+func (fc *Firecracker) protect(path string) error {
+	if err := os.Chown(path, 0, fc.cfg.GID); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o440)
+}
+
 // snapshot cold-boots a root file system, waits until the function answers
 // and writes snap.state and snap.mem next to it.
 func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string) error {
-	v, err := fc.start(ctx, logPath, f.Port)
+	rootfs := filepath.Join(f.Dir, "rootfs.ext4")
+	if err := fc.protect(rootfs); err != nil {
+		return err
+	}
+	v, err := fc.start(ctx, logPath, f.Port, jail{
+		memoryMB: f.MemoryMB,
+		files:    map[string]string{jailRootfs: rootfs, jailKernel: fc.cfg.Kernel},
+		writable: true,
+	})
 	if err != nil {
 		return err
 	}
@@ -326,10 +498,9 @@ func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string)
 		path string
 		body any
 	}{
-		{"/boot-source", map[string]string{"kernel_image_path": fc.Kernel, "boot_args": bootArgs}},
+		{"/boot-source", map[string]string{"kernel_image_path": jailKernel, "boot_args": bootArgs}},
 		{"/drives/rootfs", map[string]any{
-			"drive_id": "rootfs", "path_on_host": filepath.Join(f.Dir, "rootfs.ext4"),
-			"is_root_device": true, "is_read_only": true,
+			"drive_id": "rootfs", "path_on_host": jailRootfs, "is_root_device": true, "is_read_only": true,
 		}},
 		{"/network-interfaces/eth0", map[string]string{"iface_id": "eth0", "guest_mac": guestMAC, "host_dev_name": "tap0"}},
 		{"/machine-config", map[string]int{"vcpu_count": 1, "mem_size_mib": f.MemoryMB}},
@@ -359,9 +530,24 @@ func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string)
 	if err := v.call(ctx, http.MethodPatch, "/vm", map[string]string{"state": "Paused"}); err != nil {
 		return err
 	}
-	return v.call(ctx, http.MethodPut, "/snapshot/create", map[string]string{
-		"snapshot_type": "Full",
-		"snapshot_path": filepath.Join(f.Dir, "snap.state"),
-		"mem_file_path": filepath.Join(f.Dir, "snap.mem"),
+	err = v.call(ctx, http.MethodPut, "/snapshot/create", map[string]string{
+		"snapshot_type": "Full", "snapshot_path": jailState, "mem_file_path": jailMemory,
 	})
+	if err != nil {
+		return err
+	}
+	// The jailed process wrote these as its own user. End it first, so it
+	// holds no open file, then take them out of the jail and out of its
+	// hands before any instance maps them.
+	v.kill()
+	for _, name := range []string{"snap.state", "snap.mem"} {
+		target := filepath.Join(f.Dir, name)
+		if err := os.Rename(filepath.Join(v.root, jailDir, name), target); err != nil {
+			return err
+		}
+		if err := fc.protect(target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
