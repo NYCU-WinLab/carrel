@@ -131,8 +131,8 @@ func build(args []string) error {
 	flags.IntVar(&f.MaxInstances, "max-instances", 0, "instances at once in fresh mode")
 	flags.StringVar(&f.WakePath, "wake-path", "", "path called once after every wake")
 	_ = flags.Parse(args)
-	if f.Name == "" || *image == "" {
-		return errors.New("build needs -name and -image")
+	if !fn.ValidName(f.Name) || *image == "" {
+		return errors.New("build needs a valid -name and an -image")
 	}
 
 	// One build of a function at a time: versions are named by the second.

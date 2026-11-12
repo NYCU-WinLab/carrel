@@ -635,6 +635,9 @@ func (fc *Firecracker) collect(v *vm, name, target string, limit int64) error {
 	if err == nil {
 		err = out.Chown(0, fc.cfg.GID)
 	}
+	if err == nil {
+		err = out.Chmod(0o440) // the mode at creation is cut by the umask
+	}
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
