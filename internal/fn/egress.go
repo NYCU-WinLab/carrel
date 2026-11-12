@@ -23,6 +23,13 @@ const (
 	linkPrefix  = "cfnv" // host side of every link; the rules match this prefix
 	insideLink  = "eth0"
 	insideTable = "carrel_fn"
+
+	// What one instance may use of the network, like a tenant machine's
+	// primary NIC (PLAN 13.4). Each direction has its own rate.
+	defaultRate = "100mbit"
+	maxPackets  = 20000 // per second, in each direction
+	maxConns    = 512   // tracked connections at once
+	newConns    = 200   // new connections per second, with a burst of twice that
 )
 
 // egressAddrs returns the host's and the namespace's address on link n.
@@ -43,7 +50,12 @@ type Egress struct {
 	// Blocked adds addresses to the built-in list: a site's protected public
 	// addresses (PLAN 6.6).
 	Blocked []string
+	// Rate is what one instance may send, and receive, in tc's words, such
+	// as 100mbit. Empty means defaultRate.
+	Rate string
 }
+
+var rateRE = regexp.MustCompile(`^[1-9][0-9]{0,5}(kbit|mbit|gbit)$`)
 
 var linkNameRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
 
@@ -61,6 +73,12 @@ func (e Egress) resolve() (Egress, error) {
 				break
 			}
 		}
+	}
+	if e.Rate == "" {
+		e.Rate = defaultRate
+	}
+	if !rateRE.MatchString(e.Rate) {
+		return e, fmt.Errorf("rate %q is not a number followed by kbit, mbit or gbit", e.Rate)
 	}
 	if !linkNameRE.MatchString(e.Uplink) || strings.HasPrefix(e.Uplink, linkPrefix) {
 		return e, fmt.Errorf("uplink interface %q is not usable", e.Uplink)
@@ -145,6 +163,10 @@ table inet %[1]s {
 	chain forward {
 		type filter hook forward priority filter; policy drop;
 		iifname "tap0" tcp dport 25 drop
+		iifname "tap0" limit rate over %[6]d/second burst %[6]d packets drop
+		iifname "%[3]s" limit rate over %[6]d/second burst %[6]d packets drop
+		iifname "tap0" ct state new limit rate over %[7]d/second burst %[8]d packets drop
+		iifname "tap0" ct state new ct count over %[9]d drop
 		iifname "tap0" oifname "%[3]s" ip saddr %[4]s ct state new,established,related ip daddr != @blocked accept
 		iifname "%[3]s" oifname "tap0" ct state established,related accept
 	}
@@ -167,7 +189,7 @@ table inet %[1]s {
 		oifname "%[3]s" ip saddr != %[5]s drop
 	}
 }
-`, insideTable, e.blockedSet(), insideLink, guestAddr, egressNet)
+`, insideTable, e.blockedSet(), insideLink, guestAddr, egressNet, maxPackets, newConns, 2*newConns, maxConns)
 }
 
 func nft(namespace, rules string) error {
@@ -241,6 +263,22 @@ func expectedListing(rules string) (string, error) {
 	return listing, err
 }
 
+// sizeConntrack makes room in the host's connection tracking table for every
+// slot at its limit: each of a function's connections is tracked twice, in
+// its namespace and on the host. A larger table is left as it is.
+func sizeConntrack(slots int) error {
+	const path = "/proc/sys/net/netfilter/nf_conntrack_max"
+	want := slots*maxConns*2 + 65536 // and room for the host's own
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if have, err := strconv.Atoi(strings.TrimSpace(string(content))); err == nil && have >= want {
+		return nil
+	}
+	return os.WriteFile(path, []byte(strconv.Itoa(want)), 0o644)
+}
+
 // prepareHost lets the host forward behind its rules. The rules go in
 // first: forwarding without them would route functions to private addresses.
 // Only the router replaces the table. A build beside a running router keeps
@@ -274,6 +312,10 @@ func connect(namespace string, link int, e Egress) error {
 		{"-n", namespace, "link", "set", insideLink, "up"},
 		{"-n", namespace, "route", "add", "default", "via", host},
 		{"netns", "exec", namespace, "sysctl", "-qw", "net.ipv4.ip_forward=1"},
+		// Both rates are shaped inside the namespace: out of the instance on
+		// the link to the host, into it on the tap.
+		{"netns", "exec", namespace, "tc", "qdisc", "replace", "dev", insideLink, "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
+		{"netns", "exec", namespace, "tc", "qdisc", "replace", "dev", "tap0", "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
 	}
 	for _, args := range steps {
 		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {

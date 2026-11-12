@@ -51,7 +51,7 @@ func usage() {
 type common struct {
 	root, firecracker, jailer, kernel string
 	uidBase, gid                      int
-	uplink, block                     string
+	uplink, block, rate               string
 }
 
 func commonFlags(flags *flag.FlagSet) *common {
@@ -64,13 +64,14 @@ func commonFlags(flags *flag.FlagSet) *common {
 	flags.IntVar(&c.gid, "gid", 300000, "group ID that reads function files")
 	flags.StringVar(&c.uplink, "uplink", "", "the one interface functions leave through (default: the default route's)")
 	flags.StringVar(&c.block, "block", "", "more addresses functions must not reach, comma separated: the site's protected public addresses")
+	flags.StringVar(&c.rate, "rate", "", "what one instance may send, and receive, such as 100mbit (default 100mbit)")
 	return c
 }
 
 // config places jails under the functions' directory: a jail holds hard
 // links to function files, which need one file system.
 func (c *common) config(prefix string, first, slots, egressFirst int, router bool) fn.Config {
-	egress := fn.Egress{Uplink: c.uplink}
+	egress := fn.Egress{Uplink: c.uplink, Rate: c.rate}
 	if c.block != "" {
 		egress.Blocked = strings.Split(c.block, ",")
 	}

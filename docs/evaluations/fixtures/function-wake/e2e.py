@@ -155,6 +155,18 @@ time.sleep(5)
 counts = {ns: tracked(ns) for ns in slots}
 check("egress: no namespace remembers a connection once its instance is gone", set(counts.values()) == {0}, str(counts))
 
+# limits: what one instance may use of the network (PLAN 13.4)
+ms, body = call("py", "/conns?host=1.1.1.1&port=443&n=700")
+check("limits: an instance holds at most 512 connections", 300 <= body.get("held", 0) <= 512, str(body))
+pid = int(subprocess.run(["pgrep", "-n", "firecracker"], capture_output=True, text=True).stdout)
+ns = subprocess.run(["ip", "netns", "identify", str(pid)], capture_output=True, text=True).stdout.strip()
+shaped = {dev: subprocess.run(["ip", "netns", "exec", ns, "tc", "qdisc", "show", "dev", dev], capture_output=True, text=True).stdout
+          for dev in ("eth0", "tap0")}
+check("limits: both directions are shaped to 100 Mbit/s", all("tbf" in q and "rate 100Mbit" in q for q in shaped.values()), str(shaped))
+conntrack = int(open("/proc/sys/net/netfilter/nf_conntrack_max").read())
+check("limits: the host tracks every slot at its limit", conntrack >= 8 * 512 * 2, str(conntrack))
+time.sleep(5)  # py is built with -idle 3: asleep again before the next checks
+
 # images: pulled from a registry with no Docker daemon, and an image whose USER is not root.
 # Functions `whoami` (traefik/whoami) and `nginx` (nginxinc/nginx-unprivileged, port 8080) must be built, with -idle 3.
 if os.path.exists(ROOT + "/whoami/function.json") and os.path.exists(ROOT + "/nginx/function.json"):

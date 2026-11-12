@@ -8,6 +8,17 @@ PORT = int(os.environ.get("PORT", "80"))
 
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
+        try:
+            out = self.answer()
+        except Exception as e:  # the checks read the reason, not a closed connection
+            out = {"error": repr(e)}
+        body = json.dumps(out).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def answer(self):
         url = urllib.parse.urlsplit(self.path)
         query = dict(urllib.parse.parse_qsl(url.query))
         if url.path == "/rand":      # what differs between two copies of one snapshot?
@@ -44,6 +55,32 @@ class H(BaseHTTPRequestHandler):
                 sys.stdout.write(("p" * 1023 + "\n") * 1024)
             sys.stdout.flush()
             out = {"ok": True}
+        elif url.path == "/download":  # how fast does the function receive from the internet?
+            start, size = time.time(), 0
+            req = urllib.request.Request(query["url"], headers={"User-Agent": "carrel-fn-check"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                while chunk := r.read(1 << 16):
+                    size += len(chunk)
+            out = {"bytes": size, "seconds": time.time() - start}
+        elif url.path == "/upload":    # how fast does the function send to the internet?
+            body = b"u" * int(query["bytes"])
+            start = time.time()
+            req = urllib.request.Request(query["url"], data=body, method="POST", headers={"User-Agent": "carrel-fn-check"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                r.read()
+            out = {"bytes": len(body), "seconds": time.time() - start}
+        elif url.path == "/conns":     # how many TCP connections can the function hold at once?
+            import concurrent.futures
+            def one(_):
+                try:
+                    return socket.create_connection((query["host"], int(query["port"])), timeout=5)
+                except OSError:
+                    return None
+            with concurrent.futures.ThreadPoolExecutor(64) as pool:
+                held = [s for s in pool.map(one, range(int(query["n"]))) if s]
+            out = {"held": len(held)}
+            for s in held:
+                s.close()
         elif url.path == "/resolve":  # does the function's resolver work?
             try:
                 out = {"ok": True, "addr": socket.getaddrinfo(query["name"], 443, socket.AF_INET)[0][4][0]}
@@ -51,11 +88,7 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": False, "error": str(e)}
         else:
             out = {"ok": True, "items": len(STATE)}
-        body = json.dumps(out).encode()
-        self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        return out
 
     def log_message(self, *a):
         pass

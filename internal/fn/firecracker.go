@@ -148,6 +148,9 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	}
 	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots), logs: map[string]*capLog{}}
 	if cfg.Router {
+		if err := sizeConntrack(cfg.Slots); err != nil {
+			return nil, fmt.Errorf("size the connection tracking table: %w", err)
+		}
 		if fc.hostRules, err = expectedListing(hostRules(cfg.Egress)); err != nil {
 			return nil, err
 		}
