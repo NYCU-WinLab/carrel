@@ -155,6 +155,38 @@ time.sleep(5)
 counts = {ns: tracked(ns) for ns in slots}
 check("egress: no namespace remembers a connection once its instance is gone", set(counts.values()) == {0}, str(counts))
 
+# limits: what one instance may use of the network (PLAN 13.4)
+ms, body = call("py", "/conns?host=1.1.1.1&port=443&n=700")
+check("limits: an instance holds at most 512 connections", 300 <= body.get("held", 0) <= 512, str(body))
+pid = int(subprocess.run(["pgrep", "-n", "firecracker"], capture_output=True, text=True).stdout)
+ns = subprocess.run(["ip", "netns", "identify", str(pid)], capture_output=True, text=True).stdout.strip()
+shaped = {dev: subprocess.run(["ip", "netns", "exec", ns, "tc", "qdisc", "show", "dev", dev], capture_output=True, text=True).stdout
+          for dev in ("eth0", "tap0")}
+check("limits: both directions are shaped to 100 Mbit/s", all("tbf" in q and "rate 100Mbit" in q for q in shaped.values()), str(shaped))
+def tx(dev):
+    return int(subprocess.run(["ip", "netns", "exec", ns, "cat", f"/sys/class/net/{dev}/statistics/tx_packets"],
+                              capture_output=True, text=True).stdout)
+before = tx("eth0")
+ms, body = call("py", "/udp?host=198.51.100.1&port=9&n=2000")
+left = tx("eth0") - before
+check("limits: one UDP flow is not cut by the new-connection limit", left >= 1900, f"{left} of 2000 left in {body.get('seconds', 0):.2f} s")
+start = time.monotonic()
+req = urllib.request.Request("http://127.0.0.1:8090/big?mib=40", headers={"X-Carrel-Function": "py"})
+size = len(urllib.request.urlopen(req, timeout=60).read())
+mbit = size * 8 / (time.monotonic() - start) / 1e6
+check("limits: an answer to the router is limited too", size == 40 << 20 and mbit < 110, f"{mbit:.0f} Mbit/s")
+ms, body = call("py", "/churn?host=1.1.1.1&port=443&n=2500")
+tracked = sum(" src=10.251." in l for l in subprocess.run(["conntrack", "-L"], capture_output=True, text=True).stdout.splitlines())
+check("limits: connections that open and close do not pile up in the host's table", tracked <= 512 + 200 * 10 + 100,
+      f"{tracked} tracked after {body.get('made')} connections in {body.get('seconds', 0):.0f} s")
+conntrack = int(open("/proc/sys/net/netfilter/nf_conntrack_max").read())
+check("limits: the host tracks every slot at its limit", conntrack >= 8 * (512 + 200 * 10) * 2, str(conntrack))
+time.sleep(5)  # py is built with -idle 3: asleep again before the next checks
+ms, body = call("job", "/conns?host=1.1.1.1&port=443&n=50")  # a fresh instance that leaves connections behind
+time.sleep(2)
+left = [l for l in subprocess.run(["conntrack", "-L"], capture_output=True, text=True).stdout.splitlines() if " src=10.251." in l]
+check("limits: no slot leaves connections in the host's table", body.get("held", 0) > 0 and left == [], f"held {body.get('held')}, left {len(left)}")
+
 # images: pulled from a registry with no Docker daemon, and an image whose USER is not root.
 # Functions `whoami` (traefik/whoami) and `nginx` (nginxinc/nginx-unprivileged, port 8080) must be built, with -idle 3.
 if os.path.exists(ROOT + "/whoami/function.json") and os.path.exists(ROOT + "/nginx/function.json"):
