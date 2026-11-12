@@ -4,6 +4,7 @@ package fn
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -87,6 +88,11 @@ func (e Egress) blockedSet() string {
 
 // hostRules is the function host's rule set. Loading it replaces the old
 // table in one transaction. e must come from resolve.
+//
+// It assumes the host has no other table that changes the source of a
+// forwarded packet before the forward hook, and no other forward chain with
+// policy drop: the first would get past the source check, the second would
+// stop all egress. A function host runs nothing else (PLAN 7.11).
 func hostRules(e Egress) string {
 	return fmt.Sprintf(`add table inet %[1]s
 delete table inet %[1]s
@@ -176,6 +182,42 @@ func nft(namespace, rules string) error {
 		return fmt.Errorf("nft in %q: %w: %s", namespace, err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// listTable returns the function table of the host, or of a namespace, as
+// nft prints it.
+func listTable(namespace string) (string, error) {
+	args := []string{"list", "table", "inet", hostTable}
+	name := "nft"
+	if namespace != "" {
+		name, args = "ip", append([]string{"netns", "exec", namespace, "nft"}, args...)
+	}
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("list the rule table in %q: %w", namespace, err)
+	}
+	return string(out), nil
+}
+
+// expectedListing loads rules into a namespace made for this and nothing
+// else, and returns how nft lists them. Guard compares the real tables with
+// it. It comes from the rules, not from the host, so a table that something
+// changed while the router started is never taken as the right one.
+func expectedListing(rules string) (string, error) {
+	probe := fmt.Sprintf("cfnprobe%d", os.Getpid())
+	_ = exec.Command("ip", "netns", "del", probe).Run()
+	if out, err := exec.Command("ip", "netns", "add", probe).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("ip netns add %s: %w: %s", probe, err, bytes.TrimSpace(out))
+	}
+	defer exec.Command("ip", "netns", "del", probe).Run()
+	if err := nft(probe, rules); err != nil {
+		return "", err
+	}
+	listing, err := listTable(probe)
+	if err == nil && listing == "" {
+		err = errors.New("nft listed an empty rule table")
+	}
+	return listing, err
 }
 
 // prepareHost lets the host forward behind its rules. The rules go in

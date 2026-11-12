@@ -88,6 +88,11 @@ type Firecracker struct {
 	recycling sync.WaitGroup
 	mu        sync.Mutex
 	closed    bool
+	// netMu keeps Guard from checking a namespace that is being made again.
+	netMu sync.Mutex
+	// hostRules and slotRules are how nft lists the two tables when they
+	// are as loaded (expectedListing). Guard compares against them.
+	hostRules, slotRules string
 }
 
 type slot struct {
@@ -125,6 +130,18 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 		return nil, err
 	}
 	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
+	if cfg.Router {
+		if fc.hostRules, err = expectedListing(hostRules(cfg.Egress)); err != nil {
+			return nil, err
+		}
+		if fc.slotRules, err = expectedListing(insideRules(cfg.Egress)); err != nil {
+			return nil, err
+		}
+		// The router just loaded the host table. It must already match.
+		if listing, err := listTable(""); err != nil || listing != fc.hostRules {
+			return nil, fmt.Errorf("the host rule table is not as loaded: %v", err)
+		}
+	}
 	for i := range cfg.Slots {
 		name := cfg.Prefix + strconv.Itoa(cfg.First+i)
 		// A daemon that crashed leaves its Firecracker processes running.
@@ -140,6 +157,67 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 		fc.slots <- s
 	}
 	return fc, nil
+}
+
+// Guard puts the rule tables back when something removed or changed them,
+// such as `nft flush ruleset` or a firewall service that restarted. The
+// slots' own tables keep private addresses blocked even then, but the host
+// stops dropping what functions send to it, and egress stops. Only the
+// router guards; call it every few seconds.
+func (fc *Firecracker) Guard() {
+	if !fc.cfg.Router {
+		return
+	}
+	fc.netMu.Lock()
+	defer fc.netMu.Unlock()
+	fc.mu.Lock()
+	closed := fc.closed
+	fc.mu.Unlock()
+	if closed {
+		return
+	}
+	forward, _ := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	// A table that cannot be listed counts as changed: it is loaded again.
+	if listing, err := listTable(""); err != nil || listing != fc.hostRules || string(bytes.TrimSpace(forward)) != "1" {
+		if err := prepareHost(fc.cfg.Egress, true); err != nil {
+			slog.Error("rule table not restored", "table", "host", "error", err)
+		} else {
+			slog.Warn("rule table restored", "table", "host")
+			fc.hostRules = relisted("", fc.hostRules, hostRules(fc.cfg.Egress))
+		}
+	}
+	for i := range fc.cfg.Slots {
+		name := fc.cfg.Prefix + strconv.Itoa(fc.cfg.First+i)
+		if _, err := os.Stat("/run/netns/" + name); err != nil {
+			continue // a slot out of use after a failed rebuild has no namespace
+		}
+		if listing, err := listTable(name); err == nil && listing == fc.slotRules {
+			continue
+		}
+		if err := nft(name, insideRules(fc.cfg.Egress)); err != nil {
+			slog.Error("rule table not restored", "table", name, "error", err)
+		} else {
+			slog.Warn("rule table restored", "table", name)
+			fc.slotRules = relisted(name, fc.slotRules, insideRules(fc.cfg.Egress))
+		}
+	}
+}
+
+// relisted returns the expected listing again when a table that was just
+// loaded still differs from it. That happens when nft was upgraded while the
+// router ran and lists the same rules in another way; without it, Guard
+// would load the table every 5 seconds.
+func relisted(namespace, expected, rules string) string {
+	if listing, err := listTable(namespace); err != nil || listing == expected {
+		return expected
+	}
+	fresh, err := expectedListing(rules)
+	if err != nil {
+		slog.Error("rule table listing not renewed", "error", err)
+		return expected
+	}
+	slog.Warn("rule table listing renewed: nft lists the same rules another way")
+	return fresh
 }
 
 // prepareCgroup makes the parent cgroup whose children the jailer limits.
@@ -193,7 +271,9 @@ func (fc *Firecracker) Close() {
 		select {
 		case s := <-fc.slots:
 			s.close()
+			fc.netMu.Lock()
 			_ = exec.Command("ip", "netns", "del", s.name).Run()
+			fc.netMu.Unlock()
 		default:
 			return
 		}
@@ -287,13 +367,18 @@ func (fc *Firecracker) release(s *slot) {
 	closed := fc.closed
 	fc.mu.Unlock()
 	if closed { // shutting down: remove the namespace, do not make a new one
+		fc.netMu.Lock()
 		_ = exec.Command("ip", "netns", "del", s.name).Run()
+		fc.netMu.Unlock()
 		return
 	}
 	var fresh *slot
 	var err error
 	for attempt := range 3 { // a failed rebuild is often a passing shortage
-		if fresh, err = newSlot(s.name, s.uid, fc.cfg.GID, s.link, fc.cfg.Egress); err == nil {
+		fc.netMu.Lock()
+		fresh, err = newSlot(s.name, s.uid, fc.cfg.GID, s.link, fc.cfg.Egress)
+		fc.netMu.Unlock()
+		if err == nil {
 			break
 		}
 		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
