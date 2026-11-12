@@ -7,9 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"path"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -19,11 +24,25 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 )
 
+// The image is the tenant's and may be hostile. Every limit below is checked
+// before the host spends the disk, memory or time it guards.
 const (
 	// maxImageBytes is the largest image a function may have, unpacked (PLAN 7.11).
 	maxImageBytes = 2 << 30
 	maxImageFiles = 1_000_000
-	initDir       = ".fn"
+	// maxStreamBytes caps what rootTar really writes: the image plus tar headers.
+	maxStreamBytes = maxImageBytes + 512<<20
+	// Layers hold more than the final image: files a later layer replaces or
+	// deletes. These cap what is read and unpacked before the layers merge.
+	maxLayerBytes   = 4 * maxImageBytes
+	maxLayerEntries = 4 * maxImageFiles
+	// Long names live in extended headers. A real one is a few hundred bytes.
+	maxExtendedHeader = 64 << 10
+	maxExtendedBytes  = 256 << 20
+	maxConfigBytes    = 1 << 20
+	maxNameBytes      = 4096 // PATH_MAX
+	maxPartBytes      = 255  // NAME_MAX
+	initDir           = ".fn"
 )
 
 // imageSource is the part of an image a function needs.
@@ -42,20 +61,97 @@ type guestSpec struct {
 	DNS []string `json:"dns"`
 }
 
+// publicOnly refuses a connection to any address a function must not reach.
+// It runs on every connection the pull makes, after the name is resolved, so
+// a reference, a redirect or a token endpoint cannot point the host at
+// itself or at a private network. The tenant chooses the reference.
+func publicOnly(extra []string) (func(network, address string, _ syscall.RawConn) error, error) {
+	var refused []netip.Prefix
+	for _, entry := range append(append([]string{}, blocked...), extra...) {
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			address, addrErr := netip.ParseAddr(entry)
+			if addrErr != nil {
+				return nil, fmt.Errorf("blocked address %q: %w", entry, err)
+			}
+			prefix = netip.PrefixFrom(address, address.BitLen())
+		}
+		refused = append(refused, prefix)
+	}
+	return func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			return err
+		}
+		addr = addr.Unmap()
+		if !addr.Is4() {
+			return fmt.Errorf("%s is not a public IPv4 address", addr)
+		}
+		for _, prefix := range refused {
+			if prefix.Contains(addr) {
+				return fmt.Errorf("%s is not a public address", addr)
+			}
+		}
+		return nil
+	}, nil
+}
+
+// pullTransport is the only way the host talks to a registry.
+func pullTransport(extra []string) (http.RoundTripper, error) {
+	control, err := publicOnly(extra)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: control}
+	return &http.Transport{
+		Proxy: nil, // a proxy would make the connection for us, to anywhere
+		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", address)
+		},
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConns:          4,
+	}, nil
+}
+
 // openImage reads an image from a registry, without credentials, or from a
 // tarball made by `docker save`. No Docker daemon is involved.
-func openImage(ctx context.Context, ref, tarPath string) (v1.Image, error) {
+func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) (v1.Image, error) {
+	var image v1.Image
+	var err error
 	if tarPath != "" {
-		return tarball.ImageFromPath(tarPath, nil)
+		image, err = tarball.ImageFromPath(tarPath, nil)
+	} else {
+		var parsed name.Reference
+		if parsed, err = name.ParseReference(ref); err != nil {
+			return nil, fmt.Errorf("image reference %q: %w", ref, err)
+		}
+		var transport http.RoundTripper
+		if transport, err = pullTransport(blockedExtra); err != nil {
+			return nil, err
+		}
+		image, err = remote.Image(parsed,
+			remote.WithContext(ctx),
+			remote.WithAuth(authn.Anonymous),
+			remote.WithTransport(transport),
+			remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
 	}
-	parsed, err := name.ParseReference(ref)
 	if err != nil {
-		return nil, fmt.Errorf("image reference %q: %w", ref, err)
+		return nil, err
 	}
-	return remote.Image(parsed,
-		remote.WithContext(ctx),
-		remote.WithAuth(authn.Anonymous),
-		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
+	// The configuration is read into memory whole. Its size comes from the manifest.
+	manifest, err := image.Manifest()
+	if err != nil {
+		return nil, err
+	}
+	if manifest.Config.Size > maxConfigBytes {
+		return nil, fmt.Errorf("the image's configuration is %d bytes, more than %d", manifest.Config.Size, maxConfigBytes)
+	}
+	return budgeted(image)
 }
 
 // specOf takes the command the image would run.
@@ -80,22 +176,186 @@ func specOf(image v1.Image) (guestSpec, error) {
 	return spec, nil
 }
 
+var errImageTooLarge = fmt.Errorf("the image is larger than %d MiB unpacked, or has more than %d files", maxImageBytes>>20, maxImageFiles)
+
+// budget is shared by every layer of one image.
+type budget struct{ bytes, entries, extended int64 }
+
+// budgeted wraps the image's layers so that reading them stops at the
+// limits. The library that merges layers keeps every name it saw in memory
+// and reads deleted and replaced files in full, so the limits must apply
+// before it, not to its output.
+func budgeted(image v1.Image) (v1.Image, error) {
+	layers, err := image.Layers()
+	if err != nil {
+		return nil, err
+	}
+	shared := &budget{bytes: maxLayerBytes, entries: maxLayerEntries, extended: maxExtendedBytes}
+	wrapped := make([]v1.Layer, len(layers))
+	for i, layer := range layers {
+		wrapped[i] = budgetedLayer{Layer: layer, budget: shared}
+	}
+	return budgetedImage{Image: image, layers: wrapped}, nil
+}
+
+type budgetedImage struct {
+	v1.Image
+	layers []v1.Layer
+}
+
+func (i budgetedImage) Layers() ([]v1.Layer, error) { return i.layers, nil }
+
+type budgetedLayer struct {
+	v1.Layer
+	budget *budget
+}
+
+func (l budgetedLayer) Uncompressed() (io.ReadCloser, error) {
+	stream, err := l.Layer.Uncompressed()
+	if err != nil {
+		return nil, err
+	}
+	return &tarMeter{stream: stream, budget: l.budget}, nil
+}
+
+// tarMeter passes a layer's tar stream through and counts it: bytes,
+// entries, and the bytes of extended headers, which carry long names.
+type tarMeter struct {
+	stream io.ReadCloser
+	budget *budget
+	header [512]byte
+	filled int   // bytes of the current header block seen so far
+	skip   int64 // bytes of the current entry's content and padding still to pass
+}
+
+func (m *tarMeter) Close() error { return m.stream.Close() }
+
+func (m *tarMeter) Read(p []byte) (int, error) {
+	n, err := m.stream.Read(p)
+	if m.budget.bytes -= int64(n); m.budget.bytes < 0 {
+		return 0, errImageTooLarge
+	}
+	for data := p[:n]; len(data) > 0; {
+		if m.skip > 0 {
+			step := min(int64(len(data)), m.skip)
+			m.skip -= step
+			data = data[step:]
+			continue
+		}
+		copied := copy(m.header[m.filled:], data)
+		m.filled += copied
+		data = data[copied:]
+		if m.filled < len(m.header) {
+			continue
+		}
+		m.filled = 0
+		if countErr := m.entry(); countErr != nil {
+			return 0, countErr
+		}
+	}
+	return n, err
+}
+
+// entry accounts for one complete header block.
+func (m *tarMeter) entry() error {
+	if m.header == [512]byte{} {
+		return nil // the end marker
+	}
+	if m.budget.entries--; m.budget.entries < 0 {
+		return errImageTooLarge
+	}
+	size := tarSize(m.header[124:136])
+	switch m.header[156] {
+	case tar.TypeLink, tar.TypeSymlink, tar.TypeChar, tar.TypeBlock, tar.TypeDir, tar.TypeFifo:
+		size = 0 // these carry no content, whatever the field says
+	case tar.TypeXHeader, tar.TypeXGlobalHeader, tar.TypeGNULongName, tar.TypeGNULongLink:
+		if size > maxExtendedHeader {
+			return fmt.Errorf("the image has a %d byte extended header: names that long are refused", size)
+		}
+		if m.budget.extended -= size; m.budget.extended < 0 {
+			return errImageTooLarge
+		}
+	}
+	if size < 0 {
+		return errors.New("the image has a tar entry with a size that is not a number")
+	}
+	m.skip = (size + 511) &^ 511
+	return nil
+}
+
+// tarSize reads a tar size field: octal text, or binary when the top bit is set.
+func tarSize(field []byte) int64 {
+	var value int64
+	if field[0]&0x80 != 0 {
+		for i, b := range field {
+			if i == 0 {
+				b &= 0x7f
+			}
+			if value > 1<<54 {
+				return -1
+			}
+			value = value<<8 | int64(b)
+		}
+		return value
+	}
+	for _, b := range field {
+		if b < '0' || b > '7' {
+			if value == 0 && b == ' ' {
+				continue
+			}
+			break
+		}
+		value = value<<3 | int64(b-'0')
+	}
+	return value
+}
+
+// capped stops a stream that grows past its limit.
+type capped struct {
+	out  io.Writer
+	left int64
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if c.left -= int64(len(p)); c.left < 0 {
+		return 0, errImageTooLarge
+	}
+	return c.out.Write(p)
+}
+
+// rootSize is what an ext4 file system needs for a root tar.
+type rootSize struct {
+	Bytes int64
+	Files int64
+}
+
 // rootTar writes the image's file system as one tar stream, with
-// carrel-fn-init and the spec under /.fn. It returns the bytes an ext4 file
-// system needs for it.
+// carrel-fn-init and the spec under /.fn.
 //
-// The image is the tenant's and may be hostile. The stream is never unpacked
-// on the host: mke2fs reads it straight into the file system image. Names
-// are still made plain here, so that a strange name fails with a clear
-// error and the image cannot bring its own /.fn.
-func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (int64, error) {
+// The stream is never unpacked on the host: mke2fs reads it straight into
+// the file system image. Names are still made plain here, so that a strange
+// name fails with a clear error and the image cannot bring its own /.fn.
+func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (rootSize, error) {
 	flat := mutate.Extract(image) // layers merged, deletions applied
 	defer flat.Close()
-	reader, writer := tar.NewReader(flat), tar.NewWriter(out)
+	reader, writer := tar.NewReader(flat), tar.NewWriter(&capped{out: out, left: maxStreamBytes})
 	seen := map[string]bool{"": true}
-	var need, files int64
+	var size rootSize
 
 	emit := func(header *tar.Header, content io.Reader) error {
+		// Counted before anything is written: one sparse or compressed entry
+		// can claim more than the disk holds.
+		size.Bytes += 4096 + int64(len(header.Name)+len(header.Linkname)) // an inode and its directory entry, generously
+		if header.Typeflag == tar.TypeReg {
+			if header.Size < 0 || header.Size > maxImageBytes {
+				return errImageTooLarge
+			}
+			size.Bytes += (header.Size + 4095) &^ 4095
+		}
+		size.Files++
+		if size.Bytes > maxImageBytes || size.Files > maxImageFiles {
+			return errImageTooLarge
+		}
 		header.Format = tar.FormatPAX
 		header.Uname, header.Gname = "", ""
 		header.PAXRecords, header.Xattrs = nil, nil //nolint:staticcheck // drop extended attributes
@@ -106,12 +366,6 @@ func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (in
 			if _, err := io.CopyN(writer, content, header.Size); err != nil {
 				return err
 			}
-			need += (header.Size + 4095) &^ 4095
-		}
-		need += 4096 // an inode and directory entry, rounded up generously
-		files++
-		if need > maxImageBytes || files > maxImageFiles {
-			return fmt.Errorf("the image is larger than %d MiB or has more than %d files", maxImageBytes>>20, maxImageFiles)
 		}
 		return nil
 	}
@@ -140,11 +394,11 @@ func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (in
 			break
 		}
 		if err != nil {
-			return 0, fmt.Errorf("read the image: %w", err)
+			return size, fmt.Errorf("read the image: %w", err)
 		}
 		target, err := plainName(header.Name)
 		if err != nil {
-			return 0, err
+			return size, err
 		}
 		if target == "" || target == initDir || strings.HasPrefix(target, initDir+"/") {
 			continue // the root itself, or the image's own /.fn
@@ -155,12 +409,17 @@ func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (in
 				continue
 			}
 			header.Name = target + "/"
-		case tar.TypeReg, tar.TypeSymlink:
+		case tar.TypeReg:
+			header.Name = target
+		case tar.TypeSymlink:
+			if len(header.Linkname) > maxNameBytes {
+				return size, fmt.Errorf("the image has a link target of %d bytes", len(header.Linkname))
+			}
 			header.Name = target
 		case tar.TypeLink:
 			link, err := plainName(header.Linkname)
 			if err != nil {
-				return 0, err
+				return size, err
 			}
 			if link == initDir || strings.HasPrefix(link, initDir+"/") {
 				continue
@@ -170,58 +429,64 @@ func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (in
 			continue // devices and FIFOs: the guest has its own /dev
 		}
 		if err := parents(target); err != nil {
-			return 0, err
+			return size, err
 		}
 		if header.Typeflag == tar.TypeDir {
 			seen[target] = true
 		}
 		if err := emit(header, reader); err != nil {
-			return 0, err
+			return size, err
 		}
 	}
-
 	// The library ends its stream with a valid tar trailer even when it
 	// stopped on an error, such as a layer it could not read or a path that
 	// leaves the root. The error is behind the trailer; without this check a
 	// broken image would become an empty file system that looks fine.
-	if _, err := io.Copy(io.Discard, flat); err != nil {
-		return 0, fmt.Errorf("read the image: %w", err)
+	if _, err := io.Copy(io.Discard, io.LimitReader(flat, 1<<20)); err != nil {
+		return size, fmt.Errorf("read the image: %w", err)
 	}
 
 	for _, dir := range []string{initDir, initDir + "/rw", initDir + "/newroot", initDir + "/old"} {
 		if err := emit(&tar.Header{Typeflag: tar.TypeDir, Name: dir + "/", Mode: 0o755}, nil); err != nil {
-			return 0, err
+			return size, err
 		}
 	}
 	init, err := os.Open(initPath)
 	if err != nil {
-		return 0, err
+		return size, err
 	}
 	defer init.Close()
 	info, err := init.Stat()
 	if err != nil {
-		return 0, err
+		return size, err
 	}
 	if err := emit(&tar.Header{Typeflag: tar.TypeReg, Name: initDir + "/init", Mode: 0o755, Size: info.Size()}, init); err != nil {
-		return 0, err
+		return size, err
 	}
 	content, err := json.Marshal(spec)
 	if err != nil {
-		return 0, err
+		return size, err
 	}
 	header := &tar.Header{Typeflag: tar.TypeReg, Name: initDir + "/spec.json", Mode: 0o644, Size: int64(len(content))}
 	if err := emit(header, strings.NewReader(string(content))); err != nil {
-		return 0, err
+		return size, err
 	}
-	return need, writer.Close()
+	return size, writer.Close()
 }
 
 // plainName returns a path relative to the root with no "." or ".." part.
-// An image that needs ".." to say where a file goes is refused.
+// An image that needs ".." to say where a file goes is refused, and so is a
+// name no Linux file system would hold.
 func plainName(name string) (string, error) {
+	if len(name) > maxNameBytes {
+		return "", fmt.Errorf("the image has a path of %d bytes", len(name))
+	}
 	for _, part := range strings.Split(name, "/") {
 		if part == ".." {
 			return "", fmt.Errorf("the image has a path that leaves its root: %q", name)
+		}
+		if len(part) > maxPartBytes {
+			return "", fmt.Errorf("the image has a file name of %d bytes", len(part))
 		}
 	}
 	return strings.TrimPrefix(path.Clean("/"+name), "/"), nil

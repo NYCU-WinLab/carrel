@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
+	"strconv"
 	"time"
 )
 
@@ -34,12 +34,20 @@ type BuildOptions struct {
 	// address, so the host's own resolver is no use to it.
 	MTU int
 	DNS []string
+	// Blocked adds to the addresses the pull must not connect to: the
+	// site's protected addresses, as for the egress filter.
+	Blocked []string
 }
+
+// buildTime is the longest one build may take, from the pull to the snapshot.
+const buildTime = 15 * time.Minute
 
 // Build turns an image into a sleeping function: a root file system and a
 // snapshot taken after the function answered its first request. The new
 // version goes live when function.json is replaced.
 func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, error) {
+	ctx, cancel := context.WithTimeout(ctx, buildTime)
+	defer cancel()
 	f := opts.Function
 	f.Version = time.Now().UTC().Format("20060102t150405")
 	if err := f.normalize(); err != nil {
@@ -57,7 +65,7 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 		}
 	}()
 
-	image, err := openImage(ctx, opts.Image, opts.ImageTar)
+	image, err := openImage(ctx, opts.Image, opts.ImageTar, opts.Blocked)
 	if err != nil {
 		return f, err
 	}
@@ -98,7 +106,7 @@ func makeRootfs(ctx context.Context, image imageSource, initPath string, spec gu
 	}
 	defer os.Remove(stream.Name())
 	defer stream.Close()
-	need, err := rootTar(image, stream, initPath, spec)
+	size, err := rootTar(image, stream, initPath, spec)
 	if err != nil {
 		return err
 	}
@@ -109,16 +117,25 @@ func makeRootfs(ctx context.Context, image imageSource, initPath string, spec gu
 	if err != nil {
 		return err
 	}
-	// A tenth for the file system's own tables, and room for the journal.
-	if err := file.Truncate(need*11/10 + 64<<20); err != nil {
+	// One inode for every file, with room to spare: mke2fs would give a
+	// large image one inode for each 16 KiB, too few for many small files.
+	inodes := size.Files + size.Files/8 + 1024
+	// A tenth for the file system's own tables, the inode tables, and the journal.
+	if err := file.Truncate(size.Bytes*11/10 + inodes*256 + 64<<20); err != nil {
 		file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	_, err = output(ctx, "mkfs.ext4", "-q", "-d", stream.Name(), target)
-	return err
+	cmd := exec.CommandContext(ctx, "mkfs.ext4", "-q", "-N", strconv.FormatInt(inodes, 10), "-d", stream.Name(), target)
+	// File names in an image are bytes. In the C locale the archive library
+	// refuses names that are not ASCII.
+	cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mkfs.ext4: %w: %s", err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // prune keeps the newest versions and the current one.
@@ -139,15 +156,4 @@ func prune(dir, current string) {
 			_ = os.RemoveAll(filepath.Join(dir, name))
 		}
 	}
-}
-
-func output(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(stderr.Bytes()))
-	}
-	return string(out), nil
 }

@@ -3,8 +3,11 @@ package fn
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,6 +69,10 @@ func rootOf(t *testing.T, image v1.Image) (map[string]string, error) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
+	image, err := budgeted(image)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := rootTar(image, &out, initPath, guestSpec{Cmd: []string{"/app"}, Port: 8080}); err != nil {
 		return nil, err
 	}
@@ -246,5 +253,159 @@ func TestRootTarFailsOnABrokenLayer(t *testing.T) {
 	}
 	if _, err := rootOf(t, imageOf(t, []entry{{name: "../escape", content: "x"}, {name: "fine", content: "kept"}})); err == nil {
 		t.Fatal("an image with a path that leaves the root built a file system")
+	}
+}
+
+// layerOf makes a layer from raw tar bytes.
+func layerOf(t *testing.T, content []byte) v1.Layer {
+	t.Helper()
+	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(content)), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return layer
+}
+
+type countingWriter struct{ written int64 }
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.written += int64(len(p))
+	return len(p), nil
+}
+
+// One entry can claim more than the host's disk: a sparse file, or zeros
+// that compress to nothing. It must be refused before its content is written.
+func TestRootTarRefusesAHugeFileBeforeWritingIt(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	if err := writer.WriteHeader(&tar.Header{Name: "huge", Typeflag: tar.TypeReg, Size: 1 << 40, Mode: 0o644}); err != nil {
+		t.Fatal(err)
+	}
+	buffer.Write(make([]byte, 1<<20)) // some of the claimed content, then the stream just ends
+	image, err := mutate.AppendLayers(empty.Image, layerOf(t, buffer.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err = budgeted(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initPath := filepath.Join(t.TempDir(), "init")
+	os.WriteFile(initPath, []byte("init"), 0o755)
+	out := &countingWriter{}
+	if _, err := rootTar(image, out, initPath, guestSpec{Cmd: []string{"/app"}}); !errors.Is(err, errImageTooLarge) {
+		t.Fatalf("err = %v, want the size limit", err)
+	}
+	if out.written > 64<<10 {
+		t.Fatalf("%d bytes were written before the image was refused", out.written)
+	}
+}
+
+// Names are not counted as content, so they have their own limits.
+func TestLongNamesAreRefused(t *testing.T) {
+	deep := strings.Repeat("a/", 3000) + "f" // 6001 bytes, more than PATH_MAX
+	if _, err := rootOf(t, imageOf(t, []entry{{name: deep, content: "x"}})); err == nil {
+		t.Error("a path longer than 4096 bytes was accepted")
+	}
+	if _, err := rootOf(t, imageOf(t, []entry{{name: strings.Repeat("n", 300), content: "x"}})); err == nil {
+		t.Error("a file name longer than 255 bytes was accepted")
+	}
+	if _, err := rootOf(t, imageOf(t, []entry{{name: "l", kind: tar.TypeSymlink, link: strings.Repeat("t", 5000)}})); err == nil {
+		t.Error("a link target longer than 4096 bytes was accepted")
+	}
+	if _, err := rootOf(t, imageOf(t, []entry{{name: strings.Repeat("a/", 100000) + "f", content: "x"}})); err == nil {
+		t.Error("a 200 KB path was accepted")
+	}
+}
+
+// The limits apply to what the layers hold, before they are merged: deleted
+// and replaced files, and deletion markers, cost the host as much to read.
+func TestTarMeterStopsAtItsBudget(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	for i := range 10 {
+		name := "f" + string(rune('0'+i))
+		writer.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 1000, Mode: 0o644})
+		writer.Write(make([]byte, 1000))
+	}
+	writer.Close()
+	read := func(b *budget) error {
+		meter := &tarMeter{stream: io.NopCloser(bytes.NewReader(buffer.Bytes())), budget: b}
+		reader := tar.NewReader(meter)
+		for {
+			if _, err := reader.Next(); err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
+			}
+		}
+	}
+	if err := read(&budget{bytes: 1 << 20, entries: 10, extended: 1 << 20}); err != nil {
+		t.Fatalf("a stream inside its budget failed: %v", err)
+	}
+	if err := read(&budget{bytes: 1 << 20, entries: 9, extended: 1 << 20}); !errors.Is(err, errImageTooLarge) {
+		t.Errorf("10 entries passed a budget of 9: %v", err)
+	}
+	if err := read(&budget{bytes: 4000, entries: 100, extended: 1 << 20}); !errors.Is(err, errImageTooLarge) {
+		t.Errorf("the byte budget did not stop the stream: %v", err)
+	}
+
+	// A long name travels in an extended header, which the meter sizes.
+	buffer.Reset()
+	writer = tar.NewWriter(&buffer)
+	writer.WriteHeader(&tar.Header{Name: strings.Repeat("d/", 40000) + "f", Typeflag: tar.TypeReg, Mode: 0o644})
+	writer.Close()
+	if err := read(&budget{bytes: 1 << 30, entries: 100, extended: 1 << 30}); err == nil || !strings.Contains(err.Error(), "extended header") {
+		t.Errorf("an 80 KB name passed: %v", err)
+	}
+}
+
+func TestTarSize(t *testing.T) {
+	for field, want := range map[string]int64{
+		"00000001750\x00": 1000, "0000000000\x00\x00": 0, "       1750 ": 1000, "\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00": 256,
+	} {
+		if got := tarSize([]byte(field)); got != want {
+			t.Errorf("tarSize(%q) = %d, want %d", field, got, want)
+		}
+	}
+	if got := tarSize([]byte("\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff")); got >= 0 {
+		t.Errorf("an absurd binary size read as %d", got)
+	}
+}
+
+// The tenant chooses the image reference. The host must not connect to
+// itself or to a private network on the tenant's word.
+func TestPullRefusesAddressesThatAreNotPublic(t *testing.T) {
+	control, err := publicOnly([]string{"140.113.60.189"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{
+		"127.0.0.1:5000", "10.200.0.2:443", "192.168.19.101:8006", "169.254.169.254:80", "100.100.1.4:443",
+		"172.16.0.2:80", "0.0.0.0:80", "140.113.60.189:443", "[::1]:443", "[fd00::1]:443", "[::ffff:127.0.0.1]:80",
+	} {
+		if err := control("tcp4", address, nil); err == nil {
+			t.Errorf("a connection to %s was allowed", address)
+		}
+	}
+	for _, address := range []string{"1.1.1.1:443", "140.82.112.34:443"} {
+		if err := control("tcp4", address, nil); err != nil {
+			t.Errorf("a connection to %s was refused: %v", address, err)
+		}
+	}
+	// End to end: a registry on loopback is never reached.
+	reached := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	defer server.Close()
+	host := strings.TrimPrefix(server.URL, "http://")
+	_, err = openImage(context.Background(), host+"/some/image:tag", "", nil)
+	if err == nil || reached {
+		t.Fatalf("the pull reached a loopback registry: err=%v reached=%v", err, reached)
+	}
+	if !strings.Contains(err.Error(), "not a public address") {
+		t.Errorf("the refusal does not say why: %v", err)
 	}
 }

@@ -183,6 +183,7 @@ func build(args []string) error {
 	built, err := runtime.Build(ctx, fn.BuildOptions{
 		Function: f, Image: *image, ImageTar: *imageTar, Init: *initPath, Root: c.root,
 		MTU: *mtu, DNS: strings.FieldsFunc(*dns, func(r rune) bool { return r == ',' }),
+		Blocked: strings.FieldsFunc(c.block, func(r rune) bool { return r == ',' }),
 	})
 	if err != nil {
 		return err

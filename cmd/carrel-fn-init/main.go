@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -87,6 +88,7 @@ func run() error {
 		}
 	}
 	var cmdStdout, cmdStderr *os.File
+	var copies sync.WaitGroup
 	cmd := exec.Command(s.Cmd[0], s.Cmd[1:]...)
 	if s.User != "" {
 		credential, home, err := credentialOf(s.User)
@@ -94,7 +96,12 @@ func run() error {
 			return fmt.Errorf("image user %q: %w", s.User, err)
 		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: credential}
-		if home != "" {
+		// The image's own HOME wins, as under Docker.
+		imageSetsHome := false
+		for _, pair := range s.Env {
+			imageSetsHome = imageSetsHome || strings.HasPrefix(pair, "HOME=")
+		}
+		if home != "" && !imageSetsHome {
 			cmd.Env = append(os.Environ(), "HOME="+home)
 		}
 	}
@@ -123,7 +130,11 @@ func run() error {
 			return err
 		}
 		*stream.to = write
-		go func() { _, _ = io.Copy(stream.from, read) }()
+		copies.Add(1)
+		go func() {
+			defer copies.Done()
+			_, _ = io.Copy(stream.from, read)
+		}()
 	}
 	cmd.Stdout, cmd.Stderr = cmdStdout, cmdStderr
 	if err := cmd.Start(); err != nil {
@@ -150,6 +161,14 @@ func run() error {
 			return err
 		}
 		if pid == cmd.Process.Pid {
+			// Let the command's last lines reach the console. A child that
+			// still holds the pipes would keep the copies open, so wait briefly.
+			flushed := make(chan struct{})
+			go func() { copies.Wait(); close(flushed) }()
+			select {
+			case <-flushed:
+			case <-time.After(time.Second):
+			}
 			return fmt.Errorf("function command ended: exit %d", status.ExitStatus())
 		}
 	}
@@ -389,7 +408,27 @@ func credentialOf(user string) (*syscall.Credential, string, error) {
 			}
 		}
 	}
-	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}, home, nil
+	// The other groups the user belongs to in the image's /etc/group, as under Docker.
+	var groups []uint32
+	if fields := lookup("/etc/passwd", 2, strconv.FormatUint(uid, 10)); fields != nil {
+		content, _ := os.ReadFile("/etc/group")
+		for _, line := range strings.Split(string(content), "\n") {
+			group := strings.Split(line, ":")
+			if len(group) < 4 {
+				continue
+			}
+			number, err := strconv.ParseUint(group[2], 10, 32)
+			if err != nil {
+				continue
+			}
+			for _, member := range strings.Split(group[3], ",") {
+				if member == fields[0] && len(groups) < 64 {
+					groups = append(groups, uint32(number))
+				}
+			}
+		}
+	}
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: groups}, home, nil
 }
 
 // lookup returns the fields of the first line of a colon-separated file
