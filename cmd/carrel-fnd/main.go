@@ -80,13 +80,8 @@ func list(value string) []string {
 // buildVersion builds one version in a build slot of its own, so a build
 // never takes a slot from the router and two builds never share a jail, a
 // user or a network namespace.
+// The caller holds the function's lock.
 func (c *common) buildVersion(ctx context.Context, f fn.Function, image, imageTar string, activate bool) (fn.Function, error) {
-	// One build of a function at a time.
-	held, err := lock(c.root, "function-"+f.Name)
-	if err != nil {
-		return f, fmt.Errorf("function %s is being built: %w", f.Name, err)
-	}
-	defer held.Close()
 	index, slot, err := buildSlot(c.root)
 	if err != nil {
 		return f, err
@@ -171,6 +166,7 @@ func serve(args []string) error {
 				_, err := c.buildVersion(ctx, f, image, "", false)
 				return err
 			},
+			Lock:   c.lockFunction,
 			Forget: router.Forget,
 		}
 		agent.Run(ctx)
@@ -238,6 +234,11 @@ func build(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	start := time.Now()
+	unlock, err := c.lockFunction(f.Name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	built, err := c.buildVersion(ctx, f, *image, *imageTar, true)
 	if err != nil {
 		return err
@@ -256,6 +257,16 @@ const (
 	firstBuildLink = 16384 - buildSlots
 	maxSlots       = firstBuildLink
 )
+
+// lockFunction takes a function's lock: one build or change of a function's
+// files at a time, from the agent or the command line.
+func (c *common) lockFunction(name string) (func(), error) {
+	held, err := lock(c.root, "function-"+name)
+	if err != nil {
+		return nil, fmt.Errorf("function %s is being built: %w", name, err)
+	}
+	return func() { held.Close() }, nil
+}
 
 // lock takes an exclusive lock that lasts until the file is closed or the
 // process ends. It fails at once when another process holds it.

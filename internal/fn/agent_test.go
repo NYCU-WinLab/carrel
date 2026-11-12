@@ -40,6 +40,8 @@ func fakeBuild(root string, builds *[]string, fail map[string]bool) func(context
 	}
 }
 
+func noLock(string) (func(), error) { return func() {}, nil }
+
 func version(v string) DesiredVersion {
 	return DesiredVersion{Version: v, Image: "example/" + v, Port: 8080, MemoryMB: 256, Mode: ModeReuse}
 }
@@ -47,7 +49,7 @@ func version(v string) DesiredVersion {
 func TestAgentAppliesTheDesiredState(t *testing.T) {
 	root := t.TempDir()
 	var builds, forgotten []string
-	a := &Agent{Root: root, failed: map[string]string{},
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
 		Build:  fakeBuild(root, &builds, map[string]bool{"t1-api/v3": true}),
 		Forget: func(name string) { forgotten = append(forgotten, name) }}
 
@@ -138,7 +140,7 @@ func TestAgentAppliesTheDesiredState(t *testing.T) {
 func TestAgentSwitchesTheLiveVersion(t *testing.T) {
 	root := t.TempDir()
 	var builds, forgotten []string
-	a := &Agent{Root: root, failed: map[string]string{},
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
 		Build:  fakeBuild(root, &builds, nil),
 		Forget: func(name string) { forgotten = append(forgotten, name) }}
 	desired := Desired{Functions: []DesiredFunction{
@@ -204,7 +206,7 @@ func TestAgentTalksToTheControlPlane(t *testing.T) {
 	}))
 	defer server.Close()
 	var builds []string
-	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root,
+	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock,
 		Build: fakeBuild(root, &builds, nil), Forget: func(string) {}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -234,5 +236,116 @@ func TestAgentTalksToTheControlPlane(t *testing.T) {
 		if h != "Bearer cfh_test" {
 			t.Fatalf("request sent %q", h)
 		}
+	}
+}
+
+func TestAgentRefusesAnIncompleteState(t *testing.T) {
+	answers := map[string]bool{
+		`{}`: false, `null`: false, `{"revision":3}`: false, `{"functions":[]}`: false,
+		`{"revision":3,"functions":null}`: false, `{"revision":3,"functions":[]}`: true,
+	}
+	for answer, valid := range answers {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(answer))
+		}))
+		a := &Agent{Control: server.URL, Token: "cfh_test"}
+		desired, err := a.fetch(context.Background(), -1)
+		server.Close()
+		if valid != (err == nil) {
+			t.Fatalf("%s: err %v, want valid %v", answer, err, valid)
+		}
+		if valid && (desired.Revision != 3 || len(desired.Functions) != 0) {
+			t.Fatalf("%s: %+v", answer, desired)
+		}
+	}
+}
+
+func TestAgentLeavesABusyFunction(t *testing.T) {
+	root := t.TempDir()
+	var builds []string
+	busy := map[string]bool{"t1-api": true, "t9-old": true}
+	a := &Agent{Root: root, failed: map[string]string{}, Forget: func(string) {},
+		Build: fakeBuild(root, &builds, nil),
+		Lock: func(name string) (func(), error) {
+			if busy[name] {
+				return nil, errors.New("held")
+			}
+			return func() {}, nil
+		}}
+	if err := os.MkdirAll(filepath.Join(root, "t9-old", "v", "v1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	desired := Desired{Functions: []DesiredFunction{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}}
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 || len(a.failed) != 0 {
+		t.Fatalf("a busy function was built %v or failed %v", builds, a.failed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "t9-old")); err != nil {
+		t.Fatal("a busy function was removed")
+	}
+	// Once free, the next pass does the work.
+	busy = map[string]bool{}
+	a.apply(context.Background(), desired)
+	if !slices.Equal(builds, []string{"t1-api/v1"}) || liveVersion(root, "t1-api") != "v1" {
+		t.Fatalf("builds %v, live %q", builds, liveVersion(root, "t1-api"))
+	}
+	if _, err := os.Stat(filepath.Join(root, "t9-old")); !os.IsNotExist(err) {
+		t.Fatal("t9-old not removed once free")
+	}
+}
+
+func TestAgentNeverFollowsALink(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	keepFile := filepath.Join(outside, "v1", "data")
+	if err := os.MkdirAll(filepath.Dir(keepFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keepFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A function that is a link, and a named function whose v is a link.
+	if err := os.Symlink(outside, filepath.Join(root, "t1-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "t2-api"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "t2-api", "v")); err != nil {
+		t.Fatal(err)
+	}
+	var builds []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock, Forget: func(string) {},
+		Build: fakeBuild(root, &builds, nil)}
+	a.apply(context.Background(), Desired{Functions: []DesiredFunction{{ID: "t2-api", Versions: []DesiredVersion{version("v2")}}}})
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("a file behind a link was removed: %v", err)
+	}
+	if len(builds) != 0 {
+		t.Fatalf("built through a link: %v", builds)
+	}
+}
+
+func TestAgentKeepsTheLiveVersionWithoutItsOwnFile(t *testing.T) {
+	root := t.TempDir()
+	// A version built before versions kept their own function.json.
+	deployDir := filepath.Join(root, "t1-api", "v", "v1")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, "snap.mem"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "t1-api", "function.json"), []byte(`{"name":"t1-api","version":"v1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var builds []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock, Forget: func(string) {},
+		Build: fakeBuild(root, &builds, nil)}
+	a.apply(context.Background(), Desired{Functions: []DesiredFunction{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}})
+	if len(builds) != 0 {
+		t.Fatalf("the live version was built again: %v", builds)
+	}
+	if _, err := os.Stat(filepath.Join(deployDir, "snap.mem")); err != nil {
+		t.Fatal("the live version was removed")
 	}
 }
