@@ -19,6 +19,8 @@ jobs:
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-deployd ./cmd/carrel-deployd
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-fetch ./cmd/carrel-fetch
+      - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-fnd ./cmd/carrel-fnd
+      - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-fn-init ./cmd/carrel-fn-init
       - uses: actions/upload-artifact@v4
         with:
           name: carrel-linux-amd64

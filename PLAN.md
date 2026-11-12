@@ -1226,8 +1226,14 @@ waits for its slot. `node_undrain` reopens placement and leaves moved machines w
 
 A function is a container image that carrel runs only while it has work. A sleeping function has
 no process and uses no memory. A request wakes it from a snapshot in about 100 ms, and it goes
-back to sleep when it is idle. Nothing here is built yet. The measurements behind the design are
-in `docs/evaluations/2026-11-12-function-wake.md`.
+back to sleep when it is idle. The measurements behind the design are in
+`docs/evaluations/2026-11-12-function-wake.md`.
+
+Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the router, the snapshot
+build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
+writable overlay. They run by hand on one test host. Nothing is connected to the control plane,
+the gateway or MCP, and the jailer and the egress filter do not exist yet, so no tenant code may
+run on it.
 
 **Why carrel offers it**
 
@@ -1365,7 +1371,10 @@ to tenant networks, one instance per `reuse` function.
 
 **Build order**
 
-1. A function host image and the router, with `fresh` and `reuse`, on one host.
+1. A function host image and the router, with `fresh` and `reuse`, on one host. The router is
+   built. Measured through it on the test host: a request that wakes a `reuse` function p95
+   162 ms (15 runs), a `fresh` request p95 168 ms (30 runs), a request to an awake function p95
+   3 ms (200 runs). Still open in this step: the jailer, the egress filter and the host image.
 2. The deploy pipeline and the member tools.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.
