@@ -1234,9 +1234,9 @@ build from a local Docker image, both instance modes, the idle stop, the clock o
 writable overlay, and the jailer around every Firecracker process. They run by hand on one test
 host. A function has a route to the internet behind the egress filter. Images come from a
 registry without credentials, or from a `docker save` tarball, with no Docker daemon. Nothing is
-connected to the control plane, the gateway or MCP. No
-tenant code may run on a function host until it has limits on disk use (issue #225) and on
-egress traffic (issue #229), and its rules are kept loaded (issue #230).
+connected to the control plane, the gateway or MCP. The three
+limits required before tenant code runs on a function host are built: disk use (issue #225),
+traffic (issue #229) and a guard that keeps the rules loaded (issue #230).
 
 **Why carrel offers it**
 
@@ -1398,7 +1398,19 @@ to tenant networks, one instance per `reuse` function.
    own. A slot's namespace is made new after every instance, so no connection of the last
    instance leads to the next one. The guest gets the uplink's MTU and public resolvers at
    build time. Making the namespace new costs the `fresh` mode on a 1 vCPU host: p50 went from
-   172 ms to 234 ms. Still open in this step: the host image and the issues above. Measured on
+   172 ms to 234 ms. The disk limits are built: the serial console goes through a pipe into a
+   log capped at 5 MiB, every jail directory but a build's output is root's, a build writes to
+   its own file system the size of its memory plus 64 MiB, Firecracker may grow no file past
+   1 MiB and writes no core file. The traffic limits are built: each instance is shaped to
+   100 Mbit/s in both directions (`-rate`), and the guest's packets are policed where they
+   enter, so an answer to the router is limited too. An instance holds at most 512
+   connections, opens at most 200 new ones a second and sends at most 20,000 packets a second.
+   Ended TCP connections and UDP flows time out in 10 to 30 seconds, and the guard trims a
+   slot that still holds more than 3,000 entries. A slot's entries in the host's table are
+   deleted before the slot is used again. The host needs `conntrack` (conntrack-tools). The
+   guard checks every slot's rules every 5 seconds, and `carrel-fnd serve` refuses to start
+   when the host's table differs from the expected one. Still open in this step: the host
+   image, issues #234, #236 and #239 to #243. Measured on
    the test host: 40 requests at once to a sleeping `reuse` function all answer 200 from one
    instance, and a stop under 30 `fresh` requests leaves no microVM, namespace, link or cgroup.
 2. The deploy pipeline and the member tools. The image pull is built: 5.6 seconds for
