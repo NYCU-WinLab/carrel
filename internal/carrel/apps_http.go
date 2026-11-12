@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -87,5 +88,31 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 			fail("invalid", "Invalid JSON body")
 		}
 		return p.AgentReport(r.Context(), bearer(r), body)
+	}))
+}
+
+// functionRoutes serve function hosts' agents, from the infra network only
+// (the internal paths in NewApp).
+func (a *App) functionRoutes(mux *http.ServeMux) {
+	p := a.Platform
+	mux.HandleFunc("GET /functions/v1/agent/state", func(w http.ResponseWriter, r *http.Request) {
+		since, err := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+		if err != nil {
+			since = -1
+		}
+		var result D
+		if err := attempt(func() { result = p.FunctionState(r.Context(), bearer(r), since) }); err != nil {
+			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
+			return
+		}
+		// The agent reads the state as is: no ok wrapper.
+		jsonResponse(w, 200, result)
+	})
+	mux.Handle("POST /functions/v1/agent/report", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		var body D
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			fail("invalid", "Invalid JSON body")
+		}
+		return p.FunctionReport(r.Context(), bearer(r), body)
 	}))
 }

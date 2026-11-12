@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"regexp"
 	"slices"
@@ -276,6 +277,8 @@ func (e *Execution) Usage(t D) D {
 	for _, s := range e.snapshots(n) {
 		used["snapshot_gb"] = num(used["snapshot_gb"]) + float64(s.DiskGB)
 	}
+	used["functions"] = len(e.S.Objects("functions", n))
+	used["function_gb"] = math.Round(e.functionBytes(n)/GiB*100) / 100
 	return used
 }
 func (e *Execution) Quota(t D, delta ...D) D {
