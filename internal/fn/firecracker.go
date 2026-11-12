@@ -37,13 +37,22 @@ const (
 		"i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd random.trust_cpu=on"
 
 	// Paths inside a jail. A snapshot records the path of its root file
-	// system, so the build and every wake use the same ones.
-	jailDir      = "/fn"
-	jailRootfs   = jailDir + "/rootfs.ext4"
-	jailKernel   = jailDir + "/vmlinux"
-	jailState    = jailDir + "/snap.state"
-	jailMemory   = jailDir + "/snap.mem"
-	jailSocket   = "/api.sock"
+	// system, so the build and every wake use the same ones, and so do
+	// snapshots built by earlier versions. /fn holds hard links to function
+	// files and is root's. /out exists only in a build: a small file system
+	// of its own that the snapshot is written to.
+	jailIn     = "/fn"
+	jailOut    = "/out"
+	jailRootfs = jailIn + "/rootfs.ext4"
+	jailKernel = jailIn + "/vmlinux"
+	jailState  = jailIn + "/snap.state"
+	jailMemory = jailIn + "/snap.mem"
+	jailSocket = "/api.sock"
+	// A build's /out holds the snapshot: the guest's memory and a little state.
+	outSlackMB = 64
+	// logHalf is the size at which a function's serial log moves to log.1:
+	// a function keeps the last 5 to 10 MiB of its output (PLAN 7.11).
+	logHalf      = 5 << 20
 	cgroupParent = "carrel-fn"
 	cgroupRoot   = "/sys/fs/cgroup"
 	// Memory a Firecracker process may use beyond its guest's memory.
@@ -90,6 +99,9 @@ type Firecracker struct {
 	closed    bool
 	// netMu keeps Guard from checking a namespace that is being made again.
 	netMu sync.Mutex
+	// logs keeps one size-capped serial log per function file.
+	logsMu sync.Mutex
+	logs   map[string]*capLog
 	// hostRules and slotRules are how nft lists the two tables when they
 	// are as loaded (expectedListing). Guard compares against them.
 	hostRules, slotRules string
@@ -129,7 +141,12 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	if err := prepareHost(cfg.Egress, cfg.Router); err != nil {
 		return nil, err
 	}
-	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
+	// No core files: a Firecracker that crashes on purpose would write one
+	// the size of its guest's memory. Every jailer and Firecracker inherits this.
+	if err := unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
+		return nil, fmt.Errorf("turn off core files: %w", err)
+	}
+	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots), logs: map[string]*capLog{}}
 	if cfg.Router {
 		if fc.hostRules, err = expectedListing(hostRules(cfg.Egress)); err != nil {
 			return nil, err
@@ -139,7 +156,10 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 		}
 		// The router just loaded the host table. It must already match.
 		if listing, err := listTable(""); err != nil || listing != fc.hostRules {
-			return nil, fmt.Errorf("the host rule table is not as loaded: %v", err)
+			if err == nil {
+				err = errors.New("its listing differs from the rules")
+			}
+			return nil, fmt.Errorf("the host rule table is not as loaded: %w", err)
 		}
 	}
 	for i := range cfg.Slots {
@@ -216,7 +236,10 @@ func relisted(namespace, expected, rules string) string {
 		slog.Error("rule table listing not renewed", "error", err)
 		return expected
 	}
-	slog.Warn("rule table listing renewed: nft lists the same rules another way")
+	// Either nft lists the same rules another way now, or something changed
+	// the table again at once. The expected listing comes from the rules in
+	// both cases, so the next check catches the second.
+	slog.Warn("rule table listing renewed", "table", namespace)
 	return fresh
 }
 
@@ -341,10 +364,12 @@ type vm struct {
 // jail describes what one Firecracker process may see.
 type jail struct {
 	memoryMB int
-	// files maps a path inside the jail to the host file it is a hard link of.
+	// files maps a path under /fn to the host file it is a hard link of.
 	files map[string]string
-	// writable lets the process create files in /fn: only a build needs it.
-	writable bool
+	// build gives the process /out, the only place it may write: a file
+	// system of memoryMB plus outSlackMB. Without it the process can create
+	// no file at all once it runs (lock).
+	build bool
 }
 
 func (fc *Firecracker) jailPath(name string) string {
@@ -412,15 +437,11 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 		return nil, err
 	}
 	root := filepath.Join(fc.jailPath(s.name), "root")
-	dir := filepath.Join(root, jailDir)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	in := filepath.Join(root, jailIn)
+	if err := os.MkdirAll(in, 0o750); err != nil {
 		return nil, err
 	}
-	owner := 0
-	if j.writable {
-		owner = s.uid
-	}
-	if err := os.Chown(dir, owner, fc.cfg.GID); err != nil {
+	if err := os.Chown(in, 0, fc.cfg.GID); err != nil {
 		return nil, err
 	}
 	for inside, host := range j.files {
@@ -428,11 +449,32 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 			return nil, fmt.Errorf("link %s into the jail: %w", host, err)
 		}
 	}
-	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// No file may grow larger than the snapshot of a build, or 1 MiB outside
+	// a build: the jailer copies Firecracker in before it sets the limit, and
+	// writes only the PID file after. Pipes and devices are not files here.
+	fileLimit := 1 << 20
+	if j.build {
+		if err := fc.mountOut(s, root, j.memoryMB+outSlackMB); err != nil {
+			return nil, err
+		}
+		fileLimit = max(fileLimit, (j.memoryMB+outSlackMB)<<20)
+	}
+	// The serial console goes through a pipe that this process reads, so the
+	// jailed process never holds a log file it could fill the disk with.
+	output, console, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	defer log.Close()
+	defer console.Close()
+	go func() {
+		defer output.Close()
+		if _, err := io.Copy(fc.logFor(logPath), output); err != nil {
+			// The log cannot be written. Keep reading, or Firecracker
+			// would block on its console and the guest with it.
+			slog.Error("function log", "path", logPath, "error", err)
+			_, _ = io.Copy(io.Discard, output)
+		}
+	}()
 	// Not CommandContext: a jailer killed after it forked would leave a
 	// Firecracker that nobody watches. The jailer ends by itself in milliseconds.
 	cmd := exec.Command(fc.cfg.Jailer,
@@ -448,9 +490,10 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 		"--cgroup", "memory.max="+strconv.Itoa((j.memoryMB+overheadMB)<<20),
 		"--cgroup", "memory.swap.max=0",
 		"--cgroup", "pids.max="+strconv.Itoa(maxPIDs),
+		"--resource-limit", "fsize="+strconv.Itoa(fileLimit),
 		"--", "--api-sock", jailSocket)
-	cmd.Stdout = log
-	cmd.Stderr = log
+	cmd.Stdout = console
+	cmd.Stderr = console
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// With a new PID namespace the jailer forks and ends: Firecracker is its
 	// child, and the jailer leaves the child's PID in a file.
@@ -501,7 +544,142 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 		v.kill()
 		return nil, fmt.Errorf("firecracker API: %w", err)
 	}
+	// Firecracker made its socket and runs no guest yet. From here on it
+	// may create nothing in its jail: every directory but /out becomes root's.
+	if err := lock(root); err != nil {
+		v.kill()
+		return nil, fmt.Errorf("lock the jail: %w", err)
+	}
 	return v, nil
+}
+
+// lock gives every directory of a jail but /out to root, readable by the
+// jails' group. The directories are opened by descriptor, never by a path
+// the jailed user could have changed, though it ran no guest code yet.
+func lock(root string) error {
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	return lockDir(fd, true)
+}
+
+func lockDir(fd int, top bool) error {
+	dir := os.NewFile(uintptr(fd), "jail")
+	defer dir.Close()
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return err
+	}
+	if err := unix.Fchown(fd, 0, int(stat.Gid)); err != nil {
+		return err
+	}
+	if err := unix.Fchmod(fd, 0o750); err != nil {
+		return err
+	}
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || (top && entry.Name() == strings.TrimPrefix(jailOut, "/")) {
+			continue
+		}
+		child, err := unix.Openat2(fd, entry.Name(), &unix.OpenHow{
+			Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC,
+			Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
+		})
+		if err != nil {
+			return err
+		}
+		if err := lockDir(child, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mountOut gives a build jail /out: a new ext4 file system of sizeMB that the
+// slot's user owns. A full /out ends the build, not the host's disk.
+func (fc *Firecracker) mountOut(s *slot, root string, sizeMB int) error {
+	image := filepath.Join(fc.jailPath(s.name), "out.ext4") // beside the root, where only root writes
+	file, err := os.OpenFile(image, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	err = file.Truncate(int64(sizeMB) << 20)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	owner := fmt.Sprintf("root_owner=%d:%d", s.uid, fc.cfg.GID)
+	if out, err := exec.Command("mkfs.ext4", "-q", "-F", "-m", "0", "-O", "^has_journal", "-E", owner, image).CombinedOutput(); err != nil {
+		return fmt.Errorf("mkfs.ext4 for /out: %w: %s", err, bytes.TrimSpace(out))
+	}
+	target := filepath.Join(root, jailOut)
+	if err := os.Mkdir(target, 0o750); err != nil {
+		return err
+	}
+	if out, err := exec.Command("mount", "-o", "loop,nosuid,nodev,noexec", image, target).CombinedOutput(); err != nil {
+		return fmt.Errorf("mount /out: %w: %s", err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+// capLog is a function's serial log: log, and log.1 once log reached logHalf.
+// Every instance of the function writes through the same one, and only one
+// process writes a log: the router writes log, a build writes build.log.
+type capLog struct {
+	mu   sync.Mutex
+	path string
+	file *os.File
+	size int64
+}
+
+func (fc *Firecracker) logFor(path string) *capLog {
+	fc.logsMu.Lock()
+	defer fc.logsMu.Unlock()
+	if fc.logs == nil {
+		fc.logs = map[string]*capLog{}
+	}
+	l := fc.logs[path]
+	if l == nil {
+		l = &capLog{path: path}
+		fc.logs[path] = l
+	}
+	return l
+}
+
+func (l *capLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file != nil && l.size+int64(len(p)) > logHalf {
+		l.file.Close()
+		l.file = nil
+		if err := os.Rename(l.path, l.path+".1"); err != nil {
+			return 0, err
+		}
+	}
+	if l.file == nil {
+		file, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return 0, err
+		}
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			return 0, err
+		}
+		l.file, l.size = file, info.Size()
+	}
+	if len(p) > logHalf {
+		p = p[len(p)-logHalf:] // one write never passes the limit: keep its end
+	}
+	n, err := l.file.Write(p)
+	l.size += int64(n)
+	return len(p), err
 }
 
 // watch closes done when the Firecracker process ends. It is not this
@@ -547,6 +725,13 @@ func (fc *Firecracker) cleanup(name string) error {
 		if !removed {
 			return fmt.Errorf("cgroup %s still has processes", cgroup)
 		}
+	}
+	// A build's /out is unmounted first, or RemoveAll would stop at it. The
+	// name is not followed if it is a link: the jail's root is root's by now.
+	out := filepath.Join(fc.jailPath(name), "root", jailOut)
+	if err := unix.Unmount(out, unix.MNT_DETACH|unix.UMOUNT_NOFOLLOW); err != nil &&
+		!errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("unmount %s: %w", out, err)
 	}
 	// RemoveAll does not follow symbolic links, so a link the jailed user
 	// left in its own directories is removed, not what it points at.
@@ -700,7 +885,7 @@ func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string)
 	v, err := fc.start(ctx, logPath, f.Port, jail{
 		memoryMB: f.MemoryMB,
 		files:    map[string]string{jailRootfs: rootfs, jailKernel: fc.cfg.Kernel},
-		writable: true,
+		build:    true,
 	})
 	if err != nil {
 		return err
@@ -743,7 +928,7 @@ func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string)
 		return err
 	}
 	err = v.call(ctx, http.MethodPut, "/snapshot/create", map[string]string{
-		"snapshot_type": "Full", "snapshot_path": jailState, "mem_file_path": jailMemory,
+		"snapshot_type": "Full", "snapshot_path": jailOut + "/snap.state", "mem_file_path": jailOut + "/snap.mem",
 	})
 	if err != nil {
 		return err
@@ -761,18 +946,27 @@ func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string)
 }
 
 // collect copies a file the jailed process wrote into a new file that root
-// owns. The jailed user owns the jail's root and /fn during a build, so it
-// could have replaced any name there with a symbolic link or a hard link to
-// something else. Nothing here trusts a path it could write: the jail is
-// opened by descriptor, links are refused at every step, and the file must
-// be a regular file of that user with one name.
+// owns. The jailed user owns /out during a build, so it could have replaced
+// any name there with a symbolic link, a hard link or something else.
+// Nothing here trusts a path it could write: the jail is opened by
+// descriptor, links are refused at every step, and the file must be a
+// regular file of that user with one name.
 func (fc *Firecracker) collect(v *vm, name, target string, limit int64) error {
 	jailRoot, err := unix.Open(v.root, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return err
 	}
 	defer unix.Close(jailRoot)
-	fd, err := unix.Openat2(jailRoot, strings.TrimPrefix(jailDir, "/")+"/"+name, &unix.OpenHow{
+	// /out is a mount point, so this step crosses into another file system.
+	outDir, err := unix.Openat2(jailRoot, strings.TrimPrefix(jailOut, "/"), &unix.OpenHow{
+		Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	})
+	if err != nil {
+		return err
+	}
+	defer unix.Close(outDir)
+	fd, err := unix.Openat2(outDir, name, &unix.OpenHow{
 		Flags:   unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC,
 		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
 	})

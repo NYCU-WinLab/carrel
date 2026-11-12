@@ -81,7 +81,9 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
 		return f, err
 	}
-	if err := fc.snapshot(ctx, f, filepath.Join(base, "log")); err != nil {
+	// The build has a log of its own: the router rotates log, and two
+	// processes must not rotate one file.
+	if err := fc.snapshot(ctx, f, filepath.Join(base, "build.log")); err != nil {
 		return f, err
 	}
 	content, err := json.MarshalIndent(f, "", "  ")

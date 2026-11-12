@@ -38,6 +38,12 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": True}
             except (OSError, KeyError) as e:
                 out = {"ok": False, "error": str(e)}
+        elif url.path == "/print":    # write MiB to stdout: does the function's log stay small?
+            import sys
+            for _ in range(int(query.get("mib", "1"))):
+                sys.stdout.write(("p" * 1023 + "\n") * 1024)
+            sys.stdout.flush()
+            out = {"ok": True}
         elif url.path == "/resolve":  # does the function's resolver work?
             try:
                 out = {"ok": True, "addr": socket.getaddrinfo(query["name"], 443, socket.AF_INET)[0][4][0]}
