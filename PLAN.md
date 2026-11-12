@@ -1232,8 +1232,9 @@ back to sleep when it is idle. The measurements behind the design are in
 Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the router, the snapshot
 build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
 writable overlay, and the jailer around every Firecracker process. They run by hand on one test
-host. A function has a route to the internet behind the egress filter. Nothing is connected to
-the control plane, the gateway or MCP, and images still come from a local Docker daemon. No
+host. A function has a route to the internet behind the egress filter. Images come from a
+registry without credentials, or from a `docker save` tarball, with no Docker daemon. Nothing is
+connected to the control plane, the gateway or MCP. No
 tenant code may run on a function host until it has limits on disk use (issue #225) and on
 egress traffic (issue #229), and its rules are kept loaded (issue #230).
 
@@ -1265,7 +1266,10 @@ egress traffic (issue #229), and its rules are kept loaded (issue #230).
    apps (section 7.9).
 2. A function host pulls the image without a Docker daemon and flattens it into an ext4 root file
    system. It adds `fn-init`, a small static program that becomes process 1, prepares mounts and
-   the network, and starts the image's command.
+   the network, and starts the image's command as the image's user. The image is the tenant's
+   and may be hostile, so its files are never unpacked on the host: the flattened tar stream goes
+   straight into the file system image (`mkfs.ext4 -d`, which needs libarchive). Paths that leave
+   the root fail the build, devices are dropped, and the image cannot bring its own `/.fn`.
 3. The host boots the microVM and waits for readiness: any HTTP answer below 500 on the port
    within 60 seconds, the rule apps use.
 4. It pauses the microVM, writes the snapshot and stops it. The function is now `asleep`.
@@ -1397,7 +1401,9 @@ to tenant networks, one instance per `reuse` function.
    172 ms to 234 ms. Still open in this step: the host image and the issues above. Measured on
    the test host: 40 requests at once to a sleeping `reuse` function all answer 200 from one
    instance, and a stop under 30 `fresh` requests leaves no microVM, namespace, link or cgroup.
-2. The deploy pipeline and the member tools.
+2. The deploy pipeline and the member tools. The image pull is built: 5.6 seconds for
+   `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
+   from image to `asleep`. Private registries need credentials, which come with the member tools.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.
 5. The AIntern job runner as the first tenant, in `fresh` mode.

@@ -17,6 +17,8 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -25,9 +27,11 @@ import (
 
 // spec is written into the image by the builder as /.fn/spec.json.
 type spec struct {
+	Name string   `json:"name"`
 	Cmd  []string `json:"cmd"`
 	Env  []string `json:"env"`
 	Cwd  string   `json:"cwd"`
+	User string   `json:"user"`
 	Port int      `json:"port"`
 	MTU  int      `json:"mtu"`
 	DNS  []string `json:"dns"`
@@ -67,6 +71,9 @@ func run() error {
 		return fmt.Errorf("overlay: %w", err)
 	}
 	mounts()
+	if s.Name != "" {
+		_ = unix.Sethostname([]byte(s.Name))
+	}
 	if err := network(s.MTU); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
@@ -80,17 +87,62 @@ func run() error {
 			_ = os.Setenv(key, value)
 		}
 	}
+	var cmdStdout, cmdStderr *os.File
+	var copies sync.WaitGroup
 	cmd := exec.Command(s.Cmd[0], s.Cmd[1:]...)
+	if s.User != "" {
+		credential, home, err := credentialOf(s.User)
+		if err != nil {
+			return fmt.Errorf("image user %q: %w", s.User, err)
+		}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: credential}
+		// The image's own HOME wins, as under Docker.
+		imageSetsHome := false
+		for _, pair := range s.Env {
+			imageSetsHome = imageSetsHome || strings.HasPrefix(pair, "HOME=")
+		}
+		if home != "" && !imageSetsHome {
+			cmd.Env = append(os.Environ(), "HOME="+home)
+		}
+	}
 	cmd.Dir = s.Cwd
 	if cmd.Dir == "" {
 		cmd.Dir = "/"
 	}
 	cmd.Stdin = nil
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// The command writes to pipes it owns, as under Docker. Images link
+	// their log files to /dev/stdout and /dev/stderr, and a user other than
+	// root cannot open the console device those would otherwise name.
+	owner := 0
+	group := 0
+	if cmd.SysProcAttr != nil {
+		owner, group = int(cmd.SysProcAttr.Credential.Uid), int(cmd.SysProcAttr.Credential.Gid)
+	}
+	for _, stream := range []struct {
+		to   **os.File
+		from *os.File
+	}{{&cmdStdout, os.Stdout}, {&cmdStderr, os.Stderr}} {
+		read, write, err := os.Pipe()
+		if err != nil {
+			return err
+		}
+		if err := write.Chown(owner, group); err != nil {
+			return err
+		}
+		*stream.to = write
+		copies.Add(1)
+		go func() {
+			defer copies.Done()
+			_, _ = io.Copy(stream.from, read)
+		}()
+	}
+	cmd.Stdout, cmd.Stderr = cmdStdout, cmdStderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %q: %w", s.Cmd[0], err)
 	}
+	// Only the command holds the write ends now, so the copies end with it.
+	cmdStdout.Close()
+	cmdStderr.Close()
 	signals := make(chan os.Signal, 8)
 	signal.Notify(signals, unix.SIGTERM, unix.SIGINT)
 	go func() {
@@ -109,6 +161,14 @@ func run() error {
 			return err
 		}
 		if pid == cmd.Process.Pid {
+			// Let the command's last lines reach the console. A child that
+			// still holds the pipes would keep the copies open, so wait briefly.
+			flushed := make(chan struct{})
+			go func() { copies.Wait(); close(flushed) }()
+			select {
+			case <-flushed:
+			case <-time.After(time.Second):
+			}
 			return fmt.Errorf("function command ended: exit %d", status.ExitStatus())
 		}
 	}
@@ -157,6 +217,14 @@ func mounts() {
 	_ = unix.Mount("devpts", "/dev/pts", "devpts", 0, "")
 	_ = os.MkdirAll("/dev/shm", 0o1777)
 	_ = unix.Mount("tmpfs", "/dev/shm", "tmpfs", 0, "mode=1777")
+	// The kernel's /dev has no standard stream links; a container runtime
+	// adds them. Images link log files to /dev/stdout and /dev/stderr.
+	for link, target := range map[string]string{
+		"/dev/fd": "/proc/self/fd", "/dev/stdin": "/proc/self/fd/0",
+		"/dev/stdout": "/proc/self/fd/1", "/dev/stderr": "/proc/self/fd/2",
+	} {
+		_ = os.Symlink(target, link)
+	}
 }
 
 // network gives eth0 the one address every function has. Each microVM sits
@@ -301,4 +369,80 @@ func control() {
 		_ = server.ListenAndServe()
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// credentialOf turns the image's USER ("name", "uid", "name:group" or
+// "uid:gid") into numbers, with the image's own /etc/passwd and /etc/group.
+func credentialOf(user string) (*syscall.Credential, string, error) {
+	userPart, groupPart, hasGroup := strings.Cut(user, ":")
+	uid, gid, home := uint64(0), uint64(0), ""
+	if number, err := strconv.ParseUint(userPart, 10, 32); err == nil {
+		uid = number
+		if fields := lookup("/etc/passwd", 2, userPart); fields != nil && len(fields) > 5 {
+			gid, _ = strconv.ParseUint(fields[3], 10, 32)
+			home = fields[5]
+		}
+	} else {
+		fields := lookup("/etc/passwd", 0, userPart)
+		if fields == nil || len(fields) < 6 {
+			return nil, "", errors.New("no such user in the image")
+		}
+		var uidErr, gidErr error
+		uid, uidErr = strconv.ParseUint(fields[2], 10, 32)
+		gid, gidErr = strconv.ParseUint(fields[3], 10, 32)
+		if uidErr != nil || gidErr != nil {
+			return nil, "", errors.New("the image's /etc/passwd entry is not valid")
+		}
+		home = fields[5]
+	}
+	if hasGroup {
+		if number, err := strconv.ParseUint(groupPart, 10, 32); err == nil {
+			gid = number
+		} else {
+			fields := lookup("/etc/group", 0, groupPart)
+			if fields == nil || len(fields) < 3 {
+				return nil, "", errors.New("no such group in the image")
+			}
+			if gid, err = strconv.ParseUint(fields[2], 10, 32); err != nil {
+				return nil, "", errors.New("the image's /etc/group entry is not valid")
+			}
+		}
+	}
+	// The other groups the user belongs to in the image's /etc/group, as under Docker.
+	var groups []uint32
+	if fields := lookup("/etc/passwd", 2, strconv.FormatUint(uid, 10)); fields != nil {
+		content, _ := os.ReadFile("/etc/group")
+		for _, line := range strings.Split(string(content), "\n") {
+			group := strings.Split(line, ":")
+			if len(group) < 4 {
+				continue
+			}
+			number, err := strconv.ParseUint(group[2], 10, 32)
+			if err != nil {
+				continue
+			}
+			for _, member := range strings.Split(group[3], ",") {
+				if member == fields[0] && len(groups) < 64 {
+					groups = append(groups, uint32(number))
+				}
+			}
+		}
+	}
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: groups}, home, nil
+}
+
+// lookup returns the fields of the first line of a colon-separated file
+// whose field at index equals value.
+func lookup(file string, index int, value string) []string {
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) > index && fields[index] == value {
+			return fields
+		}
+	}
+	return nil
 }

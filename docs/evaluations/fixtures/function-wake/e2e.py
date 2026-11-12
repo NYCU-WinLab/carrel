@@ -141,4 +141,19 @@ for _ in range(12):
 time.sleep(5)
 counts = {ns: tracked(ns) for ns in slots}
 check("egress: no namespace remembers a connection once its instance is gone", set(counts.values()) == {0}, str(counts))
+
+# images: pulled from a registry with no Docker daemon, and an image whose USER is not root.
+# Functions `whoami` (traefik/whoami) and `nginx` (nginxinc/nginx-unprivileged, port 8080) must be built, with -idle 3.
+if os.path.exists(ROOT + "/whoami/function.json") and os.path.exists(ROOT + "/nginx/function.json"):
+    def raw(name):
+        req = urllib.request.Request("http://127.0.0.1:8090/", headers={"X-Carrel-Function": name})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, r.read().decode(errors="replace")
+    status, body = raw("whoami")
+    check("image: a function pulled from a registry answers", status == 200 and "Hostname" in body, body[:40].replace("\n", " "))
+    status, body = raw("nginx")
+    check("image: a function whose image user is not root answers", status == 200 and "nginx" in body.lower())
+    log = open(ROOT + "/nginx/log", errors="replace").read()
+    check("image: its output reaches the function's log", "start worker process" in log and "GET / HTTP" in log)
+    time.sleep(5)  # both are built with -idle 3, so they are asleep again for the next run
 print("RESULT", "all pass" if all(results) else "FAILED")

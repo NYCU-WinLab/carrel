@@ -1,12 +1,13 @@
 #!/bin/bash
 # Checks carrel-fnd against concurrent builds, a second daemon and a daemon crash.
-# Run as root on a function host with Docker image fnlab-py2 present.
-# usage: resilience.sh <carrel-fnd> <carrel-fn-init> <firecracker> <jailer>
+# Run as root on a function host. The image is a `docker save` tarball of the test function
+# (server.py in this directory); no Docker daemon is needed.
+# usage: resilience.sh <carrel-fnd> <carrel-fn-init> <firecracker> <jailer> <image.tar>
 set -u
-FND=$1; INIT=$2; FC=$3; JAILER=$4
+FND=$1; INIT=$2; FC=$3; JAILER=$4; IMAGE=$5
 ROOT=/var/lib/carrel-fn
 RUN="-firecracker $FC -jailer $JAILER"
-BUILD="$FND build -image fnlab-py2 -port 80 -init $INIT $RUN"
+BUILD="$FND build -image-tar $IMAGE -port 80 -init $INIT $RUN"
 fail=0
 check() { if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got '$2', want '$3'"; fail=1; fi; }
 vms() { pgrep -c -x firecracker; }
