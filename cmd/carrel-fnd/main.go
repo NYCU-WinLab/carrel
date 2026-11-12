@@ -10,12 +10,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -81,6 +81,12 @@ func serve(args []string) error {
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
 	_ = flags.Parse(args)
 
+	// Two routers would hand out the same slots.
+	held, err := lock(c.root, "serve")
+	if err != nil {
+		return fmt.Errorf("another carrel-fnd serve runs on %s: %w", c.root, err)
+	}
+	defer held.Close()
 	runtime, err := fn.NewFirecracker(c.config("cfn", 0, *slots))
 	if err != nil {
 		return err
@@ -129,12 +135,20 @@ func build(args []string) error {
 		return errors.New("build needs -name and -image")
 	}
 
-	// One slot of its own, so a build never takes a slot from the router.
-	// Its number comes from the name: two builds of one function collide,
-	// builds of different functions almost never do.
-	hash := fnv.New32a()
-	hash.Write([]byte(f.Name))
-	runtime, err := fn.NewFirecracker(c.config("cfnb", 100000+int(hash.Sum32()%100000), 1))
+	// One build of a function at a time: versions are named by the second.
+	held, err := lock(c.root, "function-"+f.Name)
+	if err != nil {
+		return fmt.Errorf("function %s is being built: %w", f.Name, err)
+	}
+	defer held.Close()
+	// A build slot of its own, so a build never takes a slot from the router
+	// and two builds never share a jail, a user or a network namespace.
+	index, slot, err := buildSlot(c.root)
+	if err != nil {
+		return err
+	}
+	defer slot.Close()
+	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1))
 	if err != nil {
 		return err
 	}
@@ -148,4 +162,39 @@ func build(args []string) error {
 	}
 	slog.Info("built", "function", built.Name, "version", built.Version, "seconds", time.Since(start).Seconds())
 	return nil
+}
+
+// buildSlots is how many builds may run on one host at once. Their slot
+// numbers start above any router slot.
+const (
+	buildSlots     = 16
+	firstBuildSlot = 100000
+)
+
+// lock takes an exclusive lock that lasts until the file is closed or the
+// process ends. It fails at once when another process holds it.
+func lock(root, name string) (*os.File, error) {
+	dir := filepath.Join(root, ".lock")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+// buildSlot locks the first free build slot.
+func buildSlot(root string) (int, *os.File, error) {
+	for i := range buildSlots {
+		if held, err := lock(root, "build-"+strconv.Itoa(i)); err == nil {
+			return firstBuildSlot + i, held, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("%d builds already run on this host", buildSlots)
 }

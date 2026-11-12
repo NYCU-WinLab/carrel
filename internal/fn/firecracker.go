@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -93,7 +94,13 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	}
 	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
 	for i := range cfg.Slots {
-		s, err := newSlot(cfg.Prefix+strconv.Itoa(cfg.First+i), cfg.UIDBase+cfg.First+i, cfg.GID)
+		name := cfg.Prefix + strconv.Itoa(cfg.First+i)
+		// A daemon that crashed leaves its Firecracker processes running.
+		if err := fc.cleanup(name); err != nil {
+			fc.Close()
+			return nil, err
+		}
+		s, err := newSlot(name, cfg.UIDBase+cfg.First+i, cfg.GID)
 		if err != nil {
 			fc.Close()
 			return nil, err
@@ -213,8 +220,19 @@ type jail struct {
 	writable bool
 }
 
-func (fc *Firecracker) jailPath(s *slot) string {
-	return filepath.Join(fc.cfg.JailBase, filepath.Base(fc.cfg.Firecracker), s.name)
+func (fc *Firecracker) jailPath(name string) string {
+	return filepath.Join(fc.cfg.JailBase, filepath.Base(fc.cfg.Firecracker), name)
+}
+
+// release cleans a slot and makes it free again. A slot that cannot be
+// cleaned stays out of use: its next instance would share a user, a network
+// namespace and a memory limit with whatever still runs there.
+func (fc *Firecracker) release(s *slot) {
+	if err := fc.cleanup(s.name); err != nil {
+		slog.Error("slot taken out of use", "slot", s.name, "error", err)
+		return
+	}
+	fc.slots <- s
 }
 
 // start launches a jailed Firecracker in a free slot. The caller configures
@@ -228,16 +246,17 @@ func (fc *Firecracker) start(ctx context.Context, logPath string, port int, j ja
 	}
 	v, err := fc.launch(ctx, s, logPath, port, j)
 	if err != nil {
-		fc.cleanup(s)
-		fc.slots <- s
+		fc.release(s)
 		return nil, err
 	}
 	return v, nil
 }
 
 func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port int, j jail) (*vm, error) {
-	fc.cleanup(s) // whatever an earlier run left in this slot
-	root := filepath.Join(fc.jailPath(s), "root")
+	if err := fc.cleanup(s.name); err != nil { // whatever an earlier run left in this slot
+		return nil, err
+	}
+	root := filepath.Join(fc.jailPath(s.name), "root")
 	dir := filepath.Join(root, jailDir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
@@ -259,7 +278,9 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 		return nil, err
 	}
 	defer log.Close()
-	cmd := exec.CommandContext(ctx, fc.cfg.Jailer,
+	// Not CommandContext: a jailer killed after it forked would leave a
+	// Firecracker that nobody watches. The jailer ends by itself in milliseconds.
+	cmd := exec.Command(fc.cfg.Jailer,
 		"--id", s.name,
 		"--exec-file", fc.cfg.Firecracker,
 		"--uid", strconv.Itoa(s.uid),
@@ -293,6 +314,17 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return nil, fmt.Errorf("firecracker ended at once: %w", err)
+	}
+	// The PID was read from a file. Make sure it still names this slot's
+	// Firecracker and not a process that took the number after it ended.
+	membership, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cgroup")
+	if err != nil || strings.TrimSpace(string(membership)) != "0::/"+cgroupParent+"/"+s.name {
+		unix.Close(pidfd)
+		return nil, fmt.Errorf("PID %d is not in this slot's cgroup", pid)
+	}
+	if err := ctx.Err(); err != nil {
+		unix.Close(pidfd)
+		return nil, err
 	}
 	v := &vm{fc: fc, slot: s, port: port, root: root, pidfd: pidfd, done: make(chan struct{})}
 	sock := filepath.Join(root, jailSocket)
@@ -340,17 +372,30 @@ func (v *vm) kill() {
 	})
 }
 
-// cleanup removes a slot's jail directory and cgroup.
-func (fc *Firecracker) cleanup(s *slot) {
-	_ = os.RemoveAll(fc.jailPath(s))
-	cgroup := filepath.Join(cgroupRoot, cgroupParent, s.name)
-	for range 50 { // the kernel empties the cgroup shortly after the process ends
-		err := os.Remove(cgroup)
-		if err == nil || errors.Is(err, os.ErrNotExist) {
-			return
+// cleanup ends every process in a slot's cgroup, then removes the cgroup and
+// the jail directory. An error means the slot is not safe to use.
+func (fc *Firecracker) cleanup(name string) error {
+	cgroup := filepath.Join(cgroupRoot, cgroupParent, name)
+	if _, err := os.Stat(cgroup); err == nil {
+		// cgroup.kill reaches a Firecracker that this process lost track of:
+		// after a failed launch, a cancelled request or a daemon crash.
+		_ = os.WriteFile(filepath.Join(cgroup, "cgroup.kill"), []byte("1"), 0o644)
+		removed := false
+		for range 1000 { // the kernel empties the cgroup shortly after the processes end
+			err := os.Remove(cgroup)
+			if err == nil || errors.Is(err, os.ErrNotExist) {
+				removed = true
+				break
+			}
+			time.Sleep(2 * time.Millisecond)
 		}
-		time.Sleep(2 * time.Millisecond)
+		if !removed {
+			return fmt.Errorf("cgroup %s still has processes", cgroup)
+		}
 	}
+	// RemoveAll does not follow symbolic links, so a link the jailed user
+	// left in its own directories is removed, not what it points at.
+	return os.RemoveAll(fc.jailPath(name))
 }
 
 func (v *vm) Dial(ctx context.Context) (net.Conn, error) { return v.slot.dial(ctx, v.port) }
@@ -359,8 +404,7 @@ func (v *vm) Done() <-chan struct{}                      { return v.done }
 func (v *vm) Stop() {
 	v.stop.Do(func() {
 		v.kill()
-		v.fc.cleanup(v.slot)
-		v.fc.slots <- v.slot
+		v.fc.release(v.slot)
 	})
 }
 
@@ -537,17 +581,65 @@ func (fc *Firecracker) snapshot(ctx context.Context, f Function, logPath string)
 		return err
 	}
 	// The jailed process wrote these as its own user. End it first, so it
-	// holds no open file, then take them out of the jail and out of its
-	// hands before any instance maps them.
+	// holds no open file, then copy them out of the jail.
 	v.kill()
+	limit := int64(f.MemoryMB+16) << 20
 	for _, name := range []string{"snap.state", "snap.mem"} {
-		target := filepath.Join(f.Dir, name)
-		if err := os.Rename(filepath.Join(v.root, jailDir, name), target); err != nil {
-			return err
-		}
-		if err := fc.protect(target); err != nil {
-			return err
+		if err := fc.collect(v, name, filepath.Join(f.Dir, name), limit); err != nil {
+			return fmt.Errorf("collect %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+// collect copies a file the jailed process wrote into a new file that root
+// owns. The jailed user owns the jail's root and /fn during a build, so it
+// could have replaced any name there with a symbolic link or a hard link to
+// something else. Nothing here trusts a path it could write: the jail is
+// opened by descriptor, links are refused at every step, and the file must
+// be a regular file of that user with one name.
+func (fc *Firecracker) collect(v *vm, name, target string, limit int64) error {
+	jailRoot, err := unix.Open(v.root, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(jailRoot)
+	fd, err := unix.Openat2(jailRoot, strings.TrimPrefix(jailDir, "/")+"/"+name, &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
+	})
+	if err != nil {
+		return err
+	}
+	source := os.NewFile(uintptr(fd), name)
+	defer source.Close()
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return err
+	}
+	switch {
+	case stat.Mode&unix.S_IFMT != unix.S_IFREG:
+		return errors.New("not a regular file")
+	case stat.Nlink != 1:
+		return errors.New("the file has more than one name")
+	case int(stat.Uid) != v.slot.uid:
+		return errors.New("the file is not owned by the instance's user")
+	case stat.Size > limit:
+		return fmt.Errorf("%d bytes, more than the function's memory", stat.Size)
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o440)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, io.LimitReader(source, limit))
+	if err == nil {
+		err = out.Chown(0, fc.cfg.GID)
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(target)
+	}
+	return err
 }
