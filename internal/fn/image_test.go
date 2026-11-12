@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -320,59 +321,104 @@ func TestLongNamesAreRefused(t *testing.T) {
 	}
 }
 
+// filtered runs one layer through the budget and reads what comes out.
+func filtered(content []byte, b *budget) (int, error) {
+	reader, writer := io.Pipe()
+	go func() { writer.CloseWithError(b.filter(writer, bytes.NewReader(content))) }()
+	entries := 0
+	tr := tar.NewReader(reader)
+	for {
+		if _, err := tr.Next(); err != nil {
+			if errors.Is(err, io.EOF) {
+				return entries, nil
+			}
+			return entries, err
+		}
+		entries++
+	}
+}
+
 // The limits apply to what the layers hold, before they are merged: deleted
 // and replaced files, and deletion markers, cost the host as much to read.
-func TestTarMeterStopsAtItsBudget(t *testing.T) {
+func TestFilterStopsAtItsBudget(t *testing.T) {
 	var buffer bytes.Buffer
 	writer := tar.NewWriter(&buffer)
 	for i := range 10 {
-		name := "f" + string(rune('0'+i))
-		writer.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 1000, Mode: 0o644})
+		writer.WriteHeader(&tar.Header{Name: "f" + string(rune('0'+i)), Typeflag: tar.TypeReg, Size: 1000, Mode: 0o644})
 		writer.Write(make([]byte, 1000))
 	}
 	writer.Close()
-	read := func(b *budget) error {
-		meter := &tarMeter{stream: io.NopCloser(bytes.NewReader(buffer.Bytes())), budget: b}
-		reader := tar.NewReader(meter)
-		for {
-			if _, err := reader.Next(); err != nil {
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				return err
-			}
+	full := func() *budget { return &budget{raw: 1 << 20, content: 1 << 20, entries: 100, names: 1 << 20} }
+	if n, err := filtered(buffer.Bytes(), full()); err != nil || n != 10 {
+		t.Fatalf("a stream inside its budget: %d entries, %v", n, err)
+	}
+	for name, cut := range map[string]func(*budget){
+		"entries": func(b *budget) { b.entries = 9 },
+		"content": func(b *budget) { b.content = 9000 },
+		"raw":     func(b *budget) { b.raw = 4000 },
+		"names":   func(b *budget) { b.names = 15 },
+	} {
+		b := full()
+		cut(b)
+		if _, err := filtered(buffer.Bytes(), b); !errors.Is(err, errImageTooLarge) {
+			t.Errorf("the %s budget did not stop the stream: %v", name, err)
 		}
 	}
-	if err := read(&budget{bytes: 1 << 20, entries: 10, extended: 1 << 20}); err != nil {
-		t.Fatalf("a stream inside its budget failed: %v", err)
-	}
-	if err := read(&budget{bytes: 1 << 20, entries: 9, extended: 1 << 20}); !errors.Is(err, errImageTooLarge) {
-		t.Errorf("10 entries passed a budget of 9: %v", err)
-	}
-	if err := read(&budget{bytes: 4000, entries: 100, extended: 1 << 20}); !errors.Is(err, errImageTooLarge) {
-		t.Errorf("the byte budget did not stop the stream: %v", err)
-	}
 
-	// A long name travels in an extended header, which the meter sizes.
+	// A long name travels in an extended header, which archive/tar caps.
 	buffer.Reset()
 	writer = tar.NewWriter(&buffer)
 	writer.WriteHeader(&tar.Header{Name: strings.Repeat("d/", 40000) + "f", Typeflag: tar.TypeReg, Mode: 0o644})
 	writer.Close()
-	if err := read(&budget{bytes: 1 << 30, entries: 100, extended: 1 << 30}); err == nil || !strings.Contains(err.Error(), "extended header") {
-		t.Errorf("an 80 KB name passed: %v", err)
+	if _, err := filtered(buffer.Bytes(), newBudget()); err == nil {
+		t.Error("an 80 KB name passed")
 	}
 }
 
-func TestTarSize(t *testing.T) {
-	for field, want := range map[string]int64{
-		"00000001750\x00": 1000, "0000000000\x00\x00": 0, "       1750 ": 1000, "\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00": 256,
-	} {
-		if got := tarSize([]byte(field)); got != want {
-			t.Errorf("tarSize(%q) = %d, want %d", field, got, want)
-		}
+// A PAX record can give an entry a size other than its header block's. The
+// count must follow archive/tar, which the merge uses: here the PAX size is 0
+// and the block claims 1 GiB, behind which hide entries the merge will read.
+func TestFilterCountsWhatArchiveTarReads(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	if err := writer.WriteHeader(&tar.Header{Name: "big", Typeflag: tar.TypeReg, Size: 1 << 33, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
 	}
-	if got := tarSize([]byte("\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff")); got >= 0 {
-		t.Errorf("an absurd binary size read as %d", got)
+	stream := buffer.Bytes()[:1536] // the PAX header, its records and the file's block; no content
+	stream = bytes.Replace(stream, []byte("size=8589934592"), []byte("size=0000000000"), 1)
+	block := stream[1024:1536]
+	copy(block[124:136], "07777777777\x00")
+	copy(block[148:156], "        ")
+	sum := 0
+	for _, c := range block {
+		sum += int(c)
+	}
+	copy(block[148:156], fmt.Sprintf("%06o\x00 ", sum))
+
+	var rest bytes.Buffer
+	more := tar.NewWriter(&rest)
+	for i := range 10 {
+		more.WriteHeader(&tar.Header{Name: fmt.Sprintf(".wh.f%d", i), Typeflag: tar.TypeReg, Mode: 0o644})
+	}
+	more.Close()
+	stream = append(append([]byte{}, stream...), rest.Bytes()...)
+
+	n, err := filtered(stream, &budget{raw: 1 << 20, content: 1 << 20, entries: 100, names: 1 << 20})
+	if err != nil || n != 11 {
+		t.Fatalf("got %d entries, %v; archive/tar reads 11", n, err)
+	}
+	if _, err := filtered(stream, &budget{raw: 1 << 20, content: 1 << 20, entries: 5, names: 1 << 20}); !errors.Is(err, errImageTooLarge) {
+		t.Errorf("entries behind a PAX size escaped the count: %v", err)
+	}
+}
+
+// The library reads a configuration of unknown size without a limit.
+func TestConfigSizeMustBeKnownAndSmall(t *testing.T) {
+	for size, ok := range map[int64]bool{-1: false, 0: true, 1000: true, maxConfigBytes + 1: false} {
+		manifest := &v1.Manifest{Config: v1.Descriptor{Size: size}}
+		if err := checkConfig(manifest); (err == nil) != ok {
+			t.Errorf("size %d: %v", size, err)
+		}
 	}
 }
 

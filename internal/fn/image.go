@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -36,13 +37,12 @@ const (
 	// deletes. These cap what is read and unpacked before the layers merge.
 	maxLayerBytes   = 4 * maxImageBytes
 	maxLayerEntries = 4 * maxImageFiles
-	// Long names live in extended headers. A real one is a few hundred bytes.
-	maxExtendedHeader = 64 << 10
-	maxExtendedBytes  = 256 << 20
-	maxConfigBytes    = 1 << 20
-	maxNameBytes      = 4096 // PATH_MAX
-	maxPartBytes      = 255  // NAME_MAX
-	initDir           = ".fn"
+	// The merge keeps every name of every layer in memory, deletion markers too.
+	maxLayerNames  = 256 << 20
+	maxConfigBytes = 1 << 20
+	maxNameBytes   = 4096 // PATH_MAX
+	maxPartBytes   = 255  // NAME_MAX
+	initDir        = ".fn"
 )
 
 // imageSource is the part of an image a function needs.
@@ -148,10 +148,20 @@ func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) 
 	if err != nil {
 		return nil, err
 	}
-	if manifest.Config.Size > maxConfigBytes {
-		return nil, fmt.Errorf("the image's configuration is %d bytes, more than %d", manifest.Config.Size, maxConfigBytes)
+	if err := checkConfig(manifest); err != nil {
+		return nil, err
 	}
 	return budgeted(image)
+}
+
+// checkConfig bounds the configuration, which the library reads into memory
+// whole. It reads at most the size the manifest gives, and a negative size
+// means unknown to it: then it reads whatever the registry sends.
+func checkConfig(manifest *v1.Manifest) error {
+	if size := manifest.Config.Size; size < 0 || size > maxConfigBytes {
+		return fmt.Errorf("the image's configuration is %d bytes, it must be 0 to %d", size, maxConfigBytes)
+	}
+	return nil
 }
 
 // specOf takes the command the image would run.
@@ -179,7 +189,23 @@ func specOf(image v1.Image) (guestSpec, error) {
 var errImageTooLarge = fmt.Errorf("the image is larger than %d MiB unpacked, or has more than %d files", maxImageBytes>>20, maxImageFiles)
 
 // budget is shared by every layer of one image.
-type budget struct{ bytes, entries, extended int64 }
+type budget struct {
+	mu                           sync.Mutex
+	raw, content, entries, names int64
+}
+
+func newBudget() *budget {
+	return &budget{raw: maxLayerBytes, content: maxLayerBytes, entries: maxLayerEntries, names: maxLayerNames}
+}
+
+func (b *budget) take(field *int64, n int64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if *field -= n; *field < 0 {
+		return errImageTooLarge
+	}
+	return nil
+}
 
 // budgeted wraps the image's layers so that reading them stops at the
 // limits. The library that merges layers keeps every name it saw in memory
@@ -190,7 +216,7 @@ func budgeted(image v1.Image) (v1.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	shared := &budget{bytes: maxLayerBytes, entries: maxLayerEntries, extended: maxExtendedBytes}
+	shared := newBudget()
 	wrapped := make([]v1.Layer, len(layers))
 	for i, layer := range layers {
 		wrapped[i] = budgetedLayer{Layer: layer, budget: shared}
@@ -210,104 +236,88 @@ type budgetedLayer struct {
 	budget *budget
 }
 
+// Uncompressed hands the merge a copy of the layer that archive/tar parsed
+// and wrote again. The merge then reads exactly the entries that were
+// counted: a layer cannot hide entries from the count with headers that a
+// raw byte scanner and archive/tar read differently.
 func (l budgetedLayer) Uncompressed() (io.ReadCloser, error) {
 	stream, err := l.Layer.Uncompressed()
 	if err != nil {
 		return nil, err
 	}
-	return &tarMeter{stream: stream, budget: l.budget}, nil
+	reader, writer := io.Pipe()
+	go func() {
+		err := l.budget.filter(writer, stream)
+		_ = stream.Close()
+		_ = writer.CloseWithError(err) // nil ends the reader with io.EOF
+	}()
+	return reader, nil
 }
 
-// tarMeter passes a layer's tar stream through and counts it: bytes,
-// entries, and the bytes of extended headers, which carry long names.
-type tarMeter struct {
-	stream io.ReadCloser
+// rawMeter counts the bytes of a layer as they arrive, headers included.
+type rawMeter struct {
+	in     io.Reader
 	budget *budget
-	header [512]byte
-	filled int   // bytes of the current header block seen so far
-	skip   int64 // bytes of the current entry's content and padding still to pass
 }
 
-func (m *tarMeter) Close() error { return m.stream.Close() }
-
-func (m *tarMeter) Read(p []byte) (int, error) {
-	n, err := m.stream.Read(p)
-	if m.budget.bytes -= int64(n); m.budget.bytes < 0 {
-		return 0, errImageTooLarge
-	}
-	for data := p[:n]; len(data) > 0; {
-		if m.skip > 0 {
-			step := min(int64(len(data)), m.skip)
-			m.skip -= step
-			data = data[step:]
-			continue
-		}
-		copied := copy(m.header[m.filled:], data)
-		m.filled += copied
-		data = data[copied:]
-		if m.filled < len(m.header) {
-			continue
-		}
-		m.filled = 0
-		if countErr := m.entry(); countErr != nil {
-			return 0, countErr
-		}
+func (m rawMeter) Read(p []byte) (int, error) {
+	n, err := m.in.Read(p)
+	if takeErr := m.budget.take(&m.budget.raw, int64(n)); takeErr != nil {
+		return 0, takeErr
 	}
 	return n, err
 }
 
-// entry accounts for one complete header block.
-func (m *tarMeter) entry() error {
-	if m.header == [512]byte{} {
-		return nil // the end marker
-	}
-	if m.budget.entries--; m.budget.entries < 0 {
-		return errImageTooLarge
-	}
-	size := tarSize(m.header[124:136])
-	switch m.header[156] {
-	case tar.TypeLink, tar.TypeSymlink, tar.TypeChar, tar.TypeBlock, tar.TypeDir, tar.TypeFifo:
-		size = 0 // these carry no content, whatever the field says
-	case tar.TypeXHeader, tar.TypeXGlobalHeader, tar.TypeGNULongName, tar.TypeGNULongLink:
-		if size > maxExtendedHeader {
-			return fmt.Errorf("the image has a %d byte extended header: names that long are refused", size)
+// filter parses one layer, counts every entry, name and byte against the
+// budget, and writes the entries again with only the fields a root file
+// system keeps. archive/tar caps each extended header at 1 MiB.
+func (b *budget) filter(out io.Writer, in io.Reader) error {
+	reader, writer := tar.NewReader(rawMeter{in: in, budget: b}), tar.NewWriter(out)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return writer.Close()
 		}
-		if m.budget.extended -= size; m.budget.extended < 0 {
-			return errImageTooLarge
+		if err != nil {
+			return err
 		}
-	}
-	if size < 0 {
-		return errors.New("the image has a tar entry with a size that is not a number")
-	}
-	m.skip = (size + 511) &^ 511
-	return nil
-}
-
-// tarSize reads a tar size field: octal text, or binary when the top bit is set.
-func tarSize(field []byte) int64 {
-	var value int64
-	if field[0]&0x80 != 0 {
-		for i, b := range field {
-			if i == 0 {
-				b &= 0x7f
+		if err := b.take(&b.entries, 1); err != nil {
+			return err
+		}
+		if long := max(len(header.Name), len(header.Linkname)); long > maxNameBytes {
+			return fmt.Errorf("the image has a path of %d bytes", long)
+		}
+		if err := b.take(&b.names, int64(len(header.Name)+len(header.Linkname))); err != nil {
+			return err
+		}
+		clean := &tar.Header{
+			Typeflag: header.Typeflag, Name: header.Name, Linkname: header.Linkname,
+			Mode: header.Mode, Uid: header.Uid, Gid: header.Gid, ModTime: header.ModTime,
+			Format: tar.FormatPAX,
+		}
+		switch header.Typeflag {
+		case tar.TypeReg, tar.TypeGNUSparse, '\x00':
+			// A sparse file is read with its holes filled, at its full size.
+			if header.Size < 0 || header.Size > maxImageBytes {
+				return errImageTooLarge
 			}
-			if value > 1<<54 {
-				return -1
+			if err := b.take(&b.content, header.Size); err != nil {
+				return err
 			}
-			value = value<<8 | int64(b)
+			clean.Typeflag, clean.Size = tar.TypeReg, header.Size
+		case tar.TypeDir, tar.TypeSymlink, tar.TypeLink, tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+		default:
+			continue // a type no file system holds
 		}
-		return value
-	}
-	for _, b := range field {
-		if b < '0' || b > '7' {
-			if value == 0 && b == ' ' {
-				continue
+		if err := writer.WriteHeader(clean); err != nil {
+			return err
+		}
+		if clean.Size > 0 {
+			if _, err := io.CopyN(writer, reader, clean.Size); err != nil {
+				return err
 			}
-			break
 		}
-		value = value<<3 | int64(b-'0')
 	}
-	return value
 }
 
 // capped stops a stream that grows past its limit.
