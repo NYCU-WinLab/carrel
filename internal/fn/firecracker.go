@@ -37,10 +37,11 @@ const (
 		"i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd random.trust_cpu=on"
 
 	// Paths inside a jail. A snapshot records the path of its root file
-	// system, so the build and every wake use the same ones. /in holds hard
-	// links to function files and is root's. /out exists only in a build: a
-	// small file system of its own that the snapshot is written to.
-	jailIn     = "/in"
+	// system, so the build and every wake use the same ones, and so do
+	// snapshots built by earlier versions. /fn holds hard links to function
+	// files and is root's. /out exists only in a build: a small file system
+	// of its own that the snapshot is written to.
+	jailIn     = "/fn"
 	jailOut    = "/out"
 	jailRootfs = jailIn + "/rootfs.ext4"
 	jailKernel = jailIn + "/vmlinux"
@@ -98,8 +99,6 @@ type Firecracker struct {
 	closed    bool
 	// netMu keeps Guard from checking a namespace that is being made again.
 	netMu sync.Mutex
-	// binaryLimit is the size of the Firecracker executable plus 1 MiB.
-	binaryLimit int
 	// logs keeps one size-capped serial log per function file.
 	logsMu sync.Mutex
 	logs   map[string]*capLog
@@ -142,12 +141,12 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	if err := prepareHost(cfg.Egress, cfg.Router); err != nil {
 		return nil, err
 	}
-	binary, err := os.Stat(cfg.Firecracker)
-	if err != nil {
-		return nil, err
+	// No core files: a Firecracker that crashes on purpose would write one
+	// the size of its guest's memory. Every jailer and Firecracker inherits this.
+	if err := unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{}); err != nil {
+		return nil, fmt.Errorf("turn off core files: %w", err)
 	}
-	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots), logs: map[string]*capLog{},
-		binaryLimit: int(binary.Size()) + 1<<20}
+	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots), logs: map[string]*capLog{}}
 	if cfg.Router {
 		if fc.hostRules, err = expectedListing(hostRules(cfg.Egress)); err != nil {
 			return nil, err
@@ -365,7 +364,7 @@ type vm struct {
 // jail describes what one Firecracker process may see.
 type jail struct {
 	memoryMB int
-	// files maps a path under /in to the host file it is a hard link of.
+	// files maps a path under /fn to the host file it is a hard link of.
 	files map[string]string
 	// build gives the process /out, the only place it may write: a file
 	// system of memoryMB plus outSlackMB. Without it the process can create
@@ -450,10 +449,10 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 			return nil, fmt.Errorf("link %s into the jail: %w", host, err)
 		}
 	}
-	// No file may grow larger than the snapshot of a build, or outside a
-	// build than the copy of Firecracker the jailer writes after it set the
-	// limit. Pipes and devices are not files here.
-	fileLimit := fc.binaryLimit
+	// No file may grow larger than the snapshot of a build, or 1 MiB outside
+	// a build: the jailer copies Firecracker in before it sets the limit, and
+	// writes only the PID file after. Pipes and devices are not files here.
+	fileLimit := 1 << 20
 	if j.build {
 		if err := fc.mountOut(s, root, j.memoryMB+outSlackMB); err != nil {
 			return nil, err
@@ -469,7 +468,12 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 	defer console.Close()
 	go func() {
 		defer output.Close()
-		_, _ = io.Copy(fc.logFor(logPath), output)
+		if _, err := io.Copy(fc.logFor(logPath), output); err != nil {
+			// The log cannot be written. Keep reading, or Firecracker
+			// would block on its console and the guest with it.
+			slog.Error("function log", "path", logPath, "error", err)
+			_, _ = io.Copy(io.Discard, output)
+		}
 	}()
 	// Not CommandContext: a jailer killed after it forked would leave a
 	// Firecracker that nobody watches. The jailer ends by itself in milliseconds.
@@ -625,7 +629,8 @@ func (fc *Firecracker) mountOut(s *slot, root string, sizeMB int) error {
 }
 
 // capLog is a function's serial log: log, and log.1 once log reached logHalf.
-// Every instance of the function writes through the same one.
+// Every instance of the function writes through the same one, and only one
+// process writes a log: the router writes log, a build writes build.log.
 type capLog struct {
 	mu   sync.Mutex
 	path string

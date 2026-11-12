@@ -48,25 +48,26 @@ root = f"/proc/{pid}/root"
 top = sorted(os.listdir(root))
 mount_ns = os.readlink(f"/proc/{pid}/ns/mnt")
 check("jail: own root directory with nothing of the host", mount_ns != os.readlink("/proc/self/ns/mnt")
-      and set(top) <= {"api.sock", "dev", "firecracker", "firecracker.pid", "in", "run"} and "in" in top, str(top))
+      and set(top) <= {"api.sock", "dev", "firecracker", "firecracker.pid", "fn", "run"} and "fn" in top, str(top))
 cgroup = open(f"/proc/{pid}/cgroup").read().strip().split("::")[1]
 limit = int(open(f"/sys/fs/cgroup{cgroup}/memory.max").read())
 check("jail: memory limit is guest memory + 128 MiB", limit == (512 + 128) << 20, f"{limit >> 20} MiB in {cgroup}")
 check("jail: process limit", open(f"/sys/fs/cgroup{cgroup}/pids.max").read().strip() == "64")
 netns = os.readlink(f"/proc/{pid}/ns/net")
 check("jail: own network namespace", netns != os.readlink("/proc/self/ns/net"), netns)
-seen = sorted(os.listdir(root + "/in"))
+seen = sorted(os.listdir(root + "/fn"))
 check("jail: sees only its own function files", seen == ["rootfs.ext4", "snap.mem", "snap.state"], str(seen))
 # disk: the instance can create no file in its jail, and no file may grow
 dirs = [d for d, _, _ in os.walk(root)]
 mine = [d for d in dirs if os.stat(d).st_uid != 0 or os.stat(d).st_mode & 0o022]
 check("disk: every directory of the jail is root's and not writable by others", dirs and not mine, str(mine[:3]))
 fsize = [line for line in open(f"/proc/{pid}/limits") if line.startswith("Max file size")][0].split()
-binary = os.path.getsize(root + "/firecracker")
-check("disk: no file may grow past the Firecracker binary + 1 MiB", fsize[3] == fsize[4] == str(binary + (1 << 20)), " ".join(fsize[3:5]))
+check("disk: no file may grow past 1 MiB", fsize[3] == fsize[4] == str(1 << 20), " ".join(fsize[3:5]))
+core = [line for line in open(f"/proc/{pid}/limits") if line.startswith("Max core file size")][0].split()
+check("disk: Firecracker may write no core file", core[4] == core[5] == "0", " ".join(core[4:6]))
 # The serial log is a pipe the router reads; the only files Firecracker holds are its read-only inputs.
 held = [os.readlink(f"/proc/{pid}/fd/{fd}") for fd in os.listdir(f"/proc/{pid}/fd")]
-files = sorted({h for h in held if h.startswith("/") and not h.startswith(("/dev/", "/in/"))})
+files = sorted({h for h in held if h.startswith("/") and not h.startswith(("/dev/", "/fn/"))})
 check("disk: Firecracker holds no writable host file, its log included", files == [], str(files))
 check("disk: the serial output goes to a pipe", any(h.startswith("pipe:") for h in held))
 modes = {oct(os.stat(f).st_mode & 0o777) for f in glob.glob(ROOT + "/py/v/*/*")}
@@ -165,7 +166,7 @@ if os.path.exists(ROOT + "/whoami/function.json") and os.path.exists(ROOT + "/ng
     check("image: a function pulled from a registry answers", status == 200 and "Hostname" in body, body[:40].replace("\n", " "))
     status, body = raw("nginx")
     check("image: a function whose image user is not root answers", status == 200 and "nginx" in body.lower())
-    log = open(ROOT + "/nginx/log", errors="replace").read()
+    log = "".join(open(f, errors="replace").read() for f in glob.glob(ROOT + "/nginx/*log"))  # build.log and log
     check("image: its output reaches the function's log", "start worker process" in log and "GET / HTTP" in log)
     time.sleep(5)  # both are built with -idle 3, so they are asleep again for the next run
 print("RESULT", "all pass" if all(results) else "FAILED")
