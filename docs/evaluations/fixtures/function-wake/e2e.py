@@ -48,15 +48,27 @@ root = f"/proc/{pid}/root"
 top = sorted(os.listdir(root))
 mount_ns = os.readlink(f"/proc/{pid}/ns/mnt")
 check("jail: own root directory with nothing of the host", mount_ns != os.readlink("/proc/self/ns/mnt")
-      and set(top) <= {"api.sock", "dev", "firecracker", "firecracker.pid", "fn", "run"} and "fn" in top, str(top))
+      and set(top) <= {"api.sock", "dev", "firecracker", "firecracker.pid", "in", "run"} and "in" in top, str(top))
 cgroup = open(f"/proc/{pid}/cgroup").read().strip().split("::")[1]
 limit = int(open(f"/sys/fs/cgroup{cgroup}/memory.max").read())
 check("jail: memory limit is guest memory + 128 MiB", limit == (512 + 128) << 20, f"{limit >> 20} MiB in {cgroup}")
 check("jail: process limit", open(f"/sys/fs/cgroup{cgroup}/pids.max").read().strip() == "64")
 netns = os.readlink(f"/proc/{pid}/ns/net")
 check("jail: own network namespace", netns != os.readlink("/proc/self/ns/net"), netns)
-seen = sorted(os.listdir(root + "/fn"))
+seen = sorted(os.listdir(root + "/in"))
 check("jail: sees only its own function files", seen == ["rootfs.ext4", "snap.mem", "snap.state"], str(seen))
+# disk: the instance can create no file in its jail, and no file may grow
+dirs = [d for d, _, _ in os.walk(root)]
+mine = [d for d in dirs if os.stat(d).st_uid != 0 or os.stat(d).st_mode & 0o022]
+check("disk: every directory of the jail is root's and not writable by others", dirs and not mine, str(mine[:3]))
+fsize = [line for line in open(f"/proc/{pid}/limits") if line.startswith("Max file size")][0].split()
+binary = os.path.getsize(root + "/firecracker")
+check("disk: no file may grow past the Firecracker binary + 1 MiB", fsize[3] == fsize[4] == str(binary + (1 << 20)), " ".join(fsize[3:5]))
+# The serial log is a pipe the router reads; the only files Firecracker holds are its read-only inputs.
+held = [os.readlink(f"/proc/{pid}/fd/{fd}") for fd in os.listdir(f"/proc/{pid}/fd")]
+files = sorted({h for h in held if h.startswith("/") and not h.startswith(("/dev/", "/in/"))})
+check("disk: Firecracker holds no writable host file, its log included", files == [], str(files))
+check("disk: the serial output goes to a pipe", any(h.startswith("pipe:") for h in held))
 modes = {oct(os.stat(f).st_mode & 0o777) for f in glob.glob(ROOT + "/py/v/*/*")}
 owners = {os.stat(f).st_uid for f in glob.glob(ROOT + "/py/v/*/*")}
 check("jail: function files are read-only and owned by root", modes == {"0o440"} and owners == {0}, f"{modes} {owners}")

@@ -199,12 +199,33 @@ func listTable(namespace string) (string, error) {
 	return string(out), nil
 }
 
+const probePrefix = "cfnprobe"
+
+// removeOldProbes deletes probe namespaces of processes that ended while
+// they probed.
+func removeOldProbes() {
+	entries, _ := os.ReadDir("/run/netns")
+	for _, entry := range entries {
+		pid, ok := strings.CutPrefix(entry.Name(), probePrefix)
+		if !ok {
+			continue
+		}
+		if _, err := strconv.Atoi(pid); err != nil {
+			continue
+		}
+		if _, err := os.Stat("/proc/" + pid); errors.Is(err, os.ErrNotExist) {
+			_ = exec.Command("ip", "netns", "del", entry.Name()).Run()
+		}
+	}
+}
+
 // expectedListing loads rules into a namespace made for this and nothing
 // else, and returns how nft lists them. Guard compares the real tables with
 // it. It comes from the rules, not from the host, so a table that something
 // changed while the router started is never taken as the right one.
 func expectedListing(rules string) (string, error) {
-	probe := fmt.Sprintf("cfnprobe%d", os.Getpid())
+	removeOldProbes()
+	probe := fmt.Sprintf("%s%d", probePrefix, os.Getpid())
 	_ = exec.Command("ip", "netns", "del", probe).Run()
 	if out, err := exec.Command("ip", "netns", "add", probe).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("ip netns add %s: %w: %s", probe, err, bytes.TrimSpace(out))
