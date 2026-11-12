@@ -1816,9 +1816,10 @@ old host.
     are still needed. The striped pools make backups the only recovery from a disk failure.
 15. App artifact limits (section 7.9): 500 MB per release and 3 kept releases are first guesses.
     Revisit after real apps.
-16. Where function hosts run (section 7.11): platform VMs with nested virtualization, as measured,
-    or Firecracker on the nodes themselves. The nodes are faster and put tenant code one layer
-    closer to the hypervisor.
+16. Resolved 2026-11-12: function hosts run in platform VMs with nested virtualization, as
+    measured. A guest that leaves Firecracker lands in a VM, not on a node that holds every
+    tenant's machines, and the guard owns the whole host table, which a node shares with the
+    Proxmox firewall. The same `carrel-fnd` runs on a node if nested virtualization proves too slow.
 17. Function limits (section 7.11): 2 GiB of memory, a 3,600 second timeout, 20 functions and
     20 GiB per tenant are first guesses. Long batch work may need a longer timeout.
 18. How a function reaches its tenant's private addresses (section 7.11). Version 1 allows public
