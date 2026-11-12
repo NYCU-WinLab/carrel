@@ -158,6 +158,10 @@ type state struct {
 	current *awake
 	// fresh mode: one token per running instance.
 	slots chan struct{}
+	// retired is set when a newer deploy or a shutdown replaced this state.
+	// A request that still holds it must look the function up again, or it
+	// would wake an instance that nothing watches.
+	retired bool
 }
 
 // Router sends each request to its function and wakes the function first
@@ -169,43 +173,70 @@ type Router struct {
 
 	mu        sync.Mutex
 	functions map[string]*state
+	closed    bool
 }
+
+// errClosed means the router is shutting down.
+var errClosed = errors.New("the router is shutting down")
 
 func NewRouter(root string, runtime Runtime) *Router {
 	return &Router{root: root, runtime: runtime, now: time.Now, functions: map[string]*state{}}
 }
 
-// function returns the state of a deployed function, loading it on first use.
+// function returns the state of a deployed function. It reads function.json
+// again when the file changed, and retires the state of the old version.
 func (r *Router) function(name string) (*state, error) {
 	if !nameRE.MatchString(name) {
 		return nil, os.ErrNotExist
 	}
+	// One lookup at a time: two first requests must end with one state, or
+	// each would wake its own instance and one of them would never be reaped.
+	r.mu.Lock()
+	s, stale, err := r.lookup(name)
+	r.mu.Unlock()
+	if stale != nil {
+		stale.retire()
+	}
+	return s, err
+}
+
+// lookup runs with r.mu held. stale is a state the caller must retire.
+func (r *Router) lookup(name string) (s, stale *state, err error) {
+	if r.closed {
+		return nil, nil, errClosed
+	}
 	dir := filepath.Join(r.root, name)
+	current := r.functions[name]
 	info, err := os.Stat(filepath.Join(dir, "function.json"))
 	if err != nil {
-		r.Forget(name)
-		return nil, err
+		delete(r.functions, name)
+		return nil, current, err
 	}
-	r.mu.Lock()
-	s, ok := r.functions[name]
-	r.mu.Unlock()
-	if ok && s.loaded.Equal(info.ModTime()) {
-		return s, nil
+	if current != nil && current.loaded.Equal(info.ModTime()) {
+		return current, nil, nil
 	}
-	// New or deployed again: the old instance runs the old version, so stop it.
-	r.Forget(name)
+	// New or deployed again: the old instance runs the old version.
 	f, err := LoadFunction(dir)
 	if err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if s, ok := r.functions[name]; ok { // another request loaded it first
-		return s, nil
+		delete(r.functions, name)
+		return nil, current, err
 	}
 	s = &state{fn: f, loaded: info.ModTime(), slots: make(chan struct{}, f.MaxInstances)}
 	r.functions[name] = s
-	return s, nil
+	return s, current, nil
+}
+
+// retire stops the state's instance and tells requests that still hold the
+// state to look the function up again.
+func (s *state) retire() {
+	s.mu.Lock()
+	current := s.current
+	s.current = nil
+	s.retired = true
+	s.mu.Unlock()
+	if current != nil {
+		current.instance.Stop()
+	}
 }
 
 // Forget drops a function's cached state and stops its instance, so the next
@@ -215,15 +246,8 @@ func (r *Router) Forget(name string) {
 	s := r.functions[name]
 	delete(r.functions, name)
 	r.mu.Unlock()
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	current := s.current
-	s.current = nil
-	s.mu.Unlock()
-	if current != nil {
-		current.instance.Stop()
+	if s != nil {
+		s.retire()
 	}
 }
 
@@ -242,28 +266,47 @@ func functionName(req *http.Request) string {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	s, err := r.function(functionName(req))
-	if errors.Is(err, os.ErrNotExist) {
-		http.Error(w, "no such function", http.StatusNotFound)
-		return
+	name := functionName(req)
+	// A state can be retired between the lookup and its use, by a deploy or
+	// a removal. Look it up again; a few tries cover any real sequence.
+	for range 4 {
+		s, err := r.function(name)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			http.Error(w, "no such function", http.StatusNotFound)
+			return
+		case errors.Is(err, errClosed):
+			busy(w)
+			return
+		case err != nil:
+			slog.Error("load function", "error", err)
+			http.Error(w, "function is not deployable", http.StatusInternalServerError)
+			return
+		}
+		ctx, cancel := context.WithTimeout(req.Context(), time.Duration(s.fn.TimeoutSeconds)*time.Second)
+		served := r.serve(w, req.WithContext(ctx), s)
+		cancel()
+		if served {
+			return
+		}
 	}
-	if err != nil {
-		slog.Error("load function", "error", err)
-		http.Error(w, "function is not deployable", http.StatusInternalServerError)
-		return
-	}
-	ctx, cancel := context.WithTimeout(req.Context(), time.Duration(s.fn.TimeoutSeconds)*time.Second)
-	defer cancel()
-	req = req.WithContext(ctx)
-	if s.fn.Mode == ModeFresh {
-		r.serveFresh(w, req, s)
-		return
-	}
-	r.serveReuse(w, req, s)
+	busy(w)
 }
 
-func (r *Router) serveReuse(w http.ResponseWriter, req *http.Request, s *state) {
+// serve reports false when the state was retired before the request used it.
+func (r *Router) serve(w http.ResponseWriter, req *http.Request, s *state) bool {
+	if s.fn.Mode == ModeFresh {
+		return r.serveFresh(w, req, s)
+	}
+	return r.serveReuse(w, req, s)
+}
+
+func (r *Router) serveReuse(w http.ResponseWriter, req *http.Request, s *state) bool {
 	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		return false
+	}
 	if s.current != nil {
 		select {
 		case <-s.current.instance.Done(): // it ended on its own; wake a new one
@@ -278,7 +321,7 @@ func (r *Router) serveReuse(w http.ResponseWriter, req *http.Request, s *state) 
 		if err != nil {
 			s.mu.Unlock()
 			wakeFailed(w, err)
-			return
+			return true
 		}
 		s.current = &awake{instance: instance, proxy: proxyTo(instance, s.fn)}
 	}
@@ -292,24 +335,32 @@ func (r *Router) serveReuse(w http.ResponseWriter, req *http.Request, s *state) 
 	current.inflight--
 	current.lastUsed = r.now()
 	s.mu.Unlock()
+	return true
 }
 
-func (r *Router) serveFresh(w http.ResponseWriter, req *http.Request, s *state) {
+func (r *Router) serveFresh(w http.ResponseWriter, req *http.Request, s *state) bool {
+	s.mu.Lock()
+	retired := s.retired
+	s.mu.Unlock()
+	if retired {
+		return false
+	}
 	select {
 	case s.slots <- struct{}{}:
 	default:
 		busy(w)
-		return
+		return true
 	}
 	defer func() { <-s.slots }()
 	instance, err := r.wake(req.Context(), s.fn)
 	if err != nil {
 		wakeFailed(w, err)
-		return
+		return true
 	}
 	// The instance dies with the answer: no request sees another's memory or files.
 	defer instance.Stop()
 	proxyTo(instance, s.fn).ServeHTTP(w, req)
+	return true
 }
 
 func (r *Router) wake(ctx context.Context, f Function) (Instance, error) {
@@ -365,14 +416,14 @@ func (r *Router) Run(ctx context.Context) {
 		case <-ticker.C:
 			r.Reap()
 		case <-ctx.Done():
+			// Closed first: no request may wake an instance after this.
 			r.mu.Lock()
-			names := make([]string, 0, len(r.functions))
-			for name := range r.functions {
-				names = append(names, name)
-			}
+			r.closed = true
+			states := r.functions
+			r.functions = map[string]*state{}
 			r.mu.Unlock()
-			for _, name := range names {
-				r.Forget(name)
+			for _, s := range states {
+				s.retire()
 			}
 			return
 		}

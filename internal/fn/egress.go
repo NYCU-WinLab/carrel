@@ -138,7 +138,8 @@ table inet %[1]s {
 // flows pass: the guest to a public address, and the router to the guest.
 // A packet that conntrack calls invalid would skip the address translation
 // and leave with whatever source the guest wrote, so only tracked packets
-// from the guest's one address are forwarded.
+// from the guest's one address are forwarded, and nothing leaves that was
+// not translated to the link's own address.
 func insideRules(e Egress) string {
 	return fmt.Sprintf(`add table inet %[1]s
 delete table inet %[1]s
@@ -169,8 +170,12 @@ table inet %[1]s {
 		type nat hook postrouting priority srcnat; policy accept;
 		oifname "%[3]s" masquerade
 	}
+	chain translated {
+		type filter hook postrouting priority srcnat + 10; policy accept;
+		oifname "%[3]s" ip saddr != %[5]s drop
+	}
 }
-`, insideTable, e.blockedSet(), insideLink, guestAddr)
+`, insideTable, e.blockedSet(), insideLink, guestAddr, egressNet)
 }
 
 func nft(namespace, rules string) error {

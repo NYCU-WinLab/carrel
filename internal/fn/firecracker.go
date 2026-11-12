@@ -84,14 +84,28 @@ type Firecracker struct {
 	cfg   Config
 	slots chan *slot
 	// recycling counts slots that are being cleaned in the background.
+	// mu guards closed, so no slot starts recycling after Close began.
 	recycling sync.WaitGroup
+	mu        sync.Mutex
+	closed    bool
 }
 
 type slot struct {
 	name string
 	uid  int
 	link int
-	ns   *os.File
+	// mu guards ns against a dial that arrives after the slot was recycled:
+	// a closed descriptor's number can already name another namespace.
+	mu     sync.RWMutex
+	ns     *os.File
+	closed bool
+}
+
+func (s *slot) close() {
+	s.mu.Lock()
+	s.closed = true
+	s.ns.Close()
+	s.mu.Unlock()
 }
 
 // NewFirecracker prepares the cgroup and one network namespace per slot.
@@ -171,11 +185,14 @@ func newSlot(name string, uid, gid, link int, egress Egress) (*slot, error) {
 
 // Close removes the namespaces. Call it after every instance stopped.
 func (fc *Firecracker) Close() {
+	fc.mu.Lock()
+	fc.closed = true
+	fc.mu.Unlock()
 	fc.recycling.Wait()
 	for {
 		select {
 		case s := <-fc.slots:
-			s.ns.Close()
+			s.close()
 			_ = exec.Command("ip", "netns", "del", s.name).Run()
 		default:
 			return
@@ -193,7 +210,15 @@ func (s *slot) inNamespace(do func() error) error {
 		return err
 	}
 	defer original.Close()
-	if err := unix.Setns(int(s.ns.Fd()), unix.CLONE_NEWNET); err != nil {
+	// The lock covers only the switch: after it the thread is inside the
+	// namespace and needs the descriptor no more.
+	s.mu.RLock()
+	err = errors.New("the instance stopped")
+	if !s.closed {
+		err = unix.Setns(int(s.ns.Fd()), unix.CLONE_NEWNET)
+	}
+	s.mu.RUnlock()
+	if err != nil {
 		runtime.UnlockOSThread()
 		return err
 	}
@@ -257,8 +282,22 @@ func (fc *Firecracker) release(s *slot) {
 		slog.Error("slot taken out of use", "slot", s.name, "error", err)
 		return
 	}
-	s.ns.Close()
-	fresh, err := newSlot(s.name, s.uid, fc.cfg.GID, s.link, fc.cfg.Egress)
+	s.close()
+	fc.mu.Lock()
+	closed := fc.closed
+	fc.mu.Unlock()
+	if closed { // shutting down: remove the namespace, do not make a new one
+		_ = exec.Command("ip", "netns", "del", s.name).Run()
+		return
+	}
+	var fresh *slot
+	var err error
+	for attempt := range 3 { // a failed rebuild is often a passing shortage
+		if fresh, err = newSlot(s.name, s.uid, fc.cfg.GID, s.link, fc.cfg.Egress); err == nil {
+			break
+		}
+		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+	}
 	if err != nil {
 		slog.Error("slot taken out of use", "slot", s.name, "error", err)
 		return
@@ -435,8 +474,16 @@ func (v *vm) Done() <-chan struct{}                      { return v.done }
 func (v *vm) Stop() {
 	v.stop.Do(func() {
 		v.kill()
-		// The answer does not wait for the slot to be made new.
+		// The answer does not wait for the slot to be made new. After
+		// Close began, nothing waits for a goroutine, so clean up here.
+		v.fc.mu.Lock()
+		if v.fc.closed {
+			v.fc.mu.Unlock()
+			v.fc.release(v.slot)
+			return
+		}
 		v.fc.recycling.Add(1)
+		v.fc.mu.Unlock()
 		go func() {
 			defer v.fc.recycling.Done()
 			v.fc.release(v.slot)

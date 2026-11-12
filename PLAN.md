@@ -1394,7 +1394,9 @@ to tenant networks, one instance per `reuse` function.
    own. A slot's namespace is made new after every instance, so no connection of the last
    instance leads to the next one. The guest gets the uplink's MTU and public resolvers at
    build time. Making the namespace new costs the `fresh` mode on a 1 vCPU host: p50 went from
-   172 ms to 234 ms. Still open in this step: the host image and the issues above.
+   172 ms to 234 ms. Still open in this step: the host image and the issues above. Measured on
+   the test host: 40 requests at once to a sleeping `reuse` function all answer 200 from one
+   instance, and a stop under 30 `fresh` requests leaves no microVM, namespace, link or cgroup.
 2. The deploy pipeline and the member tools.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.
