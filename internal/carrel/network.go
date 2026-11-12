@@ -370,7 +370,7 @@ func nextNIC(nics []D) int {
 
 func (e *Execution) Reconcile() D {
 	state := e.S.Desired()
-	domains := dicts(state["domains"])
+	domains := withFrozenDomains(dicts(state["domains"]), e.S.Objects("domains"), e.S.Objects("frozen"))
 	for _, d := range domains {
 		if d["state"] == "configuring" {
 			d["state"] = "ready"

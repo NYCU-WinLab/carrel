@@ -626,21 +626,35 @@ func TestFrozenMachinesDomainsAnswer503UntilTheThaw(t *testing.T) {
 	}
 }
 
-// And the gateway is told which machines are frozen: a freeze with a published
-// name leaves the site reconcilable.
-func TestReconcileWithAFrozenMachinesDomain(t *testing.T) {
+// While the machine is being frozen it is "deleting", and the desired state
+// leaves its domains out; the gateway still gets them, so the name answers 503
+// in the very configuration the freeze sends.
+func TestFreezeKeepsTheDomainForTheGateway(t *testing.T) {
 	p, _, _ := freezeSite(t)
 	slug := str(p.Store.Tenants()[0]["slug"])
 	p.Store.Put("domains", "d1", 1, D{"id": "d1", "tenant_n": 1, "vmid": 10100, "sub": "web", "name": "web." + slug + ".winlab.tw", "state": "ready", "target_port": 80})
-	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
-	if p.Store.Get("domains", "d1") == nil {
-		t.Fatal("the freeze dropped the domain")
+	p.Store.Put("domains", "d2", 1, D{"id": "d2", "tenant_n": 1, "vmid": 10100, "sub": "old", "name": "old." + slug + ".winlab.tw", "state": "deleting", "target_port": 80})
+	// As FinishFreeze leaves the records just before it reconciles.
+	m := p.Store.Get("machines", "10100")
+	p.Store.Put("frozen", 10100, 1, merge(m, D{"state": "frozen"}))
+	m["state"] = "deleting"
+	p.Store.Put("machines", 10100, 1, m)
+	if len(dicts(p.Store.Desired()["domains"])) != 0 {
+		t.Fatal("the desired state keeps the domains of a machine that is going")
 	}
-	view := p.Store.Desired()
-	view["frozen"] = p.Store.Objects("frozen")
+	kept := withFrozenDomains(dicts(p.Store.Desired()["domains"]), p.Store.Objects("domains"), p.Store.Objects("frozen"))
+	if len(kept) != 1 || kept[0]["id"] != "d1" {
+		t.Fatalf("the gateway gets %s", encoded(kept))
+	}
+	// A domain of another tenant on the same VMID, or one already listed, is not added.
+	other := withFrozenDomains(kept, []D{{"id": "d1", "tenant_n": 1, "vmid": 10100}, {"id": "d9", "tenant_n": 2, "vmid": 10100, "state": "ready"}}, p.Store.Objects("frozen"))
+	if len(other) != 1 {
+		t.Fatalf("added %s", encoded(other))
+	}
+	view := D{"tenants": p.Store.Tenants(), "machines": []any{}, "domains": kept, "frozen": p.Store.Objects("frozen")}
 	crt, key := testPair(t, "*."+slug+".winlab.tw")
 	caddy, _, _ := gatewayConfig(view, "", nil, []D{{"slug": slug, "fullchain": string(crt), "privkey": string(key)}})
-	if !strings.Contains(caddy, "respond 503") {
-		t.Fatalf("the frozen name is not parked:\n%s", caddy)
+	if !strings.Contains(caddy, "host web."+slug+".winlab.tw") || !strings.Contains(caddy, "respond 503") {
+		t.Fatalf("the name is not parked during the freeze:\n%s", caddy)
 	}
 }
