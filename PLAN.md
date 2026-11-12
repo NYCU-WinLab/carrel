@@ -1232,9 +1232,8 @@ back to sleep when it is idle. The measurements behind the design are in
 Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the router, the snapshot
 build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
 writable overlay, and the jailer around every Firecracker process. They run by hand on one test
-host. Nothing is connected to the control plane, the gateway or MCP. A function has no route out
-of its network namespace yet, and the egress filter that must come with that route does not exist,
-so no tenant code may run on it.
+host. A function has a route to the internet behind the egress filter. Nothing is connected to
+the control plane, the gateway or MCP, and images still come from a local Docker daemon.
 
 **Why carrel offers it**
 
@@ -1311,7 +1310,8 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
   token that reads function versions and nothing else.
 - Each instance has its own network namespace. It may reach the internet and public names. Private
   ranges and platform addresses are dropped, so a function reaches a tenant machine through that
-  machine's public name or port (open decision 18).
+  machine's public name or port (open decision 18). IPv6 is dropped. A function host needs
+  `nftables`, and no other firewall on it may drop forwarded packets by default.
 - The promise of section 7.7 does not cover functions. carrel runs the code, so the platform
   holds the image, the environment and the snapshot, and a snapshot contains the memory of the
   process. Admin reads of them are audited and visible to the tenant in `audit_log`.
@@ -1381,8 +1381,12 @@ to tenant networks, one instance per `reuse` function.
    to the guest's memory plus 128 MiB and processes to 64. Function files are owned by root and
    read-only to the jails' group, because every instance of a function maps the same snapshot. A
    build's snapshot is taken out of the jail only after its Firecracker process ended. With the
-   jailer the same requests measure p95 176 ms, 192 ms and 3 ms. Still open in this step: the
-   egress filter and the host image.
+   jailer the same requests measure p95 176 ms, 192 ms and 3 ms. The egress filter is built:
+   each slot has a link to the host numbered out of `10.251.0.0/16`, and the private, link-local,
+   carrier NAT, loopback and multicast ranges are dropped in the instance's namespace and again
+   on the host. The host accepts nothing from a function. The guest gets the uplink's MTU and
+   public resolvers at build time. Still open in this step: the host image, limits on disk use
+   (issue #225) and a limit on egress traffic (section 6.6).
 2. The deploy pipeline and the member tools.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.

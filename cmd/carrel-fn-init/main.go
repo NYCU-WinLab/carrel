@@ -29,6 +29,8 @@ type spec struct {
 	Env  []string `json:"env"`
 	Cwd  string   `json:"cwd"`
 	Port int      `json:"port"`
+	MTU  int      `json:"mtu"`
+	DNS  []string `json:"dns"`
 }
 
 const (
@@ -65,9 +67,10 @@ func run() error {
 		return fmt.Errorf("overlay: %w", err)
 	}
 	mounts()
-	if err := network(); err != nil {
+	if err := network(s.MTU); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	resolver(s.DNS)
 	go control()
 
 	// The command is looked up in the image's PATH, so the image's
@@ -158,7 +161,7 @@ func mounts() {
 
 // network gives eth0 the one address every function has. Each microVM sits
 // alone in its own network namespace on the host, so the address never clashes.
-func network() error {
+func network(mtu int) error {
 	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM, 0)
 	if err != nil {
 		return err
@@ -173,10 +176,38 @@ func network() error {
 	if err := setAddr(fd, "eth0", unix.SIOCSIFNETMASK, "255.255.255.252"); err != nil {
 		return err
 	}
+	if mtu > 0 {
+		req := ifreqMTU{mtu: int32(mtu)}
+		copy(req.name[:], "eth0")
+		if err := ioctl(fd, unix.SIOCSIFMTU, unsafe.Pointer(&req)); err != nil {
+			return err
+		}
+	}
 	if err := linkUp(fd, "eth0"); err != nil {
 		return err
 	}
 	return defaultRoute(fd, hostAddr)
+}
+
+type ifreqMTU struct {
+	name [unix.IFNAMSIZ]byte
+	mtu  int32
+	_    [20]byte
+}
+
+// resolver points the guest at public resolvers. The image's own file may
+// be a link to a path that does not exist here, so it is replaced.
+func resolver(servers []string) {
+	if len(servers) == 0 {
+		return
+	}
+	var content strings.Builder
+	for _, server := range servers {
+		content.WriteString("nameserver " + server + "\n")
+	}
+	_ = os.MkdirAll("/etc", 0o755)
+	_ = os.Remove("/etc/resolv.conf")
+	_ = os.WriteFile("/etc/resolv.conf", []byte(content.String()), 0o644)
 }
 
 type ifreqAddr struct {

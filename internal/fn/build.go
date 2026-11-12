@@ -30,6 +30,11 @@ type BuildOptions struct {
 	Init string
 	// Root is the directory that holds every function.
 	Root string
+	// MTU is the largest packet the host's uplink carries, and DNS the
+	// public resolvers the function asks. A function reaches no private
+	// address, so the host's own resolver is no use to it.
+	MTU int
+	DNS []string
 }
 
 type guestSpec struct {
@@ -37,6 +42,9 @@ type guestSpec struct {
 	Env  []string `json:"env"`
 	Cwd  string   `json:"cwd"`
 	Port int      `json:"port"`
+	// MTU and DNS describe the function host's network to the guest.
+	MTU int      `json:"mtu"`
+	DNS []string `json:"dns"`
 }
 
 // Build turns an image into a sleeping function: a root file system and a
@@ -70,6 +78,8 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 		return f, err
 	}
 	spec.Port = f.Port
+	spec.MTU = opts.MTU
+	spec.DNS = opts.DNS
 	if err := addInit(tree, opts.Init, spec); err != nil {
 		return f, err
 	}

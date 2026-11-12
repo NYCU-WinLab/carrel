@@ -84,4 +84,29 @@ check("fresh: guest clock is current", abs(b["time"] - time.time()) < 1.0)
 w1 = call("job", "/write")[1]; w2 = call("job", "/write")[1]
 check("overlay: root file system is writable", w1.get("wrote") is True, str(w1))
 check("overlay: writes do not survive the instance", w1.get("seen_before") is False and w2.get("seen_before") is False, str(w2))
+# egress: a function reaches the internet and public names, and no private address.
+# Each blocked target accepts connections from the host itself, so a refusal is the filter's work.
+import socket
+probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect(("1.1.1.1", 53))
+host_addr = probe.getsockname()[0]; probe.close()
+def connect(host, port):
+    return call("job", f"/connect?host={host}&port={port}")[1]
+def from_host(host, port):
+    try:
+        socket.create_connection((host, port), timeout=2).close(); return True
+    except OSError:
+        return False
+check("egress: reaches a public address", connect("1.1.1.1", 443)["ok"])
+resolved = call("job", "/resolve?name=example.com")[1]
+check("egress: resolves a public name", resolved["ok"], str(resolved))
+link = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True).stdout
+link_addr = next(line.split()[3].split("/")[0] for line in link.splitlines() if line.split()[1].startswith("cfnv"))
+for label, host, port in [("the function host's own address", host_addr, 22),
+                          ("the host's end of an egress link", link_addr, 22)]:
+    check(f"egress control: the host itself reaches {label}", from_host(host, port), f"{host}:{port}")
+    check(f"egress: cannot reach {label}", connect(host, port)["ok"] is False, f"{host}:{port}")
+for label, host, port in [("the guest link's host end", "172.16.0.1", 22), ("a metadata address", "169.254.169.254", 80),
+                          ("the platform gateway", "10.200.0.2", 443), ("a node", "192.168.19.101", 8006),
+                          ("a tailnet address", "100.100.1.4", 22), ("loopback of the host", "127.0.0.2", 22)]:
+    check(f"egress: cannot reach {label}", connect(host, port)["ok"] is False, f"{host}:{port}")
 print("RESULT", "all pass" if all(results) else "FAILED")

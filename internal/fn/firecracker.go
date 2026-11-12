@@ -68,6 +68,9 @@ type Config struct {
 	// function files.
 	UIDBase int
 	GID     int
+	// EgressFirst + slot index numbers the slot's link to the host, which
+	// gives it a route to the internet (egress.go).
+	EgressFirst int
 }
 
 // Firecracker wakes functions by restoring Firecracker snapshots. Each
@@ -92,6 +95,9 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	if err := prepareCgroup(); err != nil {
 		return nil, err
 	}
+	if err := prepareHost(); err != nil {
+		return nil, err
+	}
 	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
 	for i := range cfg.Slots {
 		name := cfg.Prefix + strconv.Itoa(cfg.First+i)
@@ -100,7 +106,7 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 			fc.Close()
 			return nil, err
 		}
-		s, err := newSlot(name, cfg.UIDBase+cfg.First+i, cfg.GID)
+		s, err := newSlot(name, cfg.UIDBase+cfg.First+i, cfg.GID, cfg.EgressFirst+i)
 		if err != nil {
 			fc.Close()
 			return nil, err
@@ -124,7 +130,7 @@ func prepareCgroup() error {
 	return nil
 }
 
-func newSlot(name string, uid, gid int) (*slot, error) {
+func newSlot(name string, uid, gid, link int) (*slot, error) {
 	_ = exec.Command("ip", "netns", "del", name).Run() // left over from an earlier run
 	steps := [][]string{
 		{"netns", "add", name},
@@ -140,6 +146,9 @@ func newSlot(name string, uid, gid int) (*slot, error) {
 		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("ip %v: %w: %s", args, err, bytes.TrimSpace(out))
 		}
+	}
+	if err := connect(name, link); err != nil {
+		return nil, err
 	}
 	ns, err := os.Open("/run/netns/" + name)
 	if err != nil {
