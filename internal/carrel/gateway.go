@@ -53,6 +53,22 @@ func checkedPair(bundle D, host string) D {
 	return D{"fullchain": crt, "privkey": key}
 }
 
+// route is one name the gateway serves and where its requests go.
+type route struct {
+	domain  D
+	address string
+	port    int
+}
+
+// forward is the route's Caddy directive: its machine or virtual address, or
+// 503 while the machine it names is frozen.
+func (r route) forward() string {
+	if r.address == "" {
+		return "  respond 503"
+	}
+	return fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
+}
+
 // gatewayConfig returns the gateway's Caddyfile, hosts file and certificate
 // pairs for the desired state.
 func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string, string, map[string]D) {
@@ -73,11 +89,6 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 	vips := map[string]D{}
 	for _, v := range dicts(state["vips"]) {
 		vips[str(v["id"])] = v
-	}
-	type route struct {
-		domain  D
-		address string
-		port    int
 	}
 	routes := map[string][]route{}
 	// Special domain grants (PLAN 6.10) and the routes under each.
@@ -102,6 +113,14 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		grants[g.ID] = g
 	}
+	// A frozen machine keeps its domains for its return (freeze.go). Its names
+	// stay routes of their own that answer 503 until the thaw: a missing route
+	// would hand them to the tenant's catch-all, and a route with no machine
+	// used to fail the configuration of every tenant.
+	frozen := map[int]int{}
+	for _, f := range dicts(state["frozen"]) {
+		frozen[integer(f["vmid"])] = integer(f["tenant_n"])
+	}
 	grantRoutes := map[string][]route{}
 	for _, d := range dicts(state["domains"]) {
 		if d["state"] != "ready" {
@@ -113,20 +132,25 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		} else {
 			target = machines[integer(d["vmid"])]
 		}
-		if target == nil || (d["vip"] != nil && integer(target["tenant_n"]) != integer(d["tenant_n"])) {
+		owner, address := integer(d["tenant_n"]), ""
+		if n, parked := frozen[integer(d["vmid"])]; target == nil && d["vip"] == nil && parked && n == owner {
+			// No address: the route answers 503 (forward).
+		} else if target == nil || (d["vip"] != nil && integer(target["tenant_n"]) != owner) {
 			fail("conflict", "Invalid tenant domain")
+		} else {
+			owner = integer(target["tenant_n"])
+			address = str(target["ip"])
+			if d["vip"] != nil {
+				address = str(target["address"])
+			}
 		}
-		address := str(target["ip"])
-		if d["vip"] != nil {
-			address = str(target["address"])
-		}
-		slug := slugs[integer(target["tenant_n"])]
+		slug := slugs[owner]
 		if id := str(d["grant"]); id != "" {
 			if srv[id] {
 				continue
 			}
 			g, ok := grants[id]
-			if !ok || g.TenantN != integer(d["tenant_n"]) || integer(target["tenant_n"]) != g.TenantN || !g.covers(str(d["name"])) {
+			if !ok || g.TenantN != integer(d["tenant_n"]) || owner != g.TenantN || !g.covers(str(d["name"])) {
 				fail("conflict", "Invalid special domain")
 			}
 			port := integer(d["target_port"])
@@ -194,7 +218,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		lines = append(lines, "https://*."+slug+".winlab.tw {", " tls "+gatewayCerts+"/"+slug+"/fullchain.pem "+gatewayCerts+"/"+slug+"/privkey.pem")
 		fallback := "  respond 404"
 		for _, r := range routes[slug] {
-			upstream := fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
+			upstream := r.forward()
 			if r.domain["sub"] == "*" {
 				// Caddy runs a handle without a matcher after every named
 				// one, so a domain of its own always wins over the catch-all.
@@ -227,7 +251,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 			fallback := "  respond 404"
 			for _, r := range grantRoutes[id] {
 				if r.domain["name"] == g.Name {
-					fallback = fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
+					fallback = r.forward()
 				}
 			}
 			lines = append(lines, "https://*."+g.base()+", https://*.*."+g.base()+" {", " tls {", "  on_demand", " }", " handle {", fallback, " }", "}")
@@ -251,7 +275,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		}
 		fallback := "  respond 404"
 		for _, r := range grantRoutes[id] {
-			upstream := fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
+			upstream := r.forward()
 			if r.domain["name"] == g.Name {
 				// The exact name, or a wildcard's catch-all.
 				fallback = upstream
@@ -327,7 +351,12 @@ func (e *Execution) SyncGateway(state D) map[string]any {
 				fail("backend_unavailable", "Gateway configuration rejected; use the operation ID for operator diagnostics", D{"component": "carrel-gateway", "recovery": "retry_infrastructure"})
 			}
 		}()
-		caddy, hosts, certificates = gatewayConfig(state, e.P.Config.OriginHost(), origin, dicts(state["certificates"]))
+		// The frozen machines are for this configuration only: the nodes get the state as it was.
+		view := D{"frozen": e.S.Objects("frozen")}
+		for k, v := range state {
+			view[k] = v
+		}
+		caddy, hosts, certificates = gatewayConfig(view, e.P.Config.OriginHost(), origin, dicts(state["certificates"]))
 	}()
 	pairs, held := D{}, map[string]any{}
 	for name, pair := range certificates {

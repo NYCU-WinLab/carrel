@@ -350,6 +350,29 @@ func (e *Execution) FinishFreeze(t D) D {
 	return D{"machine": e.PublicFrozen(e.S.Get("frozen", str(m["vmid"]))), "dry_run": false, "quota_after": e.Quota(t)}
 }
 
+// withFrozenDomains returns the desired domains plus those of frozen machines
+// the desired state left out. While a machine is being frozen it is "deleting"
+// for the nodes, which takes its domains out too; the gateway must keep each
+// name as a route that answers 503 from that moment (gatewayConfig), or the
+// tenant's catch-all would take its requests until the next reconcile.
+func withFrozenDomains(desired, stored, frozen []D) []D {
+	owner := map[int]int{}
+	for _, f := range frozen {
+		owner[integer(f["vmid"])] = integer(f["tenant_n"])
+	}
+	have := map[string]bool{}
+	for _, d := range desired {
+		have[str(d["id"])] = true
+	}
+	for _, d := range stored {
+		n, parked := owner[integer(d["vmid"])]
+		if parked && d["vip"] == nil && d["state"] != "deleting" && n == integer(d["tenant_n"]) && !have[str(d["id"])] {
+			desired = append(desired, d)
+		}
+	}
+	return desired
+}
+
 func toDicts[T any](rows []T) []D {
 	out := []D{}
 	for _, r := range rows {
