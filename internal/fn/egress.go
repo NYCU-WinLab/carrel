@@ -87,6 +87,11 @@ func (e Egress) blockedSet() string {
 
 // hostRules is the function host's rule set. Loading it replaces the old
 // table in one transaction. e must come from resolve.
+//
+// It assumes the host has no other table that changes the source of a
+// forwarded packet before the forward hook, and no other forward chain with
+// policy drop: the first would get past the source check, the second would
+// stop all egress. A function host runs nothing else (PLAN 7.11).
 func hostRules(e Egress) string {
 	return fmt.Sprintf(`add table inet %[1]s
 delete table inet %[1]s
@@ -176,6 +181,21 @@ func nft(namespace, rules string) error {
 		return fmt.Errorf("nft in %q: %w: %s", namespace, err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// listTable returns the function table of the host, or of a namespace, as
+// nft prints it. It is empty when the table is missing.
+func listTable(namespace string) string {
+	args := []string{"list", "table", "inet", hostTable}
+	name := "nft"
+	if namespace != "" {
+		name, args = "ip", append([]string{"netns", "exec", namespace, "nft"}, args...)
+	}
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // prepareHost lets the host forward behind its rules. The rules go in

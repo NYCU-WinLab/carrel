@@ -112,6 +112,20 @@ func serve(args []string) error {
 		router.Run(ctx)
 		close(reaped)
 	}()
+	guarded := make(chan struct{})
+	go func() {
+		defer close(guarded)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				runtime.Guard()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	server := &http.Server{Addr: *listen, Handler: router, ReadHeaderTimeout: 10 * time.Second}
 	drained := make(chan struct{})
 	go func() {
@@ -130,6 +144,7 @@ func serve(args []string) error {
 	}
 	stop()
 	<-reaped
+	<-guarded
 	runtime.Close()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
