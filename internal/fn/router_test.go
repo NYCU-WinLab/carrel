@@ -298,3 +298,63 @@ func TestNormalizeLimits(t *testing.T) {
 		}
 	}
 }
+
+// Two first requests used to build two states: each woke its own instance,
+// and the one whose state was replaced was never stopped.
+func TestFirstRequestsShareOneStateAndLeakNoInstance(t *testing.T) {
+	for range 200 {
+		router, runtime, root := setup(t, nil)
+		deploy(t, root, "api", "v1", "")
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				get(router, "api")
+			}()
+		}
+		wg.Wait()
+		if wakes := runtime.wakes.Load(); wakes != 1 {
+			t.Fatalf("wakes = %d, want 1", wakes)
+		}
+		router.Forget("api")
+		if stops := runtime.stops.Load(); stops != 1 {
+			t.Fatalf("stops = %d, want 1: an instance is left awake", stops)
+		}
+	}
+}
+
+func TestARetiredStateIsLookedUpAgain(t *testing.T) {
+	router, runtime, root := setup(t, nil)
+	deploy(t, root, "api", "v1", "")
+	old, err := router.function("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.retire() // a deploy or a removal happened after the lookup
+	recorder := httptest.NewRecorder()
+	if router.serve(recorder, httptest.NewRequest(http.MethodGet, "http://api.example.test/", nil), old) {
+		t.Fatal("a retired state served a request")
+	}
+	if wakes := runtime.wakes.Load(); wakes != 0 {
+		t.Fatalf("a retired state woke %d instance(s)", wakes)
+	}
+}
+
+func TestNoWakeAfterShutdown(t *testing.T) {
+	router, runtime, root := setup(t, nil)
+	deploy(t, root, "api", "v1", "")
+	get(router, "api")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	router.Run(ctx)
+	if stops := runtime.stops.Load(); stops != 1 {
+		t.Fatalf("stops = %d, want 1", stops)
+	}
+	if got := get(router, "api"); got.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status after shutdown = %d, want 503", got.Code)
+	}
+	if wakes := runtime.wakes.Load(); wakes != 1 {
+		t.Fatalf("wakes = %d, want 1: a request woke an instance after shutdown", wakes)
+	}
+}

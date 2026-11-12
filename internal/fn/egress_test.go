@@ -123,14 +123,15 @@ func TestRulesKeepTheirGuards(t *testing.T) {
 		`ip saddr 172.16.0.2 ct state new,established,related ip daddr != @blocked accept`,
 		`iifname "tap0" tcp dport 25 drop`,
 		`type filter hook output priority filter; policy drop;`,
+		`oifname "eth0" ip saddr != 10.251.0.0/16 drop`,
 		"140.113.60.189/32",
 	} {
 		if !strings.Contains(inside, want) {
 			t.Errorf("namespace rules lack %q", want)
 		}
 	}
-	// Two each in forward, input and output, and the policy of the NAT chain.
-	if strings.Count(inside, "accept") != 7 {
-		t.Errorf("the namespace rules accept in %d places, want 7: every new accept needs a review", strings.Count(inside, "accept"))
+	// Two each in forward, input and output, and the policies of the two postrouting chains.
+	if strings.Count(inside, "accept") != 8 {
+		t.Errorf("the namespace rules accept in %d places, want 8: every new accept needs a review", strings.Count(inside, "accept"))
 	}
 }

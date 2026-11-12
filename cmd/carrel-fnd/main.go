@@ -113,14 +113,22 @@ func serve(args []string) error {
 		close(reaped)
 	}()
 	server := &http.Server{Addr: *listen, Handler: router, ReadHeaderTimeout: 10 * time.Second}
+	drained := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdown)
+		close(drained)
 	}()
 	slog.Info("serving", "listen", *listen, "root", c.root, "slots", *slots)
 	err = server.ListenAndServe()
+	// ListenAndServe returns when the shutdown starts. Wait until requests
+	// drained and instances stopped before the namespaces go away.
+	if errors.Is(err, http.ErrServerClosed) {
+		<-drained
+	}
+	stop()
 	<-reaped
 	runtime.Close()
 	if errors.Is(err, http.ErrServerClosed) {
