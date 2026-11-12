@@ -183,13 +183,19 @@ type Router struct {
 	mu        sync.Mutex
 	functions map[string]*state
 	closed    bool
+	// retiring counts states a request took out of functions and is
+	// retiring; Forget waits for them too.
+	retiring int
+	retired  *sync.Cond
 }
 
 // errClosed means the router is shutting down.
 var errClosed = errors.New("the router is shutting down")
 
 func NewRouter(root string, runtime Runtime) *Router {
-	return &Router{root: root, runtime: runtime, now: time.Now, functions: map[string]*state{}}
+	r := &Router{root: root, runtime: runtime, now: time.Now, functions: map[string]*state{}}
+	r.retired = sync.NewCond(&r.mu)
+	return r
 }
 
 // function returns the state of a deployed function. It reads function.json
@@ -202,9 +208,16 @@ func (r *Router) function(name string) (*state, error) {
 	// each would wake its own instance and one of them would never be reaped.
 	r.mu.Lock()
 	s, stale, err := r.lookup(name)
+	if stale != nil {
+		r.retiring++
+	}
 	r.mu.Unlock()
 	if stale != nil {
 		stale.retire()
+		r.mu.Lock()
+		r.retiring--
+		r.retired.Broadcast()
+		r.mu.Unlock()
 	}
 	return s, err
 }
@@ -268,6 +281,12 @@ func (r *Router) Forget(name string) {
 	if s != nil {
 		s.retire()
 	}
+	// A request may have taken the state out first and still be retiring it.
+	r.mu.Lock()
+	for r.retiring > 0 {
+		r.retired.Wait()
+	}
+	r.mu.Unlock()
 }
 
 // functionName takes the function from the X-Carrel-Function header the

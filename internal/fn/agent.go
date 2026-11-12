@@ -158,7 +158,38 @@ func (a *Agent) fetch(ctx context.Context, since int64) (Desired, error) {
 	if answer.Revision == nil || answer.Functions == nil {
 		return Desired{}, errors.New("the control plane's state lacks revision or functions")
 	}
-	return Desired{Revision: *answer.Revision, Functions: *answer.Functions}, nil
+	desired := Desired{Revision: *answer.Revision, Functions: *answer.Functions}
+	if err := desired.check(); err != nil {
+		return Desired{}, fmt.Errorf("the control plane's state is refused: %w", err)
+	}
+	return desired, nil
+}
+
+// check refuses a state with any part the agent cannot use, before any file
+// changes: a function skipped for a bad field would look unnamed, and its
+// files would go.
+func (d Desired) check() error {
+	ids := map[string]bool{}
+	for _, f := range d.Functions {
+		if !nameRE.MatchString(f.ID) || ids[f.ID] {
+			return fmt.Errorf("function id %q is invalid or repeated", f.ID)
+		}
+		ids[f.ID] = true
+		if f.Versions == nil {
+			return fmt.Errorf("function %s has no versions list", f.ID)
+		}
+		versions := map[string]bool{}
+		for _, v := range f.Versions {
+			if !versionRE.MatchString(v.Version) || versions[v.Version] {
+				return fmt.Errorf("function %s: version %q is invalid or repeated", f.ID, v.Version)
+			}
+			versions[v.Version] = true
+		}
+		if f.Current != "" && !versions[f.Current] {
+			return fmt.Errorf("function %s: current version %q is not listed", f.ID, f.Current)
+		}
+	}
+	return nil
 }
 
 func (a *Agent) report(ctx context.Context, inventory Inventory) error {

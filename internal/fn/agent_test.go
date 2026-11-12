@@ -243,6 +243,13 @@ func TestAgentRefusesAnIncompleteState(t *testing.T) {
 	answers := map[string]bool{
 		`{}`: false, `null`: false, `{"revision":3}`: false, `{"functions":[]}`: false,
 		`{"revision":3,"functions":null}`: false, `{"revision":3,"functions":[]}`: true,
+		`{"revision":3,"functions":[{}]}`:                                                         false,
+		`{"revision":3,"functions":[{"id":"t1-a"}]}`:                                              false,
+		`{"revision":3,"functions":[{"id":"t1-a","versions":null}]}`:                              false,
+		`{"revision":3,"functions":[{"id":"../a","versions":[]}]}`:                                false,
+		`{"revision":3,"functions":[{"id":"t1-a","versions":[{}]}]}`:                              false,
+		`{"revision":3,"functions":[{"id":"t1-a","current":"v2","versions":[{"version":"v1"}]}]}`: false,
+		`{"revision":3,"functions":[{"id":"t1-a","versions":[]},{"id":"t1-a","versions":[]}]}`:    false,
 	}
 	for answer, valid := range answers {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +261,7 @@ func TestAgentRefusesAnIncompleteState(t *testing.T) {
 		if valid != (err == nil) {
 			t.Fatalf("%s: err %v, want valid %v", answer, err, valid)
 		}
-		if valid && (desired.Revision != 3 || len(desired.Functions) != 0) {
+		if valid && (desired.Revision != 3 || desired.Functions == nil) {
 			t.Fatalf("%s: %+v", answer, desired)
 		}
 	}
