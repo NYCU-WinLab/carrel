@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -409,6 +410,22 @@ func TestFilterCountsWhatArchiveTarReads(t *testing.T) {
 	}
 	if _, err := filtered(stream, &budget{raw: 1 << 20, content: 1 << 20, entries: 5, names: 1 << 20}); !errors.Is(err, errImageTooLarge) {
 		t.Errorf("entries behind a PAX size escaped the count: %v", err)
+	}
+}
+
+// The library reports a layer whose digest does not match at the end of the
+// stream, after the tar trailer. The filter must read that far.
+func TestFilterReadsTheLayerToItsEnd(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	writer.WriteHeader(&tar.Header{Name: "evil", Typeflag: tar.TypeReg, Mode: 0o644})
+	writer.Close()
+	digest := errors.New("error verifying sha256 checksum")
+	in := io.MultiReader(bytes.NewReader(buffer.Bytes()), iotest.ErrReader(digest))
+	reader, out := io.Pipe()
+	go func() { out.CloseWithError(newBudget().filter(out, in)) }()
+	if _, err := io.ReadAll(reader); !errors.Is(err, digest) {
+		t.Fatalf("err = %v, want the digest error behind the trailer", err)
 	}
 }
 

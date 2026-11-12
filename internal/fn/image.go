@@ -276,6 +276,12 @@ func (b *budget) filter(out io.Writer, in io.Reader) error {
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
+			// The library checks the layer's digest only when its stream
+			// reaches EOF, which is past the tar trailer. Without this read
+			// a registry could swap a layer and the build would not notice.
+			if _, err := io.Copy(io.Discard, rawMeter{in: in, budget: b}); err != nil {
+				return err
+			}
 			return writer.Close()
 		}
 		if err != nil {
