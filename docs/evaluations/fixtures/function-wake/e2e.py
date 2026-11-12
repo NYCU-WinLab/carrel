@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""End-to-end check of carrel-fnd on a function host: reuse, idle sleep, fresh, clock, overlay."""
-import json, subprocess, time, urllib.request
+"""End-to-end check of carrel-fnd on a function host: reuse, idle sleep, fresh, clock, overlay, jail.
+
+Run as root on the function host while `carrel-fnd serve` listens on 127.0.0.1:8090.
+Functions `py` (reuse, idle 3 s, 512 MiB) and `job` (fresh) must be built from the test image.
+"""
+import glob, json, os, subprocess, time, urllib.request
+
+ROOT = "/var/lib/carrel-fn"
 
 def call(name, path="/"):
     req = urllib.request.Request("http://127.0.0.1:8090" + path, headers={"X-Carrel-Function": name})
@@ -29,9 +35,37 @@ warm = [call("py")[0] for _ in range(200)]
 stats("reuse: warm request through the router", warm)
 check("reuse: one microVM for 201 requests", vms() == 1, f"{vms()} running")
 
+# jail: what the one awake Firecracker process may see and do
+pid = int(subprocess.run(["pgrep", "-o", "firecracker"], capture_output=True, text=True).stdout)
+status = dict(line.split(":\t", 1) for line in open(f"/proc/{pid}/status").read().splitlines() if ":\t" in line)
+uid = int(status["Uid"].split()[0])
+check("jail: Firecracker does not run as root", uid >= 300000, f"uid {uid}")
+check("jail: no capabilities", int(status["CapEff"], 16) == 0 and int(status["CapPrm"], 16) == 0, status["CapEff"])
+check("jail: seccomp filter is on", status["Seccomp"].strip() == "2", status["Seccomp"].strip())
+check("jail: own PID namespace", len(status["NSpid"].split()) == 2, status["NSpid"].strip())
+# The jailer pivots into the jail in a new mount namespace, so the host reads the jail through /proc.
+root = f"/proc/{pid}/root"
+top = sorted(os.listdir(root))
+mount_ns = os.readlink(f"/proc/{pid}/ns/mnt")
+check("jail: own root directory with nothing of the host", mount_ns != os.readlink("/proc/self/ns/mnt")
+      and set(top) <= {"api.sock", "dev", "firecracker", "firecracker.pid", "fn", "run"} and "fn" in top, str(top))
+cgroup = open(f"/proc/{pid}/cgroup").read().strip().split("::")[1]
+limit = int(open(f"/sys/fs/cgroup{cgroup}/memory.max").read())
+check("jail: memory limit is guest memory + 128 MiB", limit == (512 + 128) << 20, f"{limit >> 20} MiB in {cgroup}")
+check("jail: process limit", open(f"/sys/fs/cgroup{cgroup}/pids.max").read().strip() == "64")
+netns = os.readlink(f"/proc/{pid}/ns/net")
+check("jail: own network namespace", netns != os.readlink("/proc/self/ns/net"), netns)
+seen = sorted(os.listdir(root + "/fn"))
+check("jail: sees only its own function files", seen == ["rootfs.ext4", "snap.mem", "snap.state"], str(seen))
+modes = {oct(os.stat(f).st_mode & 0o777) for f in glob.glob(ROOT + "/py/v/*/*")}
+owners = {os.stat(f).st_uid for f in glob.glob(ROOT + "/py/v/*/*")}
+check("jail: function files are read-only and owned by root", modes == {"0o440"} and owners == {0}, f"{modes} {owners}")
+
 # idle: the instance stops after idle_seconds (3 here), then wakes again
 time.sleep(5)
 check("reuse: asleep after idle_seconds", vms() == 0, f"{vms()} running")
+left = glob.glob(ROOT + "/.jail/firecracker/*") + glob.glob("/sys/fs/cgroup/carrel-fn/cfn*")
+check("jail: directory and cgroup are removed after sleep", left == [], str(left))
 wakes = []
 for _ in range(15):
     wakes.append(call("py")[0]); time.sleep(4.5)

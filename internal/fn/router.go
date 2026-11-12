@@ -54,6 +54,10 @@ var (
 	versionRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 )
 
+// ValidName reports whether name may name a function. Names become
+// directory, lock and namespace names, so check before any of those.
+func ValidName(name string) bool { return nameRE.MatchString(name) }
+
 // normalize fills defaults and rejects values outside PLAN 7.11's limits.
 func (f *Function) normalize() error {
 	if !nameRE.MatchString(f.Name) {
