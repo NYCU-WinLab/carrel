@@ -65,7 +65,7 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	if err != nil {
 		return f, err
 	}
-	spec.Port, spec.MTU, spec.DNS = f.Port, opts.MTU, opts.DNS
+	spec.Name, spec.Port, spec.MTU, spec.DNS = f.Name, f.Port, opts.MTU, opts.DNS
 	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
 		return f, err
 	}

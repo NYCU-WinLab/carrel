@@ -31,6 +31,7 @@ type imageSource = v1.Image
 
 // guestSpec is what carrel-fn-init reads from /.fn/spec.json.
 type guestSpec struct {
+	Name string   `json:"name"`
 	Cmd  []string `json:"cmd"`
 	Env  []string `json:"env"`
 	Cwd  string   `json:"cwd"`

@@ -118,7 +118,7 @@ func TestRootTarKeepsTheImageAndAddsInit(t *testing.T) {
 		"usr/": "dir", "usr/bin/": "dir", "usr/bin/tool": "no parent directory in the layer",
 		"lib": "-> usr/lib", "app/hard": "-> app/server",
 		".fn/": "dir", ".fn/rw/": "dir", ".fn/newroot/": "dir", ".fn/old/": "dir",
-		".fn/init": "the real init", ".fn/spec.json": `{"cmd":["/app"],"env":null,"cwd":"","user":"","port":8080,"mtu":0,"dns":null}`,
+		".fn/init": "the real init", ".fn/spec.json": `{"name":"","cmd":["/app"],"env":null,"cwd":"","user":"","port":8080,"mtu":0,"dns":null}`,
 	}
 	var got, expected []string
 	for name, content := range files {

@@ -26,6 +26,7 @@ import (
 
 // spec is written into the image by the builder as /.fn/spec.json.
 type spec struct {
+	Name string   `json:"name"`
 	Cmd  []string `json:"cmd"`
 	Env  []string `json:"env"`
 	Cwd  string   `json:"cwd"`
@@ -69,6 +70,9 @@ func run() error {
 		return fmt.Errorf("overlay: %w", err)
 	}
 	mounts()
+	if s.Name != "" {
+		_ = unix.Sethostname([]byte(s.Name))
+	}
 	if err := network(s.MTU); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
@@ -194,6 +198,14 @@ func mounts() {
 	_ = unix.Mount("devpts", "/dev/pts", "devpts", 0, "")
 	_ = os.MkdirAll("/dev/shm", 0o1777)
 	_ = unix.Mount("tmpfs", "/dev/shm", "tmpfs", 0, "mode=1777")
+	// The kernel's /dev has no standard stream links; a container runtime
+	// adds them. Images link log files to /dev/stdout and /dev/stderr.
+	for link, target := range map[string]string{
+		"/dev/fd": "/proc/self/fd", "/dev/stdin": "/proc/self/fd/0",
+		"/dev/stdout": "/proc/self/fd/1", "/dev/stderr": "/proc/self/fd/2",
+	} {
+		_ = os.Symlink(target, link)
+	}
 }
 
 // network gives eth0 the one address every function has. Each microVM sits
