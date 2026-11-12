@@ -32,6 +32,9 @@ type Function struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	WakePath       string `json:"wake_path,omitempty"`
 	MaxInstances   int    `json:"max_instances"`
+	// Image and Digest record what the version was built from.
+	Image  string `json:"image,omitempty"`
+	Digest string `json:"digest,omitempty"`
 	// Version names the directory v/<version> that holds rootfs.ext4,
 	// snap.state and snap.mem. A snapshot records the path of its root file
 	// system, so a version never moves.
@@ -50,7 +53,9 @@ const (
 )
 
 var (
-	nameRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	// A function on a host is named t<tenant>-<name>: up to 4 characters
+	// for the tenant and 32 for the name the tenant chose.
+	nameRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	versionRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 )
 

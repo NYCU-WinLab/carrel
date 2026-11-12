@@ -1413,7 +1413,17 @@ to tenant networks, one instance per `reuse` function.
    image, issues #234, #236 and #239 to #243. Measured on
    the test host: 40 requests at once to a sleeping `reuse` function all answer 200 from one
    instance, and a stop under 30 `fresh` requests leaves no microVM, namespace, link or cgroup.
-2. The deploy pipeline and the member tools. The image pull is built: 5.6 seconds for
+2. The deploy pipeline and the member tools. The host agent is built: `carrel-fnd serve
+   -control <url>` asks the control plane for the host's desired state with the host's one
+   token (`GET /functions/v1/agent/state`, a 30 second long poll), builds the versions it lacks
+   one at a time, puts each function's current version live, removes the functions and versions
+   the state no longer names, and sends its whole inventory after every pass
+   (`POST /functions/v1/agent/report`): each version is ready, with its disk use and image
+   digest, or failed, with the error. Both sides are level-triggered, so a lost report or a
+   restart heals on the next pass. A function is named `t<tenant>-<name>` on a host. The
+   control plane decides which version is current; the host never activates a build on its own.
+   The functions' directory must be on a file system without `nodev`, or no tap device opens.
+   The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`. Private registries need credentials, which come with the member tools.
 3. Gateway routes, domains and the OIDC deploy action.

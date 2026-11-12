@@ -52,6 +52,8 @@ type common struct {
 	root, firecracker, jailer, kernel string
 	uidBase, gid                      int
 	uplink, block, rate               string
+	initPath, dns                     string
+	mtu                               int
 }
 
 func commonFlags(flags *flag.FlagSet) *common {
@@ -65,16 +67,46 @@ func commonFlags(flags *flag.FlagSet) *common {
 	flags.StringVar(&c.uplink, "uplink", "", "the one interface functions leave through (default: the default route's)")
 	flags.StringVar(&c.block, "block", "", "more addresses functions must not reach, comma separated: the site's protected public addresses")
 	flags.StringVar(&c.rate, "rate", "", "what one instance may send, and receive, such as 100mbit (default 100mbit)")
+	flags.StringVar(&c.initPath, "init", "/usr/local/lib/carrel-fn/carrel-fn-init", "carrel-fn-init binary, for builds")
+	flags.IntVar(&c.mtu, "mtu", 1450, "largest packet the host's uplink carries (tenant networks run at 1450, PLAN 6.2)")
+	flags.StringVar(&c.dns, "dns", "1.1.1.1,8.8.8.8", "public resolvers for functions, comma separated")
 	return c
+}
+
+func list(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' })
+}
+
+// buildVersion builds one version in a build slot of its own, so a build
+// never takes a slot from the router and two builds never share a jail, a
+// user or a network namespace.
+func (c *common) buildVersion(ctx context.Context, f fn.Function, image, imageTar string, activate bool) (fn.Function, error) {
+	// One build of a function at a time.
+	held, err := lock(c.root, "function-"+f.Name)
+	if err != nil {
+		return f, fmt.Errorf("function %s is being built: %w", f.Name, err)
+	}
+	defer held.Close()
+	index, slot, err := buildSlot(c.root)
+	if err != nil {
+		return f, err
+	}
+	defer slot.Close()
+	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1, firstBuildLink+index-firstBuildSlot, false))
+	if err != nil {
+		return f, err
+	}
+	defer runtime.Close()
+	return runtime.Build(ctx, fn.BuildOptions{
+		Function: f, Image: image, ImageTar: imageTar, Init: c.initPath, Root: c.root,
+		MTU: c.mtu, DNS: list(c.dns), Blocked: list(c.block), Activate: activate,
+	})
 }
 
 // config places jails under the functions' directory: a jail holds hard
 // links to function files, which need one file system.
 func (c *common) config(prefix string, first, slots, egressFirst int, router bool) fn.Config {
-	egress := fn.Egress{Uplink: c.uplink, Rate: c.rate}
-	if c.block != "" {
-		egress.Blocked = strings.Split(c.block, ",")
-	}
+	egress := fn.Egress{Uplink: c.uplink, Rate: c.rate, Blocked: list(c.block)}
 	return fn.Config{
 		Egress: egress, Router: router,
 		Firecracker: c.firecracker, Jailer: c.jailer, Kernel: c.kernel,
@@ -90,9 +122,22 @@ func serve(args []string) error {
 	c := commonFlags(flags)
 	listen := flags.String("listen", "127.0.0.1:8090", "address the router listens on")
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
+	control := flags.String("control", "", "control plane URL; with it the host builds and removes functions as the control plane asks")
+	tokenFile := flags.String("token-file", "/etc/carrel-fn/token", "file that holds the host's token for -control")
 	_ = flags.Parse(args)
 	if *slots < 1 || *slots > maxSlots {
 		return fmt.Errorf("-slots must be 1 to %d", maxSlots)
+	}
+	var token string
+	if *control != "" {
+		content, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			return fmt.Errorf("-control needs the host's token: %w", err)
+		}
+		token = strings.TrimSpace(string(content))
+		if token == "" {
+			return fmt.Errorf("%s is empty", *tokenFile)
+		}
 	}
 
 	// Two routers would hand out the same slots.
@@ -112,6 +157,23 @@ func serve(args []string) error {
 	go func() {
 		router.Run(ctx)
 		close(reaped)
+	}()
+	agented := make(chan struct{})
+	go func() {
+		defer close(agented)
+		if *control == "" {
+			return
+		}
+		agent := &fn.Agent{
+			Control: strings.TrimRight(*control, "/"), Token: token, Root: c.root,
+			Client: &http.Client{Timeout: 2 * time.Minute},
+			Build: func(ctx context.Context, f fn.Function, image string) error {
+				_, err := c.buildVersion(ctx, f, image, "", false)
+				return err
+			},
+			Forget: router.Forget,
+		}
+		agent.Run(ctx)
 	}()
 	guarded := make(chan struct{})
 	go func() {
@@ -146,6 +208,7 @@ func serve(args []string) error {
 	stop()
 	<-reaped
 	<-guarded
+	<-agented
 	runtime.Close()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -160,7 +223,6 @@ func build(args []string) error {
 	flags.StringVar(&f.Name, "name", "", "function name")
 	image := flags.String("image", "", "image reference in a registry, pulled without credentials")
 	imageTar := flags.String("image-tar", "", "a tarball from `docker save`, read in place of -image")
-	initPath := flags.String("init", "/usr/local/lib/carrel-fn/carrel-fn-init", "carrel-fn-init binary")
 	flags.IntVar(&f.Port, "port", 8080, "port the image serves HTTP on")
 	flags.IntVar(&f.MemoryMB, "memory", 512, "guest memory in MiB")
 	flags.StringVar(&f.Mode, "mode", fn.ModeReuse, "reuse or fresh")
@@ -168,39 +230,15 @@ func build(args []string) error {
 	flags.IntVar(&f.TimeoutSeconds, "timeout", 0, "seconds one request may take")
 	flags.IntVar(&f.MaxInstances, "max-instances", 0, "instances at once in fresh mode")
 	flags.StringVar(&f.WakePath, "wake-path", "", "path called once after every wake")
-	mtu := flags.Int("mtu", 1450, "largest packet the host's uplink carries (tenant networks run at 1450, PLAN 6.2)")
-	dns := flags.String("dns", "1.1.1.1,8.8.8.8", "public resolvers for the function, comma separated")
 	_ = flags.Parse(args)
 	if !fn.ValidName(f.Name) || (*image == "") == (*imageTar == "") {
 		return errors.New("build needs a valid -name and one of -image and -image-tar")
 	}
 
-	// One build of a function at a time: versions are named by the second.
-	held, err := lock(c.root, "function-"+f.Name)
-	if err != nil {
-		return fmt.Errorf("function %s is being built: %w", f.Name, err)
-	}
-	defer held.Close()
-	// A build slot of its own, so a build never takes a slot from the router
-	// and two builds never share a jail, a user or a network namespace.
-	index, slot, err := buildSlot(c.root)
-	if err != nil {
-		return err
-	}
-	defer slot.Close()
-	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1, firstBuildLink+index-firstBuildSlot, false))
-	if err != nil {
-		return err
-	}
-	defer runtime.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	start := time.Now()
-	built, err := runtime.Build(ctx, fn.BuildOptions{
-		Function: f, Image: *image, ImageTar: *imageTar, Init: *initPath, Root: c.root,
-		MTU: *mtu, DNS: strings.FieldsFunc(*dns, func(r rune) bool { return r == ',' }),
-		Blocked: strings.FieldsFunc(c.block, func(r rune) bool { return r == ',' }),
-	})
+	built, err := c.buildVersion(ctx, f, *image, *imageTar, true)
 	if err != nil {
 		return err
 	}
