@@ -6,9 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,9 +21,10 @@ const keptVersions = 3
 // BuildOptions describes one deploy of a function.
 type BuildOptions struct {
 	Function Function
-	// Image is a Docker image present on this host. Step 2 of PLAN 7.11
-	// replaces this with a pull that needs no Docker daemon.
-	Image string
+	// Image is a registry reference, pulled without credentials. ImageTar,
+	// when set, is a tarball from `docker save` and is read in its place.
+	Image    string
+	ImageTar string
 	// Init is the carrel-fn-init binary copied into the image as process 1.
 	Init string
 	// Root is the directory that holds every function.
@@ -35,16 +34,6 @@ type BuildOptions struct {
 	// address, so the host's own resolver is no use to it.
 	MTU int
 	DNS []string
-}
-
-type guestSpec struct {
-	Cmd  []string `json:"cmd"`
-	Env  []string `json:"env"`
-	Cwd  string   `json:"cwd"`
-	Port int      `json:"port"`
-	// MTU and DNS describe the function host's network to the guest.
-	MTU int      `json:"mtu"`
-	DNS []string `json:"dns"`
 }
 
 // Build turns an image into a sleeping function: a root file system and a
@@ -68,22 +57,16 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 		}
 	}()
 
-	tree, err := os.MkdirTemp(base, "tree-")
+	image, err := openImage(ctx, opts.Image, opts.ImageTar)
 	if err != nil {
 		return f, err
 	}
-	defer os.RemoveAll(tree)
-	spec, err := exportImage(ctx, opts.Image, tree)
+	spec, err := specOf(image)
 	if err != nil {
 		return f, err
 	}
-	spec.Port = f.Port
-	spec.MTU = opts.MTU
-	spec.DNS = opts.DNS
-	if err := addInit(tree, opts.Init, spec); err != nil {
-		return f, err
-	}
-	if err := makeExt4(ctx, tree, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
+	spec.Port, spec.MTU, spec.DNS = f.Port, opts.MTU, opts.DNS
+	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
 		return f, err
 	}
 	if err := fc.snapshot(ctx, f, filepath.Join(base, "log")); err != nil {
@@ -105,114 +88,36 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	return f, nil
 }
 
-// exportImage unpacks a Docker image's file system into dir and returns the
-// command the image would run.
-func exportImage(ctx context.Context, image, dir string) (guestSpec, error) {
-	var spec guestSpec
-	id, err := output(ctx, "docker", "create", image)
-	if err != nil {
-		return spec, err
-	}
-	container := strings.TrimSpace(id)
-	defer exec.Command("docker", "rm", "-f", container).Run()
-
-	inspect, err := output(ctx, "docker", "inspect", container)
-	if err != nil {
-		return spec, err
-	}
-	var described []struct {
-		Config struct {
-			Entrypoint []string
-			Cmd        []string
-			Env        []string
-			WorkingDir string
-		}
-	}
-	if err := json.Unmarshal([]byte(inspect), &described); err != nil || len(described) != 1 {
-		return spec, errors.New("unexpected docker inspect output")
-	}
-	config := described[0].Config
-	spec = guestSpec{Cmd: append(config.Entrypoint, config.Cmd...), Env: config.Env, Cwd: config.WorkingDir}
-	if len(spec.Cmd) == 0 {
-		return spec, fmt.Errorf("image %s has no entrypoint or command", image)
-	}
-
-	export := exec.CommandContext(ctx, "docker", "export", container)
-	unpack := exec.CommandContext(ctx, "tar", "-x", "-C", dir)
-	pipe, err := export.StdoutPipe()
-	if err != nil {
-		return spec, err
-	}
-	unpack.Stdin = pipe
-	var exportErr, unpackErr bytes.Buffer
-	export.Stderr, unpack.Stderr = &exportErr, &unpackErr
-	if err := unpack.Start(); err != nil {
-		return spec, err
-	}
-	if err := export.Run(); err != nil {
-		_ = unpack.Wait()
-		return spec, fmt.Errorf("docker export: %w: %s", err, bytes.TrimSpace(exportErr.Bytes()))
-	}
-	if err := unpack.Wait(); err != nil {
-		return spec, fmt.Errorf("unpack image: %w: %s", err, bytes.TrimSpace(unpackErr.Bytes()))
-	}
-	return spec, nil
-}
-
-// addInit puts carrel-fn-init, its mount points and the image's command
-// under /.fn. The image's own files are not changed.
-func addInit(tree, initPath string, spec guestSpec) error {
-	for _, dir := range []string{"rw", "newroot", "old"} {
-		if err := os.MkdirAll(filepath.Join(tree, ".fn", dir), 0o755); err != nil {
-			return err
-		}
-	}
-	source, err := os.Open(initPath)
+// makeRootfs writes the image into a new ext4 file system. The image's
+// files never exist on the host: mke2fs reads the tar stream straight into
+// the file system image.
+func makeRootfs(ctx context.Context, image imageSource, initPath string, spec guestSpec, target string) error {
+	stream, err := os.CreateTemp(filepath.Dir(target), "rootfs-*.tar")
 	if err != nil {
 		return err
 	}
-	defer source.Close()
-	target, err := os.OpenFile(filepath.Join(tree, ".fn", "init"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	defer os.Remove(stream.Name())
+	defer stream.Close()
+	need, err := rootTar(image, stream, initPath, spec)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(target, source); err != nil {
-		target.Close()
+	if err := stream.Close(); err != nil {
 		return err
 	}
-	if err := target.Close(); err != nil {
-		return err
-	}
-	content, err := json.Marshal(spec)
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(tree, ".fn", "spec.json"), content, 0o644)
-}
-
-// makeExt4 writes tree into a new ext4 image with a fifth of headroom.
-func makeExt4(ctx context.Context, tree, image string) error {
-	usage, err := output(ctx, "du", "-sm", tree)
-	if err != nil {
-		return err
-	}
-	var megabytes int
-	if _, err := fmt.Sscan(usage, &megabytes); err != nil {
-		return fmt.Errorf("du: %q", usage)
-	}
-	size := megabytes*12/10 + 50
-	file, err := os.OpenFile(image, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := file.Truncate(int64(size) << 20); err != nil {
+	// A tenth for the file system's own tables, and room for the journal.
+	if err := file.Truncate(need*11/10 + 64<<20); err != nil {
 		file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	_, err = output(ctx, "mkfs.ext4", "-q", "-d", tree, image)
+	_, err = output(ctx, "mkfs.ext4", "-q", "-d", stream.Name(), target)
 	return err
 }
 

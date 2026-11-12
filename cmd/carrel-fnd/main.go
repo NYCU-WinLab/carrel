@@ -142,7 +142,8 @@ func build(args []string) error {
 	c := commonFlags(flags)
 	var f fn.Function
 	flags.StringVar(&f.Name, "name", "", "function name")
-	image := flags.String("image", "", "Docker image on this host")
+	image := flags.String("image", "", "image reference in a registry, pulled without credentials")
+	imageTar := flags.String("image-tar", "", "a tarball from `docker save`, read in place of -image")
 	initPath := flags.String("init", "/usr/local/lib/carrel-fn/carrel-fn-init", "carrel-fn-init binary")
 	flags.IntVar(&f.Port, "port", 8080, "port the image serves HTTP on")
 	flags.IntVar(&f.MemoryMB, "memory", 512, "guest memory in MiB")
@@ -154,8 +155,8 @@ func build(args []string) error {
 	mtu := flags.Int("mtu", 1450, "largest packet the host's uplink carries (tenant networks run at 1450, PLAN 6.2)")
 	dns := flags.String("dns", "1.1.1.1,8.8.8.8", "public resolvers for the function, comma separated")
 	_ = flags.Parse(args)
-	if !fn.ValidName(f.Name) || *image == "" {
-		return errors.New("build needs a valid -name and an -image")
+	if !fn.ValidName(f.Name) || (*image == "") == (*imageTar == "") {
+		return errors.New("build needs a valid -name and one of -image and -image-tar")
 	}
 
 	// One build of a function at a time: versions are named by the second.
@@ -180,7 +181,7 @@ func build(args []string) error {
 	defer stop()
 	start := time.Now()
 	built, err := runtime.Build(ctx, fn.BuildOptions{
-		Function: f, Image: *image, Init: *initPath, Root: c.root,
+		Function: f, Image: *image, ImageTar: *imageTar, Init: *initPath, Root: c.root,
 		MTU: *mtu, DNS: strings.FieldsFunc(*dns, func(r rune) bool { return r == ',' }),
 	})
 	if err != nil {
