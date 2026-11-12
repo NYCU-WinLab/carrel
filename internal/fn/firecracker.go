@@ -90,8 +90,8 @@ type Firecracker struct {
 	closed    bool
 	// netMu keeps Guard from checking a namespace that is being made again.
 	netMu sync.Mutex
-	// hostRules and slotRules are the tables as nft listed them right after
-	// they were loaded. Guard compares against them.
+	// hostRules and slotRules are how nft lists the two tables when they
+	// are as loaded (expectedListing). Guard compares against them.
 	hostRules, slotRules string
 }
 
@@ -131,7 +131,16 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	}
 	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
 	if cfg.Router {
-		fc.hostRules = listTable("")
+		if fc.hostRules, err = expectedListing(hostRules(cfg.Egress)); err != nil {
+			return nil, err
+		}
+		if fc.slotRules, err = expectedListing(insideRules(cfg.Egress)); err != nil {
+			return nil, err
+		}
+		// The router just loaded the host table. It must already match.
+		if listing, err := listTable(""); err != nil || listing != fc.hostRules {
+			return nil, fmt.Errorf("the host rule table is not as loaded: %v", err)
+		}
 	}
 	for i := range cfg.Slots {
 		name := cfg.Prefix + strconv.Itoa(cfg.First+i)
@@ -144,9 +153,6 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 		if err != nil {
 			fc.Close()
 			return nil, err
-		}
-		if i == 0 {
-			fc.slotRules = listTable(name) // the same in every slot
 		}
 		fc.slots <- s
 	}
@@ -171,11 +177,13 @@ func (fc *Firecracker) Guard() {
 		return
 	}
 	forward, _ := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-	if listTable("") != fc.hostRules || string(bytes.TrimSpace(forward)) != "1" {
+	// A table that cannot be listed counts as changed: it is loaded again.
+	if listing, err := listTable(""); err != nil || listing != fc.hostRules || string(bytes.TrimSpace(forward)) != "1" {
 		if err := prepareHost(fc.cfg.Egress, true); err != nil {
 			slog.Error("rule table not restored", "table", "host", "error", err)
 		} else {
 			slog.Warn("rule table restored", "table", "host")
+			fc.hostRules = relisted("", fc.hostRules, hostRules(fc.cfg.Egress))
 		}
 	}
 	for i := range fc.cfg.Slots {
@@ -183,15 +191,33 @@ func (fc *Firecracker) Guard() {
 		if _, err := os.Stat("/run/netns/" + name); err != nil {
 			continue // a slot out of use after a failed rebuild has no namespace
 		}
-		if listTable(name) == fc.slotRules {
+		if listing, err := listTable(name); err == nil && listing == fc.slotRules {
 			continue
 		}
 		if err := nft(name, insideRules(fc.cfg.Egress)); err != nil {
 			slog.Error("rule table not restored", "table", name, "error", err)
 		} else {
 			slog.Warn("rule table restored", "table", name)
+			fc.slotRules = relisted(name, fc.slotRules, insideRules(fc.cfg.Egress))
 		}
 	}
+}
+
+// relisted returns the expected listing again when a table that was just
+// loaded still differs from it. That happens when nft was upgraded while the
+// router ran and lists the same rules in another way; without it, Guard
+// would load the table every 5 seconds.
+func relisted(namespace, expected, rules string) string {
+	if listing, err := listTable(namespace); err != nil || listing == expected {
+		return expected
+	}
+	fresh, err := expectedListing(rules)
+	if err != nil {
+		slog.Error("rule table listing not renewed", "error", err)
+		return expected
+	}
+	slog.Warn("rule table listing renewed: nft lists the same rules another way")
+	return fresh
 }
 
 // prepareCgroup makes the parent cgroup whose children the jailer limits.

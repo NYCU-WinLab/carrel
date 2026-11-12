@@ -4,6 +4,7 @@ package fn
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -184,8 +185,8 @@ func nft(namespace, rules string) error {
 }
 
 // listTable returns the function table of the host, or of a namespace, as
-// nft prints it. It is empty when the table is missing.
-func listTable(namespace string) string {
+// nft prints it.
+func listTable(namespace string) (string, error) {
 	args := []string{"list", "table", "inet", hostTable}
 	name := "nft"
 	if namespace != "" {
@@ -193,9 +194,30 @@ func listTable(namespace string) string {
 	}
 	out, err := exec.Command(name, args...).Output()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("list the rule table in %q: %w", namespace, err)
 	}
-	return string(out)
+	return string(out), nil
+}
+
+// expectedListing loads rules into a namespace made for this and nothing
+// else, and returns how nft lists them. Guard compares the real tables with
+// it. It comes from the rules, not from the host, so a table that something
+// changed while the router started is never taken as the right one.
+func expectedListing(rules string) (string, error) {
+	probe := fmt.Sprintf("cfnprobe%d", os.Getpid())
+	_ = exec.Command("ip", "netns", "del", probe).Run()
+	if out, err := exec.Command("ip", "netns", "add", probe).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("ip netns add %s: %w: %s", probe, err, bytes.TrimSpace(out))
+	}
+	defer exec.Command("ip", "netns", "del", probe).Run()
+	if err := nft(probe, rules); err != nil {
+		return "", err
+	}
+	listing, err := listTable(probe)
+	if err == nil && listing == "" {
+		err = errors.New("nft listed an empty rule table")
+	}
+	return listing, err
 }
 
 // prepareHost lets the host forward behind its rules. The rules go in
