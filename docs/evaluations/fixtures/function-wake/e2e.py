@@ -84,4 +84,61 @@ check("fresh: guest clock is current", abs(b["time"] - time.time()) < 1.0)
 w1 = call("job", "/write")[1]; w2 = call("job", "/write")[1]
 check("overlay: root file system is writable", w1.get("wrote") is True, str(w1))
 check("overlay: writes do not survive the instance", w1.get("seen_before") is False and w2.get("seen_before") is False, str(w2))
+# egress: a function reaches the internet and public names, and no private address.
+# Each blocked target accepts connections from the host itself, so a refusal is the filter's work.
+import socket
+probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect(("1.1.1.1", 53))
+host_addr = probe.getsockname()[0]; probe.close()
+def connect(host, port):
+    return call("job", f"/connect?host={host}&port={port}")[1]
+def from_host(host, port):
+    try:
+        socket.create_connection((host, port), timeout=2).close(); return True
+    except OSError:
+        return False
+check("egress: reaches a public address", connect("1.1.1.1", 443)["ok"])
+resolved = call("job", "/resolve?name=example.com")[1]
+check("egress: resolves a public name", resolved["ok"], str(resolved))
+link = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True).stdout
+link_addr = next(line.split()[3].split("/")[0] for line in link.splitlines() if line.split()[1].startswith("cfnv"))
+for label, host, port in [("the function host's own address", host_addr, 22),
+                          ("the host's end of an egress link", link_addr, 22)]:
+    check(f"egress control: the host itself reaches {label}", from_host(host, port), f"{host}:{port}")
+    check(f"egress: cannot reach {label}", connect(host, port)["ok"] is False, f"{host}:{port}")
+for label, host, port in [("the guest link's host end", "172.16.0.1", 22), ("a metadata address", "169.254.169.254", 80),
+                          ("the platform gateway", "10.200.0.2", 443), ("a node", "192.168.19.101", 8006),
+                          ("a tailnet address", "100.100.1.4", 22), ("loopback of the host", "127.0.0.2", 22)]:
+    check(f"egress: cannot reach {label}", connect(host, port)["ok"] is False, f"{host}:{port}")
+
+# egress: a packet with a forged source, or one that connection tracking calls invalid, must not
+# leave the host. The capture is shown to work first, with an ordinary connection attempt.
+uplink = subprocess.run(["ip", "-o", "-4", "route", "show", "default"], capture_output=True, text=True).stdout.split("dev ")[1].split()[0]
+def leaving(send):
+    capture = subprocess.Popen(["timeout", "4", "tcpdump", "-l", "-n", "-i", uplink, "dst host 1.1.1.1 and tcp dst port 4444"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    time.sleep(1); send(); out = capture.communicate()[0]
+    return [line.split()[2] for line in out.splitlines() if " > 1.1.1.1.4444" in line]
+seen = leaving(lambda: connect("1.1.1.1", 4444))
+check("egress control: the capture sees an ordinary connection, from the host's address",
+      len(seen) > 0 and all(src.startswith(host_addr + ".") for src in seen), str(seen[:2]))
+SYN, SYN_FIN = 0x02, 0x03
+for label, src, flags in [("a forged public source", "198.51.100.7", SYN), ("a forged private source", "10.200.0.2", SYN),
+                          ("an invalid packet from the guest's own address", "172.16.0.2", SYN_FIN),
+                          ("an invalid packet with a forged source", "198.51.100.7", SYN_FIN)]:
+    sent = []
+    seen = leaving(lambda: sent.append(call("job", f"/spoof?src={src}&dst=1.1.1.1&port=4444&flags={flags}")[1]))
+    check(f"egress: {label} does not leave the host", sent[0]["ok"] and seen == [], f"sent {sent[0]} captured {seen[:2]}")
+
+# egress: a slot's namespace is made new after every instance, so it remembers no connection.
+def tracked(ns):
+    out = subprocess.run(["ip", "netns", "exec", ns, "cat", "/proc/sys/net/netfilter/nf_conntrack_count"], capture_output=True, text=True)
+    return int(out.stdout or -1)
+call("py", "/resolve?name=example.com")
+slots = [line.split()[0] for line in subprocess.run(["ip", "netns", "list"], capture_output=True, text=True).stdout.splitlines() if line.startswith("cfn")]
+check("egress control: an awake instance's namespace tracks its connections", max(tracked(ns) for ns in slots) > 0)
+for _ in range(12):
+    call("job", "/resolve?name=example.com")
+time.sleep(5)
+counts = {ns: tracked(ns) for ns in slots}
+check("egress: no namespace remembers a connection once its instance is gone", set(counts.values()) == {0}, str(counts))
 print("RESULT", "all pass" if all(results) else "FAILED")

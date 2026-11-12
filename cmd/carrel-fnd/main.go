@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,6 +51,7 @@ func usage() {
 type common struct {
 	root, firecracker, jailer, kernel string
 	uidBase, gid                      int
+	uplink, block                     string
 }
 
 func commonFlags(flags *flag.FlagSet) *common {
@@ -60,17 +62,25 @@ func commonFlags(flags *flag.FlagSet) *common {
 	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-fn/vmlinux", "guest kernel, on the file system of -root")
 	flags.IntVar(&c.uidBase, "uid-base", 300000, "first of the user IDs instances run as, one per slot")
 	flags.IntVar(&c.gid, "gid", 300000, "group ID that reads function files")
+	flags.StringVar(&c.uplink, "uplink", "", "the one interface functions leave through (default: the default route's)")
+	flags.StringVar(&c.block, "block", "", "more addresses functions must not reach, comma separated: the site's protected public addresses")
 	return c
 }
 
 // config places jails under the functions' directory: a jail holds hard
 // links to function files, which need one file system.
-func (c *common) config(prefix string, first, slots int) fn.Config {
+func (c *common) config(prefix string, first, slots, egressFirst int, router bool) fn.Config {
+	egress := fn.Egress{Uplink: c.uplink}
+	if c.block != "" {
+		egress.Blocked = strings.Split(c.block, ",")
+	}
 	return fn.Config{
+		Egress: egress, Router: router,
 		Firecracker: c.firecracker, Jailer: c.jailer, Kernel: c.kernel,
 		JailBase: filepath.Join(c.root, ".jail"),
 		Prefix:   prefix, First: first, Slots: slots,
 		UIDBase: c.uidBase, GID: c.gid,
+		EgressFirst: egressFirst,
 	}
 }
 
@@ -80,6 +90,9 @@ func serve(args []string) error {
 	listen := flags.String("listen", "127.0.0.1:8090", "address the router listens on")
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
 	_ = flags.Parse(args)
+	if *slots < 1 || *slots > maxSlots {
+		return fmt.Errorf("-slots must be 1 to %d", maxSlots)
+	}
 
 	// Two routers would hand out the same slots.
 	held, err := lock(c.root, "serve")
@@ -87,7 +100,7 @@ func serve(args []string) error {
 		return fmt.Errorf("another carrel-fnd serve runs on %s: %w", c.root, err)
 	}
 	defer held.Close()
-	runtime, err := fn.NewFirecracker(c.config("cfn", 0, *slots))
+	runtime, err := fn.NewFirecracker(c.config("cfn", 0, *slots, 0, true))
 	if err != nil {
 		return err
 	}
@@ -130,6 +143,8 @@ func build(args []string) error {
 	flags.IntVar(&f.TimeoutSeconds, "timeout", 0, "seconds one request may take")
 	flags.IntVar(&f.MaxInstances, "max-instances", 0, "instances at once in fresh mode")
 	flags.StringVar(&f.WakePath, "wake-path", "", "path called once after every wake")
+	mtu := flags.Int("mtu", 1450, "largest packet the host's uplink carries (tenant networks run at 1450, PLAN 6.2)")
+	dns := flags.String("dns", "1.1.1.1,8.8.8.8", "public resolvers for the function, comma separated")
 	_ = flags.Parse(args)
 	if !fn.ValidName(f.Name) || *image == "" {
 		return errors.New("build needs a valid -name and an -image")
@@ -148,7 +163,7 @@ func build(args []string) error {
 		return err
 	}
 	defer slot.Close()
-	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1))
+	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1, firstBuildLink+index-firstBuildSlot, false))
 	if err != nil {
 		return err
 	}
@@ -156,7 +171,10 @@ func build(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	start := time.Now()
-	built, err := runtime.Build(ctx, fn.BuildOptions{Function: f, Image: *image, Init: *initPath, Root: c.root})
+	built, err := runtime.Build(ctx, fn.BuildOptions{
+		Function: f, Image: *image, Init: *initPath, Root: c.root,
+		MTU: *mtu, DNS: strings.FieldsFunc(*dns, func(r rune) bool { return r == ',' }),
+	})
 	if err != nil {
 		return err
 	}
@@ -169,6 +187,10 @@ func build(args []string) error {
 const (
 	buildSlots     = 16
 	firstBuildSlot = 100000
+	// Links to the host are numbered below 16384. Routers use the low
+	// numbers, builds the last 16.
+	firstBuildLink = 16384 - buildSlots
+	maxSlots       = firstBuildLink
 )
 
 // lock takes an exclusive lock that lasts until the file is closed or the
