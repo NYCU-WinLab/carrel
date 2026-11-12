@@ -62,6 +62,10 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	defer func() {
 		if !built {
 			_ = os.RemoveAll(f.Dir)
+			// A function that never built leaves no directory. os.Remove
+			// takes only empty ones, so earlier versions stay.
+			_ = os.Remove(filepath.Join(base, "v"))
+			_ = os.Remove(base)
 		}
 	}()
 
