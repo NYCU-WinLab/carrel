@@ -214,6 +214,9 @@ func (fc *Firecracker) Guard() {
 		if _, err := os.Stat("/run/netns/" + name); err != nil {
 			continue // a slot out of use after a failed rebuild has no namespace
 		}
+		if err := trimConnections(name, fc.cfg.EgressFirst+i); err != nil {
+			slog.Error("connections not trimmed", "slot", name, "error", err)
+		}
 		if listing, err := listTable(name); err == nil && listing == fc.slotRules {
 			continue
 		}
@@ -262,20 +265,20 @@ func prepareCgroup() error {
 
 func newSlot(name string, uid, gid, link int, egress Egress) (*slot, error) {
 	_ = exec.Command("ip", "netns", "del", name).Run() // left over from an earlier run
-	steps := [][]string{
-		{"netns", "add", name},
-		{"-n", name, "link", "set", "lo", "up"},
-		// The slot's user owns the tap, so Firecracker opens it without any capability.
-		{"-n", name, "tuntap", "add", "dev", "tap0", "mode", "tap", "user", strconv.Itoa(uid), "group", strconv.Itoa(gid)},
-		{"-n", name, "link", "set", "tap0", "address", hostMAC},
-		{"-n", name, "addr", "add", hostCIDR, "dev", "tap0"},
-		{"-n", name, "link", "set", "tap0", "up"},
-		{"-n", name, "neigh", "replace", guestAddr, "lladdr", guestMAC, "dev", "tap0", "nud", "permanent"},
+	if out, err := exec.Command("ip", "netns", "add", name).CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ip netns add %s: %w: %s", name, err, bytes.TrimSpace(out))
 	}
-	for _, args := range steps {
-		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("ip %v: %w: %s", args, err, bytes.TrimSpace(out))
-		}
+	err := batch([]string{"ip", "-n", name, "-batch", "-"}, [][]string{
+		{"link", "set", "lo", "up"},
+		// The slot's user owns the tap, so Firecracker opens it without any capability.
+		{"tuntap", "add", "dev", "tap0", "mode", "tap", "user", strconv.Itoa(uid), "group", strconv.Itoa(gid)},
+		{"link", "set", "tap0", "address", hostMAC},
+		{"addr", "add", hostCIDR, "dev", "tap0"},
+		{"link", "set", "tap0", "up"},
+		{"neigh", "replace", guestAddr, "lladdr", guestMAC, "dev", "tap0", "nud", "permanent"},
+	})
+	if err != nil {
+		return nil, err
 	}
 	if err := forgetConnections(link); err != nil {
 		return nil, err

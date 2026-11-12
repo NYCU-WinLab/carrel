@@ -6,12 +6,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -314,12 +316,50 @@ func forgetConnections(link int) error {
 	return nil
 }
 
+// trimAt is how many tracked connections a slot's namespace may hold before
+// Guard removes its ended ones: the open ones it may have, the ended ones
+// its new-connection rate leaves for shortTimeout, and some room.
+const trimAt = maxConns + newConns*shortTimeout + 488
+
+// guardSeconds is how often the router calls Guard.
+const guardSeconds = 5
+
+// GuardPeriod is how often the router must call Guard.
+const GuardPeriod = guardSeconds * time.Second
+
+// trimConnections removes a slot's ended TCP connections, in its namespace
+// and on the host, once the namespace tracks more than trimAt. The limit on
+// connections does not count ended ones, and a guest that keeps sending
+// valid ACKs keeps an ended connection's timeout from running out, so
+// without this a slot could fill the host's table one connection at a time.
+func trimConnections(namespace string, link int) error {
+	out, err := exec.Command("ip", "netns", "exec", namespace, "cat", "/proc/sys/net/netfilter/nf_conntrack_count").Output()
+	if err != nil {
+		return err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || count <= trimAt {
+		return err
+	}
+	_, inside, err := egressAddrs(link)
+	if err != nil {
+		return err
+	}
+	for _, state := range []string{"TIME_WAIT", "CLOSE"} {
+		// conntrack exits 1 when nothing matched, so only the output tells.
+		_ = exec.Command("ip", "netns", "exec", namespace, "conntrack", "-D", "-p", "tcp", "--state", state).Run()
+		_ = exec.Command("conntrack", "-D", "-p", "tcp", "--state", state, "--orig-src", inside).Run()
+	}
+	slog.Warn("ended connections trimmed", "slot", namespace, "tracked", count)
+	return nil
+}
+
 // sizeConntrack makes room in the host's connection tracking table for every
 // slot at its limit: each of a function's connections is tracked twice, in
 // its namespace and on the host. A larger table is left as it is.
 func sizeConntrack(slots int) error {
 	const path = "/proc/sys/net/netfilter/nf_conntrack_max"
-	want := slots*(maxConns+newConns*shortTimeout)*2 + 65536 // and room for the host's own
+	want := slots*(trimAt+newConns*guardSeconds)*2 + 65536 // and room for the host's own
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -355,38 +395,60 @@ func connect(namespace string, link int, e Egress) error {
 	}
 	outside := linkPrefix + strconv.Itoa(link)
 	_ = exec.Command("ip", "link", "del", outside).Run() // left over from an earlier run
-	steps := [][]string{
+	// Commands go in batches: a slot is made again after every instance, on
+	// a host whose CPUs run the guests, and every process costs.
+	err = batch([]string{"ip", "-batch", "-"}, [][]string{
 		{"link", "add", outside, "type", "veth", "peer", "name", insideLink, "netns", namespace},
 		// No multicast or IPv6 on the link: an interface that comes up
 		// announces itself, and those packets would fill the host's table.
 		{"link", "set", outside, "multicast", "off"},
-		{"-n", namespace, "link", "set", insideLink, "multicast", "off"},
-		{"netns", "exec", namespace, "sysctl", "-qw", "net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1"},
 		{"addr", "add", host + "/30", "dev", outside},
 		{"link", "set", outside, "up"},
-		{"-n", namespace, "addr", "add", inside + "/30", "dev", insideLink},
-		{"-n", namespace, "link", "set", insideLink, "up"},
-		{"-n", namespace, "route", "add", "default", "via", host},
-		{"netns", "exec", namespace, "sysctl", "-qw", "net.ipv4.ip_forward=1"},
-		// Packet counts per connection, so the new-connection limit counts a
-		// flow once: a UDP flow with no answer stays new for every packet.
-		{"netns", "exec", namespace, "sysctl", "-qw", "net.netfilter.nf_conntrack_acct=1"},
-		// Both rates are shaped inside the namespace: out of the instance on
-		// the link to the host, into it on the tap.
-		{"netns", "exec", namespace, "tc", "qdisc", "replace", "dev", insideLink, "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
-		{"netns", "exec", namespace, "tc", "qdisc", "replace", "dev", "tap0", "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
-		// A small burst makes TCP back off far below the rate (256 KB gave
-		// 27 Mbit/s at 100mbit), so the burst is a quarter second of the rate.
-		// Everything the guest sends is policed where it enters: the answers
-		// to the router's requests end in this namespace and never reach eth0.
-		{"netns", "exec", namespace, "tc", "qdisc", "add", "dev", "tap0", "ingress"},
-		{"netns", "exec", namespace, "tc", "filter", "add", "dev", "tap0", "ingress", "matchall",
-			"action", "police", "rate", e.Rate, "burst", strconv.FormatInt(rateBits(e.Rate)/8/4, 10), "conform-exceed", "drop"},
+	})
+	if err == nil {
+		err = batch([]string{"ip", "-n", namespace, "-batch", "-"}, [][]string{
+			{"link", "set", insideLink, "multicast", "off"},
+			{"addr", "add", inside + "/30", "dev", insideLink},
+			{"link", "set", insideLink, "up"},
+			{"route", "add", "default", "via", host},
+		})
 	}
-	for _, args := range steps {
-		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("ip %v: %w: %s", args, err, bytes.TrimSpace(out))
-		}
+	if err == nil {
+		// Packet counts per connection (acct), so the new-connection limit
+		// counts a flow once: a UDP flow with no answer stays new for every packet.
+		err = batch([]string{"ip", "netns", "exec", namespace, "sysctl", "-qw",
+			"net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1",
+			"net.ipv4.ip_forward=1", "net.netfilter.nf_conntrack_acct=1"}, nil)
+	}
+	if err == nil {
+		// Both rates are shaped inside the namespace: out of the instance on
+		// the link to the host, into it on the tap. Everything the guest
+		// sends is also policed where it enters: the answers to the router's
+		// requests end in this namespace and never reach eth0. A small burst
+		// makes TCP back off far below the rate (256 KB gave 27 Mbit/s at
+		// 100mbit), so the burst is a quarter second of the rate.
+		err = batch([]string{"ip", "netns", "exec", namespace, "tc", "-batch", "-"}, [][]string{
+			{"qdisc", "replace", "dev", insideLink, "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
+			{"qdisc", "replace", "dev", "tap0", "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
+			{"qdisc", "add", "dev", "tap0", "ingress"},
+			{"filter", "add", "dev", "tap0", "ingress", "matchall",
+				"action", "police", "rate", e.Rate, "burst", strconv.FormatInt(rateBits(e.Rate)/8/4, 10), "conform-exceed", "drop"},
+		})
+	}
+	return err
+}
+
+// batch runs a command once, with one line per entry on its standard
+// input. Every word was checked or made here: none holds a space or a newline.
+func batch(command []string, lines [][]string) error {
+	cmd := exec.Command(command[0], command[1:]...)
+	var input strings.Builder
+	for _, line := range lines {
+		input.WriteString(strings.Join(line, " ") + "\n")
+	}
+	cmd.Stdin = strings.NewReader(input.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w: %s", strings.Join(command, " "), err, bytes.TrimSpace(out))
 	}
 	return nil
 }

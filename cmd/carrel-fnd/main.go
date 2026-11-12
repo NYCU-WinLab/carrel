@@ -116,7 +116,7 @@ func serve(args []string) error {
 	guarded := make(chan struct{})
 	go func() {
 		defer close(guarded)
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(fn.GuardPeriod)
 		defer ticker.Stop()
 		for {
 			select {
