@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-12",
+  "plan_section": "7.11",
+  "setup": {
+    "machine": {"name": "fn-lab", "tenant": "zyx1121", "vcpu": 1, "memory_mb": 2048, "disk_gb": 10, "nested_virt": true},
+    "node_cpu": "Intel Xeon E5-2630 v4",
+    "firecracker": "v1.18.0",
+    "guest_kernel": "6.1.155",
+    "timer": "process start to first HTTP 200, host side"
+  },
+  "wake_ms": {
+    "python_512mib": {
+      "snapshot_restore_cached": {"n": 30, "p50": 95.3, "p95": 103.6, "min": 89.2, "max": 106.0,
+        "stages_p50": {"process_and_socket": 1.3, "load_and_resume": 5.4, "resume_to_http": 88.1},
+        "rss_mib_after_1_request": 34.7},
+      "snapshot_restore_cache_dropped": {"n": 15, "p50": 218.0, "p95": 223.2, "min": 210.4, "max": 252.3},
+      "docker_start_stopped": {"n": 20, "p50": 1368.3, "p95": 1611.2, "min": 1141.4, "max": 1657.9},
+      "docker_run": {"n": 20, "p50": 2286.9, "p95": 2524.1, "min": 1981.5, "max": 2691.6},
+      "microvm_cold_boot": {"n": 30, "p50": 2508.9, "p95": 3026.2, "min": 2031.3, "max": 3113.1,
+        "rss_mib_after_1_request": 137.2}
+    },
+    "browser_1024mib": {
+      "snapshot_restore_cached": {"n": 10, "p50": 891.8, "p95": 913.4, "min": 871.1, "max": 913.4,
+        "rss_mib_after_1_request": 221},
+      "snapshot_restore_cache_dropped": {"n": 1, "value": 2177.5},
+      "docker_start_stopped": {"n": 5, "p50": 1625.1, "p95": 1811.0, "min": 1583.4, "max": 1811.0},
+      "docker_run": {"n": 5, "p50": 2068.4, "p95": 2105.0, "min": 1994.8, "max": 2105.0},
+      "microvm_cold_boot": {"n": 5, "p50": 5899.4, "p95": 6420.7, "min": 5633.6, "max": 6420.7},
+      "render_after_wake_ms": {"n": 50, "mean": 83}
+    },
+    "minimal_128mib": {
+      "snapshot_restore_cached": {"n": 30, "p50": 59.8, "p95": 83.7, "min": 53.7, "max": 89.8,
+        "rss_mib_after_1_request": 24.2},
+      "microvm_cold_boot": {"n": 30, "p50": 170.1, "p95": 183.7, "min": 152.0, "max": 188.2,
+        "rss_mib_after_1_request": 59.2}
+    }
+  },
+  "density": {
+    "workload": "python_512mib",
+    "copies": 30,
+    "answering_after_load": 30,
+    "mem_available_before_mib": 1660,
+    "mem_available_after_mib": 1164,
+    "mib_per_copy": 16,
+    "firecracker_pss_mib_per_copy": 8.6,
+    "restore_ms_under_load": {"n": 30, "p50": 173.0, "p95": 191.1, "max": 198.1},
+    "private_memory_mib": {"after_wake": 6.8, "after_2000_light_requests": 9.1, "after_300_allocating_requests": 15.6},
+    "light_request_ms": 1.72,
+    "allocating_request_ms": 48.9
+  },
+  "image_to_function_s": {
+    "python_118mb": {"n": 3, "export": 1.34, "rootfs": 2.6, "rootfs_mib": 201, "cold_boot": 3.95, "snapshot": 1.22, "total": 10.4},
+    "browser_945mb": {"n": 1, "export": 7.75, "rootfs": 10.88, "rootfs_mib": 1154, "cold_boot": 10.67, "snapshot": 3.06, "total": 33.53},
+    "total_includes_settle_s": 1
+  },
+  "copies_of_one_snapshot": {
+    "os_urandom": "different",
+    "uuid4": "different",
+    "random_random": "identical",
+    "wall_clock": "snapshot time, 23 s behind the host"
+  },
+  "problems": [
+    "restored guest keeps the ARP entry of the snapshot-time tap; a tap with another MAC delays the first answer by about 46 s",
+    "the API socket file appears before Firecracker listens on it",
+    "busybox selects its applet from its own file name",
+    "the Firecracker CI bucket publishes guest kernels up to v1.15 only"
+  ]
+}

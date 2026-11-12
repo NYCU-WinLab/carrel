@@ -26,6 +26,8 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 
 - Not a manifest or container platform. Members get pet machines they SSH into and change by
   hand. Declarative workloads belong to kitbash (`zyx1121/kitbash`), which carrel does not extend.
+  Functions (section 7.11) are the one planned exception: a single container image that carrel
+  runs while it has work. They add no manifest language and no orchestration.
 - Not a public cloud. One installation serves one organization, and tenants are lab members and
   lab projects.
 - Not a place where admins look inside tenant machines (section 7.7).
@@ -66,6 +68,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
 | 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the `owner` is set at creation (section 9.4, issue #141) |
 | 2026-10-24 | The lab website moves onto a tenant: `winlab.tw` and `www.winlab.tw` may be granted as exact special names. `www` stays reserved as a tenant slug, and the zone's wildcard is never granted (section 6.10) |
+| 2026-11-12 | Functions are designed, not built: a container image that sleeps without memory and wakes from a microVM snapshot on a request. The contract is an OCI image that serves HTTP, so the same image runs on AWS Lambda. Pet machines stay the default (section 7.11) |
 
 ### 1.6 Current core and deferred work
 
@@ -94,6 +97,8 @@ service. Live tool discovery and the acceptance reports are the authority for im
 | Image | A cloud image or ISO a tenant imported (section 7.8) | tenant, name |
 | App | A repository branch bound to one machine, deployed on every push (section 7.9) | tenant, name |
 | Release | One built artifact of an app, with its commit SHA and state | app, id |
+| Function | A container image owned by one tenant that runs only while it has work (section 7.11, planned) | tenant, name |
+| Version | One image digest of a function, with its root file system and snapshot | function, digest |
 | Grant | One allocation: a port, a domain (own or special), a peer rule, a snapshot | id |
 | Request | A quota, domain or port request waiting for an admin (section 5.3) | id |
 | Zone | A DNS zone carrel manages, and the tenants it is open to (section 6.10) | zone name |
@@ -218,6 +223,11 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
 | | `app_rollback` | `app`; switches back to the previous release |
 | | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
+| Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL and a single-use link for the environment file (section 7.11) |
+| | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
+| | `function_logs` | `function`, `since`; the output the platform captured |
+| | `function_rollback` | `function`; switches back to the previous version |
+| | `function_remove` | `confirm: <name>`; deletes every version and snapshot |
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
 | Virtual addresses | `vip_add`, `vip_list`, `vip_remove` | `name`, `machines` (section 6.3) |
 | Insight | `machine_metrics` | CPU, memory, disk and network from the hypervisor |
@@ -370,6 +380,7 @@ machine disk size against `snapshot_gb`; measured retained bytes are reported se
 A frozen machine (section 10.1) holds its configured disk size in `frozen_gb` (default: the `disk_gb`
 default) and its address in `ips`, and nothing else.
 Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
+Functions will add `functions` and `function_gb` (section 7.11).
 
 ### 5.2 Quota versus admission
 
@@ -1211,6 +1222,155 @@ picks the node with the most free memory that is not drained. Moves run one at a
 site, since they share the nodes' one link with corosync; a move that finds another in progress
 waits for its slot. `node_undrain` reopens placement and leaves moved machines where they are.
 
+### 7.11 Functions: wake on request (design only)
+
+A function is a container image that carrel runs only while it has work. A sleeping function has
+no process and uses no memory. A request wakes it from a snapshot in about 100 ms, and it goes
+back to sleep when it is idle. Nothing here is built yet. The measurements behind the design are
+in `docs/evaluations/2026-11-12-function-wake.md`.
+
+**Why carrel offers it**
+
+- A webhook, a scheduled script or a small API no longer needs a machine that is patched,
+  monitored and mostly idle.
+- Each instance is a microVM, a small virtual machine with its own kernel. That boundary is
+  strong enough for code the tenant does not trust, such as code an agent wrote a minute ago.
+- An agent deploys with one tool call and gets a URL back.
+- A function can run for an hour and can call the lab's own services by their public names. AWS
+  Lambda stops at 15 minutes and cannot reach the lab.
+
+**Contract**
+
+- An OCI image for `linux/amd64` that serves HTTP on `$PORT` (default 8080). carrel honours the
+  image's entrypoint, command, environment and working directory, and does not change the image.
+- A function keeps no state. Every instance starts from the snapshot made at deploy time. The root
+  file system is read-only under a memory-backed overlay, so writes work and are gone when the
+  instance stops.
+- This is the contract of Cloud Run and Knative. The same image runs on AWS Lambda with the AWS
+  Lambda Web Adapter. carrel does not implement the Lambda Invoke API or Runtime API, so a move
+  to AWS changes where the image runs and nothing inside it.
+
+**Deploy**
+
+1. The member's agent calls `function_deploy` with a name and an image reference. A repository can
+   also deploy on every push through `NYCU-WinLab/carrel-deploy@v1` with the same OIDC checks as
+   apps (section 7.9).
+2. A function host pulls the image without a Docker daemon and flattens it into an ext4 root file
+   system. It adds `fn-init`, a small static program that becomes process 1, prepares mounts and
+   the network, and starts the image's command.
+3. The host boots the microVM and waits for readiness: any HTTP answer below 500 on the port
+   within 60 seconds, the rule apps use.
+4. It pauses the microVM, writes the snapshot and stops it. The function is now `asleep`.
+5. A version is one image digest. carrel keeps the last 3. `function_rollback` switches to the
+   previous one without a new build.
+
+Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds for a 945 MB image.
+
+**Wake**
+
+1. The gateway sends a request for the function's name to the router on a function host.
+2. If no instance is awake, the router restores the snapshot into a new network namespace. The
+   tap device there carries the MAC address the snapshot expects.
+3. The router hands the current time to `fn-init`, which sets the guest clock. A restored guest
+   otherwise reads the time of the snapshot.
+4. If the function declared a `wake_path`, the router calls it once. This is where a function
+   reseeds random state it keeps in user space, which is identical in every restore.
+5. The router forwards the request and holds the instance awake while requests arrive.
+6. After `idle_seconds` (default 300) without a request, the router stops the instance.
+
+**Instance modes**
+
+- `reuse` (default): one instance serves concurrent requests until it is idle. For web services
+  and APIs.
+- `fresh`: every request gets its own instance, which is destroyed after the answer. For untrusted
+  code and job runners, where one request must never see the memory or files of another.
+  At most 10 instances per function run at once in version 1.
+
+**Triggers**
+
+- HTTP: `domain_add` accepts `function` in place of `machine` and `target_port`. Webhooks are
+  HTTP.
+- Schedule: `schedule` is a cron expression in the site's time zone. The control plane sends a
+  POST to the function. A missed run is not repeated.
+- Queues and platform events are not in version 1.
+
+**Isolation**
+
+- Instances are Firecracker microVMs started through its jailer (a private root directory, a
+  system call filter, a cgroup and an unprivileged user).
+- They run on function hosts: platform-owned VMs with nested virtualization in the infra range.
+  An escape from a microVM lands in a function host, not on a node. A function host holds one
+  token that reads function versions and nothing else.
+- Each instance has its own network namespace. It may reach the internet and public names. Private
+  ranges and platform addresses are dropped, so a function reaches a tenant machine through that
+  machine's public name or port (open decision 18).
+- The promise of section 7.7 does not cover functions. carrel runs the code, so the platform
+  holds the image, the environment and the snapshot, and a snapshot contains the memory of the
+  process. Admin reads of them are audited and visible to the tenant in `audit_log`.
+
+**Environment and secrets**
+
+`function_deploy` returns a single-use upload link. The agent pipes an environment file to it, so
+values never appear in tool arguments, in the audit log or in a transcript. The control plane
+stores them encrypted. A change of environment makes a new snapshot. Snapshots stay on function
+hosts and are deleted with their version.
+
+**Limits and quota**
+
+- Per function: 128 to 2,048 MiB of memory (default 512), 1 vCPU, `timeout_seconds` default 300
+  and at most 3,600, image at most 2 GB.
+- Per tenant: `functions` (default 20) and `function_gb` (default 20), which counts the root file
+  systems and snapshots of kept versions.
+- Awake instances are not charged to a tenant. They share the memory of the function hosts. When
+  a host runs short, the router first stops the idle instances used least recently, then answers
+  503 with `Retry-After`.
+
+**Observability**
+
+- Each wake is a span in sensorium with function, version, mode, restore time and whether the
+  snapshot came from the page cache.
+- The platform captures standard output and standard error, keeps the last 10 MB per function
+  and returns it through `function_logs`. Apps keep their logs inside the machine; functions have
+  no machine to keep them in.
+- `function_get` reports state, the URL, versions and the p50 and p95 wake time of the last
+  24 hours.
+
+**Measured on 2026-11-12** (nested virtualization, 1 vCPU, from process start to the first HTTP 200)
+
+| Workload | Snapshot restore p95 | `docker start` p95 | Cold boot p95 |
+|---|---:|---:|---:|
+| Python function, 512 MiB | 104 ms (223 ms from disk) | 1,611 ms | 3,026 ms |
+| Headless browser, 1,024 MiB | 913 ms (2,178 ms from disk) | 1,811 ms | 6,421 ms |
+
+Thirty restored copies of the Python function added 16 MiB each, because copies share every page
+they have not written.
+
+**Targets**
+
+- Wake p95 under 300 ms for a function that touches less than 50 MiB in its first request.
+- From image to `asleep` under 15 seconds for a 200 MB image.
+- At least 50 sleeping-but-recently-used functions kept in the page cache of one 8 GiB host.
+
+**To solve before the build**
+
+- Large first requests. The browser function touches 221 MiB one page at a time. Record the pages
+  of the first request at deploy time and read them in one pass at restore. The target is the
+  300 ms above.
+- Snapshot portability. A snapshot depends on the CPU model and the Firecracker version (open
+  decision 19). A Firecracker upgrade rebuilds every snapshot from its root file system.
+- The writable overlay was not part of the measurements.
+
+**Version 1 limits**: HTTP and schedule triggers only. No GPU, no persistent disk, no attachment
+to tenant networks, one instance per `reuse` function.
+
+**Build order**
+
+1. A function host image and the router, with `fresh` and `reuse`, on one host.
+2. The deploy pipeline and the member tools.
+3. Gateway routes, domains and the OIDC deploy action.
+4. Schedules, logs, quota and sensorium spans.
+5. The AIntern job runner as the first tenant, in `fresh` mode.
+
 ## 8. Hosts and sites
 
 ### 8.1 The installer
@@ -1607,6 +1767,16 @@ old host.
     are still needed. The striped pools make backups the only recovery from a disk failure.
 15. App artifact limits (section 7.9): 500 MB per release and 3 kept releases are first guesses.
     Revisit after real apps.
+16. Where function hosts run (section 7.11): platform VMs with nested virtualization, as measured,
+    or Firecracker on the nodes themselves. The nodes are faster and put tenant code one layer
+    closer to the hypervisor.
+17. Function limits (section 7.11): 2 GiB of memory, a 3,600 second timeout, 20 functions and
+    20 GiB per tenant are first guesses. Long batch work may need a longer timeout.
+18. How a function reaches its tenant's private addresses (section 7.11). Version 1 allows public
+    names only.
+19. Whether all four nodes can restore one snapshot (section 7.11). A snapshot depends on the CPU
+    model and the Firecracker version. The nodes' CPU models must be compared before a function
+    may wake on any node.
 
 ## 14. Vocabulary
 
