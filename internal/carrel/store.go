@@ -288,6 +288,21 @@ func (s *Store) Desired() D {
 			return o["state"] != "deleting" && !deleting[integer(o["vmid"])] && !addresses[str(o["target"])] && !addresses[strings.TrimSuffix(str(o["source"]), "/32")]
 		})
 	}
+	// A frozen machine keeps its domains for its return (freeze.go), and nothing
+	// answers at them until then: with no machine to forward to, the gateway
+	// refused the whole configuration, for every tenant.
+	present := map[int]bool{}
+	for _, m := range ms {
+		present[integer(m["vmid"])] = true
+	}
+	frozen := map[int]bool{}
+	for _, f := range s.Objects("frozen") {
+		frozen[integer(f["vmid"])] = true
+	}
+	state["domains"] = filter(dicts(state["domains"]), func(d D) bool {
+		vmid := integer(d["vmid"])
+		return d["vip"] != nil || present[vmid] || !frozen[vmid]
+	})
 	// Sent only when a tenant has one, so requests without any stay as they were.
 	if vips := filter(s.Objects("vips"), func(o D) bool { return o["state"] != "deleting" }); len(vips) > 0 {
 		state["vips"] = vips

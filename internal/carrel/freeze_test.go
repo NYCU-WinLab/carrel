@@ -569,3 +569,30 @@ func TestReconcileRunSurvivesASweepFailure(t *testing.T) {
 		t.Fatalf("result %s", encoded(result))
 	}
 }
+
+// A frozen machine keeps its domain, and the gateway gets no route for it
+// until the thaw: a route with no machine failed the whole gateway
+// configuration.
+func TestFrozenMachinesDomainLeavesTheGatewayUntilTheThaw(t *testing.T) {
+	p, _, _ := freezeSite(t)
+	slug := str(p.Store.Tenants()[0]["slug"])
+	p.Store.Put("domains", "d1", 1, D{"id": "d1", "tenant_n": 1, "vmid": 10100, "sub": "web", "name": "web." + slug + ".winlab.tw", "state": "ready", "target_port": 80})
+	routed := func() int { return len(dicts(p.Store.Desired()["domains"])) }
+	if routed() != 1 {
+		t.Fatal("the domain of a present machine is not routed")
+	}
+	assertOK(t, member(p, "machine_freeze", D{"machine": "box", "confirm": "box"}))
+	if p.Store.Get("domains", "d1") == nil {
+		t.Fatal("the freeze dropped the domain")
+	}
+	if routed() != 0 {
+		t.Fatal("the gateway still routes to a frozen machine")
+	}
+	state := p.Store.Desired()
+	state["certificates"] = []D{}
+	gatewayConfig(state, "", nil, nil)
+	assertOK(t, member(p, "machine_thaw", D{"machine": "box"}))
+	if routed() != 1 {
+		t.Fatal("the domain did not come back with the machine")
+	}
+}
