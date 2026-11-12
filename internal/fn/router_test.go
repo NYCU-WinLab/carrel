@@ -358,3 +358,30 @@ func TestNoWakeAfterShutdown(t *testing.T) {
 		t.Fatalf("wakes = %d, want 1: a request woke an instance after shutdown", wakes)
 	}
 }
+
+func TestForgetStopsFreshInstancesFirst(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	router, runtime, root := setup(t, func(w http.ResponseWriter, _ *http.Request) {
+		entered <- struct{}{}
+		<-release
+		io.WriteString(w, "ok")
+	})
+	deploy(t, root, "job", "v1", `,"mode":"fresh"`)
+	done := make(chan struct{})
+	go func() {
+		get(router, "job")
+		close(done)
+	}()
+	<-entered
+	router.Forget("job")
+	// Forget returned: the instance serving the request is stopped already.
+	if stops := runtime.stops.Load(); stops != 1 {
+		t.Fatalf("stops = %d after Forget, want 1", stops)
+	}
+	close(release)
+	<-done
+	if stops := runtime.stops.Load(); stops != 1 {
+		t.Fatalf("stops = %d, want 1", stops)
+	}
+}

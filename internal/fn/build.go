@@ -37,25 +37,39 @@ type BuildOptions struct {
 	// Blocked adds to the addresses the pull must not connect to: the
 	// site's protected addresses, as for the egress filter.
 	Blocked []string
+	// Activate puts the new version live at once and prunes old versions.
+	// The host agent leaves both to the control plane's desired state.
+	Activate bool
 }
 
 // buildTime is the longest one build may take, from the pull to the snapshot.
 const buildTime = 15 * time.Minute
 
 // Build turns an image into a sleeping function: a root file system and a
-// snapshot taken after the function answered its first request. The new
-// version goes live when function.json is replaced.
+// snapshot taken after the function answered its first request. A version
+// keeps its own function.json; it goes live when that file is copied over the
+// function's function.json (Activate). Function.Version names the version,
+// or the build names it by the second.
 func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, error) {
 	ctx, cancel := context.WithTimeout(ctx, buildTime)
 	defer cancel()
 	f := opts.Function
-	f.Version = time.Now().UTC().Format("20060102t150405")
+	if f.Version == "" {
+		f.Version = time.Now().UTC().Format("20060102t150405")
+	}
+	if !versionRE.MatchString(f.Version) {
+		return f, fmt.Errorf("invalid version %q", f.Version)
+	}
 	if err := f.normalize(); err != nil {
 		return f, err
 	}
 	base := filepath.Join(opts.Root, f.Name)
 	f.Dir = filepath.Join(base, "v", f.Version)
-	if err := os.MkdirAll(f.Dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(f.Dir), 0o700); err != nil {
+		return f, err
+	}
+	// A version is built once: its snapshot records its own paths.
+	if err := os.Mkdir(f.Dir, 0o700); err != nil {
 		return f, err
 	}
 	built := false
@@ -77,6 +91,10 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	if err != nil {
 		return f, err
 	}
+	f.Image = opts.Image
+	if digest, err := image.Digest(); err == nil {
+		f.Digest = digest.String()
+	}
 	spec.Name, spec.Port, spec.MTU, spec.DNS = f.Name, f.Port, opts.MTU, opts.DNS
 	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
 		return f, err
@@ -90,16 +108,48 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	if err != nil {
 		return f, err
 	}
-	pending := filepath.Join(base, "function.json.new")
-	if err := os.WriteFile(pending, append(content, '\n'), 0o600); err != nil {
-		return f, err
-	}
-	if err := os.Rename(pending, filepath.Join(base, "function.json")); err != nil {
+	if err := writeFile(filepath.Join(f.Dir, "function.json"), append(content, '\n')); err != nil {
 		return f, err
 	}
 	built = true
-	prune(filepath.Join(base, "v"), f.Version)
+	if opts.Activate {
+		if err := Activate(opts.Root, f.Name, f.Version); err != nil {
+			return f, err
+		}
+		prune(filepath.Join(base, "v"), f.Version)
+	}
 	return f, nil
+}
+
+// Built reports whether a version of a function finished its build.
+func Built(root, name, version string) bool {
+	if !nameRE.MatchString(name) || !versionRE.MatchString(version) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(root, name, "v", version, "function.json"))
+	return err == nil
+}
+
+// Activate makes a built version the one the router wakes. The router reads
+// function.json again when it changes, and a new request wakes the version.
+func Activate(root, name, version string) error {
+	if !Built(root, name, version) {
+		return fmt.Errorf("version %s of %s is not built", version, name)
+	}
+	content, err := os.ReadFile(filepath.Join(root, name, "v", version, "function.json"))
+	if err != nil {
+		return err
+	}
+	return writeFile(filepath.Join(root, name, "function.json"), content)
+}
+
+// writeFile replaces a file in one step, so a reader sees the old or the new one.
+func writeFile(path string, content []byte) error {
+	pending := path + ".new"
+	if err := os.WriteFile(pending, content, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(pending, path)
 }
 
 // makeRootfs writes the image into a new ext4 file system. The image's

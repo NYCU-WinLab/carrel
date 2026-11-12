@@ -32,6 +32,9 @@ type Function struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	WakePath       string `json:"wake_path,omitempty"`
 	MaxInstances   int    `json:"max_instances"`
+	// Image and Digest record what the version was built from.
+	Image  string `json:"image,omitempty"`
+	Digest string `json:"digest,omitempty"`
 	// Version names the directory v/<version> that holds rootfs.ext4,
 	// snap.state and snap.mem. A snapshot records the path of its root file
 	// system, so a version never moves.
@@ -50,7 +53,9 @@ const (
 )
 
 var (
-	nameRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+	// A function on a host is named t<tenant>-<name>: up to 4 characters
+	// for the tenant and 32 for the name the tenant chose.
+	nameRE    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	versionRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 )
 
@@ -156,8 +161,12 @@ type state struct {
 	mu     sync.Mutex
 	// reuse mode: the one instance, nil while the function is asleep.
 	current *awake
-	// fresh mode: one token per running instance.
+	// fresh mode: one token per running instance, and the instances, so a
+	// removal stops them.
 	slots chan struct{}
+	fresh map[Instance]struct{}
+	// wakes counts fresh wakes in progress; retire waits for them.
+	wakes sync.WaitGroup
 	// retired is set when a newer deploy or a shutdown replaced this state.
 	// A request that still holds it must look the function up again, or it
 	// would wake an instance that nothing watches.
@@ -174,13 +183,19 @@ type Router struct {
 	mu        sync.Mutex
 	functions map[string]*state
 	closed    bool
+	// retiring counts states a request took out of functions and is
+	// retiring; Forget waits for them too.
+	retiring int
+	retired  *sync.Cond
 }
 
 // errClosed means the router is shutting down.
 var errClosed = errors.New("the router is shutting down")
 
 func NewRouter(root string, runtime Runtime) *Router {
-	return &Router{root: root, runtime: runtime, now: time.Now, functions: map[string]*state{}}
+	r := &Router{root: root, runtime: runtime, now: time.Now, functions: map[string]*state{}}
+	r.retired = sync.NewCond(&r.mu)
+	return r
 }
 
 // function returns the state of a deployed function. It reads function.json
@@ -193,9 +208,16 @@ func (r *Router) function(name string) (*state, error) {
 	// each would wake its own instance and one of them would never be reaped.
 	r.mu.Lock()
 	s, stale, err := r.lookup(name)
+	if stale != nil {
+		r.retiring++
+	}
 	r.mu.Unlock()
 	if stale != nil {
 		stale.retire()
+		r.mu.Lock()
+		r.retiring--
+		r.retired.Broadcast()
+		r.mu.Unlock()
 	}
 	return s, err
 }
@@ -221,22 +243,32 @@ func (r *Router) lookup(name string) (s, stale *state, err error) {
 		delete(r.functions, name)
 		return nil, current, err
 	}
-	s = &state{fn: f, loaded: info.ModTime(), slots: make(chan struct{}, f.MaxInstances)}
+	s = &state{fn: f, loaded: info.ModTime(), slots: make(chan struct{}, f.MaxInstances), fresh: map[Instance]struct{}{}}
 	r.functions[name] = s
 	return s, current, nil
 }
 
-// retire stops the state's instance and tells requests that still hold the
-// state to look the function up again.
+// retire stops the state's instances and tells requests that still hold the
+// state to look the function up again. It returns when no instance of the
+// state runs: a removal deletes the files next.
 func (s *state) retire() {
 	s.mu.Lock()
 	current := s.current
 	s.current = nil
 	s.retired = true
+	running := make([]Instance, 0, len(s.fresh))
+	for instance := range s.fresh {
+		running = append(running, instance)
+	}
 	s.mu.Unlock()
 	if current != nil {
 		current.instance.Stop()
 	}
+	for _, instance := range running {
+		instance.Stop()
+	}
+	// A wake in progress sees the state retired and stops its instance.
+	s.wakes.Wait()
 }
 
 // Forget drops a function's cached state and stops its instance, so the next
@@ -249,6 +281,12 @@ func (r *Router) Forget(name string) {
 	if s != nil {
 		s.retire()
 	}
+	// A request may have taken the state out first and still be retiring it.
+	r.mu.Lock()
+	for r.retiring > 0 {
+		r.retired.Wait()
+	}
+	r.mu.Unlock()
 }
 
 // functionName takes the function from the X-Carrel-Function header the
@@ -340,25 +378,43 @@ func (r *Router) serveReuse(w http.ResponseWriter, req *http.Request, s *state) 
 
 func (r *Router) serveFresh(w http.ResponseWriter, req *http.Request, s *state) bool {
 	s.mu.Lock()
-	retired := s.retired
-	s.mu.Unlock()
-	if retired {
+	if s.retired {
+		s.mu.Unlock()
 		return false
 	}
 	select {
 	case s.slots <- struct{}{}:
 	default:
+		s.mu.Unlock()
 		busy(w)
 		return true
 	}
 	defer func() { <-s.slots }()
+	s.wakes.Add(1)
+	s.mu.Unlock()
 	instance, err := r.wake(req.Context(), s.fn)
 	if err != nil {
+		s.wakes.Done()
 		wakeFailed(w, err)
 		return true
 	}
+	s.mu.Lock()
+	if s.retired {
+		s.mu.Unlock()
+		instance.Stop()
+		s.wakes.Done()
+		return false
+	}
+	s.fresh[instance] = struct{}{}
+	s.mu.Unlock()
+	s.wakes.Done()
 	// The instance dies with the answer: no request sees another's memory or files.
-	defer instance.Stop()
+	defer func() {
+		s.mu.Lock()
+		delete(s.fresh, instance)
+		s.mu.Unlock()
+		instance.Stop()
+	}()
 	proxyTo(instance, s.fn).ServeHTTP(w, req)
 	return true
 }
