@@ -109,4 +109,36 @@ for label, host, port in [("the guest link's host end", "172.16.0.1", 22), ("a m
                           ("the platform gateway", "10.200.0.2", 443), ("a node", "192.168.19.101", 8006),
                           ("a tailnet address", "100.100.1.4", 22), ("loopback of the host", "127.0.0.2", 22)]:
     check(f"egress: cannot reach {label}", connect(host, port)["ok"] is False, f"{host}:{port}")
+
+# egress: a packet with a forged source, or one that connection tracking calls invalid, must not
+# leave the host. The capture is shown to work first, with an ordinary connection attempt.
+uplink = subprocess.run(["ip", "-o", "-4", "route", "show", "default"], capture_output=True, text=True).stdout.split("dev ")[1].split()[0]
+def leaving(send):
+    capture = subprocess.Popen(["timeout", "4", "tcpdump", "-l", "-n", "-i", uplink, "dst host 1.1.1.1 and tcp dst port 4444"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    time.sleep(1); send(); out = capture.communicate()[0]
+    return [line.split()[2] for line in out.splitlines() if " > 1.1.1.1.4444" in line]
+seen = leaving(lambda: connect("1.1.1.1", 4444))
+check("egress control: the capture sees an ordinary connection, from the host's address",
+      len(seen) > 0 and all(src.startswith(host_addr + ".") for src in seen), str(seen[:2]))
+SYN, SYN_FIN = 0x02, 0x03
+for label, src, flags in [("a forged public source", "198.51.100.7", SYN), ("a forged private source", "10.200.0.2", SYN),
+                          ("an invalid packet from the guest's own address", "172.16.0.2", SYN_FIN),
+                          ("an invalid packet with a forged source", "198.51.100.7", SYN_FIN)]:
+    sent = []
+    seen = leaving(lambda: sent.append(call("job", f"/spoof?src={src}&dst=1.1.1.1&port=4444&flags={flags}")[1]))
+    check(f"egress: {label} does not leave the host", sent[0]["ok"] and seen == [], f"sent {sent[0]} captured {seen[:2]}")
+
+# egress: a slot's namespace is made new after every instance, so it remembers no connection.
+def tracked(ns):
+    out = subprocess.run(["ip", "netns", "exec", ns, "cat", "/proc/sys/net/netfilter/nf_conntrack_count"], capture_output=True, text=True)
+    return int(out.stdout or -1)
+call("py", "/resolve?name=example.com")
+slots = [line.split()[0] for line in subprocess.run(["ip", "netns", "list"], capture_output=True, text=True).stdout.splitlines() if line.startswith("cfn")]
+check("egress control: an awake instance's namespace tracks its connections", max(tracked(ns) for ns in slots) > 0)
+for _ in range(12):
+    call("job", "/resolve?name=example.com")
+time.sleep(5)
+counts = {ns: tracked(ns) for ns in slots}
+check("egress: no namespace remembers a connection once its instance is gone", set(counts.values()) == {0}, str(counts))
 print("RESULT", "all pass" if all(results) else "FAILED")

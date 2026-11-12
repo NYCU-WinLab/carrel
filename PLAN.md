@@ -1233,7 +1233,9 @@ Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the rout
 build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
 writable overlay, and the jailer around every Firecracker process. They run by hand on one test
 host. A function has a route to the internet behind the egress filter. Nothing is connected to
-the control plane, the gateway or MCP, and images still come from a local Docker daemon.
+the control plane, the gateway or MCP, and images still come from a local Docker daemon. No
+tenant code may run on a function host until it has limits on disk use (issue #225) and on
+egress traffic (issue #229), and its rules are kept loaded (issue #230).
 
 **Why carrel offers it**
 
@@ -1311,7 +1313,8 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
 - Each instance has its own network namespace. It may reach the internet and public names. Private
   ranges and platform addresses are dropped, so a function reaches a tenant machine through that
   machine's public name or port (open decision 18). IPv6 is dropped. A function host needs
-  `nftables`, and no other firewall on it may drop forwarded packets by default.
+  `nftables`, and no other firewall on it may drop forwarded packets by default. It is a
+  dedicated machine: the daemon turns on IPv4 forwarding for the whole host.
 - The promise of section 7.7 does not cover functions. carrel runs the code, so the platform
   holds the image, the environment and the snapshot, and a snapshot contains the memory of the
   process. Admin reads of them are audited and visible to the tenant in `audit_log`.
@@ -1384,9 +1387,14 @@ to tenant networks, one instance per `reuse` function.
    jailer the same requests measure p95 176 ms, 192 ms and 3 ms. The egress filter is built:
    each slot has a link to the host numbered out of `10.251.0.0/16`, and the private, link-local,
    carrier NAT, loopback and multicast ranges are dropped in the instance's namespace and again
-   on the host. The host accepts nothing from a function. The guest gets the uplink's MTU and
-   public resolvers at build time. Still open in this step: the host image, limits on disk use
-   (issue #225) and a limit on egress traffic (section 6.6).
+   on the host, with the site's protected addresses and TCP port 25, as for tenant machines
+   (section 6.6). Only tracked packets from the guest's one address are forwarded, so a forged
+   source or a packet that skips address translation does not leave. Functions leave through one
+   named uplink. The host accepts nothing from a function, and a namespace starts nothing of its
+   own. A slot's namespace is made new after every instance, so no connection of the last
+   instance leads to the next one. The guest gets the uplink's MTU and public resolvers at
+   build time. Making the namespace new costs the `fresh` mode on a 1 vCPU host: p50 went from
+   172 ms to 234 ms. Still open in this step: the host image and the issues above.
 2. The deploy pipeline and the member tools.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.

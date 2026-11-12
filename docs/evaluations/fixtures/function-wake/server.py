@@ -26,6 +26,18 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": True}
             except OSError as e:
                 out = {"ok": False, "error": str(e)}
+        elif url.path == "/spoof":    # send one raw TCP packet with a chosen source and flags
+            try:
+                import struct
+                src, dst = socket.inet_aton(query["src"]), socket.inet_aton(query["dst"])
+                ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40, 1, 0, 64, socket.IPPROTO_TCP, 0, src, dst)
+                tcp = struct.pack("!HHLLBBHHH", 40000, int(query["port"]), 1, 0, 5 << 4, int(query["flags"]), 1024, 0, 0)
+                raw = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+                raw.sendto(ip + tcp, (query["dst"], 0))
+                raw.close()
+                out = {"ok": True}
+            except (OSError, KeyError) as e:
+                out = {"ok": False, "error": str(e)}
         elif url.path == "/resolve":  # does the function's resolver work?
             try:
                 out = {"ok": True, "addr": socket.getaddrinfo(query["name"], 443, socket.AF_INET)[0][4][0]}

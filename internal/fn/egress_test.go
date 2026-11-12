@@ -75,3 +75,62 @@ func TestBlockedCoversPrivateAddresses(t *testing.T) {
 		t.Errorf("the egress network %s is not blocked", egressNet)
 	}
 }
+
+func TestEgressResolveChecksWhatGoesIntoRules(t *testing.T) {
+	good, err := Egress{Uplink: "ens18", Blocked: []string{"140.113.60.189", "140.113.194.0/24"}}.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if good.Blocked[0] != "140.113.60.189/32" || good.Blocked[1] != "140.113.194.0/24" {
+		t.Fatalf("blocked = %v", good.Blocked)
+	}
+	for _, bad := range []Egress{
+		{Uplink: `ens18" accept; #`},
+		{Uplink: "cfnv3"},
+		{Uplink: "interface-name-too-long"},
+		{Uplink: "ens18", Blocked: []string{"example.com"}},
+		{Uplink: "ens18", Blocked: []string{"1.1.1.1 } accept"}},
+		{Uplink: "ens18", Blocked: []string{"2001:db8::/32"}},
+	} {
+		if _, err := bad.resolve(); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+}
+
+// The rules a reviewer asked for must stay: no forged source, no untracked
+// packet, one way out, and nothing the namespace starts on its own.
+func TestRulesKeepTheirGuards(t *testing.T) {
+	e := Egress{Uplink: "ens18", Blocked: []string{"140.113.60.189/32"}}
+	host, inside := hostRules(e), insideRules(e)
+	for _, want := range []string{
+		`iifname "cfnv*" ct state invalid drop`,
+		`iifname "cfnv*" ip saddr != 10.251.0.0/16 drop`,
+		`iifname "cfnv*" ip daddr @blocked drop`,
+		`iifname "cfnv*" tcp dport 25 drop`,
+		`iifname "cfnv*" meta nfproto ipv6 drop`,
+		`iifname "cfnv*" oifname != "ens18" drop`,
+		`oifname "cfnv*" drop`,
+		`iifname "cfnv*" oifname "ens18" masquerade`,
+		"140.113.60.189/32",
+	} {
+		if !strings.Contains(host, want) {
+			t.Errorf("host rules lack %q", want)
+		}
+	}
+	for _, want := range []string{
+		`policy drop`,
+		`ip saddr 172.16.0.2 ct state new,established,related ip daddr != @blocked accept`,
+		`iifname "tap0" tcp dport 25 drop`,
+		`type filter hook output priority filter; policy drop;`,
+		"140.113.60.189/32",
+	} {
+		if !strings.Contains(inside, want) {
+			t.Errorf("namespace rules lack %q", want)
+		}
+	}
+	// Two each in forward, input and output, and the policy of the NAT chain.
+	if strings.Count(inside, "accept") != 7 {
+		t.Errorf("the namespace rules accept in %d places, want 7: every new accept needs a review", strings.Count(inside, "accept"))
+	}
+}

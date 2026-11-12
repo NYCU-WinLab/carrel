@@ -207,7 +207,9 @@ func resolver(servers []string) {
 	}
 	_ = os.MkdirAll("/etc", 0o755)
 	_ = os.Remove("/etc/resolv.conf")
-	_ = os.WriteFile("/etc/resolv.conf", []byte(content.String()), 0o644)
+	if err := os.WriteFile("/etc/resolv.conf", []byte(content.String()), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "carrel-fn-init: resolver:", err)
+	}
 }
 
 type ifreqAddr struct {

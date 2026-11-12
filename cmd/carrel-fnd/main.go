@@ -51,6 +51,7 @@ func usage() {
 type common struct {
 	root, firecracker, jailer, kernel string
 	uidBase, gid                      int
+	uplink, block                     string
 }
 
 func commonFlags(flags *flag.FlagSet) *common {
@@ -61,13 +62,20 @@ func commonFlags(flags *flag.FlagSet) *common {
 	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-fn/vmlinux", "guest kernel, on the file system of -root")
 	flags.IntVar(&c.uidBase, "uid-base", 300000, "first of the user IDs instances run as, one per slot")
 	flags.IntVar(&c.gid, "gid", 300000, "group ID that reads function files")
+	flags.StringVar(&c.uplink, "uplink", "", "the one interface functions leave through (default: the default route's)")
+	flags.StringVar(&c.block, "block", "", "more addresses functions must not reach, comma separated: the site's protected public addresses")
 	return c
 }
 
 // config places jails under the functions' directory: a jail holds hard
 // links to function files, which need one file system.
-func (c *common) config(prefix string, first, slots, egressFirst int) fn.Config {
+func (c *common) config(prefix string, first, slots, egressFirst int, router bool) fn.Config {
+	egress := fn.Egress{Uplink: c.uplink}
+	if c.block != "" {
+		egress.Blocked = strings.Split(c.block, ",")
+	}
 	return fn.Config{
+		Egress: egress, Router: router,
 		Firecracker: c.firecracker, Jailer: c.jailer, Kernel: c.kernel,
 		JailBase: filepath.Join(c.root, ".jail"),
 		Prefix:   prefix, First: first, Slots: slots,
@@ -92,7 +100,7 @@ func serve(args []string) error {
 		return fmt.Errorf("another carrel-fnd serve runs on %s: %w", c.root, err)
 	}
 	defer held.Close()
-	runtime, err := fn.NewFirecracker(c.config("cfn", 0, *slots, 0))
+	runtime, err := fn.NewFirecracker(c.config("cfn", 0, *slots, 0, true))
 	if err != nil {
 		return err
 	}
@@ -155,7 +163,7 @@ func build(args []string) error {
 		return err
 	}
 	defer slot.Close()
-	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1, firstBuildLink+index-firstBuildSlot))
+	runtime, err := fn.NewFirecracker(c.config("cfnb", index, 1, firstBuildLink+index-firstBuildSlot, false))
 	if err != nil {
 		return err
 	}
@@ -165,7 +173,7 @@ func build(args []string) error {
 	start := time.Now()
 	built, err := runtime.Build(ctx, fn.BuildOptions{
 		Function: f, Image: *image, Init: *initPath, Root: c.root,
-		MTU: *mtu, DNS: strings.Split(*dns, ","),
+		MTU: *mtu, DNS: strings.FieldsFunc(*dns, func(r rune) bool { return r == ',' }),
 	})
 	if err != nil {
 		return err

@@ -1,10 +1,11 @@
 #!/bin/bash
 # Two container images: a Python function with test endpoints, and a headless browser function.
 set -euo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
 W=/opt/fnlab; cd $W
 systemctl start docker
 
-mkdir -p dk2 && cp "$(dirname "$0")/server.py" dk2/server.py   # the test function, next to this script
+mkdir -p dk2 && cp "$HERE/server.py" dk2/server.py   # the test function, next to this script
 printf 'FROM python:3.13-slim\nCOPY server.py /app/server.py\nCMD ["python","/app/server.py"]\n' > dk2/Dockerfile
 docker build -q -t fnlab-py2 dk2
 

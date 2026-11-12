@@ -71,6 +71,10 @@ type Config struct {
 	// EgressFirst + slot index numbers the slot's link to the host, which
 	// gives it a route to the internet (egress.go).
 	EgressFirst int
+	Egress      Egress
+	// Router is true for the long-running router, which owns the host's
+	// rule table, and false for a build.
+	Router bool
 }
 
 // Firecracker wakes functions by restoring Firecracker snapshots. Each
@@ -79,11 +83,14 @@ type Config struct {
 type Firecracker struct {
 	cfg   Config
 	slots chan *slot
+	// recycling counts slots that are being cleaned in the background.
+	recycling sync.WaitGroup
 }
 
 type slot struct {
 	name string
 	uid  int
+	link int
 	ns   *os.File
 }
 
@@ -95,7 +102,12 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 	if err := prepareCgroup(); err != nil {
 		return nil, err
 	}
-	if err := prepareHost(); err != nil {
+	egress, err := cfg.Egress.resolve()
+	if err != nil {
+		return nil, err
+	}
+	cfg.Egress = egress
+	if err := prepareHost(cfg.Egress, cfg.Router); err != nil {
 		return nil, err
 	}
 	fc := &Firecracker{cfg: cfg, slots: make(chan *slot, cfg.Slots)}
@@ -106,7 +118,7 @@ func NewFirecracker(cfg Config) (*Firecracker, error) {
 			fc.Close()
 			return nil, err
 		}
-		s, err := newSlot(name, cfg.UIDBase+cfg.First+i, cfg.GID, cfg.EgressFirst+i)
+		s, err := newSlot(name, cfg.UIDBase+cfg.First+i, cfg.GID, cfg.EgressFirst+i, cfg.Egress)
 		if err != nil {
 			fc.Close()
 			return nil, err
@@ -130,7 +142,7 @@ func prepareCgroup() error {
 	return nil
 }
 
-func newSlot(name string, uid, gid, link int) (*slot, error) {
+func newSlot(name string, uid, gid, link int, egress Egress) (*slot, error) {
 	_ = exec.Command("ip", "netns", "del", name).Run() // left over from an earlier run
 	steps := [][]string{
 		{"netns", "add", name},
@@ -147,18 +159,19 @@ func newSlot(name string, uid, gid, link int) (*slot, error) {
 			return nil, fmt.Errorf("ip %v: %w: %s", args, err, bytes.TrimSpace(out))
 		}
 	}
-	if err := connect(name, link); err != nil {
+	if err := connect(name, link, egress); err != nil {
 		return nil, err
 	}
 	ns, err := os.Open("/run/netns/" + name)
 	if err != nil {
 		return nil, err
 	}
-	return &slot{name: name, uid: uid, ns: ns}, nil
+	return &slot{name: name, uid: uid, link: link, ns: ns}, nil
 }
 
 // Close removes the namespaces. Call it after every instance stopped.
 func (fc *Firecracker) Close() {
+	fc.recycling.Wait()
 	for {
 		select {
 		case s := <-fc.slots:
@@ -233,15 +246,24 @@ func (fc *Firecracker) jailPath(name string) string {
 	return filepath.Join(fc.cfg.JailBase, filepath.Base(fc.cfg.Firecracker), name)
 }
 
-// release cleans a slot and makes it free again. A slot that cannot be
-// cleaned stays out of use: its next instance would share a user, a network
-// namespace and a memory limit with whatever still runs there.
+// release cleans a slot and makes it free again. The network namespace is
+// made new: the old one remembers the last instance's connections, and an
+// outside host could send packets along them to the next instance. A slot
+// that cannot be cleaned stays out of use: its next instance would share a
+// user, a network namespace and a memory limit with whatever still runs
+// there.
 func (fc *Firecracker) release(s *slot) {
 	if err := fc.cleanup(s.name); err != nil {
 		slog.Error("slot taken out of use", "slot", s.name, "error", err)
 		return
 	}
-	fc.slots <- s
+	s.ns.Close()
+	fresh, err := newSlot(s.name, s.uid, fc.cfg.GID, s.link, fc.cfg.Egress)
+	if err != nil {
+		slog.Error("slot taken out of use", "slot", s.name, "error", err)
+		return
+	}
+	fc.slots <- fresh
 }
 
 // start launches a jailed Firecracker in a free slot. The caller configures
@@ -413,7 +435,12 @@ func (v *vm) Done() <-chan struct{}                      { return v.done }
 func (v *vm) Stop() {
 	v.stop.Do(func() {
 		v.kill()
-		v.fc.release(v.slot)
+		// The answer does not wait for the slot to be made new.
+		v.fc.recycling.Add(1)
+		go func() {
+			defer v.fc.recycling.Done()
+			v.fc.release(v.slot)
+		}()
 	})
 }
 
