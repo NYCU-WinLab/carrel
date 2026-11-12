@@ -277,6 +277,9 @@ func newSlot(name string, uid, gid, link int, egress Egress) (*slot, error) {
 			return nil, fmt.Errorf("ip %v: %w: %s", args, err, bytes.TrimSpace(out))
 		}
 	}
+	if err := forgetConnections(link); err != nil {
+		return nil, err
+	}
 	if err := connect(name, link, egress); err != nil {
 		return nil, err
 	}

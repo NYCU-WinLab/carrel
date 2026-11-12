@@ -30,7 +30,27 @@ const (
 	maxPackets  = 20000 // per second, in each direction
 	maxConns    = 512   // tracked connections at once
 	newConns    = 200   // new connections per second, with a burst of twice that
+	// A connection that ends stays in the tracking table, uncounted, for as
+	// long as its state's timeout: 120 seconds of TIME_WAIT by default. The
+	// functions' connections end sooner, so the table holds at most
+	// maxConns + newConns * shortTimeout entries per instance.
+	shortTimeout = 10
+	pings        = 20 // ICMP packets per second out of an instance; ICMP has no timeout object
 )
+
+// timeouts are the tracking timeouts of a function's connections, in both
+// the host's table and each namespace's.
+const timeouts = `	ct timeout fn_tcp {
+		protocol tcp
+		l3proto ip
+		policy = { syn_sent: 30, syn_recv: 30, fin_wait: 10, close_wait: 10, last_ack: 10, time_wait: 10, close: 10 }
+	}
+	ct timeout fn_udp {
+		protocol udp
+		l3proto ip
+		policy = { unreplied: 10, replied: 30 }
+	}
+`
 
 // egressAddrs returns the host's and the namespace's address on link n.
 func egressAddrs(n int) (host, inside string, err error) {
@@ -55,7 +75,14 @@ type Egress struct {
 	Rate string
 }
 
-var rateRE = regexp.MustCompile(`^[1-9][0-9]{0,5}(kbit|mbit|gbit)$`)
+var rateRE = regexp.MustCompile(`^([1-9][0-9]{0,5})(kbit|mbit|gbit)$`)
+
+// rateBits reads a rate that resolve accepted, in bits per second.
+func rateBits(rate string) int64 {
+	match := rateRE.FindStringSubmatch(rate)
+	n, _ := strconv.ParseInt(match[1], 10, 64)
+	return n * map[string]int64{"kbit": 1e3, "mbit": 1e6, "gbit": 1e9}[match[2]]
+}
 
 var linkNameRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,15}$`)
 
@@ -121,9 +148,11 @@ table inet %[1]s {
 		auto-merge
 		elements = { %[2]s }
 	}
-	chain forward {
+%[6]s	chain forward {
 		type filter hook forward priority filter; policy accept;
 		iifname "%[3]s*" ct state invalid drop
+		iifname "%[3]s*" ct state new meta l4proto tcp ct timeout set "fn_tcp"
+		iifname "%[3]s*" ct state new meta l4proto udp ct timeout set "fn_udp"
 		iifname "%[3]s*" ip saddr != %[5]s drop
 		iifname "%[3]s*" meta nfproto ipv6 drop
 		iifname "%[3]s*" ip daddr @blocked drop
@@ -141,7 +170,7 @@ table inet %[1]s {
 		iifname "%[3]s*" oifname "%[4]s" masquerade
 	}
 }
-`, hostTable, e.blockedSet(), linkPrefix, e.Uplink, egressNet)
+`, hostTable, e.blockedSet(), linkPrefix, e.Uplink, egressNet, timeouts)
 }
 
 // insideRules is the rule set of one instance's network namespace. Only two
@@ -160,19 +189,23 @@ table inet %[1]s {
 		auto-merge
 		elements = { %[2]s }
 	}
-	chain forward {
+%[10]s	chain forward {
 		type filter hook forward priority filter; policy drop;
 		iifname "tap0" tcp dport 25 drop
+		iifname "tap0" meta l4proto icmp limit rate over %[11]d/second burst %[11]d packets drop
 		iifname "tap0" limit rate over %[6]d/second burst %[6]d packets drop
 		iifname "%[3]s" limit rate over %[6]d/second burst %[6]d packets drop
-		iifname "tap0" ct state new limit rate over %[7]d/second burst %[8]d packets drop
+		iifname "tap0" ct state new ct original packets 1 limit rate over %[7]d/second burst %[8]d packets drop
 		iifname "tap0" ct state new ct count over %[9]d drop
+		iifname "tap0" ct state new meta l4proto tcp ct timeout set "fn_tcp"
+		iifname "tap0" ct state new meta l4proto udp ct timeout set "fn_udp"
 		iifname "tap0" oifname "%[3]s" ip saddr %[4]s ct state new,established,related ip daddr != @blocked accept
 		iifname "%[3]s" oifname "tap0" ct state established,related accept
 	}
 	chain input {
 		type filter hook input priority filter; policy drop;
 		iifname "lo" accept
+		iifname "tap0" limit rate over %[6]d/second burst %[6]d packets drop
 		iifname "tap0" ct state established,related accept
 	}
 	chain output {
@@ -189,7 +222,7 @@ table inet %[1]s {
 		oifname "%[3]s" ip saddr != %[5]s drop
 	}
 }
-`, insideTable, e.blockedSet(), insideLink, guestAddr, egressNet, maxPackets, newConns, 2*newConns, maxConns)
+`, insideTable, e.blockedSet(), insideLink, guestAddr, egressNet, maxPackets, newConns, 2*newConns, maxConns, timeouts, pings)
 }
 
 func nft(namespace, rules string) error {
@@ -263,12 +296,30 @@ func expectedListing(rules string) (string, error) {
 	return listing, err
 }
 
+// forgetConnections removes the host's connection tracking entries of an
+// egress link. The host translates each slot's connections and keeps the
+// entries after the namespace is gone, for days when they were established,
+// so without this a slot made new would start from zero while its old
+// connections still filled the host's table.
+func forgetConnections(link int) error {
+	_, inside, err := egressAddrs(link)
+	if err != nil {
+		return err
+	}
+	out, err := exec.Command("conntrack", "-D", "--orig-src", inside).CombinedOutput()
+	// conntrack exits 1 when nothing matched, which is the usual case.
+	if err != nil && !bytes.Contains(out, []byte("0 flow entries have been deleted")) {
+		return fmt.Errorf("conntrack -D --orig-src %s: %w: %s", inside, err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
 // sizeConntrack makes room in the host's connection tracking table for every
 // slot at its limit: each of a function's connections is tracked twice, in
 // its namespace and on the host. A larger table is left as it is.
 func sizeConntrack(slots int) error {
 	const path = "/proc/sys/net/netfilter/nf_conntrack_max"
-	want := slots*maxConns*2 + 65536 // and room for the host's own
+	want := slots*(maxConns+newConns*shortTimeout)*2 + 65536 // and room for the host's own
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -306,16 +357,31 @@ func connect(namespace string, link int, e Egress) error {
 	_ = exec.Command("ip", "link", "del", outside).Run() // left over from an earlier run
 	steps := [][]string{
 		{"link", "add", outside, "type", "veth", "peer", "name", insideLink, "netns", namespace},
+		// No multicast or IPv6 on the link: an interface that comes up
+		// announces itself, and those packets would fill the host's table.
+		{"link", "set", outside, "multicast", "off"},
+		{"-n", namespace, "link", "set", insideLink, "multicast", "off"},
+		{"netns", "exec", namespace, "sysctl", "-qw", "net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1"},
 		{"addr", "add", host + "/30", "dev", outside},
 		{"link", "set", outside, "up"},
 		{"-n", namespace, "addr", "add", inside + "/30", "dev", insideLink},
 		{"-n", namespace, "link", "set", insideLink, "up"},
 		{"-n", namespace, "route", "add", "default", "via", host},
 		{"netns", "exec", namespace, "sysctl", "-qw", "net.ipv4.ip_forward=1"},
+		// Packet counts per connection, so the new-connection limit counts a
+		// flow once: a UDP flow with no answer stays new for every packet.
+		{"netns", "exec", namespace, "sysctl", "-qw", "net.netfilter.nf_conntrack_acct=1"},
 		// Both rates are shaped inside the namespace: out of the instance on
 		// the link to the host, into it on the tap.
 		{"netns", "exec", namespace, "tc", "qdisc", "replace", "dev", insideLink, "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
 		{"netns", "exec", namespace, "tc", "qdisc", "replace", "dev", "tap0", "root", "tbf", "rate", e.Rate, "burst", "128kb", "latency", "50ms"},
+		// A small burst makes TCP back off far below the rate (256 KB gave
+		// 27 Mbit/s at 100mbit), so the burst is a quarter second of the rate.
+		// Everything the guest sends is policed where it enters: the answers
+		// to the router's requests end in this namespace and never reach eth0.
+		{"netns", "exec", namespace, "tc", "qdisc", "add", "dev", "tap0", "ingress"},
+		{"netns", "exec", namespace, "tc", "filter", "add", "dev", "tap0", "ingress", "matchall",
+			"action", "police", "rate", e.Rate, "burst", strconv.FormatInt(rateBits(e.Rate)/8/4, 10), "conform-exceed", "drop"},
 	}
 	for _, args := range steps {
 		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {

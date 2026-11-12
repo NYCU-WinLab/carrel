@@ -8,6 +8,15 @@ PORT = int(os.environ.get("PORT", "80"))
 
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/big?"):  # a large answer: is the way back to the router limited too?
+            size = int(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))["mib"]) << 20
+            self.send_response(200)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            chunk = b"b" * (1 << 20)
+            for _ in range(size >> 20):
+                self.wfile.write(chunk)
+            return
         try:
             out = self.answer()
         except Exception as e:  # the checks read the reason, not a closed connection
@@ -81,6 +90,22 @@ class H(BaseHTTPRequestHandler):
             out = {"held": len(held)}
             for s in held:
                 s.close()
+        elif url.path == "/churn":     # open and close n connections one after another
+            start, made = time.time(), 0
+            for _ in range(int(query["n"])):
+                try:
+                    socket.create_connection((query["host"], int(query["port"])), timeout=2).close()
+                    made += 1
+                except OSError:
+                    pass
+            out = {"made": made, "seconds": time.time() - start}
+        elif url.path == "/udp":       # send n datagrams on one socket as fast as it can
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            start = time.time()
+            for _ in range(int(query["n"])):
+                sock.sendto(b"x" * 64, (query["host"], int(query["port"])))
+            sock.close()
+            out = {"sent": int(query["n"]), "seconds": time.time() - start}
         elif url.path == "/resolve":  # does the function's resolver work?
             try:
                 out = {"ok": True, "addr": socket.getaddrinfo(query["name"], 443, socket.AF_INET)[0][4][0]}
