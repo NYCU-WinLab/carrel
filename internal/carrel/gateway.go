@@ -24,7 +24,10 @@ import (
 // the names in the database, and any other name to the tenant's catch-all
 // domain (sub "*") or a 404.
 
-var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*", "/console/*"}
+// The function paths are the public ones only: the host agents' paths
+// (/functions/v1/agent/*) stay on the infra network.
+var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*", "/console/*",
+	"/functions/v1/env/*", "/functions/v1/registry/*", "/functions/v1/deploy/*"}
 
 const gatewayCerts = "/etc/caddy/carrel-certs"
 

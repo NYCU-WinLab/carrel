@@ -3875,6 +3875,52 @@
       }
     },
     {
+      "name": "function_link",
+      "description": "Deploy a function on every push to a GitHub repository branch (PLAN 7.11). Returns workflow (commit to .github/workflows/carrel.yml): GitHub Actions builds the image, pushes it to ghcr.io and sends its digest to carrel with the job's OIDC token, so the repository holds no carrel secret. Each push builds a new version with the function's current settings and environment; deploy once with function_deploy first. Only the linked repository and branch, on push or workflow_dispatch, can deploy. clear unlinks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "repo": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$",
+            "description": "GitHub owner/name."
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^[A-Za-z0-9._/-]+$",
+            "default": "main"
+          },
+          "clear": {
+            "type": "boolean",
+            "default": false
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "function_list",
       "description": "List the tenant's functions with their state and current version.",
       "inputSchema": {
@@ -4921,6 +4967,7 @@
     "function_deploy",
     "function_env",
     "function_registry",
+    "function_link",
     "function_get",
     "function_logs",
     "function_list",
@@ -5007,6 +5054,7 @@
     "function_deploy",
     "function_env",
     "function_registry",
+    "function_link",
     "function_rollback",
     "function_remove"
   ],

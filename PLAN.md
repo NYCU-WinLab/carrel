@@ -226,6 +226,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
 | | `function_env` | `function`, `clear`; a single-use link for the environment file (section 7.11) |
 | | `function_registry` | `function`, `registry`, `clear`; a single-use link for a private registry's credentials (section 7.11) |
+| | `function_link` | `function`, `repo`, `branch`, `clear`; deploy on every push with GitHub OIDC (section 7.11) |
 | | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
 | | `function_logs` | `function`, `since`; the output the platform captured |
 | | `function_rollback` | `function`; switches back to the previous version |
@@ -1449,7 +1450,17 @@ to tenant networks, one instance per `reuse` function.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`.
-3. Gateway routes, domains and the OIDC deploy action.
+3. Gateway routes, domains and the OIDC deploy action. The deploy action is built:
+   `function_link` binds a repository branch to a function and returns a workflow that builds
+   the image, pushes it to ghcr.io and runs `NYCU-WinLab/carrel-deploy@v1` with `function` and
+   `image`. The action sends the image by digest to `POST /functions/v1/deploy/<tenant>/<name>`
+   with the job's OIDC token, checked as for apps (section 7.9), including the pinned
+   repository id. carrel builds a version from the current version's settings and environment
+   with that image and records the commit; the action polls
+   `GET /functions/v1/deploy/<tenant>/<name>/<version>` until the version is live, failed, or
+   superseded by a newer one. The workflow runs one deploy at a time per function. The gateway
+   sends the public function paths (`env`, `registry`, `deploy`) to carrel, never the host
+   agents' paths.
 4. Schedules, logs, quota and sensorium spans.
 5. The AIntern job runner as the first tenant, in `fresh` mode.
 

@@ -35,7 +35,7 @@ func TestGatewayServesTheOriginAndTenantWildcardsOverTLS(t *testing.T) {
 	block := strings.SplitN(strings.SplitN(caddy, "https://carrel.winlab.tw {", 2)[1], "\n}\n", 2)[0]
 	for _, want := range []string{
 		"tls /etc/caddy/carrel-certs/_origin/fullchain.pem /etc/caddy/carrel-certs/_origin/privkey.pem",
-		"@control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /status /internal/* /apps/* /console/*",
+		"@control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /status /internal/* /apps/* /console/* /functions/v1/env/* /functions/v1/registry/* /functions/v1/deploy/*",
 		"reverse_proxy 10.200.0.3:8080", "flush_interval -1", "stream_close_delay 5m", "root * /srv/carrel-site", "hide .*",
 	} {
 		if !strings.Contains(block, want) {

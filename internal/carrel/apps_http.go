@@ -123,6 +123,15 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 		}
 		return p.FunctionReport(r.Context(), bearer(r), remoteIP(r), body)
 	}))
+	// A GitHub job deploys the image it pushed to a linked function.
+	mux.Handle("POST /functions/v1/deploy/{tenant}/{function}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		c := a.githubClaims(r)
+		return p.ReceiveFunctionImage(r.Context(), r.PathValue("tenant"), r.PathValue("function"), c, r.Body)
+	}))
+	mux.Handle("GET /functions/v1/deploy/{tenant}/{function}/{version}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		c := a.githubClaims(r)
+		return D{"version": p.FunctionImageStatus(r.Context(), r.PathValue("tenant"), r.PathValue("function"), r.PathValue("version"), c)}
+	}))
 	// A member's agent uploads an environment file to a function_env link.
 	env := appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		return p.ReceiveFunctionEnv(r.Context(), r.PathValue("token"), r.Body)
