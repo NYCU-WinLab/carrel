@@ -55,3 +55,35 @@ func TestReadLogTailSinceAndLinks(t *testing.T) {
 		t.Fatalf("missing: %v %+v", err, a)
 	}
 }
+
+// Two instances share a log: their lines never mix, and a line one left
+// open does not swallow the other's first line or its time.
+func TestConsoleLinesStayWhole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log")
+	fc := &Firecracker{}
+	a := &consoleLog{log: fc.logFor(path)}
+	b := &consoleLog{log: fc.logFor(path)}
+	a.Write([]byte("a1\na2-start "))
+	b.Write([]byte("b1\n"))
+	a.Write([]byte("a2-end\n"))
+	a.Write([]byte("open"))
+	a.Close()
+	b.Write([]byte(strings.Repeat("x", maxLine+5)))
+	b.Close()
+	content, _ := os.ReadFile(path)
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSuffix(string(content), "\n"), "\n") {
+		if _, err := time.Parse(stampLayout, line[:stampWidth]); err != nil {
+			t.Fatalf("line without a time: %q", line)
+		}
+		lines = append(lines, line[stampWidth+1:])
+	}
+	want := []string{"a1", "b1", "a2-start a2-end", "open", strings.Repeat("x", maxLine), "xxxxx"}
+	if strings.Join(lines, "|") != strings.Join(want, "|") {
+		sizes := []int{}
+		for _, line := range lines {
+			sizes = append(sizes, len(line))
+		}
+		t.Fatalf("line sizes %v", sizes)
+	}
+}

@@ -16,9 +16,10 @@ import (
 var functionLogWait = 15 * time.Second
 
 const (
-	functionLogDefault  = 64 << 10
-	functionLogMax      = 1 << 20
-	maxFunctionLogReply = functionLogMax + 64<<10
+	functionLogDefault = 64 << 10
+	functionLogMax     = 1 << 20
+	// JSON writes a control character as six bytes.
+	maxFunctionLogReply = 6*functionLogMax + 64<<10
 )
 
 type functionLogAsk struct {
@@ -63,13 +64,19 @@ func (l *functionLogs) ask(ctx context.Context, host string, req D) (D, bool) {
 	defer func() {
 		l.mu.Lock()
 		delete(l.asked, str(req["id"]))
-		kept := l.waiting[host][:0]
+		// A new slice: compacting in place would keep the removed asks
+		// reachable through the old array.
+		var kept []*functionLogAsk
 		for _, a := range l.waiting[host] {
 			if a != ask {
 				kept = append(kept, a)
 			}
 		}
-		l.waiting[host] = kept
+		if len(kept) == 0 {
+			delete(l.waiting, host)
+		} else {
+			l.waiting[host] = kept
+		}
 		l.mu.Unlock()
 	}()
 	timer := time.NewTimer(functionLogWait)
@@ -91,7 +98,7 @@ func (l *functionLogs) collect(ctx context.Context, host string, wait time.Durat
 		l.mu.Lock()
 		l.init()
 		if pending := l.waiting[host]; len(pending) > 0 {
-			l.waiting[host] = nil
+			delete(l.waiting, host)
 			l.mu.Unlock()
 			out := []D{}
 			for _, a := range pending {

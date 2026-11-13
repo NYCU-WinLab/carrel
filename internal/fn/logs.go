@@ -169,14 +169,14 @@ func (a *Agent) serveLogs(ctx context.Context) {
 			err = errors.New("the log poll answered at once with no request")
 		}
 		for _, req := range asked.Requests {
-			if err != nil {
-				break
-			}
 			answer, rerr := ReadLog(a.Root, req)
 			if rerr != nil {
 				answer = LogAnswer{ID: req.ID, Error: rerr.Error()}
 			}
-			err = a.call(ctx, "POST", "/functions/v1/agent/logs", answer, nil)
+			// One answer that fails does not hold up the others.
+			if perr := a.call(ctx, "POST", "/functions/v1/agent/logs", answer, nil); perr != nil {
+				slog.Warn("function log not sent", "function", req.Function, "error", perr)
+			}
 		}
 		if err != nil && ctx.Err() == nil {
 			slog.Warn("function host logs", "error", err)

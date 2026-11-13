@@ -308,3 +308,26 @@ func TestFunctionLogsWhenTheHostIsAway(t *testing.T) {
 		t.Fatalf("stale request %v", p.fnLogs.waiting)
 	}
 }
+
+// Requests a host never collected leave nothing behind, in any order.
+func TestFunctionLogRequestsAreReleased(t *testing.T) {
+	var l functionLogs
+	old := functionLogWait
+	functionLogWait = 20 * time.Millisecond
+	defer func() { functionLogWait = old }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	for i := 0; i < 50; i++ {
+		go func() {
+			l.ask(ctx, "fn01", D{"id": randomID()})
+			done <- struct{}{}
+		}()
+	}
+	cancel()
+	for i := 0; i < 50; i++ {
+		<-done
+	}
+	if len(l.waiting) != 0 || len(l.asked) != 0 {
+		t.Fatalf("left behind: %d hosts, %d asks", len(l.waiting), len(l.asked))
+	}
+}
