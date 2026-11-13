@@ -13,6 +13,13 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 			g["machine"] = m["name"]
 		}
 	}
+	if f := str(g["function"]); f != "" {
+		// Members name a function; its id stays internal.
+		if n, name, ok := strings.Cut(f, "-"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+			g["function"] = name
+		}
+		delete(g, "target_port")
+	}
 	if g["vip"] != nil {
 		// Members name a virtual address; its id stays internal.
 		for _, v := range e.vips(n) {

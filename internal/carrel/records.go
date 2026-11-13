@@ -1,6 +1,9 @@
 package carrel
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Stored records. Each lists its JSON fields in alphabetical order, so it
 // encodes exactly like its map form. TestGolden and TestLiveRows hold the
@@ -117,10 +120,12 @@ func (e *Execution) peers(n ...int) []peerGrant { return rowsOf[peerGrant](e.S, 
 func (g peerGrant) protocol() string { return or(g.Proto, "tcp") }
 
 // domainRecord routes https://<sub>.<slug>.winlab.tw to a machine's port, or
-// to a port of a virtual address (VIP holds its id, VMID is 0; issue #146).
+// to a port of a virtual address (VIP holds its id, VMID is 0; issue #146),
+// or to a function (Function holds its id, VMID and TargetPort are 0; PLAN 7.11).
 // A domain under a special domain grant (PLAN 6.10) holds the grant's id in
 // Grant and has no Sub; Name is the granted name or one label under it.
 type domainRecord struct {
+	Function    string  `json:"function,omitempty"`
 	Grant       string  `json:"grant,omitempty"`
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
@@ -139,6 +144,10 @@ func (d domainRecord) D() D { return decode(string(encoded(d))) }
 
 // target is the domain_add argument that names the domain's target again.
 func (d domainRecord) target() D {
+	if d.Function != "" {
+		_, name, _ := strings.Cut(d.Function, "-")
+		return D{"function": name}
+	}
 	if d.VIP != "" {
 		return D{"vip": d.VIP}
 	}
@@ -147,6 +156,12 @@ func (d domainRecord) target() D {
 
 // again is the domain_add request that publishes this domain once more.
 func (d domainRecord) again() D {
+	if d.Function != "" {
+		if d.Grant != "" {
+			return merge(d.target(), D{"name": d.Name})
+		}
+		return merge(d.target(), D{"sub": d.Sub})
+	}
 	if d.Grant != "" {
 		return merge(d.target(), D{"name": d.Name, "target_port": d.TargetPort})
 	}

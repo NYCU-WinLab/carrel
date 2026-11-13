@@ -452,6 +452,12 @@ func goldenScenario(g *goldenRun) {
 	call("functions", "function_list", D{}, alice)
 	call("functions", "function_get", D{"function": "hook"}, alice)
 	call("functions", "function_rollback", D{"function": "hook"}, alice)
+	call("functions", "domain_add", D{"function": "hook", "sub": "hook", "dry_run": true}, alice)
+	call("functions", "domain_add", D{"function": "hook", "sub": "hook"}, alice)
+	call("functions", "domain_add", D{"function": "hook", "sub": "hook2", "target_port": 80}, alice)
+	call("functions", "function_get", D{"function": "hook"}, alice)
+	call("functions", "function_remove", D{"function": "hook", "confirm": "hook"}, alice)
+	call("functions", "domain_remove", D{"name": "hook.alice.winlab.tw"}, alice)
 	call("functions", "function_remove", D{"function": "hook", "confirm": "hook"}, alice)
 
 	spec := D{

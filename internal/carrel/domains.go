@@ -169,7 +169,22 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 	}
 	var domain, delta D
 	if tool == "domain_add" {
-		vmid, _, vip := e.publishTarget(t, a)
+		var vmid int
+		var vip vipRecord
+		function := ""
+		if a["function"] != nil {
+			// A function has no machine and no port: the gateway sends the
+			// request to its host's router (PLAN 7.11).
+			if a["machine"] != nil || a["vip"] != nil || a["target_port"] != nil {
+				fail("invalid", "Give function alone, without machine, vip or target_port", D{"recovery": "revise_request"})
+			}
+			function = str(e.Function(t, a["function"])["id"])
+		} else {
+			if a["target_port"] == nil {
+				fail("invalid", "target_port is required with machine or vip", D{"recovery": "revise_request"})
+			}
+			vmid, _, vip = e.publishTarget(t, a)
+		}
 		if (a["sub"] == nil) == (a["name"] == nil) {
 			fail("invalid", "Give exactly one of sub and name", D{"recovery": "revise_request"})
 		}
@@ -180,6 +195,12 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 			name = strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
 			g := e.grantCovering(n, name)
 			grant = g.ID
+			if g.Kind == "delegated" && function != "" {
+				fail("invalid", "A delegated name asks its target before a certificate; publish a function under sub or an exact or wildcard grant", D{"recovery": "revise_request"})
+			}
+			if g.Kind == "srv" && function != "" {
+				fail("invalid", "An SRV name points at a public port; a function has none", D{"recovery": "revise_request"})
+			}
 			// An SRV record names the public port that forwards to the target.
 			if _, open := e.openPortFor(n, vmid, vip.ID, integer(a["target_port"]), srvProto(name)); g.Kind == "srv" && !open {
 				fail("invalid", "Open a public port to this target with port_open first; the SRV record names it", D{"recovery": "resolve_prerequisite"})
@@ -189,7 +210,7 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 		if found && record.State == "deleting" {
 			fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
 		}
-		if found && (record.VMID != vmid || record.VIP != vip.ID || float64(record.TargetPort) != num(a["target_port"])) {
+		if found && (record.VMID != vmid || record.VIP != vip.ID || record.Function != function || float64(record.TargetPort) != num(a["target_port"])) {
 			fail("conflict", "Domain already targets a different service; remove it explicitly first", D{"recovery": "revise_request"})
 		}
 		delta = D{"domains": 0}
@@ -197,11 +218,13 @@ func (e *Execution) DomainAction(tool string, a, t D) D {
 			requireHolder(vip)
 			delta["domains"] = 1
 			e.Quota(t, delta)
-			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Sub: str(a["sub"]), Grant: grant, Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
+			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Function: function, Sub: str(a["sub"]), Grant: grant, Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
 		}
 		if dry {
 			domain = D{"name": name, "target_port": a["target_port"], "state": "planned"}
-			if vip.ID != "" {
+			if function != "" {
+				domain = D{"name": name, "function": a["function"], "state": "planned"}
+			} else if vip.ID != "" {
 				domain["vip"] = vip.ID
 			} else {
 				domain["machine"] = e.Machine(t, a["machine"])["name"]

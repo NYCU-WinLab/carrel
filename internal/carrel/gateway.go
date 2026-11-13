@@ -7,8 +7,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,13 +60,21 @@ type route struct {
 	domain  D
 	address string
 	port    int
+	// function names the function on its host, t<tenant>-<name>, when the
+	// route goes to a function host's router.
+	function string
 }
 
 // forward is the route's Caddy directive: its machine or virtual address, or
-// 503 while the machine it names is frozen.
+// 503 while the machine it names is frozen. A function's route tells the
+// router which function the request is for; header_up replaces whatever the
+// client sent in that header.
 func (r route) forward() string {
 	if r.address == "" {
 		return "  respond 503"
+	}
+	if r.function != "" {
+		return fmt.Sprintf("  reverse_proxy %s:%d {\n   header_up X-Carrel-Function %s\n   flush_interval -1\n  }", r.address, r.port, r.function)
 	}
 	return fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
 }
@@ -121,9 +131,44 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 	for _, f := range dicts(state["frozen"]) {
 		frozen[integer(f["vmid"])] = integer(f["tenant_n"])
 	}
+	// Functions a domain may point at, with their host's router (PLAN 7.11).
+	functions := map[string]D{}
+	for _, f := range dicts(state["function_routes"]) {
+		functions[str(f["id"])] = f
+	}
 	grantRoutes := map[string][]route{}
 	for _, d := range dicts(state["domains"]) {
 		if d["state"] != "ready" {
+			continue
+		}
+		if id := str(d["function"]); id != "" {
+			// A function removed, or on a host no longer configured, answers
+			// 503 like a frozen machine: never a failure for every tenant.
+			r := route{domain: d}
+			if f := functions[id]; f != nil && integer(f["tenant_n"]) == integer(d["tenant_n"]) {
+				host, port, err := net.SplitHostPort(str(f["router"]))
+				p, _ := strconv.Atoi(port)
+				if err == nil && net.ParseIP(host).To4() != nil && p > 0 && p < 65536 && functionHostPattern.MatchString(str(f["host_id"])) {
+					r.address, r.port, r.function = host, p, str(f["host_id"])
+				}
+			}
+			slug := slugs[integer(d["tenant_n"])]
+			if id := str(d["grant"]); id != "" {
+				g, ok := grants[id]
+				if srv[id] {
+					continue
+				}
+				if !ok || g.TenantN != integer(d["tenant_n"]) || !g.covers(str(d["name"])) {
+					fail("conflict", "Invalid special domain")
+				}
+				grantRoutes[id] = append(grantRoutes[id], r)
+				continue
+			}
+			sub := str(d["sub"])
+			if (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+".winlab.tw" {
+				fail("conflict", "Invalid tenant domain")
+			}
+			routes[slug] = append(routes[slug], r)
 			continue
 		}
 		var target D
@@ -157,7 +202,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 			if port < 1 || port > 65535 {
 				fail("conflict", "Invalid tenant domain port")
 			}
-			grantRoutes[id] = append(grantRoutes[id], route{d, address, port})
+			grantRoutes[id] = append(grantRoutes[id], route{domain: d, address: address, port: port})
 			continue
 		}
 		sub := str(d["sub"])
@@ -168,7 +213,7 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 		if port < 1 || port > 65535 {
 			fail("conflict", "Invalid tenant domain port")
 		}
-		routes[slug] = append(routes[slug], route{d, address, port})
+		routes[slug] = append(routes[slug], route{domain: d, address: address, port: port})
 	}
 	byName := map[string]D{}
 	for _, b := range bundles {
@@ -351,8 +396,9 @@ func (e *Execution) SyncGateway(state D) map[string]any {
 				fail("backend_unavailable", "Gateway configuration rejected; use the operation ID for operator diagnostics", D{"component": "carrel-gateway", "recovery": "retry_infrastructure"})
 			}
 		}()
-		// The frozen machines are for this configuration only: the nodes get the state as it was.
-		view := D{"frozen": e.S.Objects("frozen")}
+		// The frozen machines and the functions' routers are for this
+		// configuration only: the nodes get the state as it was.
+		view := D{"frozen": e.S.Objects("frozen"), "function_routes": e.functionRoutes()}
 		for k, v := range state {
 			view[k] = v
 		}
