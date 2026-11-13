@@ -3758,6 +3758,49 @@
       }
     },
     {
+      "name": "function_logs",
+      "description": "Read the end of a function's output: what its instances wrote to standard output and standard error, each line starting with the time it was written. The platform keeps the last 10 MB per function on its host. With build, reads the output of its builds instead, the place to look when a version failed. Asks the function host and waits up to 15 seconds for it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "since_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2592000,
+            "description": "Only lines written in the last this many seconds."
+          },
+          "build": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576,
+            "default": 65536,
+            "description": "Return at most this many bytes from the end."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "function_list",
       "description": "List the tenant's functions with their state and current version.",
       "inputSchema": {
@@ -4803,6 +4846,7 @@
     "operation_retry",
     "function_deploy",
     "function_get",
+    "function_logs",
     "function_list",
     "function_rollback",
     "function_remove"

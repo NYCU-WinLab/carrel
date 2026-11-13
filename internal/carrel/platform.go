@@ -70,6 +70,7 @@ type Platform struct {
 	wg                 sync.WaitGroup
 	platformMu         sync.Mutex
 	platformCodes      map[string]D
+	fnLogs             functionLogs
 	reportMu           sync.Mutex
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex

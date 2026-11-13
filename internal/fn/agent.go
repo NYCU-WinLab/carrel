@@ -115,6 +115,14 @@ func (a *Agent) Run(ctx context.Context) {
 	if a.failed == nil {
 		a.failed = map[string]string{}
 	}
+	// Log requests are answered beside the state poll, so a long build
+	// does not hold them up.
+	logs := make(chan struct{})
+	go func() {
+		defer close(logs)
+		a.serveLogs(ctx)
+	}()
+	defer func() { <-logs }()
 	var since int64 = -1
 	for ctx.Err() == nil {
 		desired, err := a.fetch(ctx, since)

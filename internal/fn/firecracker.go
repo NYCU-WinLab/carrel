@@ -500,7 +500,10 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 		"--cgroup", "memory.swap.max=0",
 		"--cgroup", "pids.max="+strconv.Itoa(maxPIDs),
 		"--resource-limit", "fsize="+strconv.Itoa(fileLimit),
-		"--", "--api-sock", jailSocket)
+		// Firecracker writes its own log where the serial console goes, the
+		// function's log. Only its errors belong there: the rest is the
+		// host's detail, not the function's output.
+		"--", "--api-sock", jailSocket, "--level", "Error")
 	cmd.Stdout = console
 	cmd.Stderr = console
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -640,11 +643,15 @@ func (fc *Firecracker) mountOut(s *slot, root string, sizeMB int) error {
 // capLog is a function's serial log: log, and log.1 once log reached logHalf.
 // Every instance of the function writes through the same one, and only one
 // process writes a log: the router writes log, a build writes build.log.
+// Each line starts with the time it was written (stamp), which function_logs
+// filters on.
 type capLog struct {
 	mu   sync.Mutex
 	path string
 	file *os.File
 	size int64
+	// midLine is set while the last write did not end its line.
+	midLine bool
 }
 
 func (fc *Firecracker) logFor(path string) *capLog {
@@ -661,9 +668,12 @@ func (fc *Firecracker) logFor(path string) *capLog {
 	return l
 }
 
-func (l *capLog) Write(p []byte) (int, error) {
+func (l *capLog) Write(raw []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	atStart := !l.midLine
+	p := stamp(raw, time.Now(), &atStart)
+	l.midLine = !atStart
 	if l.file != nil && l.size+int64(len(p)) > logHalf {
 		l.file.Close()
 		l.file = nil
@@ -688,7 +698,10 @@ func (l *capLog) Write(p []byte) (int, error) {
 	}
 	n, err := l.file.Write(p)
 	l.size += int64(n)
-	return len(p), err
+	if err != nil {
+		return 0, err
+	}
+	return len(raw), nil
 }
 
 // watch closes done when the Firecracker process ends. It is not this

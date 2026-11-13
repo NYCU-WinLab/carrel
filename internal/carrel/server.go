@@ -210,6 +210,8 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		case r.URL.Path == "/functions/v1/agent/report":
 			// A host reports every function it holds.
 			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionReport)
+		case r.URL.Path == "/functions/v1/agent/logs":
+			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionLogReply)
 		default:
 			r.Body = http.MaxBytesReader(w, r.Body, 262144)
 		}

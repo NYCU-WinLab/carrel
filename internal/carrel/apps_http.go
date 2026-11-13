@@ -123,4 +123,19 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 		}
 		return p.FunctionReport(r.Context(), bearer(r), remoteIP(r), body)
 	}))
+	mux.HandleFunc("GET /functions/v1/agent/logs", func(w http.ResponseWriter, r *http.Request) {
+		var result D
+		if err := attempt(func() { result = p.FunctionLogRequests(r.Context(), bearer(r), remoteIP(r)) }); err != nil {
+			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
+			return
+		}
+		jsonResponse(w, 200, result)
+	})
+	mux.Handle("POST /functions/v1/agent/logs", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		var body D
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			fail("invalid", "Invalid JSON body")
+		}
+		return p.FunctionLogAnswer(bearer(r), remoteIP(r), body)
+	}))
 }
