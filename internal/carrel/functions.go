@@ -38,6 +38,8 @@ var (
 	functionHostName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	// The host agent accepts these and nothing else (internal/fn).
 	functionVersionRE = regexp.MustCompile(`^v[0-9]{1,9}$`)
+	// A function's name on its host goes into the gateway's configuration.
+	functionHostPattern = regexp.MustCompile(`^t[0-9]{1,6}-[a-z][a-z0-9-]{0,31}$`)
 )
 
 func functionID(n int, name string) string { return appID(n, name) }
@@ -110,6 +112,15 @@ func (e *Execution) PublicFunction(f D) D {
 		out["state"] = "not_deployed"
 	}
 	out["host"] = e.functionHostState(str(f["host"]))
+	if names := e.functionDomains(f, true); len(names) > 0 {
+		urls := []string{}
+		for _, name := range names {
+			if !strings.HasPrefix(name, "*.") {
+				urls = append(urls, "https://"+name)
+			}
+		}
+		out["urls"] = urls
+	}
 	if live := str(f["live"]); live != str(f["current"]) && str(f["current"]) != "" {
 		out["switching_to"] = f["current"]
 	}
@@ -284,6 +295,9 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 		if a["confirm"] != f["name"] {
 			fail("invalid", "confirm must equal the function name")
 		}
+		if names := e.functionDomains(f, false); len(names) > 0 {
+			fail("conflict", "Domains still point at this function; remove them with domain_remove first", D{"domains": names, "recovery": "resolve_prerequisite"})
+		}
 		// A dry run counts the removal; a real one counts what is left.
 		after := D{"functions": -1}
 		if !dry {
@@ -320,6 +334,39 @@ func (e *Execution) removeFunctions(fs []D) {
 		}
 		tx.bumpFunctions()
 	})
+}
+
+// functionDomains are the names of the domains that point at a function,
+// only the serving ones when ready is set.
+func (e *Execution) functionDomains(f D, ready bool) []string {
+	names := []string{}
+	for _, d := range e.domains(integer(f["tenant_n"])) {
+		if d.Function == str(f["id"]) && (!ready || d.State == "ready") {
+			names = append(names, d.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// functionRoutes tell the gateway where each function's host listens. A
+// tenant that is not active gets no route, so its names answer 503: a
+// function wakes on any request, unlike a machine that suspension stopped.
+func (e *Execution) functionRoutes() []D {
+	routers := map[string]string{}
+	for _, h := range e.P.Config.FunctionHosts {
+		routers[h.Name] = h.Router
+	}
+	out := []D{}
+	for _, f := range e.S.Objects("functions") {
+		if t := e.S.TenantN(integer(f["tenant_n"])); t == nil || t["status"] != "active" {
+			continue
+		}
+		if router := routers[str(f["host"])]; router != "" {
+			out = append(out, D{"id": f["id"], "tenant_n": f["tenant_n"], "router": router, "host_id": functionHostID(integer(f["tenant_n"]), str(f["name"]))})
+		}
+	}
+	return out
 }
 
 // Host side

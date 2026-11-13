@@ -1388,7 +1388,7 @@
     },
     {
       "name": "domain_add",
-      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under a delegated grant, publish its catch-all *.<base>; the target serves /.well-known/carrel/ask. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address.",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under a delegated grant, publish its catch-all *.<base>; the target serves /.well-known/carrel/ask. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address. A function (function_deploy) can be the target in place of a machine and port.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1411,7 +1411,8 @@
           "target_port": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 65535
+            "maximum": 65535,
+            "description": "Required with machine or vip; not with function."
           },
           "vip": {
             "type": "string",
@@ -1448,11 +1449,14 @@
             "maximum": 55,
             "default": 55,
             "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+          },
+          "function": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "A function of the tenant to publish, in place of machine or vip and target_port. The gateway wakes it on a request."
           }
         },
-        "required": [
-          "target_port"
-        ],
+        "required": [],
         "additionalProperties": false
       },
       "annotations": {

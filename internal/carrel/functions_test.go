@@ -245,3 +245,19 @@ func TestFunctionBuildsHoldQuota(t *testing.T) {
 	report(t, a, `{"functions":[{"id":"t1-a","versions":[{"version":"v1","state":"ready","bytes":536870912}]}]}`)
 	assertOK(t, call("c"))
 }
+
+// A suspended tenant's function must stop answering on its domains: unlike
+// a machine, a function wakes on any request.
+func TestFunctionRoutesSkipSuspendedTenants(t *testing.T) {
+	p, a := functionFixture(t)
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "port": 9000}, alice))
+	e := p.execution(context.Background())
+	if routes := e.functionRoutes(); len(routes) != 1 || routes[0]["host_id"] != "t1-hook" {
+		t.Fatalf("routes %v", routes)
+	}
+	p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=1")
+	if routes := e.functionRoutes(); len(routes) != 0 {
+		t.Fatalf("suspended tenant still routed: %v", routes)
+	}
+}

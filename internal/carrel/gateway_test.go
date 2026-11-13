@@ -165,3 +165,31 @@ func TestTruncateKeepsWholeCharacters(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+func TestGatewayRoutesAFunctionToItsHostsRouter(t *testing.T) {
+	state, origin := gatewayState(t)
+	state["domains"] = append(arr(state["domains"]),
+		D{"id": "9", "tenant_n": 3, "function": "3-hook", "sub": "hook", "name": "hook.zyx1121.winlab.tw", "state": "ready"},
+		// A function with no route (removed, or its host unconfigured) answers 503.
+		D{"id": "10", "tenant_n": 3, "function": "3-gone", "sub": "gone", "name": "gone.zyx1121.winlab.tw", "state": "ready"},
+		// Another tenant's route never serves this tenant's name.
+		D{"id": "11", "tenant_n": 3, "function": "4-other", "sub": "other", "name": "other.zyx1121.winlab.tw", "state": "ready"})
+	state["function_routes"] = []any{
+		D{"id": "3-hook", "tenant_n": 3, "router": "10.200.0.20:8090", "host_id": "t3-hook"},
+		D{"id": "4-other", "tenant_n": 4, "router": "10.200.0.20:8090", "host_id": "t4-other"},
+	}
+	caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", origin, dicts(state["certificates"]))
+	tenant := strings.SplitN(caddy, "https://*.zyx1121.winlab.tw {", 2)[1]
+	want := " @d9 host hook.zyx1121.winlab.tw\n handle @d9 {\n  reverse_proxy 10.200.0.20:8090 {\n   header_up X-Carrel-Function t3-hook\n   flush_interval -1\n  }\n }"
+	if !strings.Contains(tenant, want) {
+		t.Fatalf("no function route in\n%s", tenant)
+	}
+	for _, id := range []string{"10", "11"} {
+		if !strings.Contains(tenant, " handle @d"+id+" {\n  respond 503\n }") {
+			t.Fatalf("route %s does not answer 503", id)
+		}
+	}
+	if strings.Contains(tenant, "t4-other") {
+		t.Fatal("another tenant's function is reachable")
+	}
+}
