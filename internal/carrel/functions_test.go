@@ -133,6 +133,16 @@ func TestFunctionHostAccess(t *testing.T) {
 			t.Fatalf("token %q: %d", token, code)
 		}
 	}
+	// The token works only from its host's address: a tenant machine on
+	// 10.200.0.0/16 passes the infra gate but not this.
+	req0 := httptest.NewRequest("GET", "http://10.200.0.3:8080/functions/v1/agent/state?since=-1", nil)
+	req0.RemoteAddr = "10.200.1.10:40000"
+	req0.Header.Set("Authorization", "Bearer "+testHostToken)
+	w0 := httptest.NewRecorder()
+	a.ServeHTTP(w0, req0)
+	if w0.Code != 403 {
+		t.Fatalf("a tenant machine with the token: %d", w0.Code)
+	}
 	// Only the infra network reaches the agent paths, whatever the token.
 	req := httptest.NewRequest("GET", "https://carrel.test/functions/v1/agent/state?since=-1", nil)
 	req.Header.Set("Authorization", "Bearer "+testHostToken)
@@ -145,7 +155,7 @@ func TestFunctionHostAccess(t *testing.T) {
 
 func TestFunctionReportTouchesOnlyItsHost(t *testing.T) {
 	p, a := functionFixture(t)
-	p.Config.FunctionHosts = append(p.Config.FunctionHosts, FunctionHostConfig{Name: "fn02", Router: "10.200.0.21:8090", TokenSHA256: digest("cfh_other")})
+	p.Config.FunctionHosts = append(p.Config.FunctionHosts, FunctionHostConfig{Name: "fn02", Router: "10.200.0.20:8091", TokenSHA256: digest("cfh_other")})
 	alice := person("alice", false)
 	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "x/y:1"}, alice))
 	// Another host cannot mark fn01's version built.
@@ -199,4 +209,39 @@ func TestFunctionStateWaitsForAChange(t *testing.T) {
 	if integer(out["revision"]) <= int(revision) || len(arr(out["functions"])) != 1 {
 		t.Fatalf("long poll answered %v", out)
 	}
+}
+
+func TestFunctionVersionsAreNeverReused(t *testing.T) {
+	_, a := functionFixture(t)
+	alice := person("alice", false)
+	call := func(tool string, args D) D { return a.Call(context.Background(), tool, args, alice) }
+	assertOK(t, call("function_deploy", D{"name": "hook", "image": "x/old:1"}))
+	report(t, a, `{"functions":[{"id":"t1-hook","versions":[{"version":"v1","state":"ready"}]}]}`)
+	assertOK(t, call("function_remove", D{"function": "hook", "confirm": "hook"}))
+	r := call("function_deploy", D{"name": "hook", "image": "x/new:1"})
+	assertOK(t, r)
+	if pending := obj(r["function"])["pending"]; pending == "v1" {
+		t.Fatal("a removed function's version name came back")
+	}
+	// A late report of the old v1 does not make anything current.
+	report(t, a, `{"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"}]}]}`)
+	if f := obj(call("function_get", D{"function": "hook"})["function"]); f["current"] != nil || f["state"] != "building" {
+		t.Fatalf("old report changed the new function: %v", f)
+	}
+}
+
+func TestFunctionBuildsHoldQuota(t *testing.T) {
+	p, a := functionFixture(t)
+	alice := person("alice", false)
+	p.Store.Exec(`UPDATE tenants SET quota=json_set(quota,'$.function_gb',6) WHERE n=1`)
+	call := func(name string) D {
+		return a.Call(context.Background(), "function_deploy", D{"name": name, "image": "x/y:1"}, alice)
+	}
+	// Each build holds 2.5 GiB at 512 MiB until its size is known.
+	assertOK(t, call("a"))
+	assertOK(t, call("b"))
+	assertCode(t, call("c"), "quota_exceeded")
+	// A reported size replaces the reserve.
+	report(t, a, `{"functions":[{"id":"t1-a","versions":[{"version":"v1","state":"ready","bytes":536870912}]}]}`)
+	assertOK(t, call("c"))
 }

@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -174,13 +175,32 @@ func functionSpec(a D) D {
 	return spec
 }
 
-// functionBytes is the disk a tenant's kept versions use on function hosts.
+// buildReserve is what a version holds against function_gb until its host
+// reports the real size: the largest image (PLAN 7.11) and its snapshot's memory.
+func buildReserve(memoryMB int) float64 { return 2*GiB + float64(memoryMB)*MiB }
+
+// functionBytes is the disk a tenant's kept versions use on function hosts,
+// with a reserve for each version still building.
 func (e *Execution) functionBytes(n int) float64 {
 	total := 0.0
 	for _, v := range e.S.Objects("function_versions", n) {
-		total += num(v["bytes"])
+		if v["state"] == "building" {
+			total += buildReserve(integer(v["memory_mb"]))
+		} else {
+			total += num(v["bytes"])
+		}
 	}
 	return total
+}
+
+// nextFunctionVersion numbers versions across every function and every
+// removal: a function removed and deployed again under its name must not
+// meet a version of the old one that a host still holds or reports.
+func (e *Execution) nextFunctionVersion() int {
+	r := e.S.SiteGet("functions", "version")
+	next := integer(obj(r)["version"]) + 1
+	e.S.SitePut("functions", "version", D{"version": next})
+	return next
 }
 
 func (e *Execution) FunctionTool(tool string, a, t D) D {
@@ -215,16 +235,17 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 			fail("conflict", "A build of this function is in progress; follow it with function_get and wait_seconds", D{"pending": f["pending"]})
 		}
 		quota := e.Quota(t, delta)
-		if limit := num(obj(t["quota"])["function_gb"]) * GiB; e.functionBytes(n) >= limit {
-			fail("quota_exceeded", "Kept function versions use all of function_gb; remove a function first", D{"dimension": "function_gb"})
+		reserve := buildReserve(integer(spec["memory_mb"]))
+		if limit := num(obj(t["quota"])["function_gb"]) * GiB; e.functionBytes(n)+reserve > limit {
+			fail("quota_exceeded", "Kept and building function versions would exceed function_gb; a build holds 2 GiB plus its memory until its size is known. Remove a function or wait for builds", D{"dimension": "function_gb"})
 		}
-		seq := integer(f["seq"]) + 1
-		version := "v" + strconv.Itoa(seq)
 		r := D{"dry_run": dry, "quota_after": quota}
 		if dry {
-			r["function"] = merge(pick(f, "name"), spec, D{"version": version, "state": "building"})
+			r["function"] = merge(pick(f, "name"), spec, D{"state": "building"})
 			return r
 		}
+		seq := e.nextFunctionVersion()
+		version := "v" + strconv.Itoa(seq)
 		v := merge(spec, D{"id": functionVersionID(str(f["id"]), version), "function": f["id"], "version": version, "seq": seq, "state": "building", "created_at": now()})
 		f["seq"], f["pending"] = seq, version
 		e.Transaction(func(tx *Execution) {
@@ -300,13 +321,19 @@ func (e *Execution) removeFunctions(fs []D) {
 
 // Host side
 
-func (p *Platform) functionHostOf(token string) FunctionHostConfig {
+// functionHostOf finds the host a token belongs to. The request must also
+// come from that host's address: the infra gate admits tenant machines too.
+func (p *Platform) functionHostOf(token, source string) FunctionHostConfig {
 	if !strings.HasPrefix(token, functionTokenPrefix) {
 		fail("forbidden", "Invalid function host token")
 	}
 	h := digest(token)
 	for _, host := range p.Config.FunctionHosts {
 		if secureEqual(host.TokenSHA256, h) {
+			router, err := netip.ParseAddrPort(host.Router)
+			if from, perr := netip.ParseAddr(source); err != nil || perr != nil || from.Unmap() != router.Addr() {
+				fail("forbidden", "Invalid function host token")
+			}
 			return host
 		}
 	}
@@ -321,8 +348,8 @@ func (p *Platform) touchFunctionHost(host FunctionHostConfig) {
 }
 
 // FunctionState long-polls for a desired state newer than since.
-func (p *Platform) FunctionState(ctx context.Context, token string, since int64) D {
-	host := p.functionHostOf(token)
+func (p *Platform) FunctionState(ctx context.Context, token, source string, since int64) D {
+	host := p.functionHostOf(token, source)
 	p.touchFunctionHost(host)
 	deadline := time.Now().Add(functionAgentWait)
 	for p.Store.functionRevision() <= since && time.Now().Before(deadline) && sleep(ctx, time.Second) {
@@ -361,8 +388,8 @@ func (p *Platform) desiredFunctions(host FunctionHostConfig) D {
 // FunctionReport takes a host's inventory. A version the host built becomes
 // ready, and current when it was the pending deploy; a version that failed
 // records its error.
-func (p *Platform) FunctionReport(ctx context.Context, token string, body D) D {
-	host := p.functionHostOf(token)
+func (p *Platform) FunctionReport(ctx context.Context, token, source string, body D) D {
+	host := p.functionHostOf(token, source)
 	p.writer.Lock()
 	defer p.writer.Unlock()
 	e := p.execution(ctx)
