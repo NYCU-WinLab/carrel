@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -375,5 +376,47 @@ func TestAgentStopsServingAFunctionWithoutCurrent(t *testing.T) {
 	}
 	if !Built(root, "t1-api", "v7") {
 		t.Fatal("v7 not built")
+	}
+}
+
+// A version with an environment builds only once the agent has fetched it;
+// a failed fetch is no failed build.
+func TestAgentFetchesTheEnvironmentToBuild(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	asks := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path != "/functions/v1/agent/env" || r.URL.Query().Get("function") != "t1-api" || r.URL.Query().Get("version") != "v1" {
+			http.NotFound(w, r)
+			return
+		}
+		asks++
+		if asks == 1 {
+			http.Error(w, "busy", 503)
+			return
+		}
+		_, _ = w.Write([]byte(`{"env":["A=1","B=two words"]}`))
+	}))
+	defer server.Close()
+	var builds []string
+	var got []string
+	build := fakeBuild(root, &builds, nil)
+	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock, Forget: func(string) {}, failed: map[string]string{},
+		Build: func(ctx context.Context, f Function, image string, env []string) error {
+			got = env
+			return build(ctx, f, image, env)
+		}}
+	v := version("v1")
+	v.HasEnv = true
+	desired := Desired{Revision: 1, Functions: []DesiredFunction{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{v}}}}
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 || len(a.failed) != 0 {
+		t.Fatalf("built without the environment: %v %v", builds, a.failed)
+	}
+	a.apply(context.Background(), desired)
+	if len(builds) != 1 || strings.Join(got, "|") != "A=1|B=two words" {
+		t.Fatalf("builds %v env %q", builds, got)
 	}
 }

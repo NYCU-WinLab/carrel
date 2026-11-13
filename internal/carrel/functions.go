@@ -86,13 +86,13 @@ func (e *Execution) functionHostState(name string) string {
 }
 
 func (e *Execution) PublicFunction(f D) D {
-	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "env_keys")
+	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at")
 	versions := e.FunctionVersions(f)
 	public := []D{}
 	for _, v := range versions {
 		public = append(public, publicFunctionVersion(v))
 		if v["version"] == f["current"] {
-			for _, k := range functionSpecKeys {
+			for _, k := range append(functionSpecKeys, "env_keys") {
 				if v[k] != nil {
 					out[k] = v[k]
 				}
@@ -247,8 +247,12 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 		} else if str(f["pending"]) != "" {
 			fail("conflict", "A build of this function is in progress; follow it with function_get and wait_seconds", D{"pending": f["pending"]})
 		}
-		// A deploy keeps the function's environment.
-		return e.startFunctionVersion(t, f, spec, delta, D{"env": str(f["env"]), "env_keys": f["env_keys"]}, dry)
+		// A deploy keeps the environment of the live version.
+		env := D{}
+		if cur := e.S.Get("function_versions", functionVersionID(str(f["id"]), str(f["current"]))); cur != nil {
+			env = D{"env": str(cur["env"]), "env_keys": cur["env_keys"]}
+		}
+		return e.startFunctionVersion(t, f, spec, delta, env, dry)
 	case "function_rollback":
 		f := e.Function(t, a["function"])
 		target := str(f["previous"])
@@ -292,7 +296,7 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 
 // startFunctionVersion records a version to build from spec, with the
 // environment in env (its sealed values and their names).
-func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool) D {
+func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool, also ...func(*Execution)) D {
 	n := integer(t["n"])
 	quota := e.Quota(t, delta)
 	reserve := buildReserve(integer(spec["memory_mb"]))
@@ -311,17 +315,20 @@ func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool) D {
 	seq := e.nextFunctionVersion()
 	version := "v" + strconv.Itoa(seq)
 	v := merge(spec, D{"id": functionVersionID(str(f["id"]), version), "function": f["id"], "version": version, "seq": seq, "state": "building", "created_at": now(), "env_keys": keys})
-	f["seq"], f["pending"], f["env_keys"] = seq, version, keys
+	f["seq"], f["pending"] = seq, version
+	// Only versions hold an environment: the function's is its live
+	// version's, so a rollback brings back the values that version had.
 	if sealed := str(env["env"]); sealed != "" {
-		v["env"], f["env"] = sealed, sealed
-	} else {
-		delete(f, "env")
+		v["env"] = sealed
 	}
 	e.Transaction(func(tx *Execution) {
 		tx.Put("function_versions", v["id"], n, v)
 		tx.Put("functions", f["id"], n, f)
 		tx.pruneFunctionVersions(f)
 		tx.bumpFunctions()
+		for _, step := range also {
+			step(tx)
+		}
 	})
 	r["function"] = e.PublicFunction(f)
 	r["state"] = "building"
@@ -350,6 +357,12 @@ func (e *Execution) removeFunctions(fs []D) {
 				tx.S.Remove("function_versions", v["id"])
 			}
 			tx.S.Remove("functions", f["id"])
+			// A link must not outlive its function into one of the same name.
+			for _, l := range tx.S.Objects("function_env_links", integer(f["tenant_n"])) {
+				if l["function"] == f["id"] {
+					tx.S.Remove("function_env_links", l["id"])
+				}
+			}
 		}
 		tx.bumpFunctions()
 	})
@@ -443,8 +456,9 @@ func (p *Platform) desiredFunctions(host FunctionHostConfig) D {
 				"version": v["version"], "image": v["image"], "port": v["port"], "memory_mb": v["memory_mb"],
 				"mode": v["instance"], "idle_seconds": v["idle_seconds"], "timeout_seconds": v["timeout_seconds"],
 				"max_instances": v["max_instances"], "wake_path": v["wake_path"],
-				// A version is rebuilt with the environment it was built with.
-				"env": p.openFunctionEnv(str(f["id"]), str(v["env"])),
+				// The agent fetches the values when it builds the version
+				// (FunctionEnvFor): the state stays small whatever they hold.
+				"has_env": str(v["env"]) != "",
 			})
 		}
 		entry := D{"id": functionHostID(integer(f["tenant_n"]), str(f["name"])), "versions": versions}

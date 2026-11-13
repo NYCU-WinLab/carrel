@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // A function's environment (PLAN 7.11) never travels in tool arguments:
@@ -45,6 +46,9 @@ func parseFunctionEnv(content []byte) []string {
 	if len(content) > maxFunctionEnv {
 		fail("invalid", "The environment file exceeds 64 KiB")
 	}
+	if !utf8.Valid(content) {
+		fail("invalid", "The environment file is not UTF-8")
+	}
 	values, order := map[string]string{}, []string{}
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 4096), maxFunctionEnv+1)
@@ -68,8 +72,8 @@ func parseFunctionEnv(content []byte) []string {
 		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
 			value = value[1 : len(value)-1]
 		}
-		if strings.ContainsRune(value, 0) {
-			fail("invalid", "Line "+strconv.Itoa(line)+" holds a NUL byte")
+		if strings.IndexFunc(value, func(r rune) bool { return r < 0x20 && r != '\t' || r == 0x7f }) >= 0 {
+			fail("invalid", "Line "+strconv.Itoa(line)+" holds a control character")
 		}
 		if _, seen := values[key]; !seen {
 			order = append(order, key)
@@ -156,6 +160,11 @@ func (e *Execution) functionEnv(a, w, t D) D {
 	if dry {
 		return D{"dry_run": true, "function": f["name"]}
 	}
+	for _, l := range e.S.Objects("function_env_links", n) {
+		if num(l["expires"]) < now() {
+			e.S.Remove("function_env_links", l["id"])
+		}
+	}
 	token := "cfe_" + random(32)
 	expires := now() + functionEnvLinkTTL
 	e.S.Put("function_env_links", digest(token), n, D{"id": digest(token), "tenant_n": n, "function": f["id"], "sub": w["sub"], "expires": expires})
@@ -169,7 +178,7 @@ func (e *Execution) functionEnv(a, w, t D) D {
 
 // newFunctionVersion builds a version from the function's current spec
 // with a new environment: env is the sealed environment, keys its names.
-func (e *Execution) newFunctionVersion(t, f D, keys []string, env string, dry bool) D {
+func (e *Execution) newFunctionVersion(t, f D, keys []string, env string, dry bool, also ...func(*Execution)) D {
 	if str(f["pending"]) != "" {
 		fail("conflict", "A build of this function is in progress; follow it with function_get and wait_seconds", D{"pending": f["pending"]})
 	}
@@ -186,7 +195,7 @@ func (e *Execution) newFunctionVersion(t, f D, keys []string, env string, dry bo
 	if keys == nil {
 		keys = []string{}
 	}
-	return e.startFunctionVersion(t, f, spec, D{}, D{"env": env, "env_keys": keys}, dry)
+	return e.startFunctionVersion(t, f, spec, D{}, D{"env": env, "env_keys": keys}, dry, also...)
 }
 
 // ReceiveFunctionEnv takes an upload to a function_env link.
@@ -218,8 +227,33 @@ func (p *Platform) ReceiveFunctionEnv(ctx context.Context, token string, body io
 		fail("not_found", "The function was removed")
 	}
 	sealed := p.sealFunctionEnv(str(f["id"]), pairs)
-	r := e.newFunctionVersion(t, f, envKeys(pairs), sealed, false)
-	e.S.Remove("function_env_links", link["id"])
+	// The link goes in the same transaction as the version: no crash
+	// between them leaves a used link that still works.
+	r := e.newFunctionVersion(t, f, envKeys(pairs), sealed, false, func(tx *Execution) {
+		tx.S.Remove("function_env_links", link["id"])
+	})
 	p.Store.Log(str(link["sub"]), n, "function_env_upload", D{"function": f["name"], "keys": envKeys(pairs)}, "ok")
 	return merge(r, D{"keys": envKeys(pairs)})
+}
+
+// FunctionEnvFor gives a host the values of one version it builds. Only the
+// host the function runs on gets them.
+func (p *Platform) FunctionEnvFor(token, source, function, version string) D {
+	host := p.functionHostOf(token, source)
+	for _, f := range p.Store.Objects("functions") {
+		if f["host"] != host.Name || functionHostID(integer(f["tenant_n"]), str(f["name"])) != function {
+			continue
+		}
+		v := p.Store.Get("function_versions", functionVersionID(str(f["id"]), version))
+		if v == nil {
+			break
+		}
+		env := p.openFunctionEnv(str(f["id"]), str(v["env"]))
+		if env == nil {
+			env = []string{}
+		}
+		return D{"env": env}
+	}
+	fail("not_found", "No such version on this host")
+	return nil
 }

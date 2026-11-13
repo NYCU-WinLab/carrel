@@ -1333,8 +1333,9 @@ AES-256-GCM under `function_env_key` of the configuration, bound to the function
 environment builds a new version from the current one, because the values are part of its
 snapshot; each version keeps the environment it was built with, so a rollback brings back its
 values, and a deploy keeps the function's environment. `clear` builds a version without one.
-The host gets the values in its desired state and writes them into the version's root file
-system, never into `function.json`. `function_get` shows the names only. Snapshots stay on
+The desired state only marks a version that has an environment (`has_env`); the host
+fetches its values from `GET /functions/v1/agent/env` when it builds that version, and writes
+them into the version's root file system, never into `function.json`. `function_get` shows the names only. Snapshots stay on
 function hosts and are deleted with their version.
 
 **Limits and quota**

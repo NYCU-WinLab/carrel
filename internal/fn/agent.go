@@ -40,9 +40,10 @@ type DesiredVersion struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	MaxInstances   int    `json:"max_instances"`
 	WakePath       string `json:"wake_path,omitempty"`
-	// Env holds the member's KEY=VALUE pairs, written into the version's
-	// root file system. It is never kept in function.json.
-	Env []string `json:"env,omitempty"`
+	// HasEnv says the version has the member's KEY=VALUE pairs. The agent
+	// fetches them only to build it, and writes them into the version's
+	// root file system, never into function.json.
+	HasEnv bool `json:"has_env,omitempty"`
 }
 
 // DesiredFunction names a function on the host, t<tenant>-<name>, its
@@ -184,7 +185,7 @@ func checkEnv(env []string) error {
 	size := 0
 	for _, pair := range env {
 		key, _, ok := strings.Cut(pair, "=")
-		if !ok || !envKeyRE.MatchString(key) || strings.ContainsRune(pair, 0) {
+		if !ok || !envKeyRE.MatchString(key) || strings.ContainsAny(pair, "\x00\n\r") {
 			return errors.New("an environment entry is not KEY=VALUE")
 		}
 		size += len(pair)
@@ -193,6 +194,24 @@ func checkEnv(env []string) error {
 		return errors.New("the environment is too large")
 	}
 	return nil
+}
+
+// fetchEnv asks the control plane for a version's environment.
+func (a *Agent) fetchEnv(ctx context.Context, id, version string) ([]string, error) {
+	var answer struct {
+		Env *[]string `json:"env"`
+	}
+	query := url.Values{"function": {id}, "version": {version}}
+	if err := a.call(ctx, http.MethodGet, "/functions/v1/agent/env?"+query.Encode(), nil, &answer); err != nil {
+		return nil, err
+	}
+	if answer.Env == nil {
+		return nil, errors.New("the answer lacks env")
+	}
+	if err := checkEnv(*answer.Env); err != nil {
+		return nil, err
+	}
+	return *answer.Env, nil
 }
 
 // check refuses a state with any part the agent cannot use, before any file
@@ -212,9 +231,6 @@ func (d Desired) check() error {
 		for _, v := range f.Versions {
 			if !versionRE.MatchString(v.Version) || versions[v.Version] {
 				return fmt.Errorf("function %s: version %q is invalid or repeated", f.ID, v.Version)
-			}
-			if err := checkEnv(v.Env); err != nil {
-				return fmt.Errorf("function %s: version %s: %w", f.ID, v.Version, err)
 			}
 			versions[v.Version] = true
 		}
@@ -337,12 +353,21 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 		// function.json, and a version is built only once. The lock says no
 		// build is writing it now.
 		_ = os.RemoveAll(filepath.Join(a.Root, f.ID, "v", v.Version))
+		var env []string
+		if v.HasEnv {
+			var err error
+			if env, err = a.fetchEnv(ctx, f.ID, v.Version); err != nil {
+				// Not a failed build: the next pass asks again.
+				slog.Warn("environment not fetched", "function", f.ID, "version", v.Version, "error", err)
+				continue
+			}
+		}
 		start := time.Now()
 		err := a.Build(ctx, Function{
 			Name: f.ID, Version: v.Version, Port: v.Port, MemoryMB: v.MemoryMB, Mode: v.Mode,
 			IdleSeconds: v.IdleSeconds, TimeoutSeconds: v.TimeoutSeconds,
 			MaxInstances: v.MaxInstances, WakePath: v.WakePath,
-		}, v.Image, v.Env)
+		}, v.Image, env)
 		if err != nil {
 			if ctx.Err() != nil {
 				return // a stop is not a failed build
