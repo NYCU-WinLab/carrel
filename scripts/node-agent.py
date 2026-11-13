@@ -891,7 +891,7 @@ def nic_value(m, nic):
     mac = nic["mac"]
     if not re.fullmatch(r"02:c[bc]:[0-9a-f:]{11}", mac):
         raise ValueError("invalid private MAC")
-    base = f"bridge={network},firewall=0,rate=100"
+    base = f"bridge={network},firewall=0"
     if m["kind"] == "vm":
         return f"virtio={mac},{base},mtu=1"
     address = f"{ipaddress.IPv4Address(nic['ip'])}/{integer(nic['prefix'], 24, 25)}" if nic.get("ip") else "manual"
@@ -1003,34 +1003,11 @@ def reconcile(state, first=True):
             "xvrfp_tenants",
         )
     for t in state["tenants"]:
-        n, vnet = tenant_config(t)
-        if "clsact" not in run("tc", "qdisc", "show", "dev", vnet):
-            run("tc", "qdisc", "add", "dev", vnet, "clsact")
-        run(
-            "tc",
-            "filter",
-            "replace",
-            "dev",
-            vnet,
-            "ingress",
-            "protocol",
-            "ip",
-            "pref",
-            "49152",
-            "handle",
-            "1",
-            "flower",
-            "src_ip",
-            f"10.200.{n}.0/24",
-            "action",
-            "police",
-            "rate",
-            "100mbit",
-            "burst",
-            "1mb",
-            "conform-exceed",
-            "drop/ok",
-        )
+        # Tenant egress is not shaped: machines may use the full uplink.
+        # Remove the 100 Mbit/s police filter that earlier versions installed.
+        _, vnet = tenant_config(t)
+        if "pref 49152" in run("tc", "filter", "show", "dev", vnet, "ingress"):
+            run("tc", "filter", "del", "dev", vnet, "ingress", "pref", "49152")
     interfaces = [f"{'tap' if m['kind'] == 'vm' else 'veth'}{machine(m)}i0" for m in state["machines"]]
     # Same-tenant traffic between nodes enters through the VNet's VXLAN port;
     # it must share the guests' zone, or the reply of a cross-node connection
@@ -1694,7 +1671,7 @@ def create_from_iso(m, exists, manifest, saved, marker):
     if not exists:
         args = ["qm", "create", vmid, "--name", m["name"], "--description", marker, "--tags", f"carrel;tenant-{n}",
                 "--cores", m["cpu"], "--memory", m["memory_mb"], "--balloon", "0", "--cpu", "x86-64-v2-AES",
-                "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1,rate=12.5",
+                "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
                 "--scsihw", "virtio-scsi-single", "--scsi0", f"{storage}:{m['disk_gb']},iothread=1,discard=on,ssd=1",
                 "--ide2", f"{iso},media=cdrom", "--boot", "order=scsi0;ide2", "--ostype", "l26",
                 "--vga", "std", "--onboot", "1", "--startup", "order=20,up=3"]
@@ -1843,7 +1820,7 @@ def create(m):
     keyfile = STATE / f"{vmid}.pub"
     if not m.get("service_ports"):
         write(keyfile, keys(m["ssh_keys"]), 0o600)
-    net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450,rate=12.5"
+    net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450"
     if m["kind"] == "vm" and m.get("import_volume") and not exists:
         # A tenant's cloud image (PLAN 7.8): checked against its checksum,
         # then imported as the boot disk; the rest is an ordinary VM.
@@ -1875,7 +1852,7 @@ def create(m):
             "--cpu",
             "host" if m.get("nested_virt") else "x86-64-v2-AES",
             "--net0",
-            f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1,rate=12.5",
+            f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
             "--ipconfig0",
             f"ip={m['ip']}/24,gw=10.200.{n}.1",
             "--nameserver",
@@ -2128,7 +2105,7 @@ def action(req):
                 run(cmd, "set", vmid, "--delete", f"net{index}")
         else:
             serial = integer(req["serial"], 1, 99)
-            net = f"bridge=p{m['tenant_n']:03d}{serial:02d},firewall=0,rate=100"
+            net = f"bridge=p{m['tenant_n']:03d}{serial:02d},firewall=0"
             net = "virtio," + net + ",mtu=1" if cmd == "qm" else f"name=eth{index},type=veth,mtu=1450," + net
             run(cmd, "set", vmid, f"--net{index}", nic_value(m, req["nic"]) if req.get("nic") else net)
     else:
