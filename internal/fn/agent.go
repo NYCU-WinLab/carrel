@@ -44,6 +44,9 @@ type DesiredVersion struct {
 	// fetches them only to build it, and writes them into the version's
 	// root file system, never into function.json.
 	HasEnv bool `json:"has_env,omitempty"`
+	// HasAuth says the image's registry wants the member's credentials,
+	// which the agent fetches only to build the version.
+	HasAuth bool `json:"has_auth,omitempty"`
 }
 
 // DesiredFunction names a function on the host, t<tenant>-<name>, its
@@ -93,7 +96,7 @@ type Agent struct {
 	Client  *http.Client
 	// Build makes one version. It must not activate it. The agent holds
 	// the function's lock while it runs.
-	Build func(ctx context.Context, f Function, image string, env []string) error
+	Build func(ctx context.Context, f Function, image string, env []string, auth *RegistryAuth) error
 	// Lock takes a function's lock, the one a build from the command line
 	// takes too. It fails at once when the lock is held.
 	Lock func(name string) (unlock func(), err error)
@@ -212,6 +215,21 @@ func (a *Agent) fetchEnv(ctx context.Context, id, version string) ([]string, err
 		return nil, err
 	}
 	return *answer.Env, nil
+}
+
+// fetchAuth asks the control plane for the credentials of a version's image.
+func (a *Agent) fetchAuth(ctx context.Context, id, version string) (*RegistryAuth, error) {
+	var answer struct {
+		Auth *RegistryAuth `json:"auth"`
+	}
+	query := url.Values{"function": {id}, "version": {version}}
+	if err := a.call(ctx, http.MethodGet, "/functions/v1/agent/auth?"+query.Encode(), nil, &answer); err != nil {
+		return nil, err
+	}
+	if answer.Auth == nil || answer.Auth.Registry == "" || answer.Auth.Username == "" || answer.Auth.Password == "" {
+		return nil, errors.New("the answer lacks credentials")
+	}
+	return answer.Auth, nil
 }
 
 // check refuses a state with any part the agent cannot use, before any file
@@ -362,12 +380,20 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 				continue
 			}
 		}
+		var auth *RegistryAuth
+		if v.HasAuth {
+			var err error
+			if auth, err = a.fetchAuth(ctx, f.ID, v.Version); err != nil {
+				slog.Warn("registry credentials not fetched", "function", f.ID, "version", v.Version, "error", err)
+				continue
+			}
+		}
 		start := time.Now()
 		err := a.Build(ctx, Function{
 			Name: f.ID, Version: v.Version, Port: v.Port, MemoryMB: v.MemoryMB, Mode: v.Mode,
 			IdleSeconds: v.IdleSeconds, TimeoutSeconds: v.TimeoutSeconds,
 			MaxInstances: v.MaxInstances, WakePath: v.WakePath,
-		}, v.Image, env)
+		}, v.Image, env, auth)
 		if err != nil {
 			if ctx.Err() != nil {
 				return // a stop is not a failed build

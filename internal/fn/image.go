@@ -120,7 +120,15 @@ func pullTransport(extra []string) (http.RoundTripper, error) {
 
 // openImage reads an image from a registry, without credentials, or from a
 // tarball made by `docker save`. No Docker daemon is involved.
-func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) (v1.Image, error) {
+// RegistryAuth is a member's credentials for one registry. They go to that
+// registry only: an image elsewhere is pulled without them.
+type RegistryAuth struct {
+	Registry string `json:"registry"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string, auth *RegistryAuth) (v1.Image, error) {
 	var image v1.Image
 	var err error
 	if tarPath != "" {
@@ -136,7 +144,7 @@ func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) 
 		}
 		image, err = remote.Image(parsed,
 			remote.WithContext(ctx),
-			remote.WithAuth(authn.Anonymous),
+			remote.WithAuth(authFor(parsed, auth)),
 			remote.WithTransport(transport),
 			remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
 	}
@@ -152,6 +160,13 @@ func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) 
 		return nil, err
 	}
 	return budgeted(image)
+}
+
+func authFor(ref name.Reference, auth *RegistryAuth) authn.Authenticator {
+	if auth == nil || auth.Registry != ref.Context().RegistryStr() {
+		return authn.Anonymous
+	}
+	return authn.FromConfig(authn.AuthConfig{Username: auth.Username, Password: auth.Password})
 }
 
 // checkConfig bounds the configuration, which the library reads into memory

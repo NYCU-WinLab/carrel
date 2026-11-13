@@ -43,6 +43,8 @@ type BuildOptions struct {
 	// Env adds KEY=VALUE pairs to the image's environment; a pair wins
 	// over the image's value of its key.
 	Env []string
+	// Auth pulls Image from a private registry.
+	Auth *RegistryAuth
 }
 
 // buildTime is the longest one build may take, from the pull to the snapshot.
@@ -86,7 +88,7 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 		}
 	}()
 
-	image, err := openImage(ctx, opts.Image, opts.ImageTar, opts.Blocked)
+	image, err := openImage(ctx, opts.Image, opts.ImageTar, opts.Blocked, opts.Auth)
 	if err != nil {
 		return f, err
 	}

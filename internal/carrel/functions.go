@@ -86,7 +86,7 @@ func (e *Execution) functionHostState(name string) string {
 }
 
 func (e *Execution) PublicFunction(f D) D {
-	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at")
+	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry")
 	versions := e.FunctionVersions(f)
 	public := []D{}
 	for _, v := range versions {
@@ -459,6 +459,8 @@ func (p *Platform) desiredFunctions(host FunctionHostConfig) D {
 				// The agent fetches the values when it builds the version
 				// (FunctionEnvFor): the state stays small whatever they hold.
 				"has_env": str(v["env"]) != "",
+				// Likewise the registry's credentials (FunctionAuthFor).
+				"has_auth": hasFunctionAuth(f, v),
 			})
 		}
 		entry := D{"id": functionHostID(integer(f["tenant_n"]), str(f["name"])), "versions": versions}

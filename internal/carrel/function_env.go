@@ -115,36 +115,45 @@ func (p *Platform) functionEnvAEAD() cipher.AEAD {
 	return aead
 }
 
-// sealFunctionEnv encrypts pairs for one function: the function's id is the
-// additional data, so a sealed environment cannot be moved to another.
-func (p *Platform) sealFunctionEnv(fid string, pairs []string) string {
+// sealValue encrypts v under function_env_key. aad binds it to its place:
+// a sealed value cannot be moved to another function or another use.
+func (p *Platform) sealValue(aad string, v any) string {
 	aead := p.functionEnvAEAD()
-	plain, err := json.Marshal(pairs)
+	plain, err := json.Marshal(v)
 	must(err)
 	nonce := make([]byte, aead.NonceSize())
 	_, err = io.ReadFull(rand.Reader, nonce)
 	must(err)
-	return base64.StdEncoding.EncodeToString(aead.Seal(nonce, nonce, plain, []byte(fid)))
+	return base64.StdEncoding.EncodeToString(aead.Seal(nonce, nonce, plain, []byte(aad)))
+}
+
+func (p *Platform) openValue(aad, sealed string, out any) {
+	aead := p.functionEnvAEAD()
+	raw, err := base64.StdEncoding.DecodeString(sealed)
+	if err != nil || len(raw) < aead.NonceSize() {
+		fail("internal", "A sealed function value is damaged")
+	}
+	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], []byte(aad))
+	if err != nil {
+		slog.Error("function_value_open_failed", "aad", aad)
+		fail("internal", "A sealed function value cannot be decrypted")
+	}
+	if json.Unmarshal(plain, out) != nil {
+		fail("internal", "A sealed function value is damaged")
+	}
+}
+
+// sealFunctionEnv encrypts pairs for one function, bound to its id.
+func (p *Platform) sealFunctionEnv(fid string, pairs []string) string {
+	return p.sealValue(fid, pairs)
 }
 
 func (p *Platform) openFunctionEnv(fid, sealed string) []string {
 	if sealed == "" {
 		return nil
 	}
-	aead := p.functionEnvAEAD()
-	raw, err := base64.StdEncoding.DecodeString(sealed)
-	if err != nil || len(raw) < aead.NonceSize() {
-		fail("internal", "A function environment is damaged")
-	}
-	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], []byte(fid))
-	if err != nil {
-		slog.Error("function_env_open_failed", "function", fid)
-		fail("internal", "A function environment cannot be decrypted")
-	}
 	var pairs []string
-	if json.Unmarshal(plain, &pairs) != nil {
-		fail("internal", "A function environment is damaged")
-	}
+	p.openValue(fid, sealed, &pairs)
 	return pairs
 }
 
@@ -213,7 +222,7 @@ func (p *Platform) ReceiveFunctionEnv(ctx context.Context, token string, body io
 	p.writer.Lock()
 	defer p.writer.Unlock()
 	link := e.S.Get("function_env_links", digest(token))
-	if link == nil || num(link["expires"]) < now() {
+	if link == nil || link["purpose"] != nil || num(link["expires"]) < now() {
 		fail("not_found", "Unknown, used or expired link; ask function_env for a new one")
 	}
 	n := integer(link["tenant_n"])

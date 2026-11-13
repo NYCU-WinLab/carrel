@@ -280,6 +280,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.FunctionTool(tool, a, t)
 	case "function_env":
 		return e.functionEnv(a, w, t)
+	case "function_registry":
+		return e.functionRegistry(a, w, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil

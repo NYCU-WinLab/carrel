@@ -225,6 +225,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
 | Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
 | | `function_env` | `function`, `clear`; a single-use link for the environment file (section 7.11) |
+| | `function_registry` | `function`, `registry`, `clear`; a single-use link for a private registry's credentials (section 7.11) |
 | | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
 | | `function_logs` | `function`, `since`; the output the platform captured |
 | | `function_rollback` | `function`; switches back to the previous version |
@@ -1442,10 +1443,14 @@ to tenant networks, one instance per `reuse` function.
    never connects to a host and keeps no log. Each line starts with the time the host read it,
    which `since_seconds` filters on; Firecracker's own log is limited to errors so that the log
    holds the function's output. `function_env` sets the environment through a single-use
-   upload link (see Environment and secrets). Still open in this step: private registries.
+   upload link (see Environment and secrets). `function_registry` takes credentials for a private
+   registry the same way: a single-use link, sealed on the function and bound to one registry
+   host. The desired state marks a version whose image is on that registry (`has_auth`), the host
+   fetches the credentials from `GET /functions/v1/agent/auth` to pull it, and an image on any
+   other registry is pulled without them.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
-   from image to `asleep`. Private registries need credentials, which come with the member tools.
+   from image to `asleep`.
 3. Gateway routes, domains and the OIDC deploy action.
 4. Schedules, logs, quota and sensorium spans.
 5. The AIntern job runner as the first tenant, in `fresh` mode.

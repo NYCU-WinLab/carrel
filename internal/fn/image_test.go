@@ -16,6 +16,8 @@ import (
 	"testing"
 	"testing/iotest"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
@@ -464,11 +466,24 @@ func TestPullRefusesAddressesThatAreNotPublic(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 	defer server.Close()
 	host := strings.TrimPrefix(server.URL, "http://")
-	_, err = openImage(context.Background(), host+"/some/image:tag", "", nil)
+	_, err = openImage(context.Background(), host+"/some/image:tag", "", nil, nil)
 	if err == nil || reached {
 		t.Fatalf("the pull reached a loopback registry: err=%v reached=%v", err, reached)
 	}
 	if !strings.Contains(err.Error(), "not a public address") {
 		t.Errorf("the refusal does not say why: %v", err)
+	}
+}
+
+func TestRegistryAuthGoesToItsRegistryOnly(t *testing.T) {
+	auth := &RegistryAuth{Registry: "ghcr.io", Username: "u", Password: "p"}
+	on, _ := name.ParseReference("ghcr.io/alice/hook:1")
+	off, _ := name.ParseReference("docker.io/library/nginx:1")
+	if authFor(on, auth) == authn.Anonymous || authFor(off, auth) != authn.Anonymous || authFor(on, nil) != authn.Anonymous {
+		t.Fatal("credentials go to the wrong registry")
+	}
+	got, err := authFor(on, auth).Authorization()
+	if err != nil || got.Username != "u" || got.Password != "p" {
+		t.Fatalf("authorization %+v %v", got, err)
 	}
 }
