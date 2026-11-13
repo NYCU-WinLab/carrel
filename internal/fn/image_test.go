@@ -16,9 +16,12 @@ import (
 	"testing"
 	"testing/iotest"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 )
 
@@ -464,11 +467,77 @@ func TestPullRefusesAddressesThatAreNotPublic(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
 	defer server.Close()
 	host := strings.TrimPrefix(server.URL, "http://")
-	_, err = openImage(context.Background(), host+"/some/image:tag", "", nil)
+	_, err = openImage(context.Background(), host+"/some/image:tag", "", nil, nil)
 	if err == nil || reached {
 		t.Fatalf("the pull reached a loopback registry: err=%v reached=%v", err, reached)
 	}
 	if !strings.Contains(err.Error(), "not a public address") {
 		t.Errorf("the refusal does not say why: %v", err)
+	}
+}
+
+func TestRegistryAuthGoesToItsRegistryOnly(t *testing.T) {
+	auth := &RegistryAuth{Registry: "ghcr.io", Username: "u", Password: "p"}
+	on, _ := name.ParseReference("ghcr.io/alice/hook:1")
+	off, _ := name.ParseReference("docker.io/library/nginx:1")
+	if authFor(on, auth) == authn.Anonymous || authFor(off, auth) != authn.Anonymous || authFor(on, nil) != authn.Anonymous {
+		t.Fatal("credentials go to the wrong registry")
+	}
+	got, err := authFor(on, auth).Authorization()
+	if err != nil || got.Username != "u" || got.Password != "p" {
+		t.Fatalf("authorization %+v %v", got, err)
+	}
+}
+
+type recordTrip struct{ hosts []string }
+
+func (r *recordTrip) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.hosts = append(r.hosts, req.URL.Host)
+	return &http.Response{StatusCode: 200, Body: http.NoBody, Request: req}, nil
+}
+
+// The password goes to the bound registry and its known token service only.
+func TestCredentialGuard(t *testing.T) {
+	next := &recordTrip{}
+	hub := guardCredentials(next, "index.docker.io")
+	send := func(rawURL, authorization string) error {
+		req, _ := http.NewRequest("GET", rawURL, nil)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		_, err := hub.RoundTrip(req)
+		return err
+	}
+	for _, ok := range []string{"https://index.docker.io/v2/", "https://auth.docker.io/token"} {
+		if err := send(ok, "Basic dTpw"); err != nil {
+			t.Fatalf("%s refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"https://evil.example/token", "http://auth.docker.io/token"} {
+		if err := send(bad, "Basic dTpw"); err == nil {
+			t.Fatalf("%s got the password", bad)
+		}
+	}
+	// A registry's own scoped token, or no credentials, may go anywhere.
+	if err := send("https://cdn.example/blob", "Bearer scoped"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(next.hosts, ",") != "index.docker.io,auth.docker.io,cdn.example" {
+		t.Fatalf("sent to %v", next.hosts)
+	}
+}
+
+// A failed pull with credentials shows the status, never the answer.
+func TestPullErrorHidesTheAnswer(t *testing.T) {
+	auth := &RegistryAuth{Registry: "ghcr.io", Username: "u", Password: "p"}
+	leaky := errors.New(`malformed token response: {"refresh_token":"secret-refresh"}`)
+	if got := pullError(leaky, auth).Error(); strings.Contains(got, "secret") {
+		t.Fatalf("leaked: %s", got)
+	}
+	if got := pullError(&transport.Error{StatusCode: 401}, auth).Error(); !strings.Contains(got, "401") {
+		t.Fatalf("status lost: %s", got)
+	}
+	if pullError(leaky, nil) != leaky {
+		t.Fatal("an anonymous pull keeps its error")
 	}
 }

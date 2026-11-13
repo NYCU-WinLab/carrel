@@ -129,6 +129,21 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 	})
 	mux.Handle("PUT /functions/v1/env/{token}", env)
 	mux.Handle("POST /functions/v1/env/{token}", env)
+	registry := appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.ReceiveFunctionRegistry(r.Context(), r.PathValue("token"), r.Body)
+	})
+	mux.Handle("PUT /functions/v1/registry/{token}", registry)
+	mux.Handle("POST /functions/v1/registry/{token}", registry)
+	mux.HandleFunc("GET /functions/v1/agent/auth", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		var result D
+		if err := attempt(func() { result = p.FunctionAuthFor(bearer(r), remoteIP(r), q.Get("function"), q.Get("version")) }); err != nil {
+			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		jsonResponse(w, 200, result)
+	})
 	mux.HandleFunc("GET /functions/v1/agent/env", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		var result D

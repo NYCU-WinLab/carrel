@@ -43,6 +43,8 @@ type BuildOptions struct {
 	// Env adds KEY=VALUE pairs to the image's environment; a pair wins
 	// over the image's value of its key.
 	Env []string
+	// Auth pulls Image from a private registry.
+	Auth *RegistryAuth
 }
 
 // buildTime is the longest one build may take, from the pull to the snapshot.
@@ -86,13 +88,14 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 		}
 	}()
 
-	image, err := openImage(ctx, opts.Image, opts.ImageTar, opts.Blocked)
+	image, err := openImage(ctx, opts.Image, opts.ImageTar, opts.Blocked, opts.Auth)
 	if err != nil {
 		return f, err
 	}
+	// The configuration is fetched here, over the same credentials.
 	spec, err := specOf(image)
 	if err != nil {
-		return f, err
+		return f, pullError(err, opts.Auth)
 	}
 	f.Image = opts.Image
 	if digest, err := image.Digest(); err == nil {
@@ -101,7 +104,8 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	spec.Name, spec.Port, spec.MTU, spec.DNS = f.Name, f.Port, opts.MTU, opts.DNS
 	spec.Env = append(spec.Env, opts.Env...)
 	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
-		return f, err
+		// Layers come over the same credentials: their errors are kept short too.
+		return f, pullError(err, opts.Auth)
 	}
 	// The build has a log of its own: the router rotates log, and two
 	// processes must not rotate one file.

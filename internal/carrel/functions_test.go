@@ -499,3 +499,76 @@ func strs(v any) []string {
 	}
 	return out
 }
+
+func TestFunctionRegistryCredentialsGoToTheirRegistryOnly(t *testing.T) {
+	p, a := functionFixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	alice := person("alice", false)
+	call := func(tool string, args D) D { return a.Call(context.Background(), tool, args, alice) }
+	assertOK(t, call("function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}))
+	r := call("function_registry", D{"function": "hook"})
+	assertOK(t, r)
+	link := str(r["url"])
+	if r["registry"] != "ghcr.io" || !strings.Contains(link, "/functions/v1/registry/cfr_") || !strings.Contains(str(r["upload"]), "$REGISTRY_TOKEN") {
+		t.Fatalf("link %v", r)
+	}
+	// An environment link does not open the registry path, nor the reverse.
+	envLink := str(call("function_env", D{"function": "hook"})["url"])
+	if code, _ := putEnv(t, a, strings.Replace(envLink, "/env/", "/registry/", 1), `{"username":"u","password":"p"}`); code != 404 {
+		t.Fatalf("env link on the registry path: %d", code)
+	}
+	if code, _ := putEnv(t, a, strings.Replace(link, "/registry/", "/env/", 1), "A=1\n"); code != 404 {
+		t.Fatalf("registry link on the env path: %d", code)
+	}
+	if code, _ := putEnv(t, a, link, `{"username":"alice"}`); code != 400 {
+		t.Fatalf("no password: %d", code)
+	}
+	secret := "ghp_" + randomID()
+	if code, out := putEnv(t, a, link, `{"username":"alice","password":"`+secret+`"}`); code != 200 || out["registry"] != "ghcr.io" {
+		t.Fatalf("upload: %d %v", code, out)
+	}
+	if code, _ := putEnv(t, a, link, `{"username":"alice","password":"x"}`); code != 404 {
+		t.Fatalf("second use: %d", code)
+	}
+	// The host is told v1 wants credentials, and gets them.
+	v1 := obj(arr(obj(arr(hostState(t, a)["functions"])[0])["versions"])[0])
+	if v1["has_auth"] != true || strings.Contains(string(encoded(v1)), secret) {
+		t.Fatalf("desired v1 %v", v1)
+	}
+	code, out := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version=v1", testHostToken, "")
+	if auth := obj(out["auth"]); code != 200 || auth["registry"] != "ghcr.io" || auth["username"] != "alice" || auth["password"] != secret {
+		t.Fatalf("auth: %d %v", code, out)
+	}
+	// Nothing at rest, in the audit log or in function_get holds the token.
+	for _, table := range []string{"objects", "audit", "site"} {
+		for _, row := range p.Store.Rows("SELECT * FROM " + table) {
+			if strings.Contains(string(encoded(row)), secret) {
+				t.Fatalf("%s holds the token", table)
+			}
+		}
+	}
+	got := obj(call("function_get", D{"function": "hook"})["function"])
+	if got["registry"] != "ghcr.io" || strings.Contains(string(encoded(got)), secret) {
+		t.Fatalf("function_get %v", got)
+	}
+	// An image on another registry never gets them.
+	report(t, a, `{"revision":3,"functions":[{"id":"t1-hook","versions":[{"version":"v1","state":"ready","bytes":1}]}]}`)
+	assertOK(t, call("function_deploy", D{"name": "hook", "image": "docker.io/library/nginx:1"}))
+	for _, v := range arr(obj(arr(hostState(t, a)["functions"])[0])["versions"]) {
+		if obj(v)["version"] == "v2" && obj(v)["has_auth"] != false {
+			t.Fatalf("credentials for another registry: %v", v)
+		}
+	}
+	if code, _ := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version=v2", testHostToken, ""); code != 404 {
+		t.Fatalf("auth for another registry: %d", code)
+	}
+	// clear removes them, and a link not used yet.
+	unused := str(call("function_registry", D{"function": "hook", "registry": "ghcr.io"})["url"])
+	assertOK(t, call("function_registry", D{"function": "hook", "clear": true}))
+	if code, _ := putEnv(t, a, unused, `{"username":"alice","password":"x"}`); code != 404 {
+		t.Fatalf("link after clear: %d", code)
+	}
+	if code, _ := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version=v1", testHostToken, ""); code != 404 {
+		t.Fatalf("auth after clear: %d", code)
+	}
+}

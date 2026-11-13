@@ -19,8 +19,8 @@ import (
 
 // fakeBuild writes what a real build leaves: a version directory with its
 // function.json and a file standing for the snapshot.
-func fakeBuild(root string, builds *[]string, fail map[string]bool) func(context.Context, Function, string, []string) error {
-	return func(_ context.Context, f Function, image string, _ []string) error {
+func fakeBuild(root string, builds *[]string, fail map[string]bool) func(context.Context, Function, string, []string, *RegistryAuth) error {
+	return func(_ context.Context, f Function, image string, _ []string, _ *RegistryAuth) error {
 		*builds = append(*builds, f.Name+"/"+f.Version)
 		if fail[f.Name+"/"+f.Version] {
 			return errors.New("pull failed")
@@ -404,9 +404,9 @@ func TestAgentFetchesTheEnvironmentToBuild(t *testing.T) {
 	var got []string
 	build := fakeBuild(root, &builds, nil)
 	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock, Forget: func(string) {}, failed: map[string]string{},
-		Build: func(ctx context.Context, f Function, image string, env []string) error {
+		Build: func(ctx context.Context, f Function, image string, env []string, auth *RegistryAuth) error {
 			got = env
-			return build(ctx, f, image, env)
+			return build(ctx, f, image, env, auth)
 		}}
 	v := version("v1")
 	v.HasEnv = true

@@ -22,6 +22,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 )
 
@@ -118,11 +119,60 @@ func pullTransport(extra []string) (http.RoundTripper, error) {
 	}, nil
 }
 
-// openImage reads an image from a registry, without credentials, or from a
-// tarball made by `docker save`. No Docker daemon is involved.
-func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) (v1.Image, error) {
+// RegistryAuth is a member's credentials for one registry. They go to that
+// registry only: an image elsewhere is pulled without them.
+type RegistryAuth struct {
+	Registry string `json:"registry"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// authRealms are the token services a registry may send its credentials
+// to, beside itself: Docker Hub's lives on another host.
+var authRealms = map[string][]string{"index.docker.io": {"auth.docker.io"}}
+
+// credentialGuard refuses a request that carries the member's password to
+// any host but the registry they are bound to and its known token service:
+// the registry names its token service (realm), and a hostile or
+// compromised one could name any host.
+type credentialGuard struct {
+	next    http.RoundTripper
+	allowed map[string]bool
+}
+
+func guardCredentials(next http.RoundTripper, registry string) http.RoundTripper {
+	allowed := map[string]bool{registry: true}
+	for _, h := range authRealms[registry] {
+		allowed[h] = true
+	}
+	return &credentialGuard{next: next, allowed: allowed}
+}
+
+func (g *credentialGuard) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(req.Header.Get("Authorization"), "Basic ") && (req.URL.Scheme != "https" || !g.allowed[req.URL.Host]) {
+		return nil, fmt.Errorf("the registry's credentials would go to %s://%s, which is not the registry", req.URL.Scheme, req.URL.Host)
+	}
+	return g.next.RoundTrip(req)
+}
+
+// pullError keeps what a failed pull with credentials may show: the
+// registry's status, never its answer, which can hold a token.
+func pullError(err error, auth *RegistryAuth) error {
+	if err == nil || auth == nil {
+		return err
+	}
+	var te *transport.Error
+	if errors.As(err, &te) {
+		return fmt.Errorf("pulling with the registry's credentials failed: the registry answered %d", te.StatusCode)
+	}
+	return errors.New("pulling with the registry's credentials failed")
+}
+
+// openImage reads an image from a registry, or from a tarball made by
+// `docker save`. No Docker daemon is involved.
+func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string, auth *RegistryAuth) (img v1.Image, err error) {
+	defer func() { err = pullError(err, auth) }()
 	var image v1.Image
-	var err error
 	if tarPath != "" {
 		image, err = tarball.ImageFromPath(tarPath, nil)
 	} else {
@@ -130,14 +180,17 @@ func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) 
 		if parsed, err = name.ParseReference(ref); err != nil {
 			return nil, fmt.Errorf("image reference %q: %w", ref, err)
 		}
-		var transport http.RoundTripper
-		if transport, err = pullTransport(blockedExtra); err != nil {
+		var pull http.RoundTripper
+		if pull, err = pullTransport(blockedExtra); err != nil {
 			return nil, err
+		}
+		if auth != nil {
+			pull = guardCredentials(pull, auth.Registry)
 		}
 		image, err = remote.Image(parsed,
 			remote.WithContext(ctx),
-			remote.WithAuth(authn.Anonymous),
-			remote.WithTransport(transport),
+			remote.WithAuth(authFor(parsed, auth)),
+			remote.WithTransport(pull),
 			remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}))
 	}
 	if err != nil {
@@ -152,6 +205,13 @@ func openImage(ctx context.Context, ref, tarPath string, blockedExtra []string) 
 		return nil, err
 	}
 	return budgeted(image)
+}
+
+func authFor(ref name.Reference, auth *RegistryAuth) authn.Authenticator {
+	if auth == nil || auth.Registry != ref.Context().RegistryStr() {
+		return authn.Anonymous
+	}
+	return authn.FromConfig(authn.AuthConfig{Username: auth.Username, Password: auth.Password})
 }
 
 // checkConfig bounds the configuration, which the library reads into memory
