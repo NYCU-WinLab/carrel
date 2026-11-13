@@ -331,3 +331,25 @@ func TestFunctionLogRequestsAreReleased(t *testing.T) {
 		t.Fatalf("left behind: %d hosts, %d asks", len(l.waiting), len(l.asked))
 	}
 }
+
+// The largest log of the worst characters for JSON still gets through.
+func TestFunctionLogsLargestAnswerFits(t *testing.T) {
+	_, a := functionFixture(t)
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	done := make(chan D, 1)
+	go func() {
+		done <- a.Call(context.Background(), "function_logs", D{"function": "hook", "max_bytes": functionLogMax}, alice)
+	}()
+	_, asked := hostCall(t, a, "GET", "/functions/v1/agent/logs", testHostToken, "")
+	text := strings.Repeat("<\x1b", functionLogMax/2)
+	body, _ := json.Marshal(D{"id": obj(arr(asked["requests"])[0])["id"], "text": text})
+	if code, out := hostCall(t, a, "POST", "/functions/v1/agent/logs", testHostToken, string(body)); code != 200 {
+		t.Fatalf("answer of %d bytes: %d %v", len(body), code, out)
+	}
+	r := <-done
+	assertOK(t, r)
+	if r["log"] != text {
+		t.Fatalf("log of %d bytes", len(str(r["log"])))
+	}
+}
