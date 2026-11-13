@@ -139,6 +139,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		_, _ = w.Write([]byte(keys))
 	})
 	a.appRoutes(mux)
+	a.functionRoutes(mux)
 	a.keysRoutes(mux)
 	a.statusRoute(mux, p)
 	a.askRoute(mux, p)
@@ -165,7 +166,8 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	}))
 	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/internal/guest-keys" || r.URL.Path == "/gateway/ask"
+		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/internal/guest-keys" || r.URL.Path == "/gateway/ask" ||
+			strings.HasPrefix(r.URL.Path, "/functions/v1/agent/")
 		if internal && !strings.HasPrefix(host, "10.200.") {
 			jsonResponse(w, 403, D{"error": "forbidden"})
 			return
@@ -203,7 +205,12 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 				return
 			}
 		}
-		if !(r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases")) {
+		switch {
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases"):
+		case r.URL.Path == "/functions/v1/agent/report":
+			// A host reports every function it holds.
+			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionReport)
+		default:
 			r.Body = http.MaxBytesReader(w, r.Body, 262144)
 		}
 		mux.ServeHTTP(w, r)

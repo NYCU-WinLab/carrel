@@ -356,3 +356,24 @@ func TestAgentKeepsTheLiveVersionWithoutItsOwnFile(t *testing.T) {
 		t.Fatal("the live version was removed")
 	}
 }
+
+func TestAgentStopsServingAFunctionWithoutCurrent(t *testing.T) {
+	root := t.TempDir()
+	var builds, forgotten []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
+		Build:  fakeBuild(root, &builds, nil),
+		Forget: func(name string) { forgotten = append(forgotten, name) }}
+	a.apply(context.Background(), Desired{Functions: []DesiredFunction{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}})
+	// Removed and deployed again under the same name: v7 builds, v1 must
+	// not answer meanwhile.
+	a.apply(context.Background(), Desired{Functions: []DesiredFunction{{ID: "t1-api", Versions: []DesiredVersion{version("v7")}}}})
+	if live := liveVersion(root, "t1-api"); live != "" {
+		t.Fatalf("live %q, want none", live)
+	}
+	if _, err := os.Stat(filepath.Join(root, "t1-api", "v", "v1")); !os.IsNotExist(err) {
+		t.Fatal("old version kept")
+	}
+	if !Built(root, "t1-api", "v7") {
+		t.Fatal("v7 not built")
+	}
+}

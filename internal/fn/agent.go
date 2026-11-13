@@ -332,6 +332,14 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 			slog.Info("version live", "function", f.ID, "version", f.Current)
 		}
 	}
+	// A function with no current version serves nothing: a function removed
+	// and deployed again under its name must not answer with the old one
+	// while its first version builds.
+	if f.Current == "" && liveVersion(a.Root, f.ID) != "" {
+		_ = os.Remove(filepath.Join(a.Root, f.ID, "function.json"))
+		a.Forget(f.ID)
+		slog.Info("function has no live version", "function", f.ID)
+	}
 	// Versions the state no longer names go, except the live one.
 	live := liveVersion(a.Root, f.ID)
 	versions, err := os.ReadDir(filepath.Join(a.Root, f.ID, "v"))

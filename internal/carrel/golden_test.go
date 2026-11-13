@@ -288,6 +288,7 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 	// Domains: a token for the DNS stub, and the tenant's wildcard pair as
 	// issuance would leave it.
 	p.Config.CloudflareToken = "test"
+	p.Config.FunctionHosts = []FunctionHostConfig{{Name: "fn01", Router: "10.200.0.20:8090", TokenSHA256: digest("cfh_golden")}}
 	crt, key := testPair(t, "*.alice.winlab.tw")
 	p.execution(context.Background()).storeCertificate("alice", crt, key)
 	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})
@@ -445,6 +446,13 @@ func goldenScenario(g *goldenRun) {
 	call("apps", "app_deploy", D{"app": "site", "release": "0000000000000000"}, alice)
 	call("apps", "app_rollback", D{"app": "site"}, alice)
 	call("apps", "app_unlink", D{"app": "site", "confirm": "site"}, alice)
+
+	call("functions", "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "dry_run": true}, alice)
+	call("functions", "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "instance": "fresh"}, alice)
+	call("functions", "function_list", D{}, alice)
+	call("functions", "function_get", D{"function": "hook"}, alice)
+	call("functions", "function_rollback", D{"function": "hook"}, alice)
+	call("functions", "function_remove", D{"function": "hook", "confirm": "hook"}, alice)
 
 	spec := D{
 		"machines":    []any{D{"name": "api"}, D{"name": "db", "network_access": "restricted"}},

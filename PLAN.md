@@ -1423,6 +1423,13 @@ to tenant networks, one instance per `reuse` function.
    restart heals on the next pass. A function is named `t<tenant>-<name>` on a host. The
    control plane decides which version is current; the host never activates a build on its own.
    The functions' directory must be on a file system without `nodev`, or no tap device opens.
+   The control plane side is built: `function_deploy`, `function_get` (with `wait_seconds`, the
+   way an agent follows a build), `function_list`, `function_rollback` and `function_remove`,
+   the quota `functions` and `function_gb`, and the two agent endpoints, reached only from the
+   infra network with a host token whose SHA-256 is in `function_hosts` of the configuration.
+   A deploy makes version `v<n>` and returns at once; the host's report makes it current, or
+   records its build error and leaves the current version live. Still open in this step:
+   `function_logs`, the environment upload and private registries.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`. Private registries need credentials, which come with the member tools.

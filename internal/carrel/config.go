@@ -54,6 +54,8 @@ type Config struct {
 	AppsDiskHeadroomBytes *int64 `json:"apps_disk_headroom_bytes,omitempty"` // nil: diskHeadroom
 	DeploydBinary         string `json:"deployd_binary,omitempty"`
 
+	FunctionHosts []FunctionHostConfig `json:"function_hosts,omitempty"`
+
 	VMEnvironment D `json:"vm_environment,omitempty"`
 	NetBox        D `json:"netbox,omitempty"`
 }
@@ -150,6 +152,19 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate node %s", n.Name)
 		}
 		names[n.Name], targets[n.Target] = true, true
+	}
+	hosts := map[string]bool{}
+	for _, h := range c.FunctionHosts {
+		if !functionHostName.MatchString(h.Name) || hosts[h.Name] {
+			return fmt.Errorf("function host %q needs a unique name", h.Name)
+		}
+		if ap, err := netip.ParseAddrPort(h.Router); err != nil || !ap.Addr().Is4() {
+			return fmt.Errorf("function host %s: router must be an IPv4 address and port", h.Name)
+		}
+		if !sha256Hex.MatchString(h.TokenSHA256) {
+			return fmt.Errorf("function host %s: token_sha256 must be 64 lowercase hex digits", h.Name)
+		}
+		hosts[h.Name] = true
 	}
 	return nil
 }
