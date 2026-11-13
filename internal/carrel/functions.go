@@ -67,7 +67,7 @@ func (e *Execution) FunctionVersions(f D) []D {
 var functionSpecKeys = []string{"image", "port", "memory_mb", "instance", "idle_seconds", "timeout_seconds", "max_instances", "wake_path"}
 
 func publicFunctionVersion(v D) D {
-	out := pick(v, append([]string{"version", "digest", "state", "error", "created_at", "ready_at", "env_keys"}, functionSpecKeys...)...)
+	out := pick(v, append([]string{"version", "digest", "state", "error", "created_at", "ready_at", "env_keys", "sha", "run_url"}, functionSpecKeys...)...)
 	if b := num(v["bytes"]); b > 0 {
 		out["size_mb"] = int(b/MiB + 0.5)
 	}
@@ -86,7 +86,7 @@ func (e *Execution) functionHostState(name string) string {
 }
 
 func (e *Execution) PublicFunction(f D) D {
-	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry")
+	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry", "repo", "branch")
 	versions := e.FunctionVersions(f)
 	public := []D{}
 	for _, v := range versions {
@@ -295,7 +295,8 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 }
 
 // startFunctionVersion records a version to build from spec, with the
-// environment in env (its sealed values and their names).
+// environment in env (its sealed values and their names) and, for a deploy
+// from GitHub, the commit (sha, ref, run_url).
 func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool, also ...func(*Execution)) D {
 	n := integer(t["n"])
 	quota := e.Quota(t, delta)
@@ -320,6 +321,12 @@ func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool, als
 	// version's, so a rollback brings back the values that version had.
 	if sealed := str(env["env"]); sealed != "" {
 		v["env"] = sealed
+	}
+	// A version deployed from GitHub names the commit and run it came from.
+	for _, k := range []string{"sha", "ref", "run_url"} {
+		if s := str(env[k]); s != "" {
+			v[k] = s
+		}
 	}
 	e.Transaction(func(tx *Execution) {
 		tx.Put("function_versions", v["id"], n, v)

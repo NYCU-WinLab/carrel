@@ -282,6 +282,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.functionEnv(a, w, t)
 	case "function_registry":
 		return e.functionRegistry(a, w, t)
+	case "function_link":
+		return e.functionLink(a, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil
