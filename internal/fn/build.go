@@ -92,9 +92,10 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	if err != nil {
 		return f, err
 	}
+	// The configuration is fetched here, over the same credentials.
 	spec, err := specOf(image)
 	if err != nil {
-		return f, err
+		return f, pullError(err, opts.Auth)
 	}
 	f.Image = opts.Image
 	if digest, err := image.Digest(); err == nil {
