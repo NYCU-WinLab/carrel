@@ -284,10 +284,13 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 		if a["confirm"] != f["name"] {
 			fail("invalid", "confirm must equal the function name")
 		}
+		// A dry run counts the removal; a real one counts what is left.
+		after := D{"functions": -1}
 		if !dry {
 			e.removeFunctions([]D{f})
+			after = nil
 		}
-		return D{"dry_run": dry, "quota_after": e.Quota(t, D{"functions": -1}), "removed": D{"name": f["name"]}}
+		return D{"dry_run": dry, "quota_after": e.Quota(t, after), "removed": D{"name": f["name"]}}
 	}
 	fail("invalid", "Unknown tool")
 	return nil
