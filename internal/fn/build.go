@@ -103,7 +103,8 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	spec.Name, spec.Port, spec.MTU, spec.DNS = f.Name, f.Port, opts.MTU, opts.DNS
 	spec.Env = append(spec.Env, opts.Env...)
 	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
-		return f, err
+		// Layers come over the same credentials: their errors are kept short too.
+		return f, pullError(err, opts.Auth)
 	}
 	// The build has a log of its own: the router rotates log, and two
 	// processes must not rotate one file.

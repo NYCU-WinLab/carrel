@@ -35,15 +35,22 @@ func (e *Execution) functionRegistry(a, w, t D) D {
 	f := e.Function(t, a["function"])
 	e.P.functionEnvAEAD()
 	if boolean(a["clear"]) {
-		if !dry && f["registry"] != nil {
+		cleared := f["registry"]
+		if !dry {
 			delete(f, "registry")
 			delete(f, "registry_auth")
 			e.Transaction(func(tx *Execution) {
 				tx.Put("functions", f["id"], n, f)
+				// A link not used yet must not bring the credentials back.
+				for _, l := range tx.S.Objects("function_env_links", n) {
+					if l["function"] == f["id"] && l["purpose"] == "registry" {
+						tx.S.Remove("function_env_links", l["id"])
+					}
+				}
 				tx.bumpFunctions()
 			})
 		}
-		return D{"dry_run": dry, "function": f["name"], "registry": nil}
+		return D{"dry_run": dry, "function": f["name"], "cleared": cleared}
 	}
 	registry := str(a["registry"])
 	if registry == "" {

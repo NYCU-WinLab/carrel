@@ -562,8 +562,12 @@ func TestFunctionRegistryCredentialsGoToTheirRegistryOnly(t *testing.T) {
 	if code, _ := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version=v2", testHostToken, ""); code != 404 {
 		t.Fatalf("auth for another registry: %d", code)
 	}
-	// clear removes them.
+	// clear removes them, and a link not used yet.
+	unused := str(call("function_registry", D{"function": "hook", "registry": "ghcr.io"})["url"])
 	assertOK(t, call("function_registry", D{"function": "hook", "clear": true}))
+	if code, _ := putEnv(t, a, unused, `{"username":"alice","password":"x"}`); code != 404 {
+		t.Fatalf("link after clear: %d", code)
+	}
 	if code, _ := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version=v1", testHostToken, ""); code != 404 {
 		t.Fatalf("auth after clear: %d", code)
 	}
