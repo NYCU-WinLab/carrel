@@ -389,7 +389,7 @@ Functions will add `functions` and `function_gb` (section 7.11).
 
 Quota is a ceiling, not a guarantee of unused physical capacity. Admission is checked separately.
 
-Personal and project defaults are 8 machines, 8 IPs, 8 vCPU, 16384 MiB RAM and 100 GiB disk.
+Personal and project defaults are 8 machines, 8 IPs, 16 vCPU, 32768 MiB RAM and 200 GiB disk.
 Eight default 1 vCPU / 1024 MiB / 10 GiB machines consume 8 vCPU / 8 GiB / 80 GiB. CPU growth
 then requires quota headroom or approval; stopping does not release reservations. Every machine
 uses one of the tenant's 10 public ports for SSH, leaving two for extra TCP/UDP publications.
@@ -920,7 +920,7 @@ within 90 days of it.
 | Debian 13 minimal, 1 vCPU / 1024 MiB RAM / 10 GiB disk (`tiny`); 1024 MiB swap unless `swap_mb` says otherwise (`0` for Kubernetes nodes), `vm.swappiness=10` | Small service default with explicit growth |
 | `fstrim.timer` on, disks `discard=on`, `ssd=1`, `iothread=1`, `virtio-scsi-single` | Space freed in the guest returns to the pool |
 | Unattended security upgrades, timezone Asia/Taipei | Tenants forget |
-| CPU type `x86-64-v2-AES`; `host` only with `nested_virt` | Machines can migrate between nodes |
+| CPU type `x86-64-v3` (AVX2, FMA; every node is an E5-2630 v4); `host` only with `nested_virt` | Machines can migrate between nodes |
 | Serial console on | Needed for `machine_console_log` |
 
 The prepared `debian-13-minimal` image contains cloud-init, SSH, sudo, Python for management,
@@ -1727,7 +1727,7 @@ one exists, changes are checked on disposable tenant machines.
   (`ipconfig0` and the resolver) for VMs, into `net0` for CTs, and into the DHCP reservation for
   guests that use DHCP. Keys that are not the owner's leave the cloud-init configuration, and an
   old `cicustom` snippet is replaced by carrel's own vendor data. The CPU type becomes
-  `x86-64-v2-AES` unless the owner asks for `nested_virt`.
+  `x86-64-v3` unless the owner asks for `nested_virt`.
 - **Verification**: carrel boots the guest and checks the new address through the guest agent's
   read-only network report and the SSH port. It also reads `guest-info` to learn whether
   `guest-exec` and the file commands are still enabled. A guest that fails is marked
@@ -2006,7 +2006,8 @@ Administrator deployment order (scripts have fixed B09 IDs/addresses and refuse 
 5. Create/verify the Keycloak client definition through an authorized administrator; use disposable
    member accounts with `verify-oauth.py` and `verify-platform.py` for acceptance.
 
-The initial quota was a conservative shared default: 8 vCPU, 16 GiB RAM, 100 GiB allocated disk,
+The initial quota was a conservative shared default: 8 vCPU, 16 GiB RAM, 100 GiB allocated disk
+(raised to 16 vCPU, 32 GiB and 200 GiB on 2026-11-13: 9 creates failed on quota in 27 days while the nodes ran at about 15% of their admission limit),
 4 machines/IPs (raised to 8 in section 15.14), 10 public ports/domains, 4 private networks and 4 snapshots. Project/subgroup-specific
 policy remains open decision 2. Snapshots reserve a full disk size before adapter work; rollback refuses changed NIC or
 resource configuration. Interrupted disk growth keeps the larger quota reservation and can be

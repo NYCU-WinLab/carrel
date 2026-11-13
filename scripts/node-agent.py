@@ -1670,7 +1670,7 @@ def create_from_iso(m, exists, manifest, saved, marker):
     storage = storage_id()
     if not exists:
         args = ["qm", "create", vmid, "--name", m["name"], "--description", marker, "--tags", f"carrel;tenant-{n}",
-                "--cores", m["cpu"], "--memory", m["memory_mb"], "--balloon", "0", "--cpu", "x86-64-v2-AES",
+                "--cores", m["cpu"], "--memory", m["memory_mb"], "--balloon", "0", "--cpu", "x86-64-v3",
                 "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
                 "--scsihw", "virtio-scsi-single", "--scsi0", f"{storage}:{m['disk_gb']},iothread=1,discard=on,ssd=1",
                 "--ide2", f"{iso},media=cdrom", "--boot", "order=scsi0;ide2", "--ostype", "l26",
@@ -1850,7 +1850,7 @@ def create(m):
             "--balloon",
             "0",
             "--cpu",
-            "host" if m.get("nested_virt") else "x86-64-v2-AES",
+            "host" if m.get("nested_virt") else "x86-64-v3",
             "--net0",
             f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
             "--ipconfig0",
