@@ -117,7 +117,7 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12,
         # drops large replies to clients that reach it directly (PLAN 15.15).
         f"name=eth0,bridge={bridge},ip={ip}/24,gw={gateway},type=veth"
         + (",mtu=1450" if bridge == "vmbr98" or bridge.startswith("t") else "")
-        + (",firewall=1,rate=25" if firewall else ""),
+        + (",firewall=1" if firewall else ""),
         "--nameserver",
         nameserver,
         "--ssh-public-keys",

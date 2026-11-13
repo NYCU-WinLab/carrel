@@ -584,9 +584,7 @@ may adopt the record (section 6.10). That covers migrated names and stale record
 One compromised tenant machine can get the lab's public address blocked by the campus. Version 1:
 
 - Outbound TCP 25 is dropped for tenants.
-- Egress limits: a per-tenant cap on the exit node, shaped by the tenant's `/24`, plus a per-NIC
-  cap with the Proxmox `rate` option. `rate` limits both directions of one NIC, so it guards the
-  node, not the tenant. Values in open decision 13.4.
+- No bandwidth limits: tenant machines may use the full uplink (open decision 13.4).
 - Connection-rate alerts for scanning patterns.
 - An acceptable use policy in the README, accepted by signing in. Eligible tenants are registered automatically on first use; no separate acknowledgement is required.
 
@@ -1820,7 +1818,7 @@ old host.
 1. Resolved 2026-09-27: carrel ignores `vm-users` and `vm-sudoers`.
 2. Default quota per `lab-member` subgroup and per project. Needs the hardware inventory.
 3. Resolved 2026-09-27: admin notifications and alerts go by email.
-4. Initial B09 limit: 100 Mbit/s aggregate IPv4 tenant egress, plus 12.5 MB/s primary NIC limits. Private experiment NICs have a 100 MB/s limit. Revisit after real usage.
+4. Resolved 2026-11-13: no bandwidth limits. The 100 Mbit/s tenant egress police and the Proxmox `rate` on every NIC (12.5 MB/s primary, 100 MB/s private, 25 MB/s infra) capped tests at 100 Mbit/s, so all of them are removed. Revisit only if a tenant saturates the uplink.
 5. How `machine_console_log` captures serial output: a QEMU chardev log file, or a capture of the
    Proxmox terminal proxy.
 6. Whether the campus offers IPv6 for the new host. With it, every machine could have a public
