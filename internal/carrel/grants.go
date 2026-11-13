@@ -85,7 +85,7 @@ func grantSummary(kind string, g D) D {
 	case "ports":
 		return pick(g, "id", "machine", "vip", "public_port", "port", "proto", "endpoint", "state", "verification")
 	case "domains":
-		return pick(g, "name", "machine", "vip", "sub", "target_port", "url", "state", "ready_at", "verification")
+		return pick(g, "name", "machine", "vip", "function", "sub", "target_port", "url", "state", "ready_at", "verification")
 	case "peers":
 		return pick(g, "id", "machine", "from_tenant", "from_machine", "source", "port", "proto", "state")
 	case "networks":

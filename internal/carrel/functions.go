@@ -112,7 +112,7 @@ func (e *Execution) PublicFunction(f D) D {
 		out["state"] = "not_deployed"
 	}
 	out["host"] = e.functionHostState(str(f["host"]))
-	if names := e.functionDomains(f); len(names) > 0 {
+	if names := e.functionDomains(f, true); len(names) > 0 {
 		urls := []string{}
 		for _, name := range names {
 			if !strings.HasPrefix(name, "*.") {
@@ -295,7 +295,7 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 		if a["confirm"] != f["name"] {
 			fail("invalid", "confirm must equal the function name")
 		}
-		if names := e.functionDomains(f); len(names) > 0 {
+		if names := e.functionDomains(f, false); len(names) > 0 {
 			fail("conflict", "Domains still point at this function; remove them with domain_remove first", D{"domains": names, "recovery": "resolve_prerequisite"})
 		}
 		// A dry run counts the removal; a real one counts what is left.
@@ -336,11 +336,12 @@ func (e *Execution) removeFunctions(fs []D) {
 	})
 }
 
-// functionDomains are the names of the domains that point at a function.
-func (e *Execution) functionDomains(f D) []string {
+// functionDomains are the names of the domains that point at a function,
+// only the serving ones when ready is set.
+func (e *Execution) functionDomains(f D, ready bool) []string {
 	names := []string{}
 	for _, d := range e.domains(integer(f["tenant_n"])) {
-		if d.Function == str(f["id"]) {
+		if d.Function == str(f["id"]) && (!ready || d.State == "ready") {
 			names = append(names, d.Name)
 		}
 	}
@@ -348,7 +349,9 @@ func (e *Execution) functionDomains(f D) []string {
 	return names
 }
 
-// functionRoutes tell the gateway where each function's host listens.
+// functionRoutes tell the gateway where each function's host listens. A
+// tenant that is not active gets no route, so its names answer 503: a
+// function wakes on any request, unlike a machine that suspension stopped.
 func (e *Execution) functionRoutes() []D {
 	routers := map[string]string{}
 	for _, h := range e.P.Config.FunctionHosts {
@@ -356,6 +359,9 @@ func (e *Execution) functionRoutes() []D {
 	}
 	out := []D{}
 	for _, f := range e.S.Objects("functions") {
+		if t := e.S.TenantN(integer(f["tenant_n"])); t == nil || t["status"] != "active" {
+			continue
+		}
 		if router := routers[str(f["host"])]; router != "" {
 			out = append(out, D{"id": f["id"], "tenant_n": f["tenant_n"], "router": router, "host_id": functionHostID(integer(f["tenant_n"]), str(f["name"]))})
 		}
