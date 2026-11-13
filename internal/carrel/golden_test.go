@@ -456,6 +456,8 @@ func goldenScenario(g *goldenRun) {
 	functionLogWait = time.Millisecond
 	call("functions", "function_logs", D{"function": "hook", "build": true}, alice)
 	functionLogWait = wait
+	// No function_env_key here: environments are unavailable.
+	call("functions", "function_env", D{"function": "hook"}, alice)
 	call("functions", "function_rollback", D{"function": "hook"}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook", "dry_run": true}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook"}, alice)

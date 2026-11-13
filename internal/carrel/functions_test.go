@@ -353,3 +353,108 @@ func TestFunctionLogsLargestAnswerFits(t *testing.T) {
 		t.Fatalf("log of %d bytes", len(str(r["log"])))
 	}
 }
+
+const testEnvKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" // 32 bytes
+
+// putEnv uploads an environment file to a function_env link, from outside.
+func putEnv(t *testing.T, a *App, link, body string) (int, D) {
+	t.Helper()
+	req := httptest.NewRequest("PUT", link, strings.NewReader(body))
+	req.RemoteAddr = "198.51.100.7:40000"
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	out := D{}
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	return w.Code, out
+}
+
+func TestFunctionEnvUploadBuildsAVersion(t *testing.T) {
+	p, a := functionFixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	alice := person("alice", false)
+	call := func(tool string, args D) D { return a.Call(context.Background(), tool, args, alice) }
+	assertOK(t, call("function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "port": 9000}))
+	report(t, a, `{"revision":1,"functions":[{"id":"t1-hook","versions":[{"version":"v1","state":"ready","bytes":1073741824}]}]}`)
+
+	r := call("function_env", D{"function": "hook"})
+	assertOK(t, r)
+	link := str(r["url"])
+	if !strings.HasPrefix(link, "https://carrel.test/functions/v1/env/cfe_") || !strings.Contains(str(r["upload"]), "--data-binary @.env") {
+		t.Fatalf("link %v", r)
+	}
+	// A file with a mistake leaves the link usable.
+	if code, out := putEnv(t, a, link, "PORT=1\n"); code != 400 || !strings.Contains(str(obj(out["error"])["message"]), "PORT") {
+		t.Fatalf("reserved key: %d %v", code, out)
+	}
+	if code, _ := putEnv(t, a, link, "not a pair\n"); code != 400 {
+		t.Fatalf("bad line: %d", code)
+	}
+	secret := "s3cr3t-value-" + randomID()
+	code, out := putEnv(t, a, link, "# comment\nexport API_KEY=\""+secret+"\"\nMODE=prod\nMODE=test\n")
+	if code != 200 || out["state"] != "building" || strings.Join(strs(out["keys"]), ",") != "API_KEY,MODE" {
+		t.Fatalf("upload: %d %v", code, out)
+	}
+	if strings.Contains(string(encoded(out)), secret) {
+		t.Fatal("the answer holds a value")
+	}
+	// Single use.
+	if code, _ := putEnv(t, a, link, "A=1\n"); code != 404 {
+		t.Fatalf("second use: %d", code)
+	}
+	// The host gets the values for the new version, in file order, the last MODE winning.
+	versions := arr(obj(arr(hostState(t, a)["functions"])[0])["versions"])
+	var v2 D
+	for _, v := range versions {
+		if obj(v)["version"] == "v2" {
+			v2 = obj(v)
+		}
+	}
+	if v2 == nil || strings.Join(strs(v2["env"]), "|") != "API_KEY="+secret+"|MODE=test" || integer(v2["port"]) != 9000 {
+		t.Fatalf("desired v2 %v", v2)
+	}
+	// Nothing at rest or in the audit log holds the value.
+	for _, table := range []string{"objects", "audit", "site"} {
+		for _, row := range p.Store.Rows("SELECT * FROM " + table) {
+			if strings.Contains(string(encoded(row)), secret) {
+				t.Fatalf("%s holds the value: %v", table, row)
+			}
+		}
+	}
+	got := obj(call("function_get", D{"function": "hook"})["function"])
+	if strings.Join(strs(got["env_keys"]), ",") != "API_KEY,MODE" || strings.Contains(string(encoded(got)), secret) {
+		t.Fatalf("function_get %v", got)
+	}
+	// A deploy keeps the environment.
+	report(t, a, `{"revision":3,"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready","bytes":1},{"version":"v2","state":"ready","bytes":1}]}]}`)
+	assertOK(t, call("function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:2", "port": 9000}))
+	for _, v := range arr(obj(arr(hostState(t, a)["functions"])[0])["versions"]) {
+		if obj(v)["version"] == "v3" && len(strs(obj(v)["env"])) != 2 {
+			t.Fatalf("deploy dropped the environment: %v", v)
+		}
+	}
+	// Another tenant cannot ask for a link to it.
+	assertCode(t, a.Call(context.Background(), "function_env", D{"function": "hook"}, person("bob", false)), "not_found")
+}
+
+func TestFunctionEnvNeedsAKeyAndStaysWithItsFunction(t *testing.T) {
+	p, a := functionFixture(t)
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	assertCode(t, a.Call(context.Background(), "function_env", D{"function": "hook"}, alice), "unavailable")
+	p.Config.FunctionEnvKey = testEnvKey
+	sealed := p.sealFunctionEnv("1-hook", []string{"A=1"})
+	if got := p.openFunctionEnv("1-hook", sealed); len(got) != 1 || got[0] != "A=1" {
+		t.Fatalf("open %v", got)
+	}
+	if err := attempt(func() { p.openFunctionEnv("2-hook", sealed) }); err == nil {
+		t.Fatal("an environment opened for another function")
+	}
+}
+
+func strs(v any) []string {
+	out := []string{}
+	for _, x := range arr(v) {
+		out = append(out, str(x))
+	}
+	return out
+}

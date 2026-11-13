@@ -18,8 +18,8 @@ import (
 
 // fakeBuild writes what a real build leaves: a version directory with its
 // function.json and a file standing for the snapshot.
-func fakeBuild(root string, builds *[]string, fail map[string]bool) func(context.Context, Function, string) error {
-	return func(_ context.Context, f Function, image string) error {
+func fakeBuild(root string, builds *[]string, fail map[string]bool) func(context.Context, Function, string, []string) error {
+	return func(_ context.Context, f Function, image string, _ []string) error {
 		*builds = append(*builds, f.Name+"/"+f.Version)
 		if fail[f.Name+"/"+f.Version] {
 			return errors.New("pull failed")

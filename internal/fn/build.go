@@ -40,6 +40,9 @@ type BuildOptions struct {
 	// Activate puts the new version live at once and prunes old versions.
 	// The host agent leaves both to the control plane's desired state.
 	Activate bool
+	// Env adds KEY=VALUE pairs to the image's environment; a pair wins
+	// over the image's value of its key.
+	Env []string
 }
 
 // buildTime is the longest one build may take, from the pull to the snapshot.
@@ -96,6 +99,7 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 		f.Digest = digest.String()
 	}
 	spec.Name, spec.Port, spec.MTU, spec.DNS = f.Name, f.Port, opts.MTU, opts.DNS
+	spec.Env = append(spec.Env, opts.Env...)
 	if err := makeRootfs(ctx, image, opts.Init, spec, filepath.Join(f.Dir, "rootfs.ext4")); err != nil {
 		return f, err
 	}

@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,9 @@ type Config struct {
 	DeploydBinary         string `json:"deployd_binary,omitempty"`
 
 	FunctionHosts []FunctionHostConfig `json:"function_hosts,omitempty"`
+	// FunctionEnvKey encrypts functions' environment values at rest: 32
+	// bytes in standard base64. Without it function_env is unavailable.
+	FunctionEnvKey string `json:"function_env_key,omitempty"`
 
 	VMEnvironment D `json:"vm_environment,omitempty"`
 	NetBox        D `json:"netbox,omitempty"`
@@ -165,6 +169,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("function host %s: token_sha256 must be 64 lowercase hex digits", h.Name)
 		}
 		hosts[h.Name] = true
+	}
+	if c.FunctionEnvKey != "" {
+		if key, err := base64.StdEncoding.DecodeString(c.FunctionEnvKey); err != nil || len(key) != 32 {
+			return fmt.Errorf("function_env_key must be 32 bytes in standard base64")
+		}
 	}
 	return nil
 }

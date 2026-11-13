@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,6 +40,9 @@ type DesiredVersion struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	MaxInstances   int    `json:"max_instances"`
 	WakePath       string `json:"wake_path,omitempty"`
+	// Env holds the member's KEY=VALUE pairs, written into the version's
+	// root file system. It is never kept in function.json.
+	Env []string `json:"env,omitempty"`
 }
 
 // DesiredFunction names a function on the host, t<tenant>-<name>, its
@@ -88,7 +92,7 @@ type Agent struct {
 	Client  *http.Client
 	// Build makes one version. It must not activate it. The agent holds
 	// the function's lock while it runs.
-	Build func(ctx context.Context, f Function, image string) error
+	Build func(ctx context.Context, f Function, image string, env []string) error
 	// Lock takes a function's lock, the one a build from the command line
 	// takes too. It fails at once when the lock is held.
 	Lock func(name string) (unlock func(), err error)
@@ -173,6 +177,24 @@ func (a *Agent) fetch(ctx context.Context, since int64) (Desired, error) {
 	return desired, nil
 }
 
+var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+
+// checkEnv refuses pairs the guest's init could not set as given.
+func checkEnv(env []string) error {
+	size := 0
+	for _, pair := range env {
+		key, _, ok := strings.Cut(pair, "=")
+		if !ok || !envKeyRE.MatchString(key) || strings.ContainsRune(pair, 0) {
+			return errors.New("an environment entry is not KEY=VALUE")
+		}
+		size += len(pair)
+	}
+	if size > 128<<10 || len(env) > 200 {
+		return errors.New("the environment is too large")
+	}
+	return nil
+}
+
 // check refuses a state with any part the agent cannot use, before any file
 // changes: a function skipped for a bad field would look unnamed, and its
 // files would go.
@@ -190,6 +212,9 @@ func (d Desired) check() error {
 		for _, v := range f.Versions {
 			if !versionRE.MatchString(v.Version) || versions[v.Version] {
 				return fmt.Errorf("function %s: version %q is invalid or repeated", f.ID, v.Version)
+			}
+			if err := checkEnv(v.Env); err != nil {
+				return fmt.Errorf("function %s: version %s: %w", f.ID, v.Version, err)
 			}
 			versions[v.Version] = true
 		}
@@ -317,7 +342,7 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 			Name: f.ID, Version: v.Version, Port: v.Port, MemoryMB: v.MemoryMB, Mode: v.Mode,
 			IdleSeconds: v.IdleSeconds, TimeoutSeconds: v.TimeoutSeconds,
 			MaxInstances: v.MaxInstances, WakePath: v.WakePath,
-		}, v.Image)
+		}, v.Image, v.Env)
 		if err != nil {
 			if ctx.Err() != nil {
 				return // a stop is not a failed build
