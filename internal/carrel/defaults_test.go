@@ -59,7 +59,7 @@ func TestEightMachinesFitButTotalsAndPortsStillApply(t *testing.T) {
 		t.Fatalf("wrong aggregate: %s", encoded(r))
 	}
 	assertCode(t, app.Call(ctx, "deployment_plan", D{"machines": arr(append(machines, D{"name": "ninth"}))}, who), "quota_exceeded")
-	machines[0]["cpu"] = 2
+	machines[0]["cpu"] = 10
 	assertCode(t, app.Call(ctx, "deployment_plan", D{"machines": arr(machines)}, who), "quota_exceeded")
 	delete(machines[0], "cpu")
 	e := p.execution(ctx)

@@ -47,7 +47,7 @@ func TestPublicStatusNamesOnlyTenantsWithAPublicDomain(t *testing.T) {
 		t.Fatalf("unexpected others: %s", raw)
 	}
 	member := obj(obj(body["quota"])["member"])
-	if num(member["machines"]) != 8 || num(member["vcpu"]) != 8 || num(member["memory_gib"]) != 16 || num(member["disk_gib"]) != 100 || obj(obj(body["quota"])["project"])["vcpu"] == nil {
+	if num(member["machines"]) != 8 || num(member["vcpu"]) != 16 || num(member["memory_gib"]) != 32 || num(member["disk_gib"]) != 200 || obj(obj(body["quota"])["project"])["vcpu"] == nil {
 		t.Fatalf("unexpected quota: %s", raw)
 	}
 	node := obj(body["node"])

@@ -176,8 +176,8 @@ shared physical capacity and admission headroom without exposing other tenants' 
 `machine_get` returns readiness, access rules, SSH and timestamped `runtime` power state/uptime;
 it does not return the raw hypervisor payload. Use `machine_metrics` for detailed usage.
 
-Personal and project tenants default to **8 machines / 8 IPs**, with aggregate limits of 8 vCPU,
-16 GiB RAM and 100 GiB disk. Eight `tiny` VMs use 8 vCPU, 8 GiB RAM and 80 GiB disk. Increasing
+Personal and project tenants default to **8 machines / 8 IPs**, with aggregate limits of 16 vCPU,
+32 GiB RAM and 200 GiB disk. Eight `tiny` VMs use 8 vCPU, 8 GiB RAM and 80 GiB disk. Increasing
 CPU after filling that allocation requires releasing CPU quota or an approved quota increase.
 Stopping or pausing a VM retains its reservations. Available quota does not reserve physical
 capacity; creation and growth also pass the node's admission checks.
@@ -338,7 +338,7 @@ When a temporary quota grant expires, the limit returns to its previous value an
 reports any excess. Existing machines keep running. Growth in the exceeded dimension is blocked;
 cleanup and reductions remain available. Administrator suspension is a separate explicit action.
 
-Snapshots use separate `snapshot_gb` (default 100 GiB) and `snapshots` (default 4) limits. A 40 GiB
+Snapshots use separate `snapshot_gb` (default 200 GiB) and `snapshots` (default 4) limits. A 40 GiB
 VM with two snapshots consumes 40 GiB `disk_gb` and 80 GiB `snapshot_gb`. The latter is a worst-case
 reservation, **not a claim about current physical usage**. Snapshot admission also checks safe
 physical headroom; storage pressure blocks new storage allocations. `quota_get` and
@@ -353,7 +353,7 @@ its previous power state, and waits for readiness if it was running. It is still
 backup and only then removes the machine from the cluster. A failed or unchecked backup leaves the
 machine as it was. A frozen machine appears in `machine_list` with `state=frozen`; it frees `vcpu`,
 `memory_mb`, `disk_gb` and `machines`, keeps its name, internal address, domains, ports and peers, and
-charges its configured disk size to `frozen_gb` (default 100 GiB, like `disk_gb`; `quota_request` raises
+charges its configured disk size to `frozen_gb` (default 200 GiB, like `disk_gb`; `quota_request` raises
 it) and its address to `ips`. `machine_thaw` restores it with the same name and address; it needs the
 normal quota, like `machine_create`, and fails with `quota_exceeded` when it is short. The machine comes
 back stopped. `machine_delete` on a frozen machine deletes its backup.

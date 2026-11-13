@@ -70,7 +70,7 @@ def build(vmid, name, path, storage):
         "--cores",
         "2",
         "--cpu",
-        "x86-64-v2-AES",
+        "x86-64-v3",
         "--scsihw",
         "virtio-scsi-single",
         "--serial0",

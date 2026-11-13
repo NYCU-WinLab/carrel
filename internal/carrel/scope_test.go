@@ -153,7 +153,7 @@ func TestScopeQuotaRequests(t *testing.T) {
 	app, ctx, who := NewApp(p, nil), context.Background(), person("alice", false)
 	args := D{"dimension": "public_ports", "amount": 11, "reason": "Regression", "idempotency_key": "dedup-quota"}
 	assertCode(t, app.Call(ctx, "quota_request", args, who), "invalid")
-	args["dimension"], args["amount"] = "vcpu", 12
+	args["dimension"], args["amount"] = "vcpu", 24
 	a := app.Call(ctx, "quota_request", args, who)
 	b := app.Call(ctx, "quota_request", args, who)
 	assertOK(t, a)
