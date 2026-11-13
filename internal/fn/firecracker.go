@@ -477,7 +477,12 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 	defer console.Close()
 	go func() {
 		defer output.Close()
-		if _, err := io.Copy(fc.logFor(logPath), output); err != nil {
+		console := &consoleLog{log: fc.logFor(logPath)}
+		_, err := io.Copy(console, output)
+		if err == nil {
+			err = console.Close()
+		}
+		if err != nil {
 			// The log cannot be written. Keep reading, or Firecracker
 			// would block on its console and the guest with it.
 			slog.Error("function log", "path", logPath, "error", err)
@@ -500,7 +505,10 @@ func (fc *Firecracker) launch(ctx context.Context, s *slot, logPath string, port
 		"--cgroup", "memory.swap.max=0",
 		"--cgroup", "pids.max="+strconv.Itoa(maxPIDs),
 		"--resource-limit", "fsize="+strconv.Itoa(fileLimit),
-		"--", "--api-sock", jailSocket)
+		// Firecracker writes its own log where the serial console goes, the
+		// function's log. Only its errors belong there: the rest is the
+		// host's detail, not the function's output.
+		"--", "--api-sock", jailSocket, "--level", "Error")
 	cmd.Stdout = console
 	cmd.Stderr = console
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -640,11 +648,15 @@ func (fc *Firecracker) mountOut(s *slot, root string, sizeMB int) error {
 // capLog is a function's serial log: log, and log.1 once log reached logHalf.
 // Every instance of the function writes through the same one, and only one
 // process writes a log: the router writes log, a build writes build.log.
+// Each line starts with the time it was written (stamp), which function_logs
+// filters on.
 type capLog struct {
 	mu   sync.Mutex
 	path string
 	file *os.File
 	size int64
+	// midLine is set while the last write did not end its line.
+	midLine bool
 }
 
 func (fc *Firecracker) logFor(path string) *capLog {
@@ -661,9 +673,64 @@ func (fc *Firecracker) logFor(path string) *capLog {
 	return l
 }
 
-func (l *capLog) Write(p []byte) (int, error) {
+// consoleLog gathers one instance's output into whole lines before they
+// reach the function's log, so that the lines of instances sharing it never
+// mix and each starts with its own time.
+type consoleLog struct {
+	log  *capLog
+	line []byte
+}
+
+// maxLine splits a longer line, so that one instance cannot hold memory
+// with output that never ends a line.
+const maxLine = 16 << 10
+
+func (c *consoleLog) Write(p []byte) (int, error) {
+	n := len(p)
+	var whole []byte
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			c.line = append(c.line, p...)
+			for len(c.line) >= maxLine {
+				whole = append(append(whole, c.line[:maxLine]...), '\n')
+				c.line = append(c.line[:0], c.line[maxLine:]...)
+			}
+			break
+		}
+		c.line = append(c.line, p[:i]...)
+		for len(c.line) > maxLine {
+			whole = append(append(whole, c.line[:maxLine]...), '\n')
+			c.line = append(c.line[:0], c.line[maxLine:]...)
+		}
+		whole = append(append(whole, c.line...), '\n')
+		c.line = c.line[:0]
+		p = p[i+1:]
+	}
+	if len(whole) > 0 {
+		if _, err := c.log.Write(whole); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
+}
+
+// Close writes a last line the instance did not end.
+func (c *consoleLog) Close() error {
+	if len(c.line) == 0 {
+		return nil
+	}
+	_, err := c.log.Write(append(c.line, '\n'))
+	c.line = nil
+	return err
+}
+
+func (l *capLog) Write(raw []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	atStart := !l.midLine
+	p := stamp(raw, time.Now(), &atStart)
+	l.midLine = !atStart
 	if l.file != nil && l.size+int64(len(p)) > logHalf {
 		l.file.Close()
 		l.file = nil
@@ -688,7 +755,10 @@ func (l *capLog) Write(p []byte) (int, error) {
 	}
 	n, err := l.file.Write(p)
 	l.size += int64(n)
-	return len(p), err
+	if err != nil {
+		return 0, err
+	}
+	return len(raw), nil
 }
 
 // watch closes done when the Firecracker process ends. It is not this

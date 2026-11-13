@@ -234,6 +234,8 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 			}
 		}
 		return D{"function": e.PublicFunction(f)}
+	case "function_logs":
+		return e.functionLogs(e.Function(t, a["function"]), a)
 	case "function_deploy":
 		name := str(a["name"])
 		spec := functionSpec(a)

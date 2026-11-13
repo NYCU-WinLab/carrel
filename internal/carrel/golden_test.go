@@ -451,6 +451,11 @@ func goldenScenario(g *goldenRun) {
 	call("functions", "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "instance": "fresh"}, alice)
 	call("functions", "function_list", D{}, alice)
 	call("functions", "function_get", D{"function": "hook"}, alice)
+	// No host agent runs here: the request times out at once.
+	wait := functionLogWait
+	functionLogWait = time.Millisecond
+	call("functions", "function_logs", D{"function": "hook", "build": true}, alice)
+	functionLogWait = wait
 	call("functions", "function_rollback", D{"function": "hook"}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook", "dry_run": true}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook"}, alice)

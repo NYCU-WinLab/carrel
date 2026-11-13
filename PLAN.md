@@ -1428,8 +1428,13 @@ to tenant networks, one instance per `reuse` function.
    the quota `functions` and `function_gb`, and the two agent endpoints, reached only from the
    infra network with a host token whose SHA-256 is in `function_hosts` of the configuration.
    A deploy makes version `v<n>` and returns at once; the host's report makes it current, or
-   records its build error and leaves the current version live. Still open in this step:
-   `function_logs`, the environment upload and private registries.
+   records its build error and leaves the current version live. `function_logs` reads the
+   tail of a function's output, or of its builds, from its host: the agent collects the request
+   on a second long poll (`GET /functions/v1/agent/logs`) and posts the answer, so carrel still
+   never connects to a host and keeps no log. Each line starts with the time the host read it,
+   which `since_seconds` filters on; Firecracker's own log is limited to errors so that the log
+   holds the function's output. Still open in this step: the environment upload and private
+   registries.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`. Private registries need credentials, which come with the member tools.

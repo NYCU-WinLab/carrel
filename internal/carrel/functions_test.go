@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testHostToken = "cfh_test-host-token"
@@ -259,5 +260,96 @@ func TestFunctionRoutesSkipSuspendedTenants(t *testing.T) {
 	p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=1")
 	if routes := e.functionRoutes(); len(routes) != 0 {
 		t.Fatalf("suspended tenant still routed: %v", routes)
+	}
+}
+
+func TestFunctionLogsAskTheHost(t *testing.T) {
+	p, a := functionFixture(t)
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	done := make(chan D, 1)
+	go func() {
+		done <- a.Call(context.Background(), "function_logs", D{"function": "hook", "since_seconds": 60, "max_bytes": 100}, alice)
+	}()
+	code, asked := hostCall(t, a, "GET", "/functions/v1/agent/logs", testHostToken, "")
+	reqs := arr(asked["requests"])
+	if code != 200 || len(reqs) != 1 {
+		t.Fatalf("requests: %d %v", code, asked)
+	}
+	req := obj(reqs[0])
+	if req["function"] != "t1-hook" || integer(req["max_bytes"]) != 100 || req["build"] != false || int64(integer(req["since"])) < time.Now().Unix()-61 {
+		t.Fatalf("request %v", req)
+	}
+	// Another host's token cannot answer it, and a tenant machine cannot ask.
+	p.Config.FunctionHosts = append(p.Config.FunctionHosts, FunctionHostConfig{Name: "fn02", Router: "10.200.0.20:8091", TokenSHA256: digest("cfh_other")})
+	if code, _ := hostCall(t, a, "POST", "/functions/v1/agent/logs", "cfh_other", `{"id":"`+str(req["id"])+`","text":"forged\n"}`); code != 200 {
+		t.Fatalf("other host: %d", code)
+	}
+	if code, _ := hostCall(t, a, "POST", "/functions/v1/agent/logs", testHostToken, `{"id":"`+str(req["id"])+`","text":"2026-11-13T00:00:00.000Z hello\n"}`); code != 200 {
+		t.Fatalf("answer: %d", code)
+	}
+	r := <-done
+	assertOK(t, r)
+	if r["log"] != "2026-11-13T00:00:00.000Z hello\n" {
+		t.Fatalf("logs %v", r)
+	}
+}
+
+func TestFunctionLogsWhenTheHostIsAway(t *testing.T) {
+	p, a := functionFixture(t)
+	old := functionLogWait
+	functionLogWait = 50 * time.Millisecond
+	defer func() { functionLogWait = old }()
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	assertCode(t, a.Call(context.Background(), "function_logs", D{"function": "hook"}, alice), "unavailable")
+	// The unanswered request is gone, not handed to the next poll.
+	if len(p.fnLogs.waiting["fn01"]) != 0 || len(p.fnLogs.asked) != 0 {
+		t.Fatalf("stale request %v", p.fnLogs.waiting)
+	}
+}
+
+// Requests a host never collected leave nothing behind, in any order.
+func TestFunctionLogRequestsAreReleased(t *testing.T) {
+	var l functionLogs
+	old := functionLogWait
+	functionLogWait = 20 * time.Millisecond
+	defer func() { functionLogWait = old }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	for i := 0; i < 50; i++ {
+		go func() {
+			l.ask(ctx, "fn01", D{"id": randomID()})
+			done <- struct{}{}
+		}()
+	}
+	cancel()
+	for i := 0; i < 50; i++ {
+		<-done
+	}
+	if len(l.waiting) != 0 || len(l.asked) != 0 {
+		t.Fatalf("left behind: %d hosts, %d asks", len(l.waiting), len(l.asked))
+	}
+}
+
+// The largest log of the worst characters for JSON still gets through.
+func TestFunctionLogsLargestAnswerFits(t *testing.T) {
+	_, a := functionFixture(t)
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	done := make(chan D, 1)
+	go func() {
+		done <- a.Call(context.Background(), "function_logs", D{"function": "hook", "max_bytes": functionLogMax}, alice)
+	}()
+	_, asked := hostCall(t, a, "GET", "/functions/v1/agent/logs", testHostToken, "")
+	text := strings.Repeat("<\x1b", functionLogMax/2)
+	body, _ := json.Marshal(D{"id": obj(arr(asked["requests"])[0])["id"], "text": text})
+	if code, out := hostCall(t, a, "POST", "/functions/v1/agent/logs", testHostToken, string(body)); code != 200 {
+		t.Fatalf("answer of %d bytes: %d %v", len(body), code, out)
+	}
+	r := <-done
+	assertOK(t, r)
+	if r["log"] != text {
+		t.Fatalf("log of %d bytes", len(str(r["log"])))
 	}
 }
