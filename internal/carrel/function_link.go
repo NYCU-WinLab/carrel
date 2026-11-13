@@ -76,6 +76,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Buildx reports the digest of the pushed manifest, which the deploy names.
+      - uses: docker/setup-buildx-action@v3
       - id: image
         uses: docker/build-push-action@v6
         with:
@@ -94,8 +96,10 @@ jobs:
 // GitHub. An unknown, suspended or unlinked one looks the same.
 func (e *Execution) functionBySlug(slug, name string) (D, D) {
 	t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == slug })
+	// One answer for an unknown tenant, function or link: a GitHub token
+	// learns nothing about who exists.
 	if t == nil || t["status"] != "active" {
-		fail("not_found", "Function not found")
+		fail("not_found", "Function not found or not linked to a repository; call function_link")
 	}
 	f := e.S.Get("functions", functionID(integer(t["n"]), name))
 	if f == nil || str(f["repo"]) == "" {

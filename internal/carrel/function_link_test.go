@@ -30,7 +30,7 @@ func TestFunctionLinkDeploysFromGitHub(t *testing.T) {
 	r := call("function_link", D{"function": "hook", "repo": "Alice/Hook"})
 	assertOK(t, r)
 	wf := str(r["workflow"])
-	for _, want := range []string{"branches: [main]", "id-token: write", "tenant: alice", "function: hook", "ghcr.io/alice/hook@${{ steps.image.outputs.digest }}", "concurrency: carrel-hook"} {
+	for _, want := range []string{"branches: [main]", "id-token: write", "tenant: alice", "function: hook", "ghcr.io/alice/hook@${{ steps.image.outputs.digest }}", "concurrency: carrel-hook", "docker/setup-buildx-action@v3"} {
 		if !strings.Contains(wf, want) {
 			t.Fatalf("workflow lacks %q:\n%s", want, wf)
 		}
