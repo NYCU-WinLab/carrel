@@ -223,7 +223,8 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
 | | `app_rollback` | `app`; switches back to the previous release |
 | | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
-| Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL and a single-use link for the environment file (section 7.11) |
+| Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
+| | `function_env` | `function`, `clear`; a single-use link for the environment file (section 7.11) |
 | | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
 | | `function_logs` | `function`, `since`; the output the platform captured |
 | | `function_rollback` | `function`; switches back to the previous version |
@@ -1325,10 +1326,17 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
 
 **Environment and secrets**
 
-`function_deploy` returns a single-use upload link. The agent pipes an environment file to it, so
-values never appear in tool arguments, in the audit log or in a transcript. The control plane
-stores them encrypted. A change of environment makes a new snapshot. Snapshots stay on function
-hosts and are deleted with their version.
+`function_env` returns a single-use upload link, valid for 15 minutes. The agent pipes an
+environment file to it (`PUT /functions/v1/env/<link>`), so values never appear in tool
+arguments, in the audit log or in a transcript. The control plane stores them encrypted with
+AES-256-GCM under `function_env_key` of the configuration, bound to the function. A change of
+environment builds a new version from the current one, because the values are part of its
+snapshot; each version keeps the environment it was built with, so a rollback brings back its
+values, and a deploy keeps the function's environment. `clear` builds a version without one.
+The desired state only marks a version that has an environment (`has_env`); the host
+fetches its values from `GET /functions/v1/agent/env` when it builds that version, and writes
+them into the version's root file system, never into `function.json`. `function_get` shows the names only. Snapshots stay on
+function hosts and are deleted with their version.
 
 **Limits and quota**
 
@@ -1433,8 +1441,8 @@ to tenant networks, one instance per `reuse` function.
    on a second long poll (`GET /functions/v1/agent/logs`) and posts the answer, so carrel still
    never connects to a host and keeps no log. Each line starts with the time the host read it,
    which `since_seconds` filters on; Firecracker's own log is limited to errors so that the log
-   holds the function's output. Still open in this step: the environment upload and private
-   registries.
+   holds the function's output. `function_env` sets the environment through a single-use
+   upload link (see Environment and secrets). Still open in this step: private registries.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`. Private registries need credentials, which come with the member tools.

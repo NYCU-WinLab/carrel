@@ -81,7 +81,7 @@ func list(value string) []string {
 // never takes a slot from the router and two builds never share a jail, a
 // user or a network namespace.
 // The caller holds the function's lock.
-func (c *common) buildVersion(ctx context.Context, f fn.Function, image, imageTar string, activate bool) (fn.Function, error) {
+func (c *common) buildVersion(ctx context.Context, f fn.Function, image, imageTar string, activate bool, env []string) (fn.Function, error) {
 	index, slot, err := buildSlot(c.root)
 	if err != nil {
 		return f, err
@@ -94,7 +94,7 @@ func (c *common) buildVersion(ctx context.Context, f fn.Function, image, imageTa
 	defer runtime.Close()
 	return runtime.Build(ctx, fn.BuildOptions{
 		Function: f, Image: image, ImageTar: imageTar, Init: c.initPath, Root: c.root,
-		MTU: c.mtu, DNS: list(c.dns), Blocked: list(c.block), Activate: activate,
+		MTU: c.mtu, DNS: list(c.dns), Blocked: list(c.block), Activate: activate, Env: env,
 	})
 }
 
@@ -162,8 +162,8 @@ func serve(args []string) error {
 		agent := &fn.Agent{
 			Control: strings.TrimRight(*control, "/"), Token: token, Root: c.root,
 			Client: &http.Client{Timeout: 2 * time.Minute},
-			Build: func(ctx context.Context, f fn.Function, image string) error {
-				_, err := c.buildVersion(ctx, f, image, "", false)
+			Build: func(ctx context.Context, f fn.Function, image string, env []string) error {
+				_, err := c.buildVersion(ctx, f, image, "", false, env)
 				return err
 			},
 			Lock:   c.lockFunction,
@@ -239,7 +239,7 @@ func build(args []string) error {
 		return err
 	}
 	defer unlock()
-	built, err := c.buildVersion(ctx, f, *image, *imageTar, true)
+	built, err := c.buildVersion(ctx, f, *image, *imageTar, true, nil)
 	if err != nil {
 		return err
 	}

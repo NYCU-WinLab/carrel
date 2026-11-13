@@ -123,6 +123,22 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 		}
 		return p.FunctionReport(r.Context(), bearer(r), remoteIP(r), body)
 	}))
+	// A member's agent uploads an environment file to a function_env link.
+	env := appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.ReceiveFunctionEnv(r.Context(), r.PathValue("token"), r.Body)
+	})
+	mux.Handle("PUT /functions/v1/env/{token}", env)
+	mux.Handle("POST /functions/v1/env/{token}", env)
+	mux.HandleFunc("GET /functions/v1/agent/env", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		var result D
+		if err := attempt(func() { result = p.FunctionEnvFor(bearer(r), remoteIP(r), q.Get("function"), q.Get("version")) }); err != nil {
+			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		jsonResponse(w, 200, result)
+	})
 	mux.HandleFunc("GET /functions/v1/agent/logs", func(w http.ResponseWriter, r *http.Request) {
 		var result D
 		if err := attempt(func() { result = p.FunctionLogRequests(r.Context(), bearer(r), remoteIP(r)) }); err != nil {

@@ -67,7 +67,7 @@ func (e *Execution) FunctionVersions(f D) []D {
 var functionSpecKeys = []string{"image", "port", "memory_mb", "instance", "idle_seconds", "timeout_seconds", "max_instances", "wake_path"}
 
 func publicFunctionVersion(v D) D {
-	out := pick(v, append([]string{"version", "digest", "state", "error", "created_at", "ready_at"}, functionSpecKeys...)...)
+	out := pick(v, append([]string{"version", "digest", "state", "error", "created_at", "ready_at", "env_keys"}, functionSpecKeys...)...)
 	if b := num(v["bytes"]); b > 0 {
 		out["size_mb"] = int(b/MiB + 0.5)
 	}
@@ -92,7 +92,7 @@ func (e *Execution) PublicFunction(f D) D {
 	for _, v := range versions {
 		public = append(public, publicFunctionVersion(v))
 		if v["version"] == f["current"] {
-			for _, k := range functionSpecKeys {
+			for _, k := range append(functionSpecKeys, "env_keys") {
 				if v[k] != nil {
 					out[k] = v[k]
 				}
@@ -247,30 +247,12 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 		} else if str(f["pending"]) != "" {
 			fail("conflict", "A build of this function is in progress; follow it with function_get and wait_seconds", D{"pending": f["pending"]})
 		}
-		quota := e.Quota(t, delta)
-		reserve := buildReserve(integer(spec["memory_mb"]))
-		if limit := num(obj(t["quota"])["function_gb"]) * GiB; e.functionBytes(n)+reserve > limit {
-			fail("quota_exceeded", "Kept and building function versions would exceed function_gb; a build holds 2 GiB plus its memory until its size is known. Remove a function or wait for builds", D{"dimension": "function_gb"})
+		// A deploy keeps the environment of the live version.
+		env := D{}
+		if cur := e.S.Get("function_versions", functionVersionID(str(f["id"]), str(f["current"]))); cur != nil {
+			env = D{"env": str(cur["env"]), "env_keys": cur["env_keys"]}
 		}
-		r := D{"dry_run": dry, "quota_after": quota}
-		if dry {
-			r["function"] = merge(pick(f, "name"), spec, D{"state": "building"})
-			return r
-		}
-		seq := e.nextFunctionVersion()
-		version := "v" + strconv.Itoa(seq)
-		v := merge(spec, D{"id": functionVersionID(str(f["id"]), version), "function": f["id"], "version": version, "seq": seq, "state": "building", "created_at": now()})
-		f["seq"], f["pending"] = seq, version
-		e.Transaction(func(tx *Execution) {
-			tx.Put("function_versions", v["id"], n, v)
-			tx.Put("functions", f["id"], n, f)
-			tx.pruneFunctionVersions(f)
-			tx.bumpFunctions()
-		})
-		r["function"] = e.PublicFunction(f)
-		r["state"] = "building"
-		r["next_action"] = "Call function_get with wait_seconds=55 until state is no longer building. A build takes about 10 seconds for a 100 MB image and up to a few minutes for a large one."
-		return r
+		return e.startFunctionVersion(t, f, spec, delta, env, dry)
 	case "function_rollback":
 		f := e.Function(t, a["function"])
 		target := str(f["previous"])
@@ -312,6 +294,48 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 	return nil
 }
 
+// startFunctionVersion records a version to build from spec, with the
+// environment in env (its sealed values and their names).
+func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool, also ...func(*Execution)) D {
+	n := integer(t["n"])
+	quota := e.Quota(t, delta)
+	reserve := buildReserve(integer(spec["memory_mb"]))
+	if limit := num(obj(t["quota"])["function_gb"]) * GiB; e.functionBytes(n)+reserve > limit {
+		fail("quota_exceeded", "Kept and building function versions would exceed function_gb; a build holds 2 GiB plus its memory until its size is known. Remove a function or wait for builds", D{"dimension": "function_gb"})
+	}
+	keys := env["env_keys"]
+	if keys == nil {
+		keys = []any{}
+	}
+	r := D{"dry_run": dry, "quota_after": quota}
+	if dry {
+		r["function"] = merge(pick(f, "name"), spec, D{"state": "building", "env_keys": keys})
+		return r
+	}
+	seq := e.nextFunctionVersion()
+	version := "v" + strconv.Itoa(seq)
+	v := merge(spec, D{"id": functionVersionID(str(f["id"]), version), "function": f["id"], "version": version, "seq": seq, "state": "building", "created_at": now(), "env_keys": keys})
+	f["seq"], f["pending"] = seq, version
+	// Only versions hold an environment: the function's is its live
+	// version's, so a rollback brings back the values that version had.
+	if sealed := str(env["env"]); sealed != "" {
+		v["env"] = sealed
+	}
+	e.Transaction(func(tx *Execution) {
+		tx.Put("function_versions", v["id"], n, v)
+		tx.Put("functions", f["id"], n, f)
+		tx.pruneFunctionVersions(f)
+		tx.bumpFunctions()
+		for _, step := range also {
+			step(tx)
+		}
+	})
+	r["function"] = e.PublicFunction(f)
+	r["state"] = "building"
+	r["next_action"] = "Call function_get with wait_seconds=55 until state is no longer building. A build takes about 10 seconds for a 100 MB image and up to a few minutes for a large one."
+	return r
+}
+
 // pruneFunctionVersions keeps the newest versions plus the current, previous
 // and pending ones. The host removes what the state no longer names.
 func (e *Execution) pruneFunctionVersions(f D) {
@@ -333,6 +357,12 @@ func (e *Execution) removeFunctions(fs []D) {
 				tx.S.Remove("function_versions", v["id"])
 			}
 			tx.S.Remove("functions", f["id"])
+			// A link must not outlive its function into one of the same name.
+			for _, l := range tx.S.Objects("function_env_links", integer(f["tenant_n"])) {
+				if l["function"] == f["id"] {
+					tx.S.Remove("function_env_links", l["id"])
+				}
+			}
 		}
 		tx.bumpFunctions()
 	})
@@ -426,6 +456,9 @@ func (p *Platform) desiredFunctions(host FunctionHostConfig) D {
 				"version": v["version"], "image": v["image"], "port": v["port"], "memory_mb": v["memory_mb"],
 				"mode": v["instance"], "idle_seconds": v["idle_seconds"], "timeout_seconds": v["timeout_seconds"],
 				"max_instances": v["max_instances"], "wake_path": v["wake_path"],
+				// The agent fetches the values when it builds the version
+				// (FunctionEnvFor): the state stays small whatever they hold.
+				"has_env": str(v["env"]) != "",
 			})
 		}
 		entry := D{"id": functionHostID(integer(f["tenant_n"]), str(f["name"])), "versions": versions}

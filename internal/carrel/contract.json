@@ -3801,6 +3801,40 @@
       }
     },
     {
+      "name": "function_env",
+      "description": "Set a function's environment variables without passing the values through tool arguments. Returns a single-use upload link valid for 15 minutes: run its upload line where the environment file is (UTF-8, one KEY=VALUE per line; whole-line # comments, export and one pair of quotes around a value are allowed; no inline comments, escapes or multi-line values). The values replace the whole environment, are kept encrypted, and a new version of the function builds with them; follow it with function_get and wait_seconds. A deploy keeps the environment; a rollback brings back the one its version was built with. clear builds a version without variables. function_get shows the variable names, never the values.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "clear": {
+            "type": "boolean",
+            "default": false
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "function_list",
       "description": "List the tenant's functions with their state and current version.",
       "inputSchema": {
@@ -4845,6 +4879,7 @@
     "operation_get",
     "operation_retry",
     "function_deploy",
+    "function_env",
     "function_get",
     "function_logs",
     "function_list",
@@ -4929,6 +4964,7 @@
     "zone_add",
     "zone_remove",
     "function_deploy",
+    "function_env",
     "function_rollback",
     "function_remove"
   ],

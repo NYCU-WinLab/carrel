@@ -278,6 +278,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.AppTool(tool, a, t)
 	case "function_deploy", "function_list", "function_get", "function_rollback", "function_remove", "function_logs":
 		return e.FunctionTool(tool, a, t)
+	case "function_env":
+		return e.functionEnv(a, w, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil
