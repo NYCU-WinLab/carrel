@@ -15,6 +15,9 @@ var appsInstallScript string
 //go:embed apps_deploy.sh
 var appsDeployScript string
 
+//go:embed runners_install.sh
+var runnersInstallScript string
+
 var appStatus = map[string]int{"forbidden": 403, "not_found": 404, "invalid": 400, "conflict": 409, "quota_exceeded": 409, "capacity_exhausted": 507}
 
 // appHandler turns a failed call into a JSON error with a matching status.
@@ -65,6 +68,10 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /apps/v1/deploy.sh", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		_, _ = w.Write([]byte(strings.ReplaceAll(appsDeployScript, "@ORIGIN@", p.appOrigin())))
+	})
+	mux.HandleFunc("GET /apps/v1/runner.sh", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+		_, _ = w.Write([]byte(runnersInstallScript))
 	})
 	mux.HandleFunc("GET /apps/v1/carrel-deployd", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")

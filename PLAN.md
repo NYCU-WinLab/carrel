@@ -223,6 +223,9 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
 | | `app_rollback` | `app`; switches back to the previous release |
 | | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
+| Runners | `runner_add` | `machine`, `provider: github \| gitlab`, `url`, `name`, `labels`, `allow_public`; returns the install line and `token_command` (section 7.9) |
+| | `runner_list` | Runners with machine, provider, URL and labels |
+| | `runner_remove` | `runner`, `confirm: <name>`; returns the commands that stop and unregister it |
 | Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
 | | `function_env` | `function`, `clear`; a single-use link for the environment file (section 7.11) |
 | | `function_registry` | `function`, `registry`, `clear`; a single-use link for a private registry's credentials (section 7.11) |
@@ -1208,6 +1211,20 @@ so an admin agent can answer which commit runs where (section 9.1).
 
 **Version 1 limits**: GitHub and GitLab only; other git hosts are issue #266. One app per machine
 port; one machine per app.
+
+**Self-hosted runners (issue #267)**: `runner_add` starts a GitHub Actions or GitLab runner on a
+member's machine, so jobs build there with the machine's tools and quota instead of on hosted
+runners. A job on it deploys an app unchanged: GitHub gives self-hosted jobs OIDC tokens with
+`runner_environment: self-hosted`, and GitLab issues ID tokens from the server, not the runner.
+carrel never holds a runner token. The result's `token_command` asks the forge for one with the
+member's own `gh` or `glab` login and pipes it into the install line over SSH, so the token appears
+in no tool call, no output and no command line on the machine (the script hands it to the runner
+in an environment variable). Jobs run as the unprivileged user `carrel-runner`; GitLab uses the
+shell executor, so the machine needs no Docker. A public GitHub repository is refused unless
+`allow_public` is set, because a pull request from any fork could run code on the machine.
+`runner_remove` returns the commands that stop the runner and delete it on the forge; a GitLab
+runner made with a runner authentication token stays on GitLab after `gitlab-runner unregister`,
+so the client deletes it by name.
 
 ### 7.10 Cloud-init files and moving machines
 

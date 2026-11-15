@@ -47,6 +47,12 @@ func (e *Execution) RenameMachine(a, t D) D {
 				tx.S.Put("apps", app["id"], n, app)
 			}
 		}
+		for _, r := range tx.S.Objects("runners", n) {
+			if integer(r["vmid"]) == integer(m["vmid"]) {
+				r["machine"] = name
+				tx.S.Put("runners", r["id"], n, r)
+			}
+		}
 		for _, p := range tx.peers() {
 			changed := false
 			if p.Target == m["ip"] && p.Machine == old {
