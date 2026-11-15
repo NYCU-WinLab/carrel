@@ -3624,6 +3624,128 @@
       }
     },
     {
+      "name": "runner_add",
+      "description": "Start a GitHub Actions or GitLab self-hosted runner on one of your machines (issue #267), so CI jobs build there with the machine's tools and quota. A job on it deploys an app exactly as a hosted job does. carrel never sees the runner token: run the returned token_command from the client, which asks gh or glab for a token and pipes it into install on the machine over SSH. Jobs run as the unprivileged user carrel-runner. A public GitHub repository is refused unless allow_public is set, because a pull request from any fork could run code on the machine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "github",
+              "gitlab"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^https://[A-Za-z0-9.:-]+(/[A-Za-z0-9._-]+)+/?$",
+            "description": "GitHub: https://github.com/<owner>/<repo>, or https://github.com/<organization> for an organization runner. GitLab: the project or group URL, such as https://gitlab.com/group/project."
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "description": "Runner name; default the machine name."
+          },
+          "labels": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$"
+            },
+            "description": "GitHub labels beside self-hosted; default carrel."
+          },
+          "allow_public": {
+            "type": "boolean",
+            "default": false,
+            "description": "Allow a public GitHub repository after restricting fork pull request workflows in its settings."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes."
+          }
+        },
+        "required": [
+          "machine",
+          "provider",
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "runner_list",
+      "description": "List your self-hosted runners: machine, provider, repository or group URL and labels.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "runner_remove",
+      "description": "Forget a self-hosted runner and return the commands that stop it on the machine and unregister it from the forge: token_command for GitHub (it needs a removal token from gh), uninstall over SSH for GitLab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runner": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "confirm": {
+            "type": "string",
+            "description": "Must equal the runner name."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes."
+          }
+        },
+        "required": [
+          "runner",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "function_deploy",
       "description": "Deploy a container image as a function: it runs only while it has requests and sleeps without memory otherwise, waking from a snapshot in about 100 ms. The image must serve HTTP on its port. Each deploy builds a new version from the image (pulled anonymously; linux/amd64) and puts it live once its first answer below 500 arrives. Returns at once with state building; follow it with function_get and wait_seconds. A function keeps no state between instances.",
       "inputSchema": {
@@ -4961,6 +5083,9 @@
     "app_deploy",
     "app_rollback",
     "app_unlink",
+    "runner_add",
+    "runner_list",
+    "runner_remove",
     "deployment_plan",
     "deployment_apply",
     "operation_get",
@@ -5057,7 +5182,9 @@
     "function_registry",
     "function_link",
     "function_rollback",
-    "function_remove"
+    "function_remove",
+    "runner_add",
+    "runner_remove"
   ],
   "async_tools": [
     "deployment_apply",
@@ -5193,5 +5320,5 @@
     "existing_machine_access": true,
     "machine_freeze": false
   },
-  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; delete -> machine_delete; park a stopped machine -> machine_freeze, bring it back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. Run a container image only while it has requests, such as a webhook, an API or untrusted code -> function_deploy, then function_get with wait_seconds until it is deployed. A website or service built from a GitHub repository deploys through app_link by default, not by manual SSH copies; skip it only when the user says so or the code has no repository. A result may carry suggestions: a Carrel feature that fits the task but is unused. Follow a suggestion that matches the user's goal, or mention it in one sentence; do not ignore it silently. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is the complete preview. Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
+  "instructions": "WinLab machines through MCP. For feature questions use catalog_get. If tool discovery is needed, list names first and inspect only relevant definitions; do not dump all descriptions or repeated instructions. Ordinary member tasks use these tools directly, without operator memories, infrastructure runbooks, hypervisor access or unrelated SSH inspection. Use the known machine name; machine_list only when asked to list or when the target is ambiguous. Omit tenant for personal resources. No discovery or preview is required for an authorized action.\nCreate -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; delete -> machine_delete; park a stopped machine -> machine_freeze, bring it back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push -> app_link (then run its install line over SSH and commit its workflow); status -> app_get. Build CI jobs on your own machine -> runner_add. Run a container image only while it has requests, such as a webhook, an API or untrusted code -> function_deploy, then function_get with wait_seconds until it is deployed. A website or service built from a GitHub repository deploys through app_link by default, not by manual SSH copies; skip it only when the user says so or the code has no repository. A result may carry suggestions: a Carrel feature that fits the task but is unused. Follow a suggestion that matches the user's goal, or mention it in one sentence; do not ignore it silently. shutdown is graceful; stop is forced and requires explicit intent. VM pause retains RAM, disks and quota; CT pause is unsupported. Deletion is never a substitute for shutdown. Required confirmation fields express the user's existing authorization; ask only when intent/target is unclear. Do not shut down running work just to resize without authorization.\nCreation defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. The default image debian-13-minimal has SSH, cloud-init, Python for management, security updates and basic transfer tools; Node, Docker and compilers are not preinstalled. For a prepared development VM choose image=debian-13 or ubuntu-24.04 (default size=small: 2 vCPU/2 GiB/20 GiB). size=tiny is 1 vCPU/1 GiB/10 GiB; individual cpu, memory_mb and disk_gb override the preset. New CTs default to Debian 13 with tiny and no swap. Choose larger resources for builds, Docker stacks and databases as needed. Prefer known saved public keys; otherwise read only the known default public key and pass it inline. ssh_key_add saves it once for future creation. Inline keys are not auto-saved. Never read/send private keys or tokens in tool arguments. VMs support Docker and cloud-init; CTs do not support packages/runcmd/health_checks/nested_virt.\nMember mutations wait up to 55 seconds. Inspect operation.state/result/error; succeeded needs no follow-up poll/list/quota just to prove the requested platform action. Offline NIC configuration can still await start/resume; resize can require owner filesystem work. Follow explicit result requirements. Pending: follow next_action and poll_after_seconds with operation_get. wait_seconds=0 submits immediately. Queued is not reserved or completed; disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission. operation_retry resumes; revise_request requires corrected arguments. Summary is default; detail=full retains full accounting/identifiers. Errors and previews keep diagnostics.\nPreview only when asked to plan/compare. deployment_plan is the complete preview. Authorized groups use deployment_apply directly with machines, connections and publications. restricted permits declared connections/public services; tenant allows same-tenant traffic. Use access=[{machine, network_access, confirm: machine_name}] with deployment_apply to change existing ingress together with connections; previews explain connectivity changes. SSH, publications and old explicit peer grants are preserved. Extra networks/NICs are advanced experiments. No host/bridge/VLAN/gateway choices are needed.\nFor local CLI clients, completing a creation or connection request includes SSH alias setup by default: merge returned ssh_config into the connecting client config, preserve existing entries, verify the returned tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short as the primary command. Do not wait for a separate alias request. Status-only requests need no local edits. If local file access is unavailable, the user excludes setup, or setup fails, present ssh and explain that the alias is not installed. Aliases are client config, not DNS; name reuse may change port/host identity. Do not disable host-key checking or replace unrelated aliases.\nwhoami: identity/version/all quotas; catalog_get: images/environment/sizes; quota_get: one quota; capacity_get: shared capacity. These are not prerequisites. machine_list state is recorded; machine_get power and SSH are live; guest report freshness is independent. Unknown/stale readiness is not an application health claim. Readiness includes SSH, initialization and requested application checks; not_checked and publication routing_configured do not verify an application response. MiB: memory_mb/swap_mb; GiB: disk_gb. Previews reserve/mutate nothing, record audit and retain requirements/quota changes. Membership is checked each request. Tools only, no MCP resources.\nDefault personal/project quota: 8 machines and 8 IPs, 8 vCPU, 16 GiB RAM, 100 GiB disk; totals still apply. Each SSH uses one of 10 tenant public ports, leaving two for extra TCP/UDP publications when eight machines exist. HTTPS domains do not consume these ports. Stopped/paused machines retain reservations. Resize needs available quota and node capacity; disk only grows and owner SSH must verify/grow the filesystem.\n"
 }

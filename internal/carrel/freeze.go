@@ -505,6 +505,7 @@ func (e *Execution) DeleteFrozen(f D, a, t D) D {
 		e.Call(D{"op": "backup_remove", "machine": f, "volid": f["backup_volid"], "note": f["backup_note"]})
 		e.removeApps(filter(e.S.Objects("apps", n), func(x D) bool { return integer(x["vmid"]) == integer(f["vmid"]) }))
 		e.Transaction(func(tx *Execution) {
+			tx.removeRunners(n, f["vmid"])
 			tx.forgetMachine(n, f)
 			tx.S.Remove("frozen", f["vmid"])
 		})

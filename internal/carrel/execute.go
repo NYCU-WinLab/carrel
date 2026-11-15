@@ -284,6 +284,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.functionRegistry(a, w, t)
 	case "function_link":
 		return e.functionLink(a, t)
+	case "runner_add", "runner_list", "runner_remove":
+		return e.RunnerTool(tool, a, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil
@@ -372,6 +374,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			e.Reconcile()
 			e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
 			e.Transaction(func(tx *Execution) {
+				tx.removeRunners(n, m["vmid"])
 				tx.forgetMachine(n, m)
 				tx.S.Remove("machines", m["vmid"])
 			})
