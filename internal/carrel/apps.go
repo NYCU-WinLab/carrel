@@ -67,6 +67,9 @@ func (e *Execution) PublicApp(app D) D {
 		out["mode"], out["repo_url"], out["build"], out["deploy_key"] = "pull", app["repo"], app["build"], app["deploy_key"]
 	} else {
 		out["mode"], out["forge"], out["repo_url"] = "push", linkForge(app), repoURL(app)
+		if boolean(app["protected_only"]) {
+			out["protected_only"] = true
+		}
 	}
 	seen := num(app["agent_seen_at"])
 	switch {
@@ -109,6 +112,9 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		app := D{"id": appID(n, name), "name": name, "tenant_n": n, "vmid": m["vmid"], "machine": m["name"], "branch": textAt(a, "branch", "main"), "start": a["start"], "port": integer(a["port"]), "created_at": now()}
 		pull := textAt(a, "mode", "push") == "pull"
 		if pull {
+			if boolean(a["protected_only"]) {
+				fail("invalid", "protected_only is for push mode: pull mode has no token that says whether a branch is protected")
+			}
 			app["mode"], app["repo"], app["build"] = "pull", parseCloneURL(str(a["repo"])), str(a["build"])
 		} else {
 			if str(a["build"]) != "" {
@@ -118,6 +124,13 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 			app["repo"] = repo
 			if issuer != githubIssuer {
 				app["issuer"] = issuer
+			}
+			if boolean(a["protected_only"]) {
+				// GitHub's OIDC token does not say whether the ref is protected.
+				if issuer == githubIssuer {
+					fail("invalid", "protected_only needs GitLab: GitHub's token does not say whether a branch is protected; use a branch ruleset instead")
+				}
+				app["protected_only"] = true
 			}
 		}
 		r := D{"dry_run": dry, "quota_after": e.Quota(t)}
@@ -280,6 +293,9 @@ func (e *Execution) authorizeRelease(app D, c CIClaims) {
 	}
 	if events := deployEvents[c.Forge()]; !contains(events, c.Event) {
 		fail("forbidden", "Only "+strings.Join(events, " and ")+" events can deploy")
+	}
+	if boolean(app["protected_only"]) && !c.RefProtected {
+		fail("forbidden", "Only a protected branch can deploy this app; protect the linked branch in the project settings")
 	}
 }
 

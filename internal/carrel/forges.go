@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,6 +36,9 @@ type CIClaims struct {
 	SHA          string
 	Event        string // GitHub event_name or GitLab pipeline_source
 	RunURL       string
+	// RefProtected is GitLab's ref_protected: the ref is a protected branch
+	// or tag. GitHub's token has no such claim.
+	RefProtected bool
 }
 
 // Forge is the CI system that issued the token.
@@ -120,7 +124,7 @@ func (v *GitLabVerifier) Verify(ctx context.Context, token string) (CIClaims, er
 	if err != nil {
 		return CIClaims{}, err
 	}
-	c := CIClaims{Issuer: v.Issuer, Repository: strings.ToLower(str(claims["project_path"])), RepositoryID: str(claims["project_id"]), Ref: str(claims["ref_path"]), SHA: str(claims["sha"]), Event: str(claims["pipeline_source"])}
+	c := CIClaims{Issuer: v.Issuer, Repository: strings.ToLower(str(claims["project_path"])), RepositoryID: str(claims["project_id"]), Ref: str(claims["ref_path"]), SHA: str(claims["sha"]), Event: str(claims["pipeline_source"]), RefProtected: str(claims["ref_protected"]) == "true"}
 	// Instances older than ref_path name the ref and its type apart.
 	if c.Ref == "" && str(claims["ref"]) != "" {
 		switch str(claims["ref_type"]) {
@@ -166,18 +170,22 @@ var (
 func parseRepo(repo string, gitlabIssuers []string) (string, string) {
 	repo = strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(repo)), "/"), ".git")
 	if !strings.HasPrefix(repo, "https://") {
-		if !githubRepoRE.MatchString(repo) {
+		if !githubRepo(repo) {
 			fail("invalid", "repo must be a GitHub owner/name or a repository URL")
 		}
 		return githubIssuer, repo
 	}
 	if path, ok := strings.CutPrefix(repo, "https://github.com/"); ok {
-		if !githubRepoRE.MatchString(path) {
+		if !githubRepo(path) {
 			fail("invalid", "A GitHub URL must name owner/name")
 		}
 		return githubIssuer, path
 	}
-	for _, issuer := range gitlabIssuers {
+	// The longest issuer first: with https://x.org and https://x.org/gitlab
+	// both allowed, https://x.org/gitlab/a/b is a project of the second.
+	issuers := append([]string(nil), gitlabIssuers...)
+	sort.SliceStable(issuers, func(i, j int) bool { return len(issuers[i]) > len(issuers[j]) })
+	for _, issuer := range issuers {
 		path, ok := strings.CutPrefix(repo, strings.ToLower(issuer)+"/")
 		if !ok {
 			continue
@@ -200,6 +208,12 @@ func parseRepo(repo string, gitlabIssuers []string) (string, string) {
 	}
 	fail("invalid", fmt.Sprintf("%s is not an allowed GitLab instance; carrel accepts GitHub and %s", host, strings.Join(gitlabIssuers, ", ")))
 	return "", ""
+}
+
+// githubRepo is an owner/name GitHub accepts; "." and ".." are no names.
+func githubRepo(repo string) bool {
+	_, name, _ := strings.Cut(repo, "/")
+	return githubRepoRE.MatchString(repo) && name != "." && name != ".."
 }
 
 // repoURL is the web address of a linked repository.
