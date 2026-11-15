@@ -206,7 +206,9 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			}
 		}
 		switch {
-		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases"):
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases"),
+			r.Method == "POST" && r.URL.Path == "/apps/v1/agent/upload":
+			// A release streams up to maxReleaseBytes; storeRelease bounds it.
 		case r.URL.Path == "/functions/v1/agent/report":
 			// A host reports every function it holds.
 			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionReport)

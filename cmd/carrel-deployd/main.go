@@ -55,6 +55,9 @@ type agent struct {
 	uid    int
 	gid    int
 	health time.Duration
+	// Pull mode (pull.go).
+	every    time.Duration
+	keyShown bool
 }
 
 const (
@@ -83,7 +86,7 @@ func main() {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second}
+	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second, every: time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("carrel_deployd_started", "app", cfg.App)
@@ -91,8 +94,19 @@ func main() {
 }
 
 func (a *agent) loop(ctx context.Context) {
+	var checked time.Time
+	pull := true
 	for ctx.Err() == nil {
-		r, status, err := a.next(ctx)
+		// A pull-mode app is checked every minute, and at once when its
+		// webhook was called; a push-mode one returns from check at once.
+		if pull || time.Since(checked) >= a.every {
+			checked = time.Now()
+			a.check(ctx)
+		}
+		var r *release
+		var status int
+		var err error
+		r, pull, status, err = a.next(ctx)
 		switch {
 		case err != nil:
 			slog.Warn("poll_failed", "error", err)
@@ -130,25 +144,30 @@ func (a *agent) request(ctx context.Context, method, path string, body any) (*ht
 	return a.http.Do(req)
 }
 
-func (a *agent) next(ctx context.Context) (*release, int, error) {
+// next long-polls carrel for a release to deploy, or for a webhook call
+// that asks a pull-mode agent to check its branch now.
+func (a *agent) next(ctx context.Context) (*release, bool, int, error) {
 	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	resp, err := a.request(poll, "POST", "/apps/v1/agent/next", nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, false, 0, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case 204:
-		return nil, 204, nil
+		return nil, false, 204, nil
 	case 200:
-		var out struct{ Release *release }
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Release == nil {
-			return nil, 200, errors.New("invalid release response")
+		var out struct {
+			Release *release
+			Pull    bool
 		}
-		return out.Release, 200, nil
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || (out.Release == nil && !out.Pull) {
+			return nil, false, 200, errors.New("invalid release response")
+		}
+		return out.Release, out.Pull, 200, nil
 	}
-	return nil, resp.StatusCode, nil
+	return nil, false, resp.StatusCode, nil
 }
 
 func (a *agent) report(ctx context.Context, id, state, message, log string) {

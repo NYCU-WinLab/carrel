@@ -3,6 +3,7 @@ package carrel
 import (
 	_ "embed"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -84,6 +85,18 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /apps/v1/{tenant}/{app}/releases/{id}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.ciClaims(r)
 		return D{"release": p.ReleaseStatus(r.Context(), r.PathValue("tenant"), r.PathValue("app"), r.PathValue("id"), c)}
+	}))
+	// Any forge, or a post-receive hook, calls a pull-mode app's webhook.
+	mux.Handle("POST /apps/v1/hooks/{token}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		_, _ = io.Copy(io.Discard, io.LimitReader(r.Body, 1<<20))
+		p.Poke(r.PathValue("token"))
+		return D{"checking": true}
+	}))
+	mux.Handle("GET /apps/v1/agent/source", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.AgentSource(bearer(r))
+	}))
+	mux.Handle("POST /apps/v1/agent/upload", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return D{"release": p.ReceiveAgentRelease(r.Context(), bearer(r), r.Header.Get("X-Carrel-Sha"), r.ContentLength, r.Body)}
 	}))
 	mux.Handle("POST /apps/v1/agent/next", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		return p.AgentNext(r.Context(), bearer(r))

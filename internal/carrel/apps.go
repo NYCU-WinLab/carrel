@@ -63,7 +63,11 @@ func publicRelease(r D) D {
 
 func (e *Execution) PublicApp(app D) D {
 	out := pick(app, "name", "machine", "repo", "branch", "start", "port", "created_at", "current", "previous", "pending")
-	out["forge"], out["repo_url"] = linkForge(app), repoURL(app)
+	if app["mode"] == "pull" {
+		out["mode"], out["repo_url"], out["build"], out["deploy_key"] = "pull", app["repo"], app["build"], app["deploy_key"]
+	} else {
+		out["mode"], out["forge"], out["repo_url"] = "push", linkForge(app), repoURL(app)
+	}
 	seen := num(app["agent_seen_at"])
 	switch {
 	case seen == 0:
@@ -102,10 +106,19 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		if find(e.S.Objects("apps", n), func(o D) bool { return integer(o["vmid"]) == integer(m["vmid"]) }) != nil {
 			fail("conflict", "This machine already runs an app; use another machine or unlink the existing app")
 		}
-		issuer, repo := parseRepo(str(a["repo"]), e.P.Config.GitLabIssuers)
-		app := D{"id": appID(n, name), "name": name, "tenant_n": n, "vmid": m["vmid"], "machine": m["name"], "repo": repo, "branch": textAt(a, "branch", "main"), "start": a["start"], "port": integer(a["port"]), "created_at": now()}
-		if issuer != githubIssuer {
-			app["issuer"] = issuer
+		app := D{"id": appID(n, name), "name": name, "tenant_n": n, "vmid": m["vmid"], "machine": m["name"], "branch": textAt(a, "branch", "main"), "start": a["start"], "port": integer(a["port"]), "created_at": now()}
+		pull := textAt(a, "mode", "push") == "pull"
+		if pull {
+			app["mode"], app["repo"], app["build"] = "pull", parseCloneURL(str(a["repo"])), str(a["build"])
+		} else {
+			if str(a["build"]) != "" {
+				fail("invalid", "build runs on the machine in pull mode only; in push mode the workflow builds")
+			}
+			issuer, repo := parseRepo(str(a["repo"]), e.P.Config.GitLabIssuers)
+			app["repo"] = repo
+			if issuer != githubIssuer {
+				app["issuer"] = issuer
+			}
 		}
 		r := D{"dry_run": dry, "quota_after": e.Quota(t)}
 		if dry {
@@ -114,10 +127,20 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		}
 		token := "cdt_" + random(32)
 		app["agent_token"] = digest(token)
+		hook := ""
+		if pull {
+			hook = "cdh_" + random(32)
+			app["hook_token"] = digest(hook)
+		}
 		e.Put("apps", app["id"], n, app)
 		r["app"] = e.PublicApp(app)
 		r["install"] = e.appInstall(t, app)
 		r["agent_token"] = token
+		if pull {
+			r["webhook_url"] = e.P.appOrigin() + "/apps/v1/hooks/" + hook
+			r["next_steps"] = pullNextSteps(app)
+			return r
+		}
 		r["workflow"] = e.appWorkflow(t, app)
 		r["workflow_path"] = map[string]string{forgeGitHub: ".github/workflows/carrel.yml", forgeGitLab: ".gitlab-ci.yml"}[linkForge(app)]
 		r["next_steps"] = []string{
@@ -183,8 +206,12 @@ func (e *Execution) removeApps(apps []D) {
 func (e *Execution) appInstall(t D, app D) string {
 	// No token here: it goes in on standard input, so no command line on the
 	// machine carries it (issue #33).
-	return fmt.Sprintf("f=$(mktemp) && curl -fsSL %s/apps/v1/install.sh -o \"$f\" && sudo sh \"$f\" --app %s --port %d --user \"$USER\" --start %s; rm -f \"$f\"",
-		e.P.appOrigin(), app["name"], integer(app["port"]), shellQuote(str(app["start"])))
+	pull := ""
+	if app["mode"] == "pull" {
+		pull = " --pull"
+	}
+	return fmt.Sprintf("f=$(mktemp) && curl -fsSL %s/apps/v1/install.sh -o \"$f\" && sudo sh \"$f\" --app %s --port %d --user \"$USER\" --start %s%s; rm -f \"$f\"",
+		e.P.appOrigin(), app["name"], integer(app["port"]), shellQuote(str(app["start"])), pull)
 }
 
 func (e *Execution) appWorkflow(t D, app D) string {
@@ -318,12 +345,24 @@ func (p *Platform) reserveUpload(e *Execution, app D, size int64) func() {
 
 func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c CIClaims, length int64, body io.Reader) D {
 	e := p.execution(ctx)
+	find := func() D {
+		app := e.appBySlug(slug, name)
+		e.authorizeRelease(app, c)
+		return app
+	}
+	return p.storeRelease(e, find, D{"sha": c.SHA, "ref": c.Ref, "run_url": c.RunURL}, c.Forge()+":"+c.Repository, c.RepositoryID, length, body)
+}
+
+// storeRelease keeps an uploaded artifact as the app's pending release.
+// find returns the app and checks the uploader; it runs under the writer
+// lock before and again after the upload, since the app may change while
+// the bytes arrive. pin is the repository id a push upload pins.
+func (p *Platform) storeRelease(e *Execution, find func() D, meta D, actor, pin string, length int64, body io.Reader) D {
 	var app D
 	func() {
 		p.writer.Lock()
 		defer p.writer.Unlock()
-		app = e.appBySlug(slug, name)
-		e.authorizeRelease(app, c)
+		app = find()
 	}()
 	n := integer(app["tenant_n"])
 	size := int64(maxReleaseBytes)
@@ -354,24 +393,23 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c CICl
 	}
 	p.writer.Lock()
 	defer p.writer.Unlock()
-	app = e.appBySlug(slug, name)
-	e.authorizeRelease(app, c)
+	app = find()
 	t := e.S.TenantN(n)
 	if limit := num(obj(t["quota"])["images_gb"]) * GiB; e.storedBytes(n)+e.imageBytes(n)+float64(written) > limit {
 		fail("quota_exceeded", "Stored releases would exceed images_gb", D{"dimension": "images_gb"})
 	}
 	must(os.Rename(tmp.Name(), p.releasePath(str(app["id"]), id)))
-	r := D{"id": id, "app": app["id"], "vmid": app["vmid"], "sha": c.SHA, "ref": c.Ref, "run_url": c.RunURL, "size": written, "sha256": hex.EncodeToString(h.Sum(nil)), "state": "pending", "created_at": now()}
+	r := merge(D{"id": id, "app": app["id"], "vmid": app["vmid"], "size": written, "sha256": hex.EncodeToString(h.Sum(nil)), "state": "pending", "created_at": now()}, meta)
 	e.Transaction(func(tx *Execution) {
 		tx.S.Put("releases", id, n, r)
-		if app["repo_id"] == nil {
-			app["repo_id"] = c.RepositoryID
+		if app["repo_id"] == nil && pin != "" {
+			app["repo_id"] = pin
 		}
 		app["pending"] = id
 		tx.S.Put("apps", app["id"], n, app)
 	})
 	e.pruneReleases(app)
-	e.S.Log(c.Forge()+":"+c.Repository, n, "app_release", D{"app": app["name"], "release": id, "sha": c.SHA, "size": written}, "ok")
+	e.S.Log(actor, n, "app_release", D{"app": app["name"], "release": id, "sha": meta["sha"], "size": written}, "ok")
 	return publicRelease(r)
 }
 
@@ -439,6 +477,10 @@ func (p *Platform) AgentNext(ctx context.Context, token string) D {
 		if app == nil {
 			fail("forbidden", "App was unlinked")
 		}
+		if app["mode"] == "pull" && num(app["poked_at"]) > 0 {
+			p.clearPoke(app)
+			return D{"pull": true}
+		}
 		if id := str(app["pending"]); id != "" {
 			r := p.Store.Get("releases", id)
 			if r != nil {
@@ -462,6 +504,12 @@ func (p *Platform) AgentRelease(token, id string) string {
 
 func (p *Platform) AgentReport(ctx context.Context, token string, body D) D {
 	app := p.agentApp(token)
+	if key, ok := body["deploy_key"]; ok {
+		return p.reportDeployKey(ctx, app, str(key))
+	}
+	if str(body["release"]) == "" && str(body["sha"]) != "" {
+		return p.reportFailedBuild(ctx, app, body)
+	}
 	id, state := str(body["release"]), str(body["state"])
 	if !contains([]string{"deploying", "live", "failed"}, state) {
 		fail("invalid", "state must be deploying, live or failed")

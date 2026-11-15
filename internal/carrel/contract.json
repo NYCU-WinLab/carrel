@@ -3357,7 +3357,7 @@
     },
     {
       "name": "app_link",
-      "description": "Bind a GitHub repository or GitLab project branch to a machine so every push deploys (PLAN 7.9). GitHub Actions or GitLab CI builds; carrel stores the release; carrel-deployd in the machine switches it and rolls back on a failed health check. Returns install (run once on the machine over SSH with sudo) and agent_token (shown only here), which install reads on standard input: pipe it from the client, printf '%s\\n' <agent_token> | ssh <machine> <install>, so it appears in no command line on the machine and workflow (commit to workflow_path: .github/workflows/carrel.yml on GitHub, .gitlab-ci.yml on GitLab). Runtime secrets go in /srv/apps/<name>/env on the machine. Publish the port separately with domain_add.",
+      "description": "Bind a repository branch to a machine so every push deploys (PLAN 7.9). In push mode GitHub Actions or GitLab CI builds; in pull mode (mode=pull, any git host) carrel-deployd on the machine fetches, builds and uploads, and webhook_url makes it check at once; carrel stores the release; carrel-deployd in the machine switches it and rolls back on a failed health check. Returns install (run once on the machine over SSH with sudo) and agent_token (shown only here), which install reads on standard input: pipe it from the client, printf '%s\\n' <agent_token> | ssh <machine> <install>, so it appears in no command line on the machine and workflow (commit to workflow_path: .github/workflows/carrel.yml on GitHub, .gitlab-ci.yml on GitLab). Runtime secrets go in /srv/apps/<name>/env on the machine. Publish the port separately with domain_add.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3372,8 +3372,8 @@
           },
           "repo": {
             "type": "string",
-            "pattern": "^([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}|https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._-]+)+/?)$",
-            "description": "GitHub owner/name, or the web URL of the repository: https://github.com/owner/name, or a GitLab project such as https://gitlab.com/group/subgroup/project on gitlab.com or an instance the operator allows.",
+            "pattern": "^([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}|(https|ssh)://[A-Za-z0-9._~@:/+-]+|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~/+-]+)$",
+            "description": "Push mode: GitHub owner/name, or the web URL of a GitHub repository or a GitLab project on gitlab.com or an instance the operator allows. Pull mode: any clone URL (https://..., ssh://... or user@host:path).",
             "maxLength": 512
           },
           "branch": {
@@ -3394,6 +3394,20 @@
             "minimum": 1024,
             "maximum": 65535,
             "description": "Local port the app listens on; the health check requests http://127.0.0.1:<port>/."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "push",
+              "pull"
+            ],
+            "default": "push",
+            "description": "push: GitHub Actions or GitLab CI builds and uploads with an OIDC token. pull: carrel-deployd on the machine watches the branch of any git repository, builds there and deploys; for Gitea, Bitbucket, a bare repository over SSH or a repository without CI."
+          },
+          "build": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Pull mode only: shell command run as the machine user in a fresh checkout before the release is packed, such as 'npm ci && npm run build'. Default: none."
           },
           "tenant": {
             "type": "string",
