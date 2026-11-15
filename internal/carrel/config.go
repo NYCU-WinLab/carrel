@@ -179,8 +179,11 @@ func (c Config) Validate() error {
 	}
 	for _, issuer := range c.GitLabIssuers {
 		u, err := url.Parse(issuer)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.HasSuffix(issuer, "/") || issuer == githubIssuer {
-			return fmt.Errorf("gitlab_issuers: %q must be an https origin such as https://gitlab.com, with no trailing slash", issuer)
+		// Tokens name their issuer exactly, so it must be written the one way
+		// GitLab writes it: lower case, no query, fragment, dot segment or
+		// trailing slash.
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.ContainsAny(issuer, "?#") || strings.Contains(issuer, "/.") || strings.HasSuffix(issuer, "/") || issuer != strings.ToLower(issuer) || issuer == githubIssuer {
+			return fmt.Errorf("gitlab_issuers: %q must be a lower-case https origin such as https://gitlab.com, with no trailing slash", issuer)
 		}
 	}
 	if c.FunctionEnvKey != "" {

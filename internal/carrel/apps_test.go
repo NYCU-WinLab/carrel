@@ -465,7 +465,7 @@ func TestGitLabIssuersConfig(t *testing.T) {
 		t.Fatalf("default issuers: %v", c.GitLabIssuers)
 	}
 	base := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}}
-	for _, bad := range []string{"http://gitlab.test", "https://gitlab.test/", "gitlab.test", "https://u:p@gitlab.test", githubIssuer} {
+	for _, bad := range []string{"http://gitlab.test", "https://gitlab.test/", "gitlab.test", "https://u:p@gitlab.test", githubIssuer, "https://GitLab.test", "https://gitlab.test?", "https://gitlab.test/#", "https://gitlab.test/a/../b"} {
 		c := base
 		c.GitLabIssuers = []string{bad}
 		if c.WithDefaults().Validate() == nil {

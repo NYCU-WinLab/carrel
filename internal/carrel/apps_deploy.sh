@@ -39,7 +39,10 @@ echo "Release $id stored; waiting for the machine"
 start=$(date +%s)
 warned=
 while :; do
-  status=$(curl -fsS -H "Authorization: Bearer $CARREL_ID_TOKEN" "$base/$id")
+  # A failed poll is retried: the release may be live already.
+  if ! status=$(curl -fsS -H "Authorization: Bearer $CARREL_ID_TOKEN" "$base/$id"); then
+    status='{"release":{}}'
+  fi
   state=$(printf '%s' "$status" | jq -r .release.state)
   agent=$(printf '%s' "$status" | jq -r .release.agent)
   case "$state" in
@@ -50,7 +53,7 @@ while :; do
     printf '%s' "$status" | jq -r '.release.log // empty' >&2
     exit 1 ;;
   esac
-  if [ "$agent" != connected ] && [ -z "$warned" ]; then
+  if [ "$agent" != connected ] && [ "$agent" != null ] && [ -z "$warned" ]; then
     echo "carrel: carrel-deployd on the machine is $agent; run the install line from app_link." >&2
     warned=1
   fi
