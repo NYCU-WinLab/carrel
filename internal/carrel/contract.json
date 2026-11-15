@@ -3387,7 +3387,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1024,
-            "description": "Shell command run in the release directory as the machine user, with PORT set; for example 'node server.js'."
+            "description": "Shell command run in the release directory as the machine user, with PORT set; for example 'node server.js'. Keep it in the foreground; a command that starts something and exits 0, such as docker compose up -d, also works."
           },
           "port": {
             "type": "integer",
@@ -3639,6 +3639,46 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "app_webhook_rotate",
+      "description": "Replace the webhook_url of a pull-mode app, for one that leaked. The old URL stops working at once. Returns the new webhook_url, shown only here.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
         "openWorldHint": false
       }
     },
@@ -5102,6 +5142,7 @@
     "app_deploy",
     "app_rollback",
     "app_unlink",
+    "app_webhook_rotate",
     "runner_add",
     "runner_list",
     "runner_remove",
@@ -5144,6 +5185,7 @@
     "app_link",
     "app_rollback",
     "app_unlink",
+    "app_webhook_rotate",
     "deployment_apply",
     "domain_add",
     "domain_proxy",

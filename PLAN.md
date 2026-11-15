@@ -1219,7 +1219,12 @@ running app does; install with `--user` of an account without sudo to keep both 
 to `/apps/v1/agent/upload`, and from there it is an ordinary release: stored, switched, health
 checked, `app_deploy` and `app_rollback` work as in push mode. A failed fetch or build is a
 `failed` release with the last 8 KiB of its log and no artifact, and is not retried until the
-branch moves. The webhook carries no payload carrel reads: it only makes the agent check, and only
+branch moves or the webhook is called. Builds run beside the agent's poll loop, so a long build
+does not hold up `app_deploy` or `app_rollback`. When carrel does not take an upload (429 or 5xx),
+the agent builds the commit again after 1 minute, doubling up to 30. `app_webhook_rotate`
+replaces a leaked `webhook_url`. In both modes the health check passes only when the app's unit
+stays up with no restart for 3 seconds after a good answer, so another program on the same port
+cannot pass it while the app crash-loops. The webhook carries no payload carrel reads: it only makes the agent check, and only
 the linked branch of the linked URL is ever built. carrel never clones, so the control plane never
 fetches a URL a member names. For a private repository the agent makes an ed25519 deploy key as
 the app user and reports its public half, which `app_get` shows for the member to add as a

@@ -59,7 +59,8 @@ func pullNextSteps(app D) []string {
 	return []string{
 		"Run install on the machine over SSH with the agent token on its standard input, from the client: printf '%s\\n' <agent_token> | ssh <machine> <install, quoted for the remote shell>. It needs sudo.",
 		"For a private repository, add the deploy key that app_get shows after install to the repository as a read-only deploy key. A public https URL needs none.",
-		"The agent checks the branch every minute. For a deploy within seconds, have the repository call webhook_url (POST, any body) on push. Keep webhook_url secret: anyone with it can make the agent check, though only the linked branch is ever built.",
+		"The agent checks the branch every minute. For a deploy within seconds, have the repository call webhook_url (POST, any body) on push. A call also builds the branch head again when its last build failed. Keep webhook_url secret: anyone with it can make the agent build, though only the linked branch is ever built; app_webhook_rotate replaces it.",
+		"Keep symbolic links in the built tree relative and inside it: the agent refuses a release with an absolute link or one that leaves the release directory.",
 		"Write runtime secrets to /srv/apps/" + str(app["name"]) + "/env on the machine; they never pass through carrel.",
 		"Publish the port with domain_add when the app should answer on HTTPS.",
 	}
@@ -130,6 +131,9 @@ func (p *Platform) reportDeployKey(ctx context.Context, app D, key string) D {
 	app = p.Store.Get("apps", str(app["id"]))
 	if app == nil {
 		fail("forbidden", "App was unlinked")
+	}
+	if app["mode"] != "pull" {
+		fail("forbidden", "Only a pull-mode app has a deploy key")
 	}
 	app["deploy_key"], app["agent_seen_at"] = key, now()
 	p.Store.Put("apps", app["id"], integer(app["tenant_n"]), app)

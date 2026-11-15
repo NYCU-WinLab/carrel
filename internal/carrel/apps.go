@@ -186,6 +186,21 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 			e.Put("releases", r["id"], n, r)
 		}
 		return D{"dry_run": dry, "quota_after": e.Quota(t), "release": publicRelease(r), "state": "pending"}
+	case "app_webhook_rotate":
+		app := e.App(t, a["app"])
+		if app["mode"] != "pull" {
+			fail("invalid", "Only a pull-mode app has a webhook")
+		}
+		r := D{"dry_run": dry, "quota_after": e.Quota(t), "app": app["name"]}
+		if dry {
+			return r
+		}
+		hook := "cdh_" + random(32)
+		app["hook_token"] = digest(hook)
+		e.Put("apps", app["id"], n, app)
+		r["webhook_url"] = e.P.appOrigin() + "/apps/v1/hooks/" + hook
+		r["next_action"] = "Put the new webhook_url where the repository calls it on push; the old one no longer works."
+		return r
 	case "app_unlink":
 		app := e.App(t, a["app"])
 		if a["confirm"] != app["name"] {
