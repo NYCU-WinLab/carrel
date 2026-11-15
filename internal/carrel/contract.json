@@ -3387,7 +3387,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 1024,
-            "description": "Shell command run in the release directory as the machine user, with PORT set; for example 'node server.js'."
+            "description": "Shell command run in the release directory as the machine user, with PORT set; for example 'node server.js'. Keep it in the foreground; a command that starts something and exits 0, such as docker compose up -d, also works."
           },
           "port": {
             "type": "integer",

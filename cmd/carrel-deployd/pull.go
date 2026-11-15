@@ -189,6 +189,10 @@ func (a *agent) check(ctx context.Context, called bool) {
 		slog.Warn("upload_failed", "sha", sha, "error", err, "retry_in", a.backoff.String())
 		return
 	}
+	if ctx.Err() != nil {
+		// The agent is stopping: the build did not fail, so mark nothing.
+		return
+	}
 	a.backoff, a.retryAt = 0, time.Time{}
 	mark := sha + "\n"
 	if err != nil {

@@ -490,7 +490,7 @@ func (a *agent) restartAndCheck(ctx context.Context) error {
 				if a.steady(ctx) {
 					return nil
 				}
-				last = "the app restarts while something answers on its port"
+				last = "something answers on the port, but the app's unit restarts or failed"
 			} else {
 				last = fmt.Sprintf("HTTP %d", resp.StatusCode)
 			}
@@ -500,8 +500,9 @@ func (a *agent) restartAndCheck(ctx context.Context) error {
 	return fmt.Errorf("health check on port %d failed: %s", a.cfg.Port, last)
 }
 
-// steady tells whether the app's unit is active and stays so, with no
-// restart, for steadyFor.
+// steady tells whether the app's unit stays as it is, with no restart, for
+// steadyFor: running, or exited cleanly after starting something that runs
+// on its own, such as docker compose up -d.
 func (a *agent) steady(ctx context.Context) bool {
 	before, ok := a.unitState(ctx)
 	if !ok {
@@ -512,15 +513,17 @@ func (a *agent) steady(ctx context.Context) bool {
 	return ok && after == before
 }
 
-// unitState is the unit's restart count and main process while it is
-// active.
+// unitState is the unit's state, restart count and main process, and
+// whether it is running or exited cleanly.
 func (a *agent) unitState(ctx context.Context) (string, bool) {
-	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "ActiveState,SubState,NRestarts,MainPID", a.unit()).Output()
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "ActiveState,SubState,Result,NRestarts,MainPID", a.unit()).Output()
 	if err != nil {
 		return "", false
 	}
 	s := string(out)
-	return s, strings.Contains(s, "ActiveState=active\n") && strings.Contains(s, "SubState=running\n")
+	running := strings.Contains(s, "ActiveState=active\n") && strings.Contains(s, "SubState=running\n")
+	exited := strings.Contains(s, "ActiveState=inactive\n") && strings.Contains(s, "Result=success\n")
+	return s, running || exited
 }
 
 func (a *agent) journal() string {
