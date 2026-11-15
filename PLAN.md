@@ -1182,7 +1182,7 @@ from forks get no OIDC token, so they cannot deploy.
 
 **GitLab (issue #265)**: `app_link` also takes a project URL, such as
 `https://gitlab.com/group/subgroup/project`, on gitlab.com or on an instance listed in the operator's
-`gitlab_issuers` (default: gitlab.com only). The app stores the issuer with the path, and a token
+`gitlab_issuers` (default: gitlab.com only). With overlapping issuers, such as `https://x.org` and `https://x.org/gitlab`, the longest that prefixes the URL wins. `protected_only` on a GitLab app accepts only tokens whose `ref_protected` is true, so pushing to an unprotected branch of the same name does not deploy; GitHub's token has no such claim, so the option is refused there. The app stores the issuer with the path, and a token
 deploys only when its issuer is that issuer: anyone can run a GitLab instance and mint a token for
 any `project_path`, so the path alone proves nothing. The verifier reads the instance's keys from
 `<issuer>/oauth/discovery/keys` and maps `project_path` to the repository, `project_id` to the

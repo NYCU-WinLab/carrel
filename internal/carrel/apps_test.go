@@ -453,6 +453,14 @@ func TestGitLabVerifierAndIssuerRouting(t *testing.T) {
 	if _, err := v.Verify(context.Background(), sign(audience)); err == nil {
 		t.Fatal("wrong audience accepted")
 	}
+	protected := claims()
+	protected["ref_protected"] = "true"
+	if c, err := v.Verify(context.Background(), sign(protected)); err != nil || !c.RefProtected {
+		t.Fatalf("ref_protected not read: %v %+v", err, c)
+	}
+	if c, _ := v.Verify(context.Background(), sign(claims())); c.RefProtected {
+		t.Fatal("a token without ref_protected counted as protected")
+	}
 	missing := claims()
 	delete(missing, "project_id")
 	if _, err := v.Verify(context.Background(), sign(missing)); err == nil {
@@ -476,5 +484,43 @@ func TestGitLabIssuersConfig(t *testing.T) {
 	c.GitLabIssuers = []string{"https://gitlab.winlab.tw", "https://git.example.org/gitlab"}
 	if err := c.WithDefaults().Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseRepoPrefersTheLongestIssuer(t *testing.T) {
+	issuers := []string{"https://x.test", "https://x.test/gitlab"}
+	if issuer, path := parseRepo("https://x.test/gitlab/a/b", issuers); issuer != "https://x.test/gitlab" || path != "a/b" {
+		t.Fatalf("got %s %s", issuer, path)
+	}
+	if issuer, path := parseRepo("https://x.test/a/b", issuers); issuer != "https://x.test" || path != "a/b" {
+		t.Fatalf("got %s %s", issuer, path)
+	}
+	for _, bad := range []string{"owner/.", "owner/..", "https://github.com/owner/.."} {
+		if err := attempt(func() { parseRepo(bad, issuers) }); err == nil {
+			t.Fatalf("%s accepted", bad)
+		}
+	}
+}
+
+func TestProtectedOnlyNeedsAProtectedRef(t *testing.T) {
+	p, a, _ := appFixture(t)
+	p.Config.GitLabIssuers = []string{labGitLab}
+	seedMachine(p, "lab", 10101)
+	ctx, alice := context.Background(), person("alice", false)
+	assertCode(t, a.Call(ctx, "app_link", D{"machine": "lab", "name": "gh", "repo": "alice/other", "start": "./run", "port": 8000, "protected_only": true}, alice), "invalid")
+	assertCode(t, a.Call(ctx, "app_link", D{"machine": "lab", "name": "pl", "repo": "https://git.example.org/a/b.git", "mode": "pull", "start": "./run", "port": 8000, "protected_only": true}, alice), "invalid")
+	r := a.Call(ctx, "app_link", D{"machine": "lab", "name": "docs", "repo": labGitLab + "/group/docs", "start": "./run", "port": 8000, "protected_only": true}, alice)
+	assertOK(t, r)
+	if obj(r["app"])["protected_only"] != true {
+		t.Fatalf("app: %s", encoded(r))
+	}
+	open, closed := gitlabPush(labGitLab, "group/docs", "5", "main", "push"), gitlabPush(labGitLab, "group/docs", "5", "main", "push")
+	closed.RefProtected = true
+	a.forges = fakeForge{"open": open, "closed": closed}
+	if code, _ := do(t, a, "POST", "/apps/v1/alice/docs/releases", "open", strings.NewReader("artifact")); code != 403 {
+		t.Fatalf("unprotected ref deployed: %d", code)
+	}
+	if code, out := do(t, a, "POST", "/apps/v1/alice/docs/releases", "closed", strings.NewReader("artifact")); code != 200 {
+		t.Fatalf("protected ref refused: %d %s", code, encoded(out))
 	}
 }
