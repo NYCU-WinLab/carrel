@@ -46,7 +46,7 @@ func parseCloneURL(raw string) string {
 		if err != nil || parsed.Host == "" || strings.HasPrefix(parsed.Host, "-") || strings.Trim(parsed.Path, "/") == "" || strings.Contains(u, "..") {
 			break
 		}
-		if parsed.Scheme == "https" && parsed.User != nil {
+		if _, hasPassword := parsed.User.Password(); hasPassword || (parsed.Scheme == "https" && parsed.User != nil) {
 			fail("invalid", "Put no credentials in the URL. For a private repository use an ssh URL and the deploy key app_get shows after install.")
 		}
 		return u

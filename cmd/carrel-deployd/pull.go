@@ -65,7 +65,9 @@ func (a *agent) key() string  { return filepath.Join(a.home(), "deploy_key") }
 
 // asUser runs a shell script as the app user with the given environment.
 func (a *agent) asUser(ctx context.Context, script string, env map[string]string, stdout io.Writer) (string, error) {
-	cmd := exec.CommandContext(ctx, "runuser", "-u", a.cfg.User, "--", "/bin/sh", "-c", script)
+	// runuser resets HOME to the passwd entry; env sets it back, so git and
+	// ssh read no config of the app user's own.
+	cmd := exec.CommandContext(ctx, "runuser", "-u", a.cfg.User, "--", "/usr/bin/env", "HOME="+a.home(), "/bin/sh", "-c", script)
 	cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "GIT_TERMINAL_PROMPT=0", "HOME=" + a.home()}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -132,12 +134,17 @@ func (a *agent) check(ctx context.Context) {
 		slog.Warn("ls_remote_failed", "error", err, "log", log)
 		return
 	}
-	head := strings.Fields(out.String())
-	if len(head) == 0 || !commitRE.MatchString(head[0]) {
+	// ls-remote matches the pattern as a suffix; take the exact ref.
+	sha := ""
+	for _, line := range strings.Split(out.String(), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[1] == "refs/heads/"+src.Branch && commitRE.MatchString(f[0]) {
+			sha = f[0]
+		}
+	}
+	if sha == "" {
 		slog.Warn("branch_not_found", "branch", src.Branch)
 		return
 	}
-	sha := head[0]
 	if last, _ := os.ReadFile(a.pulledFile()); strings.TrimSpace(string(last)) == sha {
 		return
 	}

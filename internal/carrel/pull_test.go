@@ -17,7 +17,7 @@ func TestPullAppBuildsOnTheMachine(t *testing.T) {
 	link := func(args D) D {
 		return a.Call(ctx, "app_link", merge(D{"machine": "pull", "name": "gitea", "mode": "pull", "start": "./run", "port": 8000}, args), alice)
 	}
-	for _, bad := range []string{"/srv/repo", "file:///srv/repo", "ext::sh -c id", "https://u:p@git.example.org/a/b.git", "https://git.example.org/", "-oProxyCommand=id@host:x"} {
+	for _, bad := range []string{"/srv/repo", "file:///srv/repo", "ext::sh -c id", "https://u:p@git.example.org/a/b.git", "https://git.example.org/", "-oProxyCommand=id@host:x", "ssh://u:p@git.example.org/a/b.git"} {
 		assertCode(t, link(D{"repo": bad}), "invalid")
 	}
 	assertCode(t, a.Call(ctx, "app_link", D{"machine": "pull", "name": "x", "repo": "alice/site", "build": "make", "start": "./run", "port": 8000}, alice), "invalid")
