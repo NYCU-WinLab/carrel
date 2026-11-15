@@ -110,7 +110,7 @@ func (e *Execution) functionBySlug(slug, name string) (D, D) {
 
 // ReceiveFunctionImage builds a version of a linked function from the image a
 // GitHub job pushed.
-func (p *Platform) ReceiveFunctionImage(ctx context.Context, slug, name string, c GitHubClaims, body io.Reader) D {
+func (p *Platform) ReceiveFunctionImage(ctx context.Context, slug, name string, c CIClaims, body io.Reader) D {
 	var in struct {
 		Image string `json:"image"`
 	}
@@ -148,7 +148,7 @@ func (p *Platform) ReceiveFunctionImage(ctx context.Context, slug, name string, 
 		f["repo_id"] = c.RepositoryID
 	}
 	r := e.startFunctionVersion(t, f, spec, D{}, extra, false)
-	e.S.Log("github:"+c.Repository, n, "function_release", D{"function": f["name"], "version": f["pending"], "sha": c.SHA, "image": in.Image}, "ok")
+	e.S.Log(c.Forge()+":"+c.Repository, n, "function_release", D{"function": f["name"], "version": f["pending"], "sha": c.SHA, "image": in.Image}, "ok")
 	return D{"version": functionRelease(f, e.S.Get("function_versions", functionVersionID(str(f["id"]), str(f["pending"]))), str(f["pending"])), "next_action": r["next_action"]}
 }
 
@@ -173,10 +173,10 @@ func functionRelease(f, v D, version string) D {
 }
 
 // FunctionImageStatus answers the deploy action's poll for one version.
-func (p *Platform) FunctionImageStatus(ctx context.Context, slug, name, version string, c GitHubClaims) D {
+func (p *Platform) FunctionImageStatus(ctx context.Context, slug, name, version string, c CIClaims) D {
 	e := p.execution(ctx)
 	_, f := e.functionBySlug(slug, name)
-	if c.Repository != f["repo"] || (f["repo_id"] != nil && str(f["repo_id"]) != c.RepositoryID) {
+	if c.Issuer != linkIssuer(f) || c.Repository != f["repo"] || (f["repo_id"] != nil && str(f["repo_id"]) != c.RepositoryID) {
 		fail("forbidden", "Token repository does not match the linked repository")
 	}
 	if !functionVersionRE.MatchString(version) {

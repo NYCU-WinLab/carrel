@@ -20,18 +20,22 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type fakeGitHub map[string]GitHubClaims
+type fakeForge map[string]CIClaims
 
-func (f fakeGitHub) VerifyGitHub(_ context.Context, token string) (GitHubClaims, error) {
+func (f fakeForge) Verify(_ context.Context, token string) (CIClaims, error) {
 	c, ok := f[token]
 	if !ok {
-		return GitHubClaims{}, errors.New("bad token")
+		return CIClaims{}, errors.New("bad token")
 	}
 	return c, nil
 }
 
-func push(repo, id, branch string) GitHubClaims {
-	return GitHubClaims{Repository: repo, RepositoryID: id, Ref: "refs/heads/" + branch, SHA: "abc123", Event: "push"}
+func push(repo, id, branch string) CIClaims {
+	return CIClaims{Issuer: githubIssuer, Repository: repo, RepositoryID: id, Ref: "refs/heads/" + branch, SHA: "abc123", Event: "push"}
+}
+
+func gitlabPush(issuer, project, id, branch, source string) CIClaims {
+	return CIClaims{Issuer: issuer, Repository: project, RepositoryID: id, Ref: "refs/heads/" + branch, SHA: "def456", Event: source}
 }
 
 func appFixture(t *testing.T) (*Platform, *App, string) {
@@ -42,11 +46,11 @@ func appFixture(t *testing.T) (*Platform, *App, string) {
 	p.Config.AppsDiskHeadroomBytes = &noHeadroom
 	seedMachine(p, "web", 10100)
 	a := NewApp(p, nil)
-	a.github = fakeGitHub{
+	a.forges = fakeForge{
 		"good":   push("alice/site", "42", "main"),
 		"other":  push("mallory/site", "7", "main"),
 		"branch": push("alice/site", "42", "dev"),
-		"pr":     {Repository: "alice/site", RepositoryID: "42", Ref: "refs/heads/main", Event: "pull_request"},
+		"pr":     {Issuer: githubIssuer, Repository: "alice/site", RepositoryID: "42", Ref: "refs/heads/main", Event: "pull_request"},
 		"reborn": push("alice/site", "99", "main"),
 	}
 	r := a.Call(context.Background(), "app_link", D{"machine": "web", "name": "site", "repo": "Alice/Site", "start": "python3 -m http.server $PORT", "port": 8000}, person("alice", false))
@@ -256,20 +260,20 @@ func TestGitHubVerifierChecksSignatureAudienceAndClaims(t *testing.T) {
 	claims := func(aud string) jwt.MapClaims {
 		return jwt.MapClaims{"iss": githubIssuer, "aud": aud, "exp": time.Now().Add(time.Minute).Unix(), "iat": time.Now().Unix(), "repository": "Alice/Site", "repository_id": "42", "ref": "refs/heads/main", "sha": "abc", "event_name": "push", "run_id": "9"}
 	}
-	c, err := v.VerifyGitHub(context.Background(), sign(claims("carrel.test"), key))
+	c, err := v.Verify(context.Background(), sign(claims("carrel.test"), key))
 	if err != nil || c.Repository != "alice/site" || c.RepositoryID != "42" || c.RunURL != "https://github.com/Alice/Site/actions/runs/9" {
 		t.Fatalf("valid token rejected: %v %+v", err, c)
 	}
-	if _, err := v.VerifyGitHub(context.Background(), sign(claims("other.test"), key)); err == nil {
+	if _, err := v.Verify(context.Background(), sign(claims("other.test"), key)); err == nil {
 		t.Fatal("wrong audience accepted")
 	}
 	other, _ := rsa.GenerateKey(rand.Reader, 2048)
-	if _, err := v.VerifyGitHub(context.Background(), sign(claims("carrel.test"), other)); err == nil {
+	if _, err := v.Verify(context.Background(), sign(claims("carrel.test"), other)); err == nil {
 		t.Fatal("wrong signature accepted")
 	}
 	missing := claims("carrel.test")
 	delete(missing, "repository_id")
-	if _, err := v.VerifyGitHub(context.Background(), sign(missing, key)); err == nil {
+	if _, err := v.Verify(context.Background(), sign(missing, key)); err == nil {
 		t.Fatal("token without repository_id accepted")
 	}
 }
@@ -330,5 +334,147 @@ func TestWorkflowSnippetDoesNotPackItself(t *testing.T) {
 	w := p.execution(context.Background()).appWorkflow(D{"slug": "alice"}, D{"name": "site", "branch": "main"})
 	if !strings.Contains(w, `tar czf "$RUNNER_TEMP/app.tar.gz" --exclude=.git .`) || !strings.Contains(w, "artifact: ${{ runner.temp }}/app.tar.gz") {
 		t.Fatalf("workflow packs into its own source tree:\n%s", w)
+	}
+}
+
+const labGitLab = "https://gitlab.winlab.test"
+
+func TestGitLabAppIsBoundToItsIssuerAndProject(t *testing.T) {
+	p, a, _ := appFixture(t)
+	p.Config.GitLabIssuers = []string{gitlabCom, labGitLab}
+	seedMachine(p, "lab", 10101)
+	ctx, alice := context.Background(), person("alice", false)
+	link := func(name, machine, repo string) D {
+		return a.Call(ctx, "app_link", D{"machine": machine, "name": name, "repo": repo, "start": "./run", "port": 8000}, alice)
+	}
+	assertCode(t, link("evil", "lab", "https://gitlab.evil.test/alice/site"), "invalid")
+	assertCode(t, link("short", "lab", labGitLab+"/alice"), "invalid")
+	r := link("docs", "lab", labGitLab+"/Group/Sub/Docs.git")
+	assertOK(t, r)
+	app := obj(r["app"])
+	if app["forge"] != "gitlab" || app["repo"] != "group/sub/docs" || app["repo_url"] != labGitLab+"/group/sub/docs" || r["workflow_path"] != ".gitlab-ci.yml" {
+		t.Fatalf("unexpected app: %s", encoded(r))
+	}
+	workflow := str(r["workflow"])
+	for _, want := range []string{"CARREL_ID_TOKEN:", "aud: carrel.test", `$CI_COMMIT_BRANCH == "main"`, "/apps/v1/deploy.sh | sh -s -- --tenant alice --app docs"} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("workflow lacks %q:\n%s", want, workflow)
+		}
+	}
+	a.forges = fakeForge{
+		"push":     gitlabPush(labGitLab, "group/sub/docs", "5", "main", "push"),
+		"web":      gitlabPush(labGitLab, "group/sub/docs", "5", "main", "web"),
+		"schedule": gitlabPush(labGitLab, "group/sub/docs", "5", "main", "schedule"),
+		"tag":      {Issuer: labGitLab, Repository: "group/sub/docs", RepositoryID: "5", Ref: "refs/tags/main", Event: "push"},
+		"dispatch": gitlabPush(labGitLab, "group/sub/docs", "5", "main", "workflow_dispatch"),
+		// The same path on another instance is another project.
+		"elsewhere": gitlabPush(gitlabCom, "group/sub/docs", "5", "main", "push"),
+		// A GitLab project named like a linked GitHub repository.
+		"lookalike": gitlabPush(gitlabCom, "alice/site", "42", "main", "push"),
+		"moved":     gitlabPush(labGitLab, "group/sub/docs", "6", "main", "push"),
+	}
+	send := func(app, token string) int {
+		code, _ := do(t, a, "POST", "/apps/v1/alice/"+app+"/releases", token, strings.NewReader("artifact"))
+		return code
+	}
+	for _, token := range []string{"schedule", "tag", "dispatch", "elsewhere"} {
+		if code := send("docs", token); code != 403 {
+			t.Fatalf("token %q got %d", token, code)
+		}
+	}
+	if code := send("site", "lookalike"); code != 403 {
+		t.Fatalf("GitLab token deployed the GitHub app: %d", code)
+	}
+	code, out := do(t, a, "POST", "/apps/v1/alice/docs/releases", "push", strings.NewReader("artifact"))
+	if code != 200 {
+		t.Fatalf("push: %d %s", code, encoded(out))
+	}
+	id := str(obj(out["release"])["id"])
+	if code, _ := do(t, a, "GET", "/apps/v1/alice/docs/releases/"+id, "elsewhere", nil); code != 403 {
+		t.Fatalf("status from another instance: %d", code)
+	}
+	if code, _ := do(t, a, "GET", "/apps/v1/alice/docs/releases/"+id, "web", nil); code != 200 {
+		t.Fatalf("status: %d", code)
+	}
+	if code := send("docs", "moved"); code != 403 {
+		t.Fatalf("pinned project id ignored: %d", code)
+	}
+	// The served script carries the origin.
+	if code, out := do(t, a, "GET", "/apps/v1/deploy.sh", "", nil); code != 200 || !strings.Contains(str(out["body"]), "url=https://carrel.test") {
+		t.Fatalf("deploy.sh: %d", code)
+	}
+}
+
+func TestGitLabVerifierAndIssuerRouting(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var issuer string
+	gitlab := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/discovery/keys" {
+			http.NotFound(w, r)
+			return
+		}
+		e := big.NewInt(int64(key.E)).Bytes()
+		jsonResponse(w, 200, D{"keys": []D{{"kid": "k1", "kty": "RSA", "alg": "RS256", "use": "sig", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(e)}}})
+	}))
+	defer gitlab.Close()
+	issuer = gitlab.URL
+	v := NewForgeVerifier("carrel.test", []string{issuer})
+	sign := func(claims jwt.MapClaims) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		token.Header["kid"] = "k1"
+		s, err := token.SignedString(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	claims := func() jwt.MapClaims {
+		return jwt.MapClaims{"iss": issuer, "aud": "carrel.test", "exp": time.Now().Add(time.Minute).Unix(), "iat": time.Now().Unix(), "project_path": "Group/Sub/Docs", "project_id": "5", "ref": "main", "ref_type": "branch", "ref_path": "refs/heads/main", "sha": "abc", "pipeline_source": "push", "job_id": "77"}
+	}
+	c, err := v.Verify(context.Background(), sign(claims()))
+	if err != nil || c.Issuer != issuer || c.Repository != "group/sub/docs" || c.RepositoryID != "5" || c.Ref != "refs/heads/main" || c.Event != "push" || c.RunURL != issuer+"/Group/Sub/Docs/-/jobs/77" || c.Forge() != forgeGitLab {
+		t.Fatalf("valid token rejected: %v %+v", err, c)
+	}
+	old := claims()
+	delete(old, "ref_path")
+	if c, err := v.Verify(context.Background(), sign(old)); err != nil || c.Ref != "refs/heads/main" {
+		t.Fatalf("token without ref_path: %v %+v", err, c)
+	}
+	untrusted := claims()
+	untrusted["iss"] = "https://gitlab.evil.test"
+	if _, err := v.Verify(context.Background(), sign(untrusted)); err == nil {
+		t.Fatal("untrusted issuer accepted")
+	}
+	audience := claims()
+	audience["aud"] = "other.test"
+	if _, err := v.Verify(context.Background(), sign(audience)); err == nil {
+		t.Fatal("wrong audience accepted")
+	}
+	missing := claims()
+	delete(missing, "project_id")
+	if _, err := v.Verify(context.Background(), sign(missing)); err == nil {
+		t.Fatal("token without project_id accepted")
+	}
+}
+
+func TestGitLabIssuersConfig(t *testing.T) {
+	if c := (Config{}).WithDefaults(); len(c.GitLabIssuers) != 1 || c.GitLabIssuers[0] != gitlabCom {
+		t.Fatalf("default issuers: %v", c.GitLabIssuers)
+	}
+	base := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}}
+	for _, bad := range []string{"http://gitlab.test", "https://gitlab.test/", "gitlab.test", "https://u:p@gitlab.test", githubIssuer, "https://GitLab.test", "https://gitlab.test?", "https://gitlab.test/#", "https://gitlab.test/a/../b"} {
+		c := base
+		c.GitLabIssuers = []string{bad}
+		if c.WithDefaults().Validate() == nil {
+			t.Fatalf("issuer %q accepted", bad)
+		}
+	}
+	c := base
+	c.GitLabIssuers = []string{"https://gitlab.winlab.tw", "https://git.example.org/gitlab"}
+	if err := c.WithDefaults().Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
