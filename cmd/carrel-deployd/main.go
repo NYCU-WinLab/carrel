@@ -105,8 +105,11 @@ func main() {
 
 func (a *agent) loop(ctx context.Context) {
 	// A pull-mode app builds beside this loop, so a long build never keeps
-	// the agent from long-polling, deploying or rolling back.
-	go a.builder(ctx)
+	// the agent from long-polling, deploying or rolling back. On the way
+	// out the loop waits for it, so no build outlives the agent.
+	built := make(chan struct{})
+	go func() { a.builder(ctx); close(built) }()
+	defer func() { <-built }()
 	for ctx.Err() == nil {
 		r, pull, status, err := a.next(ctx)
 		if pull {

@@ -27,12 +27,21 @@ type fakeCarrel struct {
 	files    [][]string
 	failures []string
 	key      string
+	polls    int
 }
 
 func (f *fakeCarrel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch r.URL.Path {
+	case "/apps/v1/agent/next":
+		// Every other poll says the webhook was called.
+		f.polls++
+		if f.polls%2 == 1 {
+			w.Write([]byte(`{"pull":true}`))
+			return
+		}
+		w.WriteHeader(204)
 	case "/apps/v1/agent/source":
 		json.NewEncoder(w).Encode(f.src)
 	case "/apps/v1/agent/report":
@@ -158,5 +167,70 @@ func TestPullBuildsEachCommitOnceAndRetriesWhatCarrelDidNotTake(t *testing.T) {
 	a.check(ctx, false)
 	if len(carrel.uploads) != 3 || carrel.uploads[2] != third || !a.retryAt.IsZero() {
 		t.Fatalf("retry: %v", carrel.uploads)
+	}
+}
+
+// The poll loop and the builder run at once; go test -race checks that they
+// share nothing but the wake channel.
+func TestLoopAndBuilderRunTogether(t *testing.T) {
+	for _, tool := range []string{"git", "ssh-keygen", "tar"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not installed")
+		}
+	}
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	os.MkdirAll(repo, 0755)
+	git(t, repo, "init", "-q")
+	os.WriteFile(filepath.Join(repo, "run"), []byte("#!/bin/sh\n"), 0755)
+	git(t, repo, "add", "-A")
+	git(t, repo, "commit", "-q", "-m", "one")
+
+	// A slow build, so polls and webhook wakes arrive while it runs.
+	carrel := &fakeCarrel{src: source{Mode: "pull", URL: repo, Branch: "main", Build: "sleep 0.3; echo built > built.txt"}, status: 200}
+	server := httptest.NewServer(carrel)
+	defer server.Close()
+	a := &agent{cfg: config{Origin: server.URL, Token: "cdt_test", App: "site", Port: 8000}, root: filepath.Join(dir, "app"), state: filepath.Join(dir, "state"), http: server.Client(), every: 50 * time.Millisecond, wake: make(chan bool, 1)}
+	a.command = func(ctx context.Context, script string) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.loop(ctx); close(done) }()
+
+	// A new commit while the loop runs is built too.
+	deadline := time.Now().Add(20 * time.Second)
+	waitFor := func(n int) {
+		for {
+			carrel.mu.Lock()
+			got := len(carrel.uploads)
+			carrel.mu.Unlock()
+			if got >= n {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d uploads, want %d", got, n)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitFor(1)
+	os.WriteFile(filepath.Join(repo, "two"), []byte("2"), 0644)
+	git(t, repo, "add", "-A")
+	git(t, repo, "commit", "-q", "-m", "two")
+	second := git(t, repo, "rev-parse", "HEAD")
+	waitFor(2)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("loop did not stop")
+	}
+	carrel.mu.Lock()
+	defer carrel.mu.Unlock()
+	// Each commit once, however many wakes came in between.
+	if len(carrel.uploads) != 2 || carrel.uploads[1] != second || carrel.polls < 2 {
+		t.Fatalf("uploads %v after %d polls", carrel.uploads, carrel.polls)
 	}
 }
