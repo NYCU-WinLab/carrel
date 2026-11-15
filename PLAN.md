@@ -1214,7 +1214,8 @@ so an admin agent can answer which commit runs where (section 9.1).
 or a repository without CI. carrel-deployd watches the branch with `git ls-remote` every minute, or
 at once when the app's `webhook_url` is called. A new commit is fetched into
 `/srv/apps/<app>/.carrel/build`, built and packed there by the app user, never by root, since git
-and the build run code the repository controls. The agent uploads the result with its agent token
+and the build run code the repository controls. The build has the app user's rights, as the
+running app does; install with `--user` of an account without sudo to keep both away from root. The agent uploads the result with its agent token
 to `/apps/v1/agent/upload`, and from there it is an ordinary release: stored, switched, health
 checked, `app_deploy` and `app_rollback` work as in push mode. A failed fetch or build is a
 `failed` release with the last 8 KiB of its log and no artifact, and is not retried until the

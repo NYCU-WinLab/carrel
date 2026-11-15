@@ -67,7 +67,8 @@ func TestPullAppBuildsOnTheMachine(t *testing.T) {
 
 	// A good build becomes the pending release, as an upload from CI does.
 	upload := func(token, sha string) (int, D) {
-		req := httptest.NewRequest("POST", "https://carrel.test/apps/v1/agent/upload", strings.NewReader("artifact"))
+		// Larger than the 256 KiB limit on other requests.
+		req := httptest.NewRequest("POST", "https://carrel.test/apps/v1/agent/upload", strings.NewReader(strings.Repeat("a", 300<<10)))
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("X-Carrel-Sha", sha)
 		w := httptest.NewRecorder()

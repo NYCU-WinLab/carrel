@@ -21,7 +21,8 @@ import (
 // commit and uploads the result as a release, which then deploys like any
 // other. Everything that touches the repository runs as the app user, in
 // directories the app user owns: git and the build command run code the
-// repository controls, and root must not.
+// repository controls, and root must not. The build has the app user's
+// rights, as the app itself does: when that user may sudo, so may the build.
 
 type source struct {
 	Mode   string `json:"mode"`
@@ -205,6 +206,11 @@ if [ -n "$CARREL_BUILD" ]; then sh -c "$CARREL_BUILD" >&2; fi`
 	if perr != nil {
 		a.reportBuild(ctx, sha, "pack failed: "+perr.Error(), packLog)
 		return perr
+	}
+	// carrel busy or out of space for now: the next check builds the commit
+	// again. A refusal (a 4xx, such as a full quota) is reported instead.
+	if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+		return fmt.Errorf("%w: upload returned %d", errRetry, resp.StatusCode)
 	}
 	if resp.StatusCode != 200 {
 		var out struct {
