@@ -1209,8 +1209,23 @@ private ones share 3,000 minutes per month.
 **Observability**: each release is a span in sensorium with app, commit SHA, duration and result,
 so an admin agent can answer which commit runs where (section 9.1).
 
-**Version 1 limits**: GitHub and GitLab only; other git hosts are issue #266. One app per machine
-port; one machine per app.
+**Pull mode (issue #266)**: `app_link` with `mode: pull` takes any clone URL (https, ssh or
+`user@host:path`) and an optional `build` command, for Gitea, Bitbucket, a bare repository over SSH
+or a repository without CI. carrel-deployd watches the branch with `git ls-remote` every minute, or
+at once when the app's `webhook_url` is called. A new commit is fetched into
+`/srv/apps/<app>/.carrel/build`, built and packed there by the app user, never by root, since git
+and the build run code the repository controls. The agent uploads the result with its agent token
+to `/apps/v1/agent/upload`, and from there it is an ordinary release: stored, switched, health
+checked, `app_deploy` and `app_rollback` work as in push mode. A failed fetch or build is a
+`failed` release with the last 8 KiB of its log and no artifact, and is not retried until the
+branch moves. The webhook carries no payload carrel reads: it only makes the agent check, and only
+the linked branch of the linked URL is ever built. carrel never clones, so the control plane never
+fetches a URL a member names. For a private repository the agent makes an ed25519 deploy key as
+the app user and reports its public half, which `app_get` shows for the member to add as a
+read-only deploy key. Push mode stays the default for GitHub and GitLab: it builds off the machine
+and proves the source with OIDC.
+
+**Version 1 limits**: one app per machine port; one machine per app.
 
 **Self-hosted runners (issue #267)**: `runner_add` starts a GitHub Actions or GitLab runner on a
 member's machine, so jobs build there with the machine's tools and quota instead of on hosted

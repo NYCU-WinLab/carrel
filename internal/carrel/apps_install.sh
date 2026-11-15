@@ -7,9 +7,10 @@
 # CARREL_APP_TOKEN in the environment still works for older install lines.
 set -eu
 
-app="" port="" user="" start=""
+app="" port="" user="" start="" pull=""
 while [ $# -gt 0 ]; do
 	case "$1" in
+	--pull) pull=1; shift ;;
 	--app) app="$2"; shift 2 ;;
 	--port) port="$2"; shift 2 ;;
 	--user) user="$2"; shift 2 ;;
@@ -37,6 +38,13 @@ echo "$port" | grep -Eq '^[0-9]{1,5}$' || { echo "invalid --port" >&2; exit 1; }
 [ -n "$start" ] || { echo "--start is required" >&2; exit 1; }
 id "$user" >/dev/null 2>&1 || { echo "unknown --user" >&2; exit 1; }
 [ "$user" != root ] || { echo "run the app as a normal user" >&2; exit 1; }
+
+# Pull mode fetches with git over https or ssh and builds on the machine.
+if [ -n "$pull" ] && ! { command -v git && command -v ssh-keygen && command -v tar; } >/dev/null 2>&1; then
+	command -v apt-get >/dev/null || { echo "install git, openssh-client and tar first" >&2; exit 1; }
+	DEBIAN_FRONTEND=noninteractive apt-get update -qq
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git openssh-client tar ca-certificates >/dev/null
+fi
 
 tmp=$(mktemp)
 curl -fsSL -o "$tmp" "@ORIGIN@/apps/v1/carrel-deployd"
@@ -99,4 +107,8 @@ systemctl daemon-reload
 systemctl enable "carrel-app-$app.service" >/dev/null 2>&1
 systemctl enable --now "carrel-deployd@$app.service"
 systemctl restart "carrel-deployd@$app.service"
-echo "carrel-deployd is running for $app. Push to the linked branch to deploy."
+if [ -n "$pull" ]; then
+	echo "carrel-deployd is running for $app and builds the linked branch now. app_get shows the deploy key for a private repository."
+else
+	echo "carrel-deployd is running for $app. Push to the linked branch to deploy."
+fi

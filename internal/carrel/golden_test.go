@@ -446,6 +446,8 @@ func goldenScenario(g *goldenRun) {
 	call("apps", "app_deploy", D{"app": "site", "release": "0000000000000000"}, alice)
 	call("apps", "app_rollback", D{"app": "site"}, alice)
 	call("apps", "app_unlink", D{"app": "site", "confirm": "site"}, alice)
+	call("apps", "app_link", D{"machine": "web", "name": "gitea", "mode": "pull", "repo": "git@git.example.org:alice/site.git", "build": "make", "start": "./run", "port": 8080}, alice)
+	call("apps", "app_unlink", D{"app": "gitea", "confirm": "gitea"}, alice)
 	// Organization and GitLab runners: no visibility lookup leaves the test.
 	call("runners", "runner_add", D{"machine": "web", "provider": "github", "url": "https://github.com/winlab", "dry_run": true}, alice)
 	call("runners", "runner_add", D{"machine": "web", "provider": "github", "url": "https://github.com/winlab"}, alice)
