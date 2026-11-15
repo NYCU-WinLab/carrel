@@ -103,6 +103,9 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 
+# A new link (a new token) starts with no built commit, so a pull-mode
+# agent builds the branch head for it even when an earlier link built it.
+rm -f "/var/lib/carrel-deployd/$app/pulled"
 systemctl daemon-reload
 systemctl enable "carrel-app-$app.service" >/dev/null 2>&1
 systemctl enable --now "carrel-deployd@$app.service"
