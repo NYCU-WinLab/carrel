@@ -255,7 +255,8 @@ func (e *Execution) appGitLabCI(t D, app D) string {
     CARREL_ID_TOKEN:
       aud: %s
   script:
-    - apk add --no-cache curl jq
+    # A shell runner, such as one from runner_add, has no apk and brings its own curl and jq.
+    - if command -v apk >/dev/null; then apk add --no-cache curl jq; fi
     # Replace with the real build; pack exactly what the start command runs.
     - tar czf /tmp/app.tar.gz --exclude=.git .
     - curl -fsSL %s/apps/v1/deploy.sh | sh -s -- --tenant %s --app %s --artifact /tmp/app.tar.gz
