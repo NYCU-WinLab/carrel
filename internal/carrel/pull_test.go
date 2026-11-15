@@ -105,4 +105,37 @@ func TestPushAppTakesNoAgentUpload(t *testing.T) {
 	if code, _ := do(t, a, "POST", "/apps/v1/agent/report", token, strings.NewReader(`{"sha":"`+commit+`","state":"failed"}`)); code != 403 {
 		t.Fatalf("push app took a build report: %d", code)
 	}
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl carrel-site"
+	if code, _ := do(t, a, "POST", "/apps/v1/agent/report", token, strings.NewReader(`{"deploy_key":"`+key+`"}`)); code != 403 {
+		t.Fatalf("push app took a deploy key: %d", code)
+	}
+}
+
+func TestWebhookRotation(t *testing.T) {
+	p, a, _ := appFixture(t)
+	seedMachine(p, "pull", 10102)
+	ctx, alice := context.Background(), person("alice", false)
+	r := a.Call(ctx, "app_link", D{"machine": "pull", "name": "gitea", "mode": "pull", "repo": "https://git.example.org/a/b.git", "start": "./run", "port": 8000}, alice)
+	assertOK(t, r)
+	old := strings.TrimPrefix(str(r["webhook_url"]), "https://carrel.test")
+	assertCode(t, a.Call(ctx, "app_webhook_rotate", D{"app": "site"}, alice), "invalid")
+	if r := a.Call(ctx, "app_webhook_rotate", D{"app": "gitea", "dry_run": true}, alice); r["webhook_url"] != nil {
+		t.Fatalf("dry run rotated: %s", encoded(r))
+	}
+	if code, _ := do(t, a, "POST", old, "", nil); code != 200 {
+		t.Fatalf("old hook before rotation: %d", code)
+	}
+	r = a.Call(ctx, "app_webhook_rotate", D{"app": "gitea"}, alice)
+	assertOK(t, r)
+	fresh := strings.TrimPrefix(str(r["webhook_url"]), "https://carrel.test")
+	if !strings.HasPrefix(fresh, "/apps/v1/hooks/cdh_") || fresh == old {
+		t.Fatalf("rotate: %s", encoded(r))
+	}
+	if code, _ := do(t, a, "POST", old, "", nil); code != 404 {
+		t.Fatalf("old hook after rotation: %d", code)
+	}
+	if code, _ := do(t, a, "POST", fresh, "", nil); code != 200 {
+		t.Fatalf("new hook: %d", code)
+	}
+	assertCode(t, a.Call(ctx, "app_webhook_rotate", D{"app": "gitea"}, person("bob", false)), "not_found")
 }

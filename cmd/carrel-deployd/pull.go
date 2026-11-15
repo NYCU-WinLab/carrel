@@ -67,7 +67,12 @@ func (a *agent) key() string  { return filepath.Join(a.home(), "deploy_key") }
 func (a *agent) asUser(ctx context.Context, script string, env map[string]string, stdout io.Writer) (string, error) {
 	// runuser resets HOME to the passwd entry; env sets it back, so git and
 	// ssh read no config of the app user's own.
-	cmd := exec.CommandContext(ctx, "runuser", "-u", a.cfg.User, "--", "/usr/bin/env", "HOME="+a.home(), "/bin/sh", "-c", script)
+	var cmd *exec.Cmd
+	if a.command != nil {
+		cmd = a.command(ctx, script)
+	} else {
+		cmd = exec.CommandContext(ctx, "runuser", "-u", a.cfg.User, "--", "/usr/bin/env", "HOME="+a.home(), "/bin/sh", "-c", script)
+	}
 	cmd.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "GIT_TERMINAL_PROMPT=0", "HOME=" + a.home()}
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -117,9 +122,31 @@ func (a *agent) ensureKey(ctx context.Context) {
 
 func (a *agent) pulledFile() string { return filepath.Join(a.state, "pulled") }
 
+// builder checks the branch every a.every, and at once when woken. It runs
+// beside the poll loop; only it builds, so builds never overlap.
+func (a *agent) builder(ctx context.Context) {
+	tick := time.NewTicker(a.every)
+	defer tick.Stop()
+	called := false
+	for {
+		a.check(ctx, called)
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			called = false
+		case called = <-a.wake:
+		}
+	}
+}
+
 // check builds the branch head when it is a commit this agent has not
-// built yet.
-func (a *agent) check(ctx context.Context) {
+// built yet. called is a webhook call, which also builds the head again
+// when its last build failed.
+func (a *agent) check(ctx context.Context, called bool) {
+	if !called && time.Now().Before(a.retryAt) {
+		return
+	}
 	src, err := a.source(ctx)
 	if err != nil || src.Mode != "pull" {
 		return
@@ -145,21 +172,33 @@ func (a *agent) check(ctx context.Context) {
 		slog.Warn("branch_not_found", "branch", src.Branch)
 		return
 	}
-	if last, _ := os.ReadFile(a.pulledFile()); strings.TrimSpace(string(last)) == sha {
-		return
+	// The pulled file holds the last commit built, and "failed" after it
+	// when that build failed.
+	if last, _ := os.ReadFile(a.pulledFile()); len(last) > 0 {
+		f := strings.Fields(string(last))
+		if len(f) > 0 && f[0] == sha && !(called && len(f) > 1 && f[1] == "failed") {
+			return
+		}
 	}
 	slog.Info("build_started", "sha", sha)
 	err = a.build(ctx, src, sha)
 	if errors.Is(err, errRetry) {
-		slog.Warn("upload_failed", "sha", sha, "error", err)
+		// carrel did not take it: build again later, waiting longer each time.
+		a.backoff = min(max(2*a.backoff, a.every), 30*time.Minute)
+		a.retryAt = time.Now().Add(a.backoff)
+		slog.Warn("upload_failed", "sha", sha, "error", err, "retry_in", a.backoff.String())
 		return
 	}
+	a.backoff, a.retryAt = 0, time.Time{}
+	mark := sha + "\n"
 	if err != nil {
 		slog.Warn("build_failed", "sha", sha, "error", err)
+		mark = sha + " failed\n"
 	}
-	// A failed build is reported and not retried until the branch moves.
+	// A failed build is not retried until the branch moves or the webhook
+	// is called.
 	_ = os.MkdirAll(a.state, 0700)
-	_ = os.WriteFile(a.pulledFile(), []byte(sha+"\n"), 0600)
+	_ = os.WriteFile(a.pulledFile(), []byte(mark), 0600)
 }
 
 // errRetry is a build that did not reach carrel; the next check retries it.

@@ -55,9 +55,19 @@ type agent struct {
 	uid    int
 	gid    int
 	health time.Duration
+	// steadyFor is how long the unit must stay up after the first good
+	// answer.
+	steadyFor time.Duration
 	// Pull mode (pull.go).
 	every    time.Duration
 	keyShown bool
+	// wake asks the builder to check now: the webhook was called.
+	wake chan bool
+	// retryAt holds back the next build after carrel did not take one.
+	retryAt time.Time
+	backoff time.Duration
+	// command runs a script as the app user; tests run it as themselves.
+	command func(ctx context.Context, script string) *exec.Cmd
 }
 
 const (
@@ -86,7 +96,7 @@ func main() {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second, every: time.Minute}
+	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second, steadyFor: 3 * time.Second, every: time.Minute, wake: make(chan bool, 1)}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("carrel_deployd_started", "app", cfg.App)
@@ -94,19 +104,18 @@ func main() {
 }
 
 func (a *agent) loop(ctx context.Context) {
-	var checked time.Time
-	pull := true
+	// A pull-mode app builds beside this loop, so a long build never keeps
+	// the agent from long-polling, deploying or rolling back.
+	go a.builder(ctx)
 	for ctx.Err() == nil {
-		// A pull-mode app is checked every minute, and at once when its
-		// webhook was called; a push-mode one returns from check at once.
-		if pull || time.Since(checked) >= a.every {
-			checked = time.Now()
-			a.check(ctx)
+		r, pull, status, err := a.next(ctx)
+		if pull {
+			// The webhook was called: check now, or after the build that runs.
+			select {
+			case a.wake <- true:
+			default:
+			}
 		}
-		var r *release
-		var status int
-		var err error
-		r, pull, status, err = a.next(ctx)
 		switch {
 		case err != nil:
 			slog.Warn("poll_failed", "error", err)
@@ -476,13 +485,42 @@ func (a *agent) restartAndCheck(ctx context.Context) error {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode < 500 {
-				return nil
+				// Another program on the port answers too, while the app
+				// restarts in a loop: the unit must stay up, unrestarted.
+				if a.steady(ctx) {
+					return nil
+				}
+				last = "the app restarts while something answers on its port"
+			} else {
+				last = fmt.Sprintf("HTTP %d", resp.StatusCode)
 			}
-			last = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 		pause(ctx, time.Second)
 	}
 	return fmt.Errorf("health check on port %d failed: %s", a.cfg.Port, last)
+}
+
+// steady tells whether the app's unit is active and stays so, with no
+// restart, for steadyFor.
+func (a *agent) steady(ctx context.Context) bool {
+	before, ok := a.unitState(ctx)
+	if !ok {
+		return false
+	}
+	pause(ctx, a.steadyFor)
+	after, ok := a.unitState(ctx)
+	return ok && after == before
+}
+
+// unitState is the unit's restart count and main process while it is
+// active.
+func (a *agent) unitState(ctx context.Context) (string, bool) {
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "ActiveState,SubState,NRestarts,MainPID", a.unit()).Output()
+	if err != nil {
+		return "", false
+	}
+	s := string(out)
+	return s, strings.Contains(s, "ActiveState=active\n") && strings.Contains(s, "SubState=running\n")
 }
 
 func (a *agent) journal() string {

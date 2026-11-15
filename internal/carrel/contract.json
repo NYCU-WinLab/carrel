@@ -3643,6 +3643,46 @@
       }
     },
     {
+      "name": "app_webhook_rotate",
+      "description": "Replace the webhook_url of a pull-mode app, for one that leaked. The old URL stops working at once. Returns the new webhook_url, shown only here.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "runner_add",
       "description": "Start a GitHub Actions or GitLab self-hosted runner on one of your machines (issue #267), so CI jobs build there with the machine's tools and quota. A job on it deploys an app exactly as a hosted job does. carrel never sees the runner token: run the returned token_command from the client, which asks gh or glab for a token and pipes it into install on the machine over SSH. Jobs run as the unprivileged user carrel-runner. A public GitHub repository is refused unless allow_public is set, because a pull request from any fork could run code on the machine.",
       "inputSchema": {
@@ -5102,6 +5142,7 @@
     "app_deploy",
     "app_rollback",
     "app_unlink",
+    "app_webhook_rotate",
     "runner_add",
     "runner_list",
     "runner_remove",
@@ -5144,6 +5185,7 @@
     "app_link",
     "app_rollback",
     "app_unlink",
+    "app_webhook_rotate",
     "deployment_apply",
     "domain_add",
     "domain_proxy",

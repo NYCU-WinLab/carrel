@@ -274,7 +274,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.PublicIPRequest(a, w, t)
 	case "public_ip_list", "public_ip_bind", "public_ip_release":
 		return e.PublicIPAction(tool, a, t)
-	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink":
+	case "app_link", "app_list", "app_get", "app_deploy", "app_rollback", "app_unlink", "app_webhook_rotate":
 		return e.AppTool(tool, a, t)
 	case "function_deploy", "function_list", "function_get", "function_rollback", "function_remove", "function_logs":
 		return e.FunctionTool(tool, a, t)
