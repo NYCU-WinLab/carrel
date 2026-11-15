@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
-
 )
 
 // Apps deploy on push (PLAN 7.9). GitHub Actions or GitLab CI uploads a
@@ -34,6 +33,7 @@ func (p *Platform) appsDir() string { return p.Config.AppsDir }
 func (p *Platform) appOrigin() string {
 	return strings.TrimRight(p.Config.Origin, "/")
 }
+
 // ciAudience is the aud a forge's token must name: carrel's host, with a
 // port when the origin has one.
 func (p *Platform) ciAudience() string {
