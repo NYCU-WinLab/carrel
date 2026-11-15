@@ -21,7 +21,7 @@ type App struct {
 	Platform *Platform
 	handler  http.Handler
 	verifier IdentityVerifier
-	github   OIDCVerifier
+	forges   OIDCVerifier
 	mu       sync.Mutex
 	minute   int64
 	requests map[string]int
@@ -36,7 +36,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	if verifier == nil {
 		verifier = NewVerifier(issuer)
 	}
-	a := &App{Platform: p, verifier: verifier, github: NewGitHubVerifier(strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://")), schemas: map[string]*jsonschema.Schema{}}
+	a := &App{Platform: p, verifier: verifier, forges: NewForgeVerifier(p.ciAudience(), p.Config.GitLabIssuers), schemas: map[string]*jsonschema.Schema{}}
 	compiler := jsonschema.NewCompiler()
 	for _, d := range dicts(Contract["tools"]) {
 		name := str(d["name"])

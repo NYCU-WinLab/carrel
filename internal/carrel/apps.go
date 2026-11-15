@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,11 +14,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/golang-jwt/jwt/v5"
 )
 
-// Apps deploy on push (PLAN 7.9). GitHub Actions uploads a release with an
-// OIDC token, and carrel-deployd inside the tenant machine pulls it. carrel
+// Apps deploy on push (PLAN 7.9). GitHub Actions or GitLab CI uploads a
+// release with an OIDC token (forges.go), and carrel-deployd inside the tenant machine pulls it. carrel
 // never connects to the machine; the agent only makes outbound requests.
 
 const (
@@ -36,6 +33,11 @@ func appID(n int, name string) string { return fmt.Sprintf("%d-%s", n, name) }
 func (p *Platform) appsDir() string { return p.Config.AppsDir }
 func (p *Platform) appOrigin() string {
 	return strings.TrimRight(p.Config.Origin, "/")
+}
+// ciAudience is the aud a forge's token must name: carrel's host, with a
+// port when the origin has one.
+func (p *Platform) ciAudience() string {
+	return strings.TrimPrefix(strings.TrimPrefix(p.appOrigin(), "https://"), "http://")
 }
 func (p *Platform) releasePath(app, release string) string {
 	return filepath.Join(p.appsDir(), app, release+".tar.gz")
@@ -61,6 +63,7 @@ func publicRelease(r D) D {
 
 func (e *Execution) PublicApp(app D) D {
 	out := pick(app, "name", "machine", "repo", "branch", "start", "port", "created_at", "current", "previous", "pending")
+	out["forge"], out["repo_url"] = linkForge(app), repoURL(app)
 	seen := num(app["agent_seen_at"])
 	switch {
 	case seen == 0:
@@ -99,7 +102,11 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		if find(e.S.Objects("apps", n), func(o D) bool { return integer(o["vmid"]) == integer(m["vmid"]) }) != nil {
 			fail("conflict", "This machine already runs an app; use another machine or unlink the existing app")
 		}
-		app := D{"id": appID(n, name), "name": name, "tenant_n": n, "vmid": m["vmid"], "machine": m["name"], "repo": strings.ToLower(str(a["repo"])), "branch": textAt(a, "branch", "main"), "start": a["start"], "port": integer(a["port"]), "created_at": now()}
+		issuer, repo := parseRepo(str(a["repo"]), e.P.Config.GitLabIssuers)
+		app := D{"id": appID(n, name), "name": name, "tenant_n": n, "vmid": m["vmid"], "machine": m["name"], "repo": repo, "branch": textAt(a, "branch", "main"), "start": a["start"], "port": integer(a["port"]), "created_at": now()}
+		if issuer != githubIssuer {
+			app["issuer"] = issuer
+		}
 		r := D{"dry_run": dry, "quota_after": e.Quota(t)}
 		if dry {
 			r["app"] = without(app, "tenant_n", "vmid")
@@ -112,9 +119,10 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		r["install"] = e.appInstall(t, app)
 		r["agent_token"] = token
 		r["workflow"] = e.appWorkflow(t, app)
+		r["workflow_path"] = map[string]string{forgeGitHub: ".github/workflows/carrel.yml", forgeGitLab: ".gitlab-ci.yml"}[linkForge(app)]
 		r["next_steps"] = []string{
 			"Run install on the machine over SSH with the agent token on its standard input, from the client: printf '%s\\n' <agent_token> | ssh <machine> <install, quoted for the remote shell>. The token then appears in no command line on the machine. Run by hand, install asks for the token instead. It needs sudo.",
-			"Commit workflow to .github/workflows/carrel.yml on the linked branch and adjust the build step.",
+			"Commit workflow to " + str(r["workflow_path"]) + " on the linked branch and adjust the build step.",
 			"Write runtime secrets to /srv/apps/" + name + "/env on the machine; they never pass through carrel.",
 			"Publish the port with domain_add when the app should answer on HTTPS.",
 		}
@@ -180,6 +188,9 @@ func (e *Execution) appInstall(t D, app D) string {
 }
 
 func (e *Execution) appWorkflow(t D, app D) string {
+	if linkForge(app) == forgeGitLab {
+		return e.appGitLabCI(t, app)
+	}
 	return fmt.Sprintf(`name: carrel
 on:
   push:
@@ -203,50 +214,34 @@ jobs:
 `, app["branch"], t["slug"], app["name"])
 }
 
+// appGitLabCI is the GitLab counterpart of appWorkflow: a job with an ID
+// token for carrel's audience runs carrel's deploy script on the linked branch.
+func (e *Execution) appGitLabCI(t D, app D) string {
+	return fmt.Sprintf(`carrel:
+  stage: deploy
+  image: alpine:3.20
+  rules:
+    - if: $CI_COMMIT_BRANCH == %q && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")
+  # One deploy at a time: a push waits for the one before it.
+  resource_group: carrel-%s
+  id_tokens:
+    CARREL_ID_TOKEN:
+      aud: %s
+  script:
+    - apk add --no-cache curl jq
+    # Replace with the real build; pack exactly what the start command runs.
+    - tar czf /tmp/app.tar.gz --exclude=.git .
+    - curl -fsSL %s/apps/v1/deploy.sh | sh -s -- --tenant %s --app %s --artifact /tmp/app.tar.gz
+`, app["branch"], app["name"], e.P.ciAudience(), e.P.appOrigin(), t["slug"], app["name"])
+}
+
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'" }
 
-// GitHub OIDC
-
-type GitHubClaims struct {
-	Repository   string
-	RepositoryID string
-	Ref          string
-	SHA          string
-	Event        string
-	RunURL       string
-}
-
-type OIDCVerifier interface {
-	VerifyGitHub(context.Context, string) (GitHubClaims, error)
-}
-
-type GitHubVerifier struct{ *Verifier }
-
-func NewGitHubVerifier(audience string) *GitHubVerifier {
-	return &GitHubVerifier{&Verifier{Issuer: githubIssuer, Audience: audience, JWKS: githubIssuer + "/.well-known/jwks", HTTP: &http.Client{Timeout: 8 * time.Second}}}
-}
-
-func (v *GitHubVerifier) VerifyGitHub(ctx context.Context, token string) (GitHubClaims, error) {
-	claims := jwt.MapClaims{}
-	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) { return v.key(ctx, str(t.Header["kid"])) }, jwt.WithValidMethods([]string{"RS256"}), jwt.WithAudience(v.Audience), jwt.WithIssuer(v.Issuer), jwt.WithExpirationRequired(), jwt.WithLeeway(10*time.Second))
-	if err != nil {
-		return GitHubClaims{}, err
-	}
-	c := GitHubClaims{Repository: strings.ToLower(str(claims["repository"])), RepositoryID: str(claims["repository_id"]), Ref: str(claims["ref"]), SHA: str(claims["sha"]), Event: str(claims["event_name"])}
-	if c.Repository == "" || c.RepositoryID == "" || c.Ref == "" {
-		return GitHubClaims{}, errors.New("missing repository claims")
-	}
-	if id := str(claims["run_id"]); id != "" {
-		c.RunURL = "https://github.com/" + str(claims["repository"]) + "/actions/runs/" + id
-	}
-	return c, nil
-}
-
-// authorizeRelease checks a GitHub token against the app it targets. The
-// first accepted deploy pins repository_id, so a deleted and recreated
-// repository with the same name cannot deploy afterwards.
-func (e *Execution) authorizeRelease(app D, c GitHubClaims) {
-	if c.Repository != app["repo"] {
+// authorizeRelease checks a forge's token against the app or function it
+// targets. The first accepted deploy pins repository_id, so a deleted and
+// recreated repository with the same name cannot deploy afterwards.
+func (e *Execution) authorizeRelease(app D, c CIClaims) {
+	if c.Issuer != linkIssuer(app) || c.Repository != app["repo"] {
 		fail("forbidden", "Token repository does not match the linked repository")
 	}
 	if pinned := str(app["repo_id"]); pinned != "" && pinned != c.RepositoryID {
@@ -255,8 +250,8 @@ func (e *Execution) authorizeRelease(app D, c GitHubClaims) {
 	if c.Ref != "refs/heads/"+str(app["branch"]) {
 		fail("forbidden", "Only the linked branch can deploy")
 	}
-	if c.Event != "push" && c.Event != "workflow_dispatch" {
-		fail("forbidden", "Only push and workflow_dispatch events can deploy")
+	if events := deployEvents[c.Forge()]; !contains(events, c.Event) {
+		fail("forbidden", "Only "+strings.Join(events, " and ")+" events can deploy")
 	}
 }
 
@@ -321,7 +316,7 @@ func (p *Platform) reserveUpload(e *Execution, app D, size int64) func() {
 	}
 }
 
-func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitHubClaims, length int64, body io.Reader) D {
+func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c CIClaims, length int64, body io.Reader) D {
 	e := p.execution(ctx)
 	var app D
 	func() {
@@ -376,7 +371,7 @@ func (p *Platform) ReceiveRelease(ctx context.Context, slug, name string, c GitH
 		tx.S.Put("apps", app["id"], n, app)
 	})
 	e.pruneReleases(app)
-	e.S.Log("github:"+c.Repository, n, "app_release", D{"app": app["name"], "release": id, "sha": c.SHA, "size": written}, "ok")
+	e.S.Log(c.Forge()+":"+c.Repository, n, "app_release", D{"app": app["name"], "release": id, "sha": c.SHA, "size": written}, "ok")
 	return publicRelease(r)
 }
 
@@ -392,10 +387,10 @@ func (e *Execution) pruneReleases(app D) {
 	}
 }
 
-func (p *Platform) ReleaseStatus(ctx context.Context, slug, name, id string, c GitHubClaims) D {
+func (p *Platform) ReleaseStatus(ctx context.Context, slug, name, id string, c CIClaims) D {
 	e := p.execution(ctx)
 	app := e.appBySlug(slug, name)
-	if c.Repository != app["repo"] || (app["repo_id"] != nil && str(app["repo_id"]) != c.RepositoryID) {
+	if c.Issuer != linkIssuer(app) || c.Repository != app["repo"] || (app["repo_id"] != nil && str(app["repo_id"]) != c.RepositoryID) {
 		fail("forbidden", "Token repository does not match the linked repository")
 	}
 	r := e.S.Get("releases", id)

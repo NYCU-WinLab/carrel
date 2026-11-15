@@ -8,12 +8,14 @@ import (
 
 func TestFunctionLinkDeploysFromGitHub(t *testing.T) {
 	p, a := functionFixture(t)
-	a.github = fakeGitHub{
+	a.forges = fakeForge{
 		"good":   push("alice/hook", "42", "main"),
 		"other":  push("mallory/hook", "7", "main"),
 		"branch": push("alice/hook", "42", "dev"),
-		"pr":     {Repository: "alice/hook", RepositoryID: "42", Ref: "refs/heads/main", Event: "pull_request"},
+		"pr":     {Issuer: githubIssuer, Repository: "alice/hook", RepositoryID: "42", Ref: "refs/heads/main", Event: "pull_request"},
 		"reborn": push("alice/hook", "99", "main"),
+		// A GitLab project with the linked repository's path.
+		"gitlab": gitlabPush(gitlabCom, "alice/hook", "42", "main", "push"),
 	}
 	alice := person("alice", false)
 	call := func(tool string, args D) D { return a.Call(context.Background(), tool, args, alice) }
@@ -41,7 +43,7 @@ func TestFunctionLinkDeploysFromGitHub(t *testing.T) {
 	}
 	report(t, a, `{"revision":1,"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready","bytes":1073741824}]}]}`)
 
-	for token, want := range map[string]int{"": 403, "forged": 403, "other": 403, "branch": 403, "pr": 403} {
+	for token, want := range map[string]int{"": 403, "forged": 403, "other": 403, "branch": 403, "pr": 403, "gitlab": 403} {
 		if code, _ := deploy(token, digestA); code != want {
 			t.Fatalf("token %q: %d", token, code)
 		}

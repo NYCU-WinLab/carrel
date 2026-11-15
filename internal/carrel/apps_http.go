@@ -12,6 +12,9 @@ import (
 //go:embed apps_install.sh
 var appsInstallScript string
 
+//go:embed apps_deploy.sh
+var appsDeployScript string
+
 var appStatus = map[string]int{"forbidden": 403, "not_found": 404, "invalid": 400, "conflict": 409, "quota_exceeded": 409, "capacity_exhausted": 507}
 
 // appHandler turns a failed call into a JSON error with a matching status.
@@ -45,10 +48,10 @@ func bearer(r *http.Request) string {
 	return v[7:]
 }
 
-func (a *App) githubClaims(r *http.Request) GitHubClaims {
-	c, err := a.github.VerifyGitHub(r.Context(), bearer(r))
+func (a *App) ciClaims(r *http.Request) CIClaims {
+	c, err := a.forges.Verify(r.Context(), bearer(r))
 	if err != nil {
-		fail("forbidden", "Invalid GitHub OIDC token")
+		fail("forbidden", "Invalid CI OIDC token")
 	}
 	return c
 }
@@ -59,16 +62,20 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		_, _ = w.Write([]byte(strings.ReplaceAll(appsInstallScript, "@ORIGIN@", p.appOrigin())))
 	})
+	mux.HandleFunc("GET /apps/v1/deploy.sh", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+		_, _ = w.Write([]byte(strings.ReplaceAll(appsDeployScript, "@ORIGIN@", p.appOrigin())))
+	})
 	mux.HandleFunc("GET /apps/v1/carrel-deployd", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		http.ServeFile(w, r, p.Config.DeploydBinary)
 	})
 	mux.Handle("POST /apps/v1/{tenant}/{app}/releases", appHandler(func(w http.ResponseWriter, r *http.Request) D {
-		c := a.githubClaims(r)
+		c := a.ciClaims(r)
 		return D{"release": p.ReceiveRelease(r.Context(), r.PathValue("tenant"), r.PathValue("app"), c, r.ContentLength, r.Body)}
 	}))
 	mux.Handle("GET /apps/v1/{tenant}/{app}/releases/{id}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
-		c := a.githubClaims(r)
+		c := a.ciClaims(r)
 		return D{"release": p.ReleaseStatus(r.Context(), r.PathValue("tenant"), r.PathValue("app"), r.PathValue("id"), c)}
 	}))
 	mux.Handle("POST /apps/v1/agent/next", appHandler(func(w http.ResponseWriter, r *http.Request) D {
@@ -125,11 +132,11 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 	}))
 	// A GitHub job deploys the image it pushed to a linked function.
 	mux.Handle("POST /functions/v1/deploy/{tenant}/{function}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
-		c := a.githubClaims(r)
+		c := a.ciClaims(r)
 		return p.ReceiveFunctionImage(r.Context(), r.PathValue("tenant"), r.PathValue("function"), c, r.Body)
 	}))
 	mux.Handle("GET /functions/v1/deploy/{tenant}/{function}/{version}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
-		c := a.githubClaims(r)
+		c := a.ciClaims(r)
 		return D{"version": p.FunctionImageStatus(r.Context(), r.PathValue("tenant"), r.PathValue("function"), r.PathValue("version"), c)}
 	}))
 	// A member's agent uploads an environment file to a function_env link.

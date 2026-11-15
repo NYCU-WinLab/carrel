@@ -218,7 +218,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `port_request` | `machine`, `public_port`, `proto`, `reason` (section 6.10) |
 | | `public_ip_request` | `reason`; an approval gives the tenant an address of the pool (section 6.12) |
 | | `public_ip_bind`, `public_ip_release`, `public_ip_list` | `machine`, `address`, `ports: ["all"] \| ["tcp/N", "udp/N"]`; 1:1 NAT |
-| Apps | `app_link` | `machine`, `name`, `repo`, `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
+| Apps | `app_link` | `machine`, `name`, `repo` (GitHub owner/name or a GitHub or GitLab URL), `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
 | | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
 | | `app_rollback` | `app`; switches back to the previous release |
@@ -1177,6 +1177,16 @@ and `event_name` of `push` or `workflow_dispatch`. The first accepted deploy pin
 so a deleted and recreated repository with the same name cannot deploy afterwards. Pull requests
 from forks get no OIDC token, so they cannot deploy.
 
+**GitLab (issue #265)**: `app_link` also takes a project URL, such as
+`https://gitlab.com/group/subgroup/project`, on gitlab.com or on an instance listed in the operator's
+`gitlab_issuers` (default: gitlab.com only). The app stores the issuer with the path, and a token
+deploys only when its issuer is that issuer: anyone can run a GitLab instance and mint a token for
+any `project_path`, so the path alone proves nothing. The verifier reads the instance's keys from
+`<issuer>/oauth/discovery/keys` and maps `project_path` to the repository, `project_id` to the
+pinned id, `ref_path` to the ref and `pipeline_source` (`push` or `web`) to the event. The returned
+`workflow` is a `.gitlab-ci.yml` job with an ID token for carrel's audience that runs
+`/apps/v1/deploy.sh`, the counterpart of `carrel-deploy`. `function_link` stays GitHub only.
+
 **Why the build runs in GitHub Actions**: the default machine has 1 GiB of memory and cannot run
 `next build`. GitHub runners have 7 GB, cost carrel nothing to operate, and keep build tools and
 caches off tenant disks. NYCU-WinLab is on the GitHub Team plan: public repositories build free,
@@ -1196,8 +1206,8 @@ private ones share 3,000 minutes per month.
 **Observability**: each release is a span in sensorium with app, commit SHA, duration and result,
 so an admin agent can answer which commit runs where (section 9.1).
 
-**Version 1 limits**: GitHub only. GitLab CI also issues OIDC tokens (`id_tokens`), so the same
-design extends to it later. One app per machine port; one machine per app.
+**Version 1 limits**: GitHub and GitLab only; other git hosts are issue #266. One app per machine
+port; one machine per app.
 
 ### 7.10 Cloud-init files and moving machines
 
