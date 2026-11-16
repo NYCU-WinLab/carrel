@@ -944,6 +944,33 @@ func TestNetBoxTenantsJoinTheTenantGroup(t *testing.T) {
 	}
 }
 
+// With netbox.subject_field, each tenant carries its Keycloak subject, so a
+// NetBox permission can match a signed-in member to their own tenants. A
+// tenant made before the field was set gains it on the next pass.
+func TestNetBoxTenantsCarryTheirSubject(t *testing.T) {
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tenant := find(f.all("tenancy/tenants/"), func(o D) bool { return o["slug"] == "carrel-alice" })
+	if tenant == nil || obj(tenant["custom_fields"])["carrel_subject"] != nil {
+		t.Fatal(tenant)
+	}
+	f.fields["carrel_subject"] = true
+	p.Config.NetBox["subject_field"] = "carrel_subject"
+	if r := syncNetBox(t, p); len(r.Errors) > 0 {
+		t.Fatal(r.Errors)
+	}
+	tenant = find(f.all("tenancy/tenants/"), func(o D) bool { return o["slug"] == "carrel-alice" })
+	if got := obj(tenant["custom_fields"])["carrel_subject"]; got != p.Store.TenantN(1)["subject"] || got == "" {
+		t.Fatal(tenant)
+	}
+	if r := syncNetBox(t, p); r.Writes != 0 || len(r.Errors) > 0 {
+		t.Fatal(r)
+	}
+}
+
 // A tenant that cannot join the group (#212 review) keeps its VNIs: the failed
 // PATCH stops tenancy for the pass and deletes nothing, and a later pass joins it.
 func TestNetBoxFailedTenantGroupJoinDeletesNothing(t *testing.T) {
