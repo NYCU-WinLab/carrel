@@ -116,12 +116,17 @@ func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
 	c := commonFlags(flags)
 	listen := flags.String("listen", "127.0.0.1:8090", "address the router listens on")
+	callers := flags.String("callers", "127.0.0.1,::1,10.200.0.2", "the only addresses the router serves, comma separated: loopback and the gateway")
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
 	control := flags.String("control", "", "control plane URL; with it the host builds and removes functions as the control plane asks")
 	tokenFile := flags.String("token-file", "/etc/carrel-fn/token", "file that holds the host's token for -control")
 	_ = flags.Parse(args)
 	if *slots < 1 || *slots > maxSlots {
 		return fmt.Errorf("-slots must be 1 to %d", maxSlots)
+	}
+	allowed, err := fn.ParseCallers(list(*callers))
+	if err != nil {
+		return fmt.Errorf("-callers: %w", err)
 	}
 	var token string
 	if *control != "" {
@@ -146,6 +151,7 @@ func serve(args []string) error {
 		return err
 	}
 	router := fn.NewRouter(c.root, runtime)
+	router.Callers = allowed
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	reaped := make(chan struct{})

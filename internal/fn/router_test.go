@@ -385,3 +385,46 @@ func TestForgetStopsFreshInstancesFirst(t *testing.T) {
 		t.Fatalf("stops = %d, want 1", stops)
 	}
 }
+
+func TestOnlyCallersReachTheRouter(t *testing.T) {
+	router, runtime, root := setup(t, nil)
+	deploy(t, root, "t4-other", "v1", "")
+	callers, err := ParseCallers([]string{"127.0.0.1", "::1", " 10.200.0.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router.Callers = callers
+	for _, tc := range []struct {
+		source string
+		want   int
+	}{
+		{"10.200.0.4:40000", http.StatusForbidden},
+		{"10.200.3.10:40000", http.StatusForbidden},
+		{"10.251.0.2:40000", http.StatusForbidden},
+		{"not an address", http.StatusForbidden},
+		{"10.200.0.2:40000", http.StatusOK},
+		{"[::ffff:10.200.0.2]:40000", http.StatusOK},
+		{"127.0.0.1:40000", http.StatusOK},
+		{"[::1]:40000", http.StatusOK},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "http://10.200.0.20:8090/", nil)
+		req.RemoteAddr = tc.source
+		req.Header.Set("X-Carrel-Function", "t4-other")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d", tc.source, recorder.Code, tc.want)
+		}
+	}
+	if wakes := runtime.wakes.Load(); wakes != 1 {
+		t.Fatalf("wakes = %d, want 1: only callers wake a function", wakes)
+	}
+}
+
+func TestParseCallersRefusesBadLists(t *testing.T) {
+	for _, values := range [][]string{nil, {"10.200.0.0/16"}, {"gateway"}} {
+		if _, err := ParseCallers(values); err == nil {
+			t.Errorf("%q: no error", values)
+		}
+	}
+}
