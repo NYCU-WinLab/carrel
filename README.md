@@ -601,6 +601,9 @@ needs the `vpn.*` and `dcim.interface` permissions of PLAN 9.4.
 Unsetting `tunnel_group` later leaves the tunnels carrel made in NetBox; the NetBox operator removes them.
 When the token may create tenants only inside a tenant group, set `"tenant_group": "<its name>"` so each
 carrel tenant joins that group.
+To let members see their own tenants in NetBox, create a text custom field on tenants and set
+`"subject_field": "<its name>"`: each tenant then carries its Keycloak subject (`user:<sub>` or
+`winlab-projects/<name>`), which a NetBox permission can match against the signed-in member.
 
 ## License
 

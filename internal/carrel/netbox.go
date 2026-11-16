@@ -55,7 +55,12 @@ type nbConfig struct {
 	// TenantGroup names the NetBox tenant group carrel's tenants join; empty
 	// leaves them out of a group. A token scoped by the group's owner needs it.
 	TenantGroup string
-	Marker      nbMarker
+	// SubjectField names a text custom field of a NetBox tenant that holds
+	// the tenant's Keycloak subject (`user:<sub>`, `winlab-projects/<name>`),
+	// so NetBox permissions can match a signed-in member to their tenants.
+	// Empty leaves it unset.
+	SubjectField string
+	Marker       nbMarker
 }
 
 // nbMarker is the ownership mark every created object carries: the `owner`
@@ -85,6 +90,7 @@ func (p *Platform) netboxConfig() (nbConfig, bool, error) {
 		PublicRole:   textAt(section, "public_role", "User"),
 		TunnelGroup:  str(section["tunnel_group"]),
 		TenantGroup:  str(section["tenant_group"]),
+		SubjectField: str(section["subject_field"]),
 		Marker:       nbMarker{Value: str(section["owner"])},
 	}
 	switch {
@@ -347,6 +353,8 @@ type nbVIP struct {
 type nbTenant struct {
 	n        int
 	slug     string
+	subject  string // Keycloak subject of the tenant
+	field    string // netbox.subject_field
 	vrf      string // the shared VRF of the tenant segment
 	vrfs     []string
 	oldVRF   map[string][]string // VRF name -> the names it had before names read like words
@@ -425,7 +433,7 @@ func (e *Execution) netboxWanted(c nbConfig) []nbTenant {
 		if len(machines) == 0 && len(networks) == 0 && len(vips) == 0 && len(clients) == 0 {
 			continue
 		}
-		tn := nbTenant{n: n, slug: slug, vrf: c.VRF, oldVRF: map[string][]string{c.VRF: {strings.ToLower(c.VRF)}}}
+		tn := nbTenant{n: n, slug: slug, subject: str(t["subject"]), field: c.SubjectField, vrf: c.VRF, oldVRF: map[string][]string{c.VRF: {strings.ToLower(c.VRF)}}}
 		used := map[string]bool{tn.vrf: true}
 		// The VNIs as node-agent numbers them (PLAN 6.2): the tenants zone is EVPN, the private zone plain VXLAN.
 		tn.vnis = append(tn.vnis, nbVNI{name: fmt.Sprintf("t%03d.%s", n, slug), slug: fmt.Sprintf("carrel-t%03d", n), kind: "vxlan-evpn", vni: 100000 + n, description: "Carrel tenant segment of " + slug})
@@ -946,6 +954,9 @@ func (e *Execution) netboxTenancy(c *nbClient, s *nbState, t *nbTenant) int {
 	want := D{"name": "Carrel: " + nbTitle(t.slug), "slug": slug, "description": fmt.Sprintf("Carrel tenant %s, segment 10.200.%d.0/24", t.slug, t.n)}
 	if s.tenantGroup != 0 {
 		want["group"] = s.tenantGroup
+	}
+	if t.field != "" {
+		want["custom_fields"] = D{t.field: t.subject}
 	}
 	got := c.ensure("tenancy/tenants/", have, want)
 	id := integer(got["id"])
