@@ -153,6 +153,16 @@ Save the client's chosen public key once with `ssh_key_add` to omit `ssh_keys` o
 If no saved key is known, read only the known default public key and pass it inline. Do not inspect
 unrelated SSH aliases or scan private keys. Inline public keys are not saved automatically.
 
+A creation takes its keys from the first of three places that has one: `ssh_keys` in the request,
+the keys saved in the tenant with `ssh_key_add`, then the creator's key on the lab portal's Keys
+page (`portal.winlab.tw/keys`). A member who keeps a key on the portal creates machines without
+passing or saving one. The portal picks which of the member's keys it serves; a portal that cannot
+be reached reads as no key, and the creation asks for one.
+
+The key is copied at creation. Removing it on the portal later does not remove it from machines
+that already exist, and in a group tenant it reaches the tenant's machines through the jump host,
+as an inline key does.
+
 ### Shared machines in a group tenant
 
 A machine trusts only its creator's key at first. To let every member of the tenant in, the owner
@@ -553,6 +563,21 @@ that did not answer, or whose files exceeded 256 KiB, as `missing_nodes`, and th
 warning. `/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
+
+### Keys from the portal
+
+With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key
+in the request or the tenant reads its creator's key from the portal:
+
+```json
+"portal_keys_url": "https://portal.winlab.tw/api/ssh-keys/services/carrel",
+"portal_keys_token_file": "/etc/carrel/portal-keys-token"
+```
+
+The URL is https, and is a portal SSH service's route (a portal admin makes the service on `/keys/services`);
+the file holds its read key, mode 600. carrel asks for one username at a time, the caller's own,
+when the call arrives, and keeps the key type and key only. Without these two settings nothing
+changes.
 
 ### NetBox sync
 
