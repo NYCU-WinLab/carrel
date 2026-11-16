@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -179,6 +180,11 @@ type Router struct {
 	root    string
 	runtime Runtime
 	now     func() time.Time
+	// Callers are the only source addresses the router serves: loopback and
+	// the gateway. Any other process that reaches the port, a tenant machine
+	// or a microVM reaching its own host, could otherwise name any tenant's
+	// function in X-Carrel-Function (issue #251). Nil serves every source.
+	Callers []netip.Addr
 
 	mu        sync.Mutex
 	functions map[string]*state
@@ -289,6 +295,39 @@ func (r *Router) Forget(name string) {
 	r.mu.Unlock()
 }
 
+// ParseCallers reads the addresses that may call the router.
+func ParseCallers(values []string) ([]netip.Addr, error) {
+	callers := make([]netip.Addr, 0, len(values))
+	for _, value := range values {
+		address, err := netip.ParseAddr(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("caller %q: %w", value, err)
+		}
+		callers = append(callers, address.Unmap())
+	}
+	if len(callers) == 0 {
+		return nil, errors.New("no caller may reach the router")
+	}
+	return callers, nil
+}
+
+// allowed reports whether the request comes from one of the callers.
+func (r *Router) allowed(req *http.Request) bool {
+	if r.Callers == nil {
+		return true
+	}
+	source, err := netip.ParseAddrPort(req.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	for _, caller := range r.Callers {
+		if caller == source.Addr().Unmap() {
+			return true
+		}
+	}
+	return false
+}
+
 // functionName takes the function from the X-Carrel-Function header the
 // gateway sets, or from the first label of the host name.
 func functionName(req *http.Request) string {
@@ -304,6 +343,10 @@ func functionName(req *http.Request) string {
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if !r.allowed(req) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	name := functionName(req)
 	// A state can be retired between the lookup and its use, by a deploy or
 	// a removal. Look it up again; a few tries cover any real sequence.
