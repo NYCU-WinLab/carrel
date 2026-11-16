@@ -372,6 +372,10 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 			keys = append(keys, k.Key)
 		}
 	}
+	if len(keys) == 0 {
+		// The creator's keys on the portal, read when the call arrived.
+		keys = arr(a["portal_keys"])
+	}
 	if (len(keys) > 0 || !dry) && !(tenantImage && e.tenantImageServesPorts(t, a)) {
 		validateKeys(keys)
 	}

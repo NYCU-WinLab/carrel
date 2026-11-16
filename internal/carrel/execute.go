@@ -17,6 +17,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 		}
 	}()
 	validateBootstrapArguments(tool, a)
+	a = e.withPortalKeys(tool, a, w)
 	if named("async_tools", tool) && !boolean(a["dry_run"]) {
 		var t D
 		if named("admin_tools", tool) {

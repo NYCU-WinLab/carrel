@@ -34,6 +34,13 @@ type Config struct {
 	ACMEDirectory   string `json:"acme_directory,omitempty"`
 	ACMEEmail       string `json:"acme_email,omitempty"`
 
+	// PortalKeysURL is the portal service that serves members' SSH keys,
+	// e.g. https://portal.winlab.tw/api/ssh-keys/services/carrel, and
+	// PortalKeysTokenFile holds its read key. Empty: creation never asks
+	// the portal.
+	PortalKeysURL       string `json:"portal_keys_url,omitempty"`
+	PortalKeysTokenFile string `json:"portal_keys_token_file,omitempty"`
+
 	HostedRedirects []string `json:"hosted_redirects,omitempty"`
 	SSHJump         bool     `json:"ssh_jump,omitempty"`
 	Fetch           bool     `json:"fetch,omitempty"`
@@ -153,6 +160,14 @@ func (c Config) Validate() error {
 	}
 	if len(c.Nodes) == 0 {
 		return errors.New("nodes must list at least one node")
+	}
+	if c.PortalKeysURL != "" {
+		if u, err := url.Parse(c.PortalKeysURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return errors.New("portal_keys_url must be an http(s) URL")
+		}
+		if c.PortalKeysTokenFile == "" {
+			return errors.New("portal_keys_url needs portal_keys_token_file")
+		}
 	}
 	names, targets := map[string]bool{}, map[string]bool{}
 	for _, n := range c.Nodes {
