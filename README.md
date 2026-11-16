@@ -159,6 +159,10 @@ page (`portal.winlab.tw/keys`). A member who keeps a key on the portal creates m
 passing or saving one. The portal picks which of the member's keys it serves; a portal that cannot
 be reached reads as no key, and the creation asks for one.
 
+The key is copied at creation. Removing it on the portal later does not remove it from machines
+that already exist, and in a group tenant it reaches the tenant's machines through the jump host,
+as an inline key does.
+
 ### Shared machines in a group tenant
 
 A machine trusts only its creator's key at first. To let every member of the tenant in, the owner
@@ -570,7 +574,7 @@ in the request or the tenant reads its creator's key from the portal:
 "portal_keys_token_file": "/etc/carrel/portal-keys-token"
 ```
 
-The URL is a portal SSH service's route (a portal admin makes the service on `/keys/services`);
+The URL is https, and is a portal SSH service's route (a portal admin makes the service on `/keys/services`);
 the file holds its read key, mode 600. carrel asks for one username at a time, the caller's own,
 when the call arrives, and keeps the key type and key only. Without these two settings nothing
 changes.

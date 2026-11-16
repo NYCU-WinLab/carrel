@@ -109,7 +109,10 @@ func (e *Execution) portalKeys(username string) []any {
 		return nil
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	resp, err := e.P.HTTP.Do(req)
+	// A redirect is never followed: it would carry the read key to another
+	// address, and over http if the portal were downgraded.
+	client := &http.Client{Timeout: portalKeysTimeout, Transport: e.P.HTTP.Transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
 	if err != nil {
 		slog.Warn("portal_keys_unavailable", "event", "portal_keys_unavailable", "reason", "request")
 		return nil

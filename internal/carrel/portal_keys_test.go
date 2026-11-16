@@ -124,6 +124,50 @@ func TestAPortalThatFailsAsksForAKey(t *testing.T) {
 	}
 }
 
+func TestThePortalReadKeyDoesNotFollowARedirect(t *testing.T) {
+	p, _ := fixture(t)
+	leaked := &atomic.Int32{}
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked.Add(1)
+		_, _ = w.Write([]byte(portalTestKey + "\n"))
+	}))
+	t.Cleanup(other.Close)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(first.Close)
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("wkk_test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.Config.PortalKeysURL, p.Config.PortalKeysTokenFile = first.URL+"/services/carrel", token
+	if keys := p.execution(context.Background()).portalKeys("alice"); len(keys) != 0 || leaked.Load() != 0 {
+		t.Fatalf("a redirect was followed: %d keys, %d requests", len(keys), leaked.Load())
+	}
+}
+
+func TestPortalKeysURLMustBeHTTPS(t *testing.T) {
+	base := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}, PortalKeysTokenFile: "/etc/carrel/portal-keys-token"}
+	for url, ok := range map[string]bool{
+		"https://portal.test/api/ssh-keys/services/carrel":     true,
+		"http://portal.test/api/ssh-keys/services/carrel":      false,
+		"https://u:p@portal.test/api/ssh-keys/services/carrel": false,
+		"https://portal.test/api/ssh-keys/services/carrel?x=1": false,
+		"portal.test": false,
+	} {
+		c := base
+		c.PortalKeysURL = url
+		if err := c.Validate(); (err == nil) != ok {
+			t.Fatalf("%s: %v", url, err)
+		}
+	}
+	c := base
+	c.PortalKeysURL, c.PortalKeysTokenFile = "https://portal.test/x", ""
+	if c.Validate() == nil {
+		t.Fatal("a URL without a token file was accepted")
+	}
+}
+
 func TestPortalKeysStayOutOfTheFingerprint(t *testing.T) {
 	a := D{"name": "box", "portal_keys": []any{"x"}, "machines": []any{D{"name": "m", "portal_keys": []any{"x"}}, "plain"}}
 	got := withoutPortalKeys(a)

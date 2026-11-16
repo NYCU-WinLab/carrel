@@ -162,8 +162,10 @@ func (c Config) Validate() error {
 		return errors.New("nodes must list at least one node")
 	}
 	if c.PortalKeysURL != "" {
-		if u, err := url.Parse(c.PortalKeysURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			return errors.New("portal_keys_url must be an http(s) URL")
+		// https only: the request carries the read key, and the answer
+		// decides which keys a machine trusts.
+		if u, err := url.Parse(c.PortalKeysURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("portal_keys_url must be an https URL with no query")
 		}
 		if c.PortalKeysTokenFile == "" {
 			return errors.New("portal_keys_url needs portal_keys_token_file")
