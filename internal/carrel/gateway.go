@@ -25,8 +25,9 @@ import (
 // domain (sub "*") or a 404.
 
 // The function paths are the public ones only: the host agents' paths
-// (/functions/v1/agent/*) stay on the infra network.
-var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/internal/*", "/apps/*", "/console/*",
+// (/functions/v1/agent/*) stay on the infra network, and so do the guests'
+// /internal/* paths, which they call on 10.200.0.3:8080 directly (#262).
+var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/apps/*", "/console/*",
 	"/functions/v1/env/*", "/functions/v1/registry/*", "/functions/v1/deploy/*"}
 
 const gatewayCerts = "/etc/caddy/carrel-certs"

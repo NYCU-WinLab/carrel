@@ -166,9 +166,11 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	}))
 	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		internal := r.URL.Path == "/internal/guest-status" || r.URL.Path == "/internal/guest-keys" || r.URL.Path == "/gateway/ask" ||
-			strings.HasPrefix(r.URL.Path, "/functions/v1/agent/")
-		if internal && !strings.HasPrefix(host, "10.200.") {
+		guest := strings.HasPrefix(r.URL.Path, "/internal/")
+		internal := guest || r.URL.Path == "/gateway/ask" || strings.HasPrefix(r.URL.Path, "/functions/v1/agent/")
+		// The gateway (10.200.0.2) forwards internet clients, so it is no
+		// guest even though its address is on the infra network (#262).
+		if internal && !strings.HasPrefix(host, "10.200.") || guest && host == "10.200.0.2" {
 			jsonResponse(w, 403, D{"error": "forbidden"})
 			return
 		}
