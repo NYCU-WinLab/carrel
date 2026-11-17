@@ -125,7 +125,9 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     }
     reads = []
     monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
-    monkeypatch.setattr(module, "storage_definition", lambda storage: {"type": "zfspool", "pool": "rpool/data"})
+    monkeypatch.setattr(
+        module, "storage_definition", lambda storage: {"type": "zfspool", "pool": "rpool/data"}
+    )
     held = []
     monkeypatch.setattr(module, "snapshot_bytes", lambda pool: held.append(pool) or 7 * GIB)
 
