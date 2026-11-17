@@ -353,6 +353,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		}
 		request = merge(request, spec, D{"action": "resize"})
 	}
+	reconcileFailed := false
 	if !dry {
 		if tool == "machine_resize" {
 			m["resize_from"] = fallback(m, "resize_from", pick(m, "cpu", "memory_mb", "disk_gb"))
@@ -385,6 +386,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 				if _, ok := problem.(Failure); ok {
 					slog.Warn("delete_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
 					problem = nil
+					reconcileFailed = true
 				} else {
 					slog.Error("delete_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
 				}
@@ -409,6 +411,9 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 	if !dry {
 		if tool == "machine_delete" {
 			r["deleted"] = D{"name": m["name"], "state": "deleted"}
+			if reconcileFailed {
+				r["warnings"] = []D{{"code": "reconcile_failed", "message": "the machine is deleted, but the follow-up reconcile failed; the next reconcile pass will catch up"}}
+			}
 		} else if tool == "machine_resize" {
 			r["machine"] = e.PublicMachine(m, e.ports(n))
 			r["configuration"] = "allocated; see machine.resize for guest verification and required owner actions"

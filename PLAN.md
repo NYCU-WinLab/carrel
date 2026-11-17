@@ -196,7 +196,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `machine_resize` | CPU/RAM may shrink while stopped; disk only grows |
 | | `machine_power` | `start \| stop \| shutdown \| reboot` |
 | | `machine_rebuild` | new `image`; keeps address, ports and domains |
-| | `machine_delete` | `confirm: <name>` |
+| | `machine_delete` | `confirm: <name>`; if the post-delete reconcile fails the result still reports `deleted` and adds `warnings: [{code: "reconcile_failed", message}]`, absent otherwise |
 | | `machine_media` | `machine`, `iso` or `none`; insert or eject an ISO |
 | | `machine_console_url` | `machine`; a single-use browser console link, bound to the requester's Keycloak login, valid 15 minutes (section 7.8) |
 | Deployments | `deployment_plan`, `deployment_apply` | `machines`, `connections`, `publications`; optional experiment `networks`, `attachments`. The plan is the read-only preview; apply has no dry run |
