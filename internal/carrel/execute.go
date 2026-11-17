@@ -378,10 +378,21 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			// The VM is gone: a reconcile that fails (a node or the gateway
 			// not answering) must not leave the record behind, since the next
 			// reconcile pass catches up on the rest.
-			if problem := attempt(func() { e.Reconcile() }); problem != nil {
-				slog.Warn("delete_reconcile_failed", "vmid", m["vmid"], "error", problem)
+			// Anything else is a bug: the record still goes (the VM is gone,
+			// SweepDeletedMachines covers leftovers), then the panic is rethrown.
+			problem := attempt(func() { e.Reconcile() })
+			if problem != nil {
+				if _, ok := problem.(Failure); ok {
+					slog.Warn("delete_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
+					problem = nil
+				} else {
+					slog.Error("delete_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
+				}
 			}
 			e.removeMachineRecord(n, m)
+			if problem != nil {
+				panic(problem)
+			}
 		case "machine_resize":
 			previous := obj(m["resize_from"])
 			m["resize"] = resizeCompletion(m, previous, spec)

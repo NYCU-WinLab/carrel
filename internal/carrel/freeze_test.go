@@ -490,6 +490,25 @@ func TestDeleteRemovesTheRecordWhenReconcileFails(t *testing.T) {
 	}
 }
 
+// A reconcile that panics with something other than a Failure is a bug: the
+// record is still removed, and the panic is not hidden behind a success.
+func TestDeleteSurfacesANonFailureReconcilePanic(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "reconcile" {
+			panic("reconcile bug")
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	if failure(r)["code"] == nil {
+		t.Fatalf("the bug was hidden behind a successful delete: %v", r)
+	}
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("the record stayed after the reconcile panicked")
+	}
+}
+
 // A delete of a machine whose thaw is restoring it waits for the thaw
 // (CheckBusy), so the restore is never cut off under it (#192, item 1).
 func TestDeleteWaitsForAThawInProgress(t *testing.T) {
