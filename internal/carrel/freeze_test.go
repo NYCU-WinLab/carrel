@@ -210,7 +210,11 @@ func TestDeletingAFrozenMachineRemovesItsBackup(t *testing.T) {
 	if f := failure(member(p, "machine_delete", D{"machine": "box", "confirm": "wrong"})); f["code"] != "invalid" {
 		t.Fatal(encoded(f))
 	}
-	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	deleted := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	assertOK(t, deleted)
+	if _, has := obj(obj(deleted["operation"])["result"])["warnings"]; has {
+		t.Fatalf("a clean delete carries warnings: %s", encoded(deleted))
+	}
 	if frozenOps(*seen, "backup_remove") != 1 || p.Store.Get("frozen", "10100") != nil {
 		t.Fatalf("%v", *seen)
 	}
@@ -874,6 +878,10 @@ func TestDeleteToleratesAnotherTenantsUnreadableCertificate(t *testing.T) {
 			}
 			if p.Store.Get("machines", "10100") != nil {
 				t.Fatal("the record stayed after the reconcile failed")
+			}
+			warnings := arr(obj(obj(r["operation"])["result"])["warnings"])
+			if len(warnings) != 1 || obj(warnings[0])["code"] != "reconcile_failed" {
+				t.Fatalf("no reconcile_failed warning: %s", encoded(r))
 			}
 			if p.Store.Get("machines", "10900") == nil || p.Store.Get("domains", "900") == nil {
 				t.Fatal("the other tenant's records were touched")
