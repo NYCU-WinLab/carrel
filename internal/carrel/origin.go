@@ -3,6 +3,7 @@ package carrel
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"os"
 	"time"
 )
@@ -88,10 +89,21 @@ func (e *Execution) MaintainOrigin() {
 // originPair reads a pair for the gateway.
 func originPair(crt, key string) D {
 	c, err := os.ReadFile(crt)
-	must(err)
+	if err != nil {
+		unreadablePair(err)
+	}
 	k, err := os.ReadFile(key)
-	must(err)
+	if err != nil {
+		unreadablePair(err)
+	}
 	return D{"fullchain": string(c), "privkey": string(k)}
+}
+
+// unreadablePair reports a certificate or key that cannot be read as an
+// infrastructure failure, not a bug.
+func unreadablePair(err error) {
+	slog.Warn("certificate_unreadable", "error", err.Error())
+	fail("backend_unavailable", "A certificate or key could not be read", D{"component": "acme", "backend_code": "certificate_unreadable", "recovery": "retry_infrastructure"})
 }
 
 // fingerprint matches node-agent's confirmation of the pair the gateway holds.
