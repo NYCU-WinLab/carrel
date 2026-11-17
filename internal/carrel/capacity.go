@@ -7,6 +7,30 @@ import (
 const GiB = 1024 * 1024 * 1024
 const MiB = 1024 * 1024
 
+// Disk watermarks: the share of a node's guest storage that holds data.
+// Above the ceiling nothing on the node may grow; the other two report.
+const (
+	diskWarning  = 0.7
+	diskCeiling  = 0.8
+	diskCritical = 0.85
+)
+
+// watermarks, from the emptiest to the fullest.
+var watermarks = []string{"ok", "warning", "blocked", "critical"}
+
+// watermark names how full a node's guest storage is.
+func watermark(used, total float64) string {
+	switch {
+	case used > total*diskCritical:
+		return "critical"
+	case used > total*diskCeiling:
+		return "blocked"
+	case used > total*diskWarning:
+		return "warning"
+	}
+	return "ok"
+}
+
 func summarize(inventory D, reservations []D, snapshots []snapshotRecord, at time.Time) D {
 	status, storage := obj(inventory["status"]), obj(inventory["storage"])
 	byID := map[int]D{}
@@ -35,18 +59,26 @@ func summarize(inventory D, reservations []D, snapshots []snapshotRecord, at tim
 		memory += max(0, num(m["memory_mb"])*MiB-num(running["maxmem"]))
 		disk += max(0, num(m["disk_gb"])*GiB-num(g["maxdisk"]))
 	}
-	reserved := 0.0
-	for _, s := range snapshots {
-		reserved += float64(s.DiskGB) * GiB
-	}
-	disk += reserved
 	info := obj(status["cpuinfo"])
 	mem := obj(status["memory"])
-	totalMem, totalDisk := num(mem["total"]), num(storage["total"])
+	totalMem, totalDisk, usedDisk := num(mem["total"]), num(storage["total"]), num(storage["used"])
+	declared := 0.0
+	for _, s := range snapshots {
+		declared += float64(s.DiskGB) * GiB
+	}
+	// Snapshots count like thin disks: at what they hold now. The node
+	// measures it, and its storage use already includes it. A node that
+	// does not report it counts every snapshot at the full size of its disk.
+	held, accounting, headroom := declared, "declared", totalDisk*diskCeiling-usedDisk-declared
+	if v := inventory["snapshot_bytes"]; v != nil {
+		held, accounting, headroom = num(v), "held", totalDisk*diskCeiling-usedDisk
+	}
+	disk += held
 	cpuLimit := num(info["cpus"]) * 4
 	memLimit := max(0, (totalMem-8*GiB)*0.9)
 	diskLimit := totalDisk * 1.5
-	blocked := num(storage["used"]) > totalDisk*0.8
+	level := watermark(usedDisk, totalDisk)
+	blocked := level == "blocked" || level == "critical"
 	diskRemaining := max(0, diskLimit-disk) / GiB
 	if blocked {
 		diskRemaining = 0
@@ -59,7 +91,7 @@ func summarize(inventory D, reservations []D, snapshots []snapshotRecord, at tim
 		usedMem = num(mem["used"]) / GiB
 		freeMem = (totalMem - num(mem["used"])) / GiB
 	}
-	return D{"checked_at": at.UTC().Format(time.RFC3339Nano), "scope": scope(inventory), "units": D{"memory": "GiB", "disk": "GiB", "cpu_utilization": "fraction"}, "physical": D{"cpu": D{"logical_cpus": info["cpus"], "cores": cores, "utilization": status["cpu"]}, "memory": D{"total": totalMem / GiB, "used": usedMem, "free": freeMem}, "disk": D{"storage": storageID(inventory), "total": totalDisk / GiB, "used": num(storage["used"]) / GiB, "free": (totalDisk - num(storage["used"])) / GiB, "snapshot_reserved_gib": reserved / GiB}}, "allocatable": D{"vcpu": D{"limit": cpuLimit, "committed": cpu, "remaining": max(0, cpuLimit-cpu)}, "memory_gib": D{"limit": memLimit / GiB, "committed": memory / GiB, "remaining": max(0, memLimit-memory) / GiB}, "disk_gib": D{"limit": diskLimit / GiB, "committed": disk / GiB, "remaining": diskRemaining}}, "policy": D{"cpu_overcommit": 4, "memory_reserve_gib": 8, "memory_fraction": 0.9, "disk_overcommit": 1.5, "disk_usage_ceiling": 0.8, "snapshot_headroom_gib": max(0, totalDisk*0.8-num(storage["used"])-reserved) / GiB, "storage_admission_blocked": blocked, "disk_accounting": "all_guest_storage_volumes", "cpu_memory_accounting": "running unmanaged guests plus all allocated Carrel machines (including stopped)", "tenant_quotas_apply_separately": true, "stopped_machines_retain_capacity": true, "cpu_is_shared": true, "quota_is_a_ceiling_not_a_capacity_reservation": true, "reserves_capacity": false}, "gpu": D{"allocation_supported": false, "inventory": "unknown"}}
+	return D{"checked_at": at.UTC().Format(time.RFC3339Nano), "scope": scope(inventory), "units": D{"memory": "GiB", "disk": "GiB", "cpu_utilization": "fraction"}, "physical": D{"cpu": D{"logical_cpus": info["cpus"], "cores": cores, "utilization": status["cpu"]}, "memory": D{"total": totalMem / GiB, "used": usedMem, "free": freeMem}, "disk": D{"storage": storageID(inventory), "total": totalDisk / GiB, "used": usedDisk / GiB, "free": (totalDisk - usedDisk) / GiB, "snapshot_gib": held / GiB, "snapshot_declared_gib": declared / GiB}}, "allocatable": D{"vcpu": D{"limit": cpuLimit, "committed": cpu, "remaining": max(0, cpuLimit-cpu)}, "memory_gib": D{"limit": memLimit / GiB, "committed": memory / GiB, "remaining": max(0, memLimit-memory) / GiB}, "disk_gib": D{"limit": diskLimit / GiB, "committed": disk / GiB, "remaining": diskRemaining}}, "policy": D{"cpu_overcommit": 4, "memory_reserve_gib": 8, "memory_fraction": 0.9, "disk_overcommit": 1.5, "disk_usage_warning": diskWarning, "disk_usage_ceiling": diskCeiling, "disk_usage_critical": diskCritical, "storage_watermark": level, "snapshot_accounting": accounting, "snapshot_headroom_gib": max(0, headroom) / GiB, "storage_admission_blocked": blocked, "disk_accounting": "all_guest_storage_volumes", "cpu_memory_accounting": "running unmanaged guests plus all allocated Carrel machines (including stopped)", "tenant_quotas_apply_separately": true, "stopped_machines_retain_capacity": true, "cpu_is_shared": true, "quota_is_a_ceiling_not_a_capacity_reservation": true, "reserves_capacity": false}, "gpu": D{"allocation_supported": false, "inventory": "unknown"}}
 }
 func (e *Execution) Capacity(proposed D, cached bool) D {
 	nodes, unavailable := e.nodeCapacities(proposed, cached)

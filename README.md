@@ -350,11 +350,15 @@ cleanup and reductions remain available. Administrator suspension is a separate 
 
 Snapshots use separate `snapshot_gb` (default 200 GiB) and `snapshots` (default 4) limits. A 40 GiB
 VM with two snapshots consumes 40 GiB `disk_gb` and 80 GiB `snapshot_gb`. The latter is a worst-case
-reservation, **not a claim about current physical usage**. Snapshot admission also checks safe
-physical headroom; storage pressure blocks new storage allocations. `quota_get` and
+charge against the tenant's quota, **not a claim about current physical usage**. Node admission
+counts snapshots like thin disks, at the bytes they hold now (ZFS `usedbysnapshots`, read with
+every check); a node that does not report it counts each snapshot at the size of its disk. A new
+snapshot is refused when its disk would not fit in the node's physical headroom, or when the node's
+storage is above the admission ceiling. `capacity_get` reports the storage watermark (`ok`,
+`warning` above 70 percent real use, `blocked` above 80, `critical` above 85). `quota_get` and
 `snapshot_list` expose timestamped actual snapshot-retained bytes, sampled from ZFS
 `usedbysnapshots`. Shared blocks are counted once.
-Accounting sample failure does not release reservations. Rollback can briefly stop a VM, restores
+Accounting sample failure does not release quota charges. Rollback can briefly stop a VM, restores
 its previous power state, and waits for readiness if it was running. It is still a disk-only rollback.
 
 ### Freeze a machine you do not need now

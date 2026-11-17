@@ -82,6 +82,18 @@ def test_zfs_usage_counts_only_owned_volumes_per_tenant(monkeypatch):
     assert (result[3]["unique_total_bytes"], result[3]["retained_snapshot_bytes"]) == (0, 0)
 
 
+def test_snapshot_bytes_adds_what_snapshots_hold_on_every_volume(monkeypatch):
+    module = load_script("node-agent.py")
+    calls = []
+    # The pool itself, a template, two guests and a volume Carrel does not own.
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or "0\n0\n50\n70\n5000")
+    assert module.snapshot_bytes("rpool/data") == 5120
+    assert calls[0][-2:] == ("usedbysnapshots", "rpool/data")
+    # An empty pool holds nothing.
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: "0")
+    assert module.snapshot_bytes("rpool/data") == 0
+
+
 def test_ct_template_pins_match_across_scripts():
     agent = load_script("node-agent.py").CT_TEMPLATES
     assert load_script("build-templates.py").CT_TEMPLATES == agent

@@ -406,7 +406,8 @@ snapshot space (100 GiB) retain their existing defaults. A machine created with
 | Quota | The sum of all quotas may exceed capacity, because most tenants are idle most of the time |
 | CPU admission | All allocated Carrel machines, including stopped ones, reserve vCPU; shared vCPU at most 4 times host threads |
 | Memory admission | All allocated Carrel machines, including stopped ones, reserve RAM; unmanaged running infrastructure also counts |
-| Disk admission | Allocated disk at most 1.5 times the pool. Alert at 80 percent real use |
+| Disk admission | Allocated disk at most 1.5 times the pool: volumes at their declared size, snapshots at the bytes they hold (2026-11-17; a node that does not measure them counts each at the size of its disk). A snapshot whose disk would not fit in the node's physical headroom is refused |
+| Disk watermark | Real use of a node's pool: `warning` above 70 percent, `blocked` above 80 (nothing on the node grows), `critical` above 85. `capacity_get` and `node_list` report it; alerts are in section 9.3. Snapshots and thin disks grow after admission, so the watermark, not admission, is what guards a pool |
 | Addresses, ports, domains | Fixed allocations, never oversubscribed |
 
 When admission fails the tool returns `capacity_exhausted` and lists the tenant's idle machines.

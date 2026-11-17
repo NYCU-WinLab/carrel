@@ -21,10 +21,14 @@ func (e *Execution) Admin(tool string, a, w D) D {
 	case "node_list":
 		nodes := []D{}
 		for _, n := range e.P.Nodes() {
-			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "inventory": e.Call(D{"op": "inventory"}, n.Target)})
+			// capacity is what admission makes of the inventory: committed
+			// against limits, and how full the node's storage really is.
+			inventory := e.Call(D{"op": "inventory"}, n.Target)
+			reservations, snapshots := e.nodeLoad(n, nil)
+			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory})
 		}
 		if len(nodes) == 1 {
-			return D{"inventory": nodes[0]["inventory"]}
+			return D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"]}
 		}
 		return D{"inventory": nodes[0]["inventory"], "nodes": nodes}
 	case "machine_migrate":

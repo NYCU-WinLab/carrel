@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 )
@@ -242,7 +243,7 @@ func combine(nodes []D) D {
 		at(out, "physical", "memory")[k] = sum("physical", "memory", k)
 	}
 	disk := at(out, "physical", "disk")
-	for _, k := range []string{"total", "used", "free", "snapshot_reserved_gib"} {
+	for _, k := range []string{"total", "used", "free", "snapshot_gib", "snapshot_declared_gib"} {
 		disk[k] = sum("physical", "disk", k)
 	}
 	for _, dim := range []string{"vcpu", "memory_gib", "disk_gib"} {
@@ -258,11 +259,22 @@ func combine(nodes []D) D {
 	}
 	policy := at(out, "policy")
 	policy["snapshot_headroom_gib"] = sum("policy", "snapshot_headroom_gib")
-	blocked := true
+	// The fullest node names the watermark; snapshots count as held only
+	// when every node measures them.
+	blocked, level, accounting := true, "ok", "held"
 	for _, c := range nodes {
-		blocked = blocked && boolean(at(c, "policy")["storage_admission_blocked"])
+		p := at(c, "policy")
+		blocked = blocked && boolean(p["storage_admission_blocked"])
+		if slices.Index(watermarks, str(p["storage_watermark"])) > slices.Index(watermarks, level) {
+			level = str(p["storage_watermark"])
+		}
+		if p["snapshot_accounting"] != "held" {
+			accounting = "declared"
+		}
 	}
 	policy["storage_admission_blocked"] = blocked
+	policy["storage_watermark"] = level
+	policy["snapshot_accounting"] = accounting
 	policy["placement"] = "each machine runs on one node; the node with the most memory left that admits it"
 	out["scope"] = fmt.Sprintf("%d nodes; shared with infrastructure and other tenants", len(nodes))
 	out["node_count"] = len(nodes)
@@ -288,7 +300,7 @@ func (e *Execution) admits(c D, cpu, memory, disk float64, proposed D, snapshot 
 	}
 	policy := obj(c["policy"])
 	if snapshot && disk > num(policy["snapshot_headroom_gib"]) {
-		fail("capacity_exhausted", "Snapshot worst-case reservation exceeds safe physical headroom")
+		fail("capacity_exhausted", "A snapshot of this disk could outgrow the node's physical headroom")
 	}
 	growing := disk > 0
 	if proposed != nil {
