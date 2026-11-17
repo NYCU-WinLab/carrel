@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
@@ -476,4 +477,58 @@ func (e *Execution) CollectCloudInit() int {
 		}
 	}
 	return added
+}
+
+// removeMachineRecord drops a deleted machine's apps, runners and record with
+// everything that hangs off its VMID, which frees its quota and reservation.
+func (e *Execution) removeMachineRecord(n int, m D) {
+	e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
+	e.Transaction(func(tx *Execution) {
+		tx.removeRunners(n, m["vmid"])
+		tx.forgetMachine(n, m)
+		tx.S.Remove("machines", m["vmid"])
+	})
+}
+
+// SweepDeletedMachines removes the records stuck in "deleting" whose VM is no
+// longer on its node: a delete that stopped after the node call leaves one,
+// and it keeps counting against admission and the tenant's quota. A node that
+// does not answer, or a freeze that still holds the record, is left alone.
+func (e *Execution) SweepDeletedMachines() []D {
+	stuck := filter(e.S.Objects("machines"), func(m D) bool {
+		return m["state"] == "deleting" && e.S.Get("frozen", str(m["vmid"])) == nil
+	})
+	if len(stuck) == 0 {
+		return nil
+	}
+	nodes := e.P.Nodes()
+	inventories, _, failures := e.inventories(nodes, false)
+	present := map[string]map[int]bool{}
+	for i, n := range nodes {
+		inventory := obj(inventories[i])
+		if failures[i] != nil || inventory["resources"] == nil {
+			continue
+		}
+		present[n.Name] = map[int]bool{}
+		for _, g := range dicts(inventory["resources"]) {
+			if (g["type"] == "qemu" || g["type"] == "lxc") && (inventory["node"] == nil || g["node"] == inventory["node"]) {
+				present[n.Name][integer(g["vmid"])] = true
+			}
+		}
+	}
+	removed := []D{}
+	for _, m := range stuck {
+		on, ok := present[str(m["node"])]
+		if !ok || on[integer(m["vmid"])] {
+			continue
+		}
+		n := integer(m["tenant_n"])
+		if err := attempt(func() { e.removeMachineRecord(n, m) }); err != nil {
+			slog.Warn("deleted_machine_record_not_removed", "vmid", m["vmid"], "error", describe(err))
+			continue
+		}
+		slog.Info("deleted_machine_record_removed", "vmid", m["vmid"], "tenant", n)
+		removed = append(removed, D{"vmid": m["vmid"], "name": m["name"], "tenant_n": n, "node": m["node"]})
+	}
+	return removed
 }
