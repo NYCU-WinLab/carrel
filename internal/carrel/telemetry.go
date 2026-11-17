@@ -3,6 +3,8 @@ package carrel
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,8 +18,8 @@ import (
 )
 
 // Telemetry sends what an admin must see to an OTLP/HTTP collector
-// (PLAN 9.1): every WARN and ERROR log record, and the gauges handed to
-// Gauge. It never slows the caller: items wait in a bounded queue, a full
+// (PLAN 9.1): every WARN and ERROR log record, the gauges handed to Gauge,
+// and the spans handed to Span. It never slows the caller: items wait in a bounded queue, a full
 // queue drops them, and a collector that does not answer costs one line on
 // stderr a minute. A nil *Telemetry does nothing, so callers need no check.
 type Telemetry struct {
@@ -35,10 +37,10 @@ type Telemetry struct {
 	sent   map[string]int
 }
 
-// telemetryItem is one OTLP log record or one OTLP metric.
+// telemetryItem is one OTLP log record, metric or span.
 type telemetryItem struct {
-	metric bool
-	body   D
+	metric, span bool
+	body         D
 }
 
 const (
@@ -163,6 +165,35 @@ func (t *Telemetry) Gauge(name, unit string, value float64, attrs ...string) {
 	t.enqueue(telemetryItem{metric: true, body: D{"name": name, "unit": unit, "gauge": D{"dataPoints": []D{point}}}})
 }
 
+// Span queues one finished tool call. tenant is the tenant number, or 0 when
+// the call named none; outcome is "ok" or the error code. Nothing else about
+// the call leaves: arguments and results stay out of the trace.
+func (t *Telemetry) Span(tool string, tenant int, start time.Time, outcome string) {
+	if t == nil {
+		return
+	}
+	ids := make([]byte, 24)
+	_, _ = rand.Read(ids)
+	status := D{"code": 1}
+	if outcome != "ok" {
+		status = D{"code": 2, "message": outcome}
+	}
+	attrs := []D{otlpString("carrel.tool", tool), otlpString("carrel.outcome", outcome)}
+	if tenant > 0 {
+		attrs = append(attrs, otlpString("carrel.tenant", strconv.Itoa(tenant)))
+	}
+	t.enqueue(telemetryItem{span: true, body: D{
+		"traceId":           hex.EncodeToString(ids[:16]),
+		"spanId":            hex.EncodeToString(ids[16:]),
+		"name":              tool,
+		"kind":              2, // SERVER
+		"startTimeUnixNano": strconv.FormatInt(start.UnixNano(), 10),
+		"endTimeUnixNano":   strconv.FormatInt(time.Now().UnixNano(), 10),
+		"attributes":        attrs,
+		"status":            status,
+	}})
+}
+
 func (t *Telemetry) enqueue(item telemetryItem) {
 	select {
 	case t.queue <- item:
@@ -179,7 +210,7 @@ func (t *Telemetry) loop() {
 	defer t.wg.Done()
 	tick := time.NewTicker(telemetryFlush)
 	defer tick.Stop()
-	var logs, metrics []D
+	var logs, metrics, spans []D
 	flush := func() {
 		if len(logs) > 0 {
 			t.post("/v1/logs", D{"resourceLogs": []D{{"resource": otlpResource(), "scopeLogs": []D{{"scope": D{"name": "carrel"}, "logRecords": logs}}}}})
@@ -189,9 +220,15 @@ func (t *Telemetry) loop() {
 			t.post("/v1/metrics", D{"resourceMetrics": []D{{"resource": otlpResource(), "scopeMetrics": []D{{"scope": D{"name": "carrel"}, "metrics": metrics}}}}})
 			metrics = nil
 		}
+		if len(spans) > 0 {
+			t.post("/v1/traces", D{"resourceSpans": []D{{"resource": otlpResource(), "scopeSpans": []D{{"scope": D{"name": "carrel"}, "spans": spans}}}}})
+			spans = nil
+		}
 	}
 	add := func(item telemetryItem) {
-		if item.metric {
+		if item.span {
+			spans = append(spans, item.body)
+		} else if item.metric {
 			metrics = append(metrics, item.body)
 		} else {
 			logs = append(logs, item.body)
@@ -201,7 +238,7 @@ func (t *Telemetry) loop() {
 		select {
 		case item := <-t.queue:
 			add(item)
-			if len(logs)+len(metrics) >= telemetryBatch {
+			if len(logs)+len(metrics)+len(spans) >= telemetryBatch {
 				flush()
 			}
 		case <-tick.C:
