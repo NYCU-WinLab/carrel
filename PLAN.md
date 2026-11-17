@@ -1624,8 +1624,9 @@ B09 uses golem, which sends to Telegram (2026-11-17; no email sender was built).
 Nothing acts on a watermark by itself yet: an admin moves machines with `machine_migrate` or asks
 owners to free space. Quorum loss is not watched.
 
-An external heartbeat covers the case where the whole site is down: carrel pings an outside
-service, and silence is the alert.
+The telemetry is also the heartbeat for a site that is down: the collector and the alerting
+service run outside the site, the control plane sends every minute, and 10 minutes of silence is
+the alert.
 
 ### 9.4 NetBox inventory sync
 
