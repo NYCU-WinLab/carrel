@@ -544,8 +544,11 @@ func TestDeleteSurfacesANonFailureReconcilePanic(t *testing.T) {
 		return nil, nil, false
 	})
 	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
-	if failure(r)["code"] == nil {
-		t.Fatalf("the bug was hidden behind a successful delete: %v", r)
+	if failure(r)["code"] != "internal" || !strings.Contains(str(failure(r)["message"]), "machine was deleted") {
+		t.Fatalf("the bug was hidden or described as a retained allocation: %v", r)
+	}
+	if op := obj(r["operation"]); op["state"] != "failed" || op["resource_changes"] != true {
+		t.Fatalf("the operation does not record the delete: %s", encoded(r))
 	}
 	if p.Store.Get("machines", "10100") != nil {
 		t.Fatal("the record stayed after the reconcile panicked")
