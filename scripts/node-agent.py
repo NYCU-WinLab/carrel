@@ -167,7 +167,19 @@ def vmids_present(vmids):
     # VM.Audit check passes. /etc/pve is cluster-wide and not ACL-filtered.
     if not isinstance(vmids, list) or len(vmids) > 1000:
         raise ValueError("invalid VMIDs")
-    return sorted(v for v in vmids if any(PVE_NODES.glob(f"*/*/{integer(v, 10000, 99999)}.conf")))
+    wanted = {integer(v, 10000, 99999) for v in vmids}
+    # An unmounted pmxcfs or an unreadable directory must fail, not read as "absent".
+    if not (PVE_NODES / NODE).is_dir():
+        raise RuntimeError(f"{PVE_NODES / NODE} is not readable")
+    found = set()
+    with os.scandir(PVE_NODES) as nodes:
+        for node in nodes:
+            if node.is_dir():
+                with os.scandir(node.path) as kinds:
+                    for kind in kinds:
+                        if kind.is_dir():
+                            found.update(int(n[:-5]) for n in os.listdir(kind.path) if n.endswith(".conf") and n[:-5].isdigit())
+    return sorted(wanted & found)
 
 
 def topology_read():
