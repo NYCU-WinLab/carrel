@@ -1963,7 +1963,7 @@
     },
     {
       "name": "snapshot_create",
-      "description": "Create a disk snapshot. Reserves its worst-case size in the separate snapshot_gb quota, not disk_gb. Actual retained blocks are reported separately when available.",
+      "description": "Create a disk snapshot. A snapshot starts near zero and grows as the disk changes; snapshot_gb counts the space the tenant's snapshots hold, not disk_gb. Refused while that space is over the limit. Without a recent measurement each snapshot counts at the size of its disk; snapshot_storage.snapshot_gb_counts says which applies (held or declared).",
       "inputSchema": {
         "type": "object",
         "properties": {
