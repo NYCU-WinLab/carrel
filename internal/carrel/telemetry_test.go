@@ -307,6 +307,12 @@ func TestCapacityReportNamesEveryNode(t *testing.T) {
 		if r["op"] == "inventory" && target == "node-02" {
 			return nil, errors.New("unreachable")
 		}
+		if r["op"] == "guest_memory" {
+			if target == "node-03" {
+				return nil, errors.New("no answer")
+			}
+			return D{"node": "carrel01", "running": 5, "reporting": 2, "assigned_bytes": 6 * GiB, "available_bytes": 4 * GiB}, nil
+		}
 		v, err := inner(r, target)
 		if inv, ok := v.(D); ok && r["op"] == "inventory" && target == "node-01" {
 			inv["storage"] = D{"total": 1000 * GiB, "used": 750 * GiB}
@@ -332,6 +338,12 @@ func TestCapacityReportNamesEveryNode(t *testing.T) {
 		"carrel.node.snapshot.declared/carrel01":   40 * GiB,
 		"carrel.node.disk.limit/carrel01":          1500 * GiB,
 		"carrel.node.vcpu.limit/carrel03":          128,
+		// The fixture's node holds 192 GiB and uses 100.
+		"carrel.node.memory.utilization/carrel01":    100.0 / 192,
+		"carrel.node.guest.running/carrel01":         5,
+		"carrel.node.guest.reporting/carrel01":       2,
+		"carrel.node.guest.memory.assigned/carrel01": 6 * GiB,
+		"carrel.node.guest.memory.needed/carrel01":   2 * GiB,
 	} {
 		if v, ok := got[name]; !ok || v != want {
 			t.Fatalf("%s = %v (reported %v), want %v", name, v, ok, want)
@@ -339,6 +351,10 @@ func TestCapacityReportNamesEveryNode(t *testing.T) {
 	}
 	if _, ok := got["carrel.node.disk.limit/carrel02"]; ok {
 		t.Fatal("an unreachable node reported capacity")
+	}
+	// A node that does not answer about its guests still reports the rest.
+	if _, ok := got["carrel.node.guest.running/carrel03"]; ok {
+		t.Fatal("a node with no answer reported guest memory")
 	}
 }
 

@@ -596,8 +596,8 @@ and ERROR log records and each node's admission view to an OTLP/HTTP collector:
 The URL is https; the file holds the collector's bearer token, mode 600, and is read on every
 send. Log records go to `/v1/logs` and gauges to `/v1/metrics` as JSON, uncompressed. The gauges
 (`carrel.node.*`, one series per node, listed in PLAN 9.1) are what the Proxmox metric server does
-not export: committed and limit for vCPU, memory and disk, the pool's real use, and what snapshots
-count for. Sending never blocks a request, and a collector that does not answer costs one
+not export: committed and limit for vCPU, memory and disk, the pool's and the memory's real use,
+what snapshots count for, and what the node's running VMs need of the memory they were given. Sending never blocks a request, and a collector that does not answer costs one
 `telemetry_export_failed` line on stderr a minute. Without these two settings nothing leaves the
 control plane.
 
