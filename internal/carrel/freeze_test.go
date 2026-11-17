@@ -480,13 +480,37 @@ func TestDeleteRemovesTheRecordWhenReconcileFails(t *testing.T) {
 	p, b, _ := freezeSite(t)
 	intercept(b, func(r D) (any, error, bool) {
 		if r["op"] == "reconcile" {
-			return nil, errors.New("node unreachable"), true
+			// The shape SSHBackend.Call returns for a node that does not answer.
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "node unreachable", "recovery": "retry_infrastructure"}}}, true
 		}
 		return nil, nil, false
 	})
-	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	assertOK(t, r)
+	if op := obj(r["operation"]); op["state"] != "succeeded" || op["error"] != nil {
+		t.Fatalf("a tolerated reconcile failure failed the delete: %s", encoded(r))
+	}
 	if p.Store.Get("machines", "10100") != nil {
 		t.Fatal("the record stayed after the reconcile failed")
+	}
+}
+
+// A reconcile that panics with something other than a Failure is a bug: the
+// record is still removed, and the panic is not hidden behind a success.
+func TestDeleteSurfacesANonFailureReconcilePanic(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "reconcile" {
+			panic("reconcile bug")
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	if failure(r)["code"] == nil {
+		t.Fatalf("the bug was hidden behind a successful delete: %v", r)
+	}
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("the record stayed after the reconcile panicked")
 	}
 }
 
