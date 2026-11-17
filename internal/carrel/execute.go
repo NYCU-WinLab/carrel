@@ -375,7 +375,12 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 					slog.Warn("thaw_backup_not_removed", "vmid", m["vmid"], "volid", backup["volid"])
 				}
 			}
-			e.Reconcile()
+			// The VM is gone: a reconcile that fails (a node or the gateway
+			// not answering) must not leave the record behind, since the next
+			// reconcile pass catches up on the rest.
+			if problem := attempt(func() { e.Reconcile() }); problem != nil {
+				slog.Warn("delete_reconcile_failed", "vmid", m["vmid"], "error", problem)
+			}
 			e.removeMachineRecord(n, m)
 		case "machine_resize":
 			previous := obj(m["resize_from"])
