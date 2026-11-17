@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -494,6 +495,37 @@ func TestDeleteRemovesTheRecordWhenReconcileFails(t *testing.T) {
 	}
 	if p.Store.Get("machines", "10100") != nil {
 		t.Fatal("the record stayed after the reconcile failed")
+	}
+}
+
+// The first node reconciles, then the gateway step fails: the delete still
+// succeeds and the record is gone, since the next reconcile pass catches up.
+func TestDeleteRemovesTheRecordWhenOnlyTheGatewayFails(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	var mu sync.Mutex
+	reconciled, gatewayTried := 0, 0
+	intercept(b, func(r D) (any, error, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r["op"] == "reconcile":
+			reconciled++
+		case r["op"] == "sync":
+			gatewayTried++
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "gateway unreachable", "recovery": "retry_infrastructure"}}}, true
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	assertOK(t, r)
+	if op := obj(r["operation"]); op["state"] != "succeeded" || op["error"] != nil {
+		t.Fatalf("a tolerated gateway failure failed the delete: %s", encoded(r))
+	}
+	if reconciled == 0 || gatewayTried == 0 {
+		t.Fatalf("setup: the node reconciled %d times and the gateway was tried %d times", reconciled, gatewayTried)
+	}
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("the record stayed after the gateway step failed")
 	}
 }
 
