@@ -682,3 +682,26 @@ func TestReconcileRunRemovesDeletingRecordOfGoneVM(t *testing.T) {
 		t.Fatalf("result %s", encoded(result))
 	}
 }
+
+// A deleting record whose VM is listed on another node stays: the inventory is
+// cluster-wide, and absent from its own node is not absent (#299).
+func TestReconcileRunKeepsDeletingRecordOfVMOnAnotherNode(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	m := seedMachine(p, "moved", 10203)
+	m["state"] = "deleting"
+	p.Store.Put("machines", m["vmid"], 1, m)
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "inventory" {
+			inventory := baseInventory()
+			inventory["resources"] = []D{{"type": "qemu", "vmid": 10203, "node": "carrel02", "status": "stopped"}}
+			return inventory, nil, true
+		}
+		return nil, nil, false
+	})
+	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
+	assertOK(t, r)
+	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
+	if len(arr(result["deleted_records_removed"])) != 0 || p.Store.Get("machines", "10203") == nil {
+		t.Fatalf("result %s", encoded(result))
+	}
+}
