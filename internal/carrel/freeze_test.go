@@ -886,3 +886,48 @@ func TestDeleteToleratesAnotherTenantsUnreadableCertificate(t *testing.T) {
 		})
 	}
 }
+
+// A reconcile that fails after a delete leaves nothing behind: the next normal
+// reconcile sends the nodes and the gateway nothing for the old VMID or its
+// address (#312).
+func TestReconcileAfterAFailedDeleteReconcileLeavesNothingForTheOldMachine(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	failing := true
+	intercept(b, func(r D) (any, error, bool) {
+		if failing && r["op"] == "reconcile" {
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "node unreachable", "recovery": "retry_infrastructure"}}}, true
+		}
+		return nil, nil, false
+	})
+	p.Store.Put("domains", "100", 1, D{"id": "100", "vmid": 10100, "tenant_n": 1, "sub": "boxapp", "name": "boxapp.alice.winlab.tw", "target": "10.200.1.10", "target_port": 3000, "state": "ready"})
+	p.Store.Put("ports", "bp", 1, D{"id": "bp", "vmid": 10100, "public_port": 8080, "proto": "tcp", "port": 8080, "ip": "10.200.1.10", "tenant_n": 1})
+	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("setup: the record stayed after the reconcile failed")
+	}
+
+	failing = false
+	b.mu.Lock()
+	b.calls = nil
+	b.mu.Unlock()
+	p.execution(context.Background()).Reconcile()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sent := 0
+	for _, r := range b.calls {
+		if r["op"] != "reconcile" && r["op"] != "sync" {
+			continue
+		}
+		sent++
+		text := string(encoded(r))
+		for _, old := range []string{"10100", "10.200.1.10", "boxapp.alice.winlab.tw"} {
+			if strings.Contains(text, old) {
+				t.Fatalf("%s still names %q of the deleted machine: %s", r["op"], old, text)
+			}
+		}
+	}
+	if sent < 2 {
+		t.Fatalf("expected a node and a gateway request, saw %d", sent)
+	}
+}
