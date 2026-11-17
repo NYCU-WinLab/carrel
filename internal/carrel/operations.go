@@ -379,7 +379,16 @@ func (o *Operations) handleError(e *Execution, err any) {
 	op["state"] = "failed"
 	op["phase"] = "failed"
 	op["error"] = failureResult(err)["error"]
-	slog.Error("operation_failed", "operation", op["id"], "error_type", fmt.Sprintf("%T", err))
+	// A refusal the member can fix is not the platform's fault. An admin
+	// must see the node or gateway failing (ERROR) and admission running
+	// out of room (WARN): those two reach the alerts (PLAN 9.3).
+	code, level := str(obj(op["error"])["code"]), slog.LevelInfo
+	if _, refusal := err.(Failure); !refusal || code == "backend_unavailable" {
+		level = slog.LevelError
+	} else if code == "capacity_exhausted" {
+		level = slog.LevelWarn
+	}
+	slog.Log(context.Background(), level, "operation_failed", "operation", op["id"], "tool", op["tool"], "code", code, "error_type", fmt.Sprintf("%T", err))
 	if op["tool"] == "deployment_apply" && textAt(obj(op["args"]), "on_failure", "rollback") == "rollback" {
 		op["state"] = "cleaning_up"
 		op["phase"] = "removing_new_resources"

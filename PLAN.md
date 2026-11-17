@@ -55,7 +55,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-09-27 | Tenants get private networks and machines with several NICs (section 6.8) |
 | 2026-09-27 | Tenants may import cloud images and ISOs (section 7.8) |
 | 2026-09-27 | carrel ignores the Keycloak groups `vm-users` and `vm-sudoers` |
-| 2026-09-27 | Admin notifications and alerts go by email |
+| 2026-09-27 | Admin notifications and alerts go by email (alerts superseded 2026-11-17: an alerting service reads the telemetry collector, section 9.3) |
 | 2026-09-27 | The old host keeps running outside carrel. Selected guests move; the rest stay, with the room-bound services, the DERP relay and the tailnet subnet router (section 10.7) |
 | 2026-09-30 | B09 first node is `carrel01` at `192.168.13.159`; future nodes get distinct names instead of reusing the room name as an SSH alias (superseded 2026-10-19) |
 | 2026-09-30 | Keep the installed LVM-thin storage on the PERC hardware RAID; do not use the ZFS design or reinstall the host for it (superseded 2026-10-19) |
@@ -1568,13 +1568,30 @@ side by side. A tenant's machines stay in one site in version 1.
 | Source | Path | Consumer |
 |---|---|---|
 | Node and guest metrics | Proxmox OpenTelemetry metric server (cluster-wide in `/etc/pve/status.cfg`) to sensorium | admin agents via sensorium MCP |
-| carrel control plane | OTel SDK traces and logs, one span per tool call | admin agents |
+| carrel control plane | WARN and ERROR log records as they happen, and each node's admission view once a minute, as OTLP/HTTP JSON to the collector in `telemetry_url` (built 2026-11-17, no SDK). One span per tool call is not built | admin agents |
 | Host journald, Caddy, Keycloak | an OTel Collector (journald receiver, Prometheus scrape) to sensorium | admin agents |
 | Tenant view | `machine_metrics` reads Proxmox RRD data, `audit_log` reads the database | the tenant only |
 
 sensorium accepts OTLP over HTTP only (JSON or protobuf, no gzip, no gRPC), which is why the
 Collector sits in front of anything that speaks another format. Its MCP token reads every project,
 so tenants never get it. Machine insides are the tenant's business and are not collected.
+
+The control plane's gauges carry a `node` attribute and hold what the Proxmox metric server does
+not export:
+
+| Metric | Meaning |
+|---|---|
+| `carrel.node.reachable` | 1 when the control plane read the node's inventory, 0 when it could not |
+| `carrel.node.vcpu.committed`, `.limit` | admission's vCPU count and ceiling |
+| `carrel.node.memory.committed`, `.limit` | the same for memory, in bytes |
+| `carrel.node.disk.committed`, `.limit` | the same for disk, in bytes |
+| `carrel.node.storage.utilization` | real use of the node's pool, 0 to 1: the watermark of section 5.2 |
+| `carrel.node.snapshot.counted`, `.declared` | what admission counts for snapshots, and the sum of their disks' sizes |
+
+A failed operation is logged at ERROR when the platform is at fault (`backend_unavailable`, or an
+error that is not a refusal), at WARN for `capacity_exhausted`, and at INFO when the member can fix
+it. The sender never blocks the control plane: a full queue drops records, and its own failures
+stay on stderr. B09 sends to the sensorium instance its alerting service reads.
 
 ### 9.2 Reconciler
 
@@ -1584,14 +1601,20 @@ it on demand.
 
 ### 9.3 Alerts
 
-sensorium only answers queries, so a scheduled job queries it and sends alerts by email.
+sensorium only answers queries, so a separate alerting service reads it and notifies the admins.
+B09 uses golem, which sends to Telegram (2026-11-17; no email sender was built).
 
-1. Pool or disk over 80 percent, node memory saturated.
-2. Node offline, quorum lost.
-3. Reconciler drift it could not repair.
-4. Backup failure, certificate renewal failure.
-5. sensorium freshness: no new data for 10 minutes. Healthy services with stale data are the
-   failure mode seen before.
+| Alert | Signal |
+|---|---|
+| A node's pool passes a watermark | `carrel.node.storage.utilization` above 0.7 is a warning and above 0.85 an error |
+| Node memory saturated | Proxmox node memory metrics |
+| A node the control plane cannot read | `carrel.node.reachable` below 1 |
+| Reconciler drift it could not repair, backup failure, certificate failure | the ERROR log records, such as `reconcile_failed`, `gateway_config_rejected`, `backup_failed` and `certificate_issuance_failed` |
+| Admission out of room | the WARN record `operation_failed` with `code` `capacity_exhausted` |
+| Freshness | no new data for 10 minutes. Healthy services with stale data are the failure mode seen before |
+
+Nothing acts on a watermark by itself yet: an admin moves machines with `machine_migrate` or asks
+owners to free space. Quorum loss is not watched.
 
 An external heartbeat covers the case where the whole site is down: carrel pings an outside
 service, and silence is the alert.

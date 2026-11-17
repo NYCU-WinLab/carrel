@@ -41,6 +41,13 @@ type Config struct {
 	PortalKeysURL       string `json:"portal_keys_url,omitempty"`
 	PortalKeysTokenFile string `json:"portal_keys_token_file,omitempty"`
 
+	// TelemetryURL is an OTLP/HTTP collector, e.g. https://sensorium.zyx.tw:
+	// WARN and ERROR log records and each node's capacity go to its
+	// /v1/logs and /v1/metrics. TelemetryTokenFile holds the bearer token.
+	// Empty: nothing leaves the control plane.
+	TelemetryURL       string `json:"telemetry_url,omitempty"`
+	TelemetryTokenFile string `json:"telemetry_token_file,omitempty"`
+
 	HostedRedirects []string `json:"hosted_redirects,omitempty"`
 	SSHJump         bool     `json:"ssh_jump,omitempty"`
 	Fetch           bool     `json:"fetch,omitempty"`
@@ -169,6 +176,15 @@ func (c Config) Validate() error {
 		}
 		if c.PortalKeysTokenFile == "" {
 			return errors.New("portal_keys_url needs portal_keys_token_file")
+		}
+	}
+	if c.TelemetryURL != "" {
+		// https only: every request carries the write token.
+		if u, err := url.Parse(c.TelemetryURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("telemetry_url must be an https URL with no query")
+		}
+		if c.TelemetryTokenFile == "" {
+			return errors.New("telemetry_url needs telemetry_token_file")
 		}
 	}
 	names, targets := map[string]bool{}, map[string]bool{}

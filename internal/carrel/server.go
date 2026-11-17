@@ -259,6 +259,7 @@ func (p *Platform) Start() {
 	go p.Operations.Loop()
 	p.Operations.Recover()
 	p.startNetBox()
+	p.startTelemetry()
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()

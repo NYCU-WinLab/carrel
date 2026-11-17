@@ -45,9 +45,11 @@ func validateKeys(keys any) {
 }
 
 type Platform struct {
-	Store        *Store
-	Backend      Backend
-	Config       Config
+	Store   *Store
+	Backend Backend
+	Config  Config
+	// Telemetry is where capacity gauges go; nil sends nothing.
+	Telemetry    *Telemetry
 	HTTP         *http.Client
 	writer       sync.Mutex
 	originRetry  backoff
