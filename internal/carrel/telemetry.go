@@ -29,7 +29,7 @@ type Telemetry struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	failedAt  time.Time
-	// mu guards the count of records exported per message this minute.
+	// mu guards the count of records exported per level and message this minute.
 	mu     sync.Mutex
 	minute time.Time
 	sent   map[string]int
@@ -123,8 +123,11 @@ func (t *Telemetry) log(r slog.Record) {
 	if r.Time.Sub(t.minute) >= time.Minute {
 		t.minute, t.sent = r.Time, map[string]int{}
 	}
-	t.sent[r.Message]++
-	repeated := t.sent[r.Message] > telemetryRepeat
+	// Counted per level: a flood of warnings must not use up the errors
+	// that share its message, as operation_failed does.
+	key := r.Level.String() + " " + r.Message
+	t.sent[key]++
+	repeated := t.sent[key] > telemetryRepeat
 	t.mu.Unlock()
 	if repeated {
 		return

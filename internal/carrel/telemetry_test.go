@@ -248,14 +248,16 @@ func TestTelemetryCapsARepeatedMessage(t *testing.T) {
 		log.Warn("oauth_rate_limited", "client", "203.0.113.9")
 	}
 	log.Error("reconcile_failed")
+	// An error that shares the flooded message still leaves.
+	log.Error("oauth_rate_limited")
 	tel.Close()
 	count := map[string]int{}
 	for _, p := range c.seen("/v1/logs") {
 		for _, r := range arr(walk(p.body, "resourceLogs", 0, "scopeLogs", 0, "logRecords")) {
-			count[str(walk(r, "body", "stringValue"))]++
+			count[str(obj(r)["severityText"])+" "+str(walk(r, "body", "stringValue"))]++
 		}
 	}
-	if count["oauth_rate_limited"] != telemetryRepeat || count["reconcile_failed"] != 1 {
+	if count["WARN oauth_rate_limited"] != telemetryRepeat || count["ERROR reconcile_failed"] != 1 || count["ERROR oauth_rate_limited"] != 1 {
 		t.Fatal(count)
 	}
 }
