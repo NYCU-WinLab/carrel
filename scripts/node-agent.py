@@ -2507,6 +2507,7 @@ def thaw(req):
             cfg = owned(m, node=where)
             if where != NODE or cfg.get("lock") or cfg.get("name", cfg.get("hostname")) != m["name"]:
                 raise ValueError("VMID is in use")
+            balloon_on(m, cfg)
             return {"state": "restored"}
     if any(PVE_NODES.glob(f"*/*/{vmid}.conf")):
         raise ValueError("VMID is in use")
@@ -2514,8 +2515,19 @@ def thaw(req):
         run("qmrestore", volid, vmid, "--storage", guest, timeout=VZDUMP_SECONDS)
     else:
         run("pct", "restore", vmid, volid, "--storage", guest, timeout=VZDUMP_SECONDS)
-    owned(m)
+    balloon_on(m, owned(m))
     return {"state": "restored"}
+
+
+def balloon_on(m, cfg):
+    """Give a restored VM its balloon device back.
+
+    A backup taken before 2026-11-17 carries "balloon: 0" and the restore
+    brings it back. Without the device the machine reports no memory need
+    and returns no freed pages to the node (PLAN 5.2).
+    """
+    if m["kind"] == "vm" and str(cfg.get("balloon", "")) == "0":
+        run("qm", "set", machine(m), "--delete", "balloon")
 
 
 def backup_remove(req):
