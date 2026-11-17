@@ -125,6 +125,9 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     }
     reads = []
     monkeypatch.setattr(module, "pve_get", pve_api(responses, reads))
+    monkeypatch.setattr(module, "storage_definition", lambda storage: {"type": "zfspool", "pool": "rpool/data"})
+    held = []
+    monkeypatch.setattr(module, "snapshot_bytes", lambda pool: held.append(pool) or 7 * GIB)
 
     def inventory():
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b'{"op":"inventory"}')))
@@ -133,6 +136,7 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
 
     first = inventory()
     assert first["disk_committed_bytes"] == 100 * GIB
+    assert first["snapshot_bytes"] == 7 * GIB and held == ["rpool/data"]
     assert first["storage"]["used"] == 100 * GIB and first["storage_id"] == "local-zfs"
     # No cache: the next inventory sees the new usage.
     responses["/nodes/fixture/storage/local-zfs/status"]["used"] = 900 * GIB

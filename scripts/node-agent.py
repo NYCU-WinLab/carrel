@@ -1287,6 +1287,14 @@ def zfs_usage(machines, pool):
              "accounting": "zfs_usedbydataset_plus_usedbysnapshots"} for n, v in totals.items()]
 
 
+def snapshot_bytes(pool):
+    # What only snapshots hold on the guest storage, in bytes. The pool's
+    # used space already includes it, so admission counts snapshots at this
+    # size instead of the full size of each disk.
+    rows = run("zfs", "list", "-H", "-p", "-d", "1", "-t", "filesystem,volume", "-o", "usedbysnapshots", pool, timeout=30)
+    return sum(int(row) for row in rows.splitlines())
+
+
 def vm_template(image):
     defaults = {"debian-13-minimal": None, "debian-13": 9000, "ubuntu-24.04": 9001}
     if image not in defaults:
@@ -2550,6 +2558,7 @@ def main():
                 "storage_id": storage,
                 **observed,
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
+                "snapshot_bytes": snapshot_bytes(storage_definition(storage)["pool"]),
             }
         elif op == "storage_usage":
             for m in req["machines"]:
