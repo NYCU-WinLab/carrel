@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -776,30 +777,41 @@ func TestReconcileRunKeepsDeletingRecordOfGuestHiddenByACL(t *testing.T) {
 // the post-delete reconcile: the delete still succeeds, and nothing of that
 // tenant reaches the caller (#316, #320).
 func TestDeleteToleratesAnotherTenantsUnreadableCertificate(t *testing.T) {
-	p, _, _ := freezeSite(t)
-	p.Config.CertificateDir = t.TempDir()
-	p.Store.Register("user:carol", "carolzzz")
-	crt, key := testPair(t, "*.carolzzz.winlab.tw")
-	p.execution(context.Background()).storeCertificate("carolzzz", crt, key)
-	p.Store.Put("certificates", "3", 3, D{"id": "3", "tenant_n": 3, "slug": "carolzzz"})
-	p.Store.Put("domains", "900", 3, D{"id": "900", "vmid": 10900, "tenant_n": 3, "sub": "app", "name": "app.carolzzz.winlab.tw", "target_port": 3000, "state": "ready"})
-	_, privkey, ok := p.execution(context.Background()).livePair("carolzzz")
-	if !ok {
-		t.Fatal("setup: no live pair")
-	}
-	must(os.Remove(privkey))
+	for _, file := range []string{"fullchain.pem", "privkey.pem"} {
+		t.Run(file, func(t *testing.T) {
+			p, _, _ := freezeSite(t)
+			p.Config.CertificateDir = t.TempDir()
+			carol := integer(p.Store.Register("user:carol", "carolzzz")["n"])
+			tenant := strconv.Itoa(carol)
+			crt, key := testPair(t, "*.carolzzz.winlab.tw")
+			p.execution(context.Background()).storeCertificate("carolzzz", crt, key)
+			p.Store.Put("certificates", tenant, carol, D{"id": tenant, "tenant_n": carol, "slug": "carolzzz"})
+			other := seedMachine(p, "carolbox", 10900)
+			other["tenant_n"] = carol
+			p.Store.Put("machines", other["vmid"], carol, other)
+			p.Store.Put("domains", "900", carol, D{"id": "900", "vmid": 10900, "tenant_n": carol, "sub": "app", "name": "app.carolzzz.winlab.tw", "target_port": 3000, "state": "ready"})
+			fullchain, privkey, ok := p.execution(context.Background()).livePair("carolzzz")
+			if !ok {
+				t.Fatal("setup: no live pair")
+			}
+			must(os.Remove(map[string]string{"fullchain.pem": fullchain, "privkey.pem": privkey}[file]))
 
-	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
-	assertOK(t, r)
-	if op := obj(r["operation"]); op["state"] != "succeeded" || op["error"] != nil {
-		t.Fatalf("the other tenant's certificate failed the delete: %s", encoded(r))
-	}
-	if p.Store.Get("machines", "10100") != nil {
-		t.Fatal("the record stayed after the reconcile failed")
-	}
-	for _, leak := range []string{"carolzzz", "app.carolzzz", "privkey.pem", p.Config.CertificateDir} {
-		if strings.Contains(string(encoded(r)), leak) {
-			t.Fatalf("the result names %q of another tenant: %s", leak, encoded(r))
-		}
+			r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+			assertOK(t, r)
+			if op := obj(r["operation"]); op["state"] != "succeeded" || op["error"] != nil {
+				t.Fatalf("the other tenant's certificate failed the delete: %s", encoded(r))
+			}
+			if p.Store.Get("machines", "10100") != nil {
+				t.Fatal("the record stayed after the reconcile failed")
+			}
+			if p.Store.Get("machines", "10900") == nil || p.Store.Get("domains", "900") == nil {
+				t.Fatal("the other tenant's records were touched")
+			}
+			for _, leak := range []string{"carolzzz", "app.carolzzz", "privkey.pem", "fullchain.pem", p.Config.CertificateDir} {
+				if strings.Contains(string(encoded(r)), leak) {
+					t.Fatalf("the result names %q of another tenant: %s", leak, encoded(r))
+				}
+			}
+		})
 	}
 }
