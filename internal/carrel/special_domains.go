@@ -508,7 +508,7 @@ func (e *Execution) MaintainGrants() {
 		})
 		if err != nil {
 			failure := obj(failureResult(err)["error"])
-			slog.Warn("grant_maintenance_failed", "grant", original.ID, "code", failure["code"], "backend_code", failure["backend_code"])
+			slog.Log(e.Ctx, levelUnlessStopping(e.Ctx, slog.LevelWarn), "grant_maintenance_failed", "grant", original.ID, "code", failure["code"], "backend_code", failure["backend_code"])
 		}
 	}
 }
