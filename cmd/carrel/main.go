@@ -21,7 +21,8 @@ func main() {
 	version := flag.Bool("version", false, "Print version")
 	backup := flag.Bool("backup", false, "Create a consistent backup and send it to the backup target")
 	flag.Parse()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	stderr := slog.NewJSONHandler(os.Stderr, nil)
+	slog.SetDefault(slog.New(stderr))
 	if *version {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"version": carrel.Version})
 		return
@@ -36,26 +37,35 @@ func main() {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
+	// From here WARN and ERROR records also go to the collector, when the
+	// configuration names one. Close sends what is queued before any exit.
+	telemetry := carrel.NewTelemetry(cfg, stderr)
+	slog.SetDefault(slog.New(telemetry.Handler(stderr)))
+	fatal := func() {
+		telemetry.Close()
+		os.Exit(1)
+	}
 	store, err := carrel.OpenStore(cfg.Database)
 	if err != nil {
 		slog.Error("open database", "error", err)
-		os.Exit(1)
+		fatal()
 	}
 	defer store.DB.Close()
 	if unplaced := carrel.UnplacedMachines(store, cfg); len(unplaced) > 0 {
 		slog.Error("machines without a configured node", "machines", unplaced)
-		os.Exit(1)
+		fatal()
 	}
 	backend := &carrel.SSHBackend{Config: "/etc/carrel/ssh_config"}
 	if cfg.SSHConfig != "" {
 		backend.Config = cfg.SSHConfig
 	}
 	platform := carrel.NewPlatform(store, backend, cfg)
+	platform.Telemetry = telemetry
 	if *backup {
 		result, err := platform.Backup(context.Background(), filepath.Dir(*configFile))
 		if err != nil {
 			slog.Error("backup_failed", "error", err)
-			os.Exit(1)
+			fatal()
 		}
 		if result["missing_nodes"] != nil {
 			// The archive landed, but some node files are not in it.
@@ -63,6 +73,7 @@ func main() {
 		} else {
 			slog.Info("backup_complete", "result", result)
 		}
+		telemetry.Close()
 		return
 	}
 	app := carrel.NewApp(platform, nil)
@@ -82,4 +93,5 @@ func main() {
 		stop()
 	}
 	platform.Close()
+	telemetry.Close()
 }

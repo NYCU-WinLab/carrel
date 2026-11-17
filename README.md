@@ -583,6 +583,24 @@ the file holds its read key, mode 600. carrel asks for one username at a time, t
 when the call arrives, and keeps the key type and key only. Without these two settings nothing
 changes.
 
+### Telemetry
+
+With `telemetry_url` and `telemetry_token_file` in `config.json`, the control plane sends its WARN
+and ERROR log records and each node's admission view to an OTLP/HTTP collector:
+
+```json
+"telemetry_url": "https://sensorium.example",
+"telemetry_token_file": "/etc/carrel/telemetry-token"
+```
+
+The URL is https; the file holds the collector's bearer token, mode 600, and is read on every
+send. Log records go to `/v1/logs` and gauges to `/v1/metrics` as JSON, uncompressed. The gauges
+(`carrel.node.*`, one series per node, listed in PLAN 9.1) are what the Proxmox metric server does
+not export: committed and limit for vCPU, memory and disk, the pool's real use, and what snapshots
+count for. Sending never blocks a request, and a collector that does not answer costs one
+`telemetry_export_failed` line on stderr a minute. Without these two settings nothing leaves the
+control plane.
+
 ### NetBox sync
 
 carrel can push machines, networks, addresses, published ports and virtual addresses to NetBox. It
