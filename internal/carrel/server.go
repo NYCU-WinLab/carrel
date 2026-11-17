@@ -245,6 +245,13 @@ func clientIP(r *http.Request) string {
 	return host
 }
 func (a *App) Call(ctx context.Context, name string, args, who D) D {
+	start := time.Now()
+	result := a.call(ctx, name, args, who)
+	a.span(name, args, who, start, result)
+	return result
+}
+
+func (a *App) call(ctx context.Context, name string, args, who D) D {
 	schema := a.schemas[name]
 	if schema == nil {
 		return D{"ok": false, "error": D{"code": "invalid", "message": "Unknown tool or missing required field"}}
@@ -253,6 +260,29 @@ func (a *App) Call(ctx context.Context, name string, args, who D) D {
 		return D{"ok": false, "error": D{"code": "invalid", "message": "Invalid tool arguments", "details": err.Error()}}
 	}
 	return memberResponse(name, args, a.Platform.Execute(ctx, name, without(args, "detail"), who))
+}
+
+// span reports the call to telemetry: the tool, the caller's tenant number
+// when one can be named, and "ok" or the error code.
+func (a *App) span(tool string, args, who D, start time.Time, result D) {
+	t := a.Platform.Telemetry
+	if t == nil {
+		return
+	}
+	// A name nobody registered is caller input: one label, not one per guess.
+	if a.schemas[tool] == nil {
+		tool = "unknown"
+	}
+	outcome := "ok"
+	if !boolean(result["ok"]) {
+		outcome = str(obj(result["error"])["code"])
+		if outcome == "" {
+			outcome = "unknown"
+		}
+	}
+	tenant := 0
+	_ = attempt(func() { tenant = integer(a.Platform.execution(a.Platform.ctx).Tenant(who, str(args["tenant"]))["n"]) })
+	t.Span(tool, tenant, start, outcome)
 }
 func (p *Platform) Start() {
 	p.wg.Add(1)

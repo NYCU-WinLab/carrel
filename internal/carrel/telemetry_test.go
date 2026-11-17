@@ -403,3 +403,78 @@ func TestOperationFailureLevels(t *testing.T) {
 		}
 	}
 }
+
+// One span per tool call: the tool, the tenant number and the outcome, and
+// nothing from the arguments.
+func TestToolCallsBecomeSpans(t *testing.T) {
+	p, _ := fixture(t)
+	c := newCollector(t)
+	tel, _ := telemetryFixture(t, c, slog.NewJSONHandler(io.Discard, nil))
+	p.Telemetry = tel
+	app := NewApp(p, nil)
+	ctx := context.Background()
+	alice := p.Store.Tenant("user:alice")
+	assertOK(t, app.Call(ctx, "machine_list", D{}, person("alice", false)))
+	assertCode(t, app.Call(ctx, "machine_get", D{"machine": "secret-name"}, person("alice", false)), "not_found")
+	assertCode(t, app.Call(ctx, "no_such_tool", D{}, person("alice", false)), "invalid")
+	tel.Close()
+
+	posts := c.seen("/v1/traces")
+	if len(posts) != 1 || posts[0].authorization != "Bearer first-token-value" {
+		t.Fatal(posts)
+	}
+	spans := arr(walk(posts[0].body, "resourceSpans", 0, "scopeSpans", 0, "spans"))
+	if len(spans) != 3 {
+		t.Fatal(spans)
+	}
+	attr := func(s any, key string) string {
+		for _, a := range arr(obj(s)["attributes"]) {
+			if obj(a)["key"] == key {
+				return str(walk(a, "value", "stringValue"))
+			}
+		}
+		return ""
+	}
+	for i, want := range [][3]string{
+		{"machine_list", strconv.Itoa(integer(alice["n"])), "ok"},
+		{"machine_get", strconv.Itoa(integer(alice["n"])), "not_found"},
+		{"unknown", strconv.Itoa(integer(alice["n"])), "invalid"},
+	} {
+		s := spans[i]
+		if obj(s)["name"] != want[0] || attr(s, "carrel.tool") != want[0] || attr(s, "carrel.tenant") != want[1] || attr(s, "carrel.outcome") != want[2] {
+			t.Fatalf("span %d: %v", i, s)
+		}
+		if len(str(obj(s)["traceId"])) != 32 || len(str(obj(s)["spanId"])) != 16 {
+			t.Fatal(s)
+		}
+		start, _ := strconv.ParseInt(str(obj(s)["startTimeUnixNano"]), 10, 64)
+		end, _ := strconv.ParseInt(str(obj(s)["endTimeUnixNano"]), 10, 64)
+		if start == 0 || end < start {
+			t.Fatal(s)
+		}
+		if strings.Contains(string(encoded(s)), "secret-name") {
+			t.Fatal("arguments leaked into a span")
+		}
+	}
+	if num(walk(spans[0], "status", "code")) != 1 || num(walk(spans[1], "status", "code")) != 2 {
+		t.Fatal(spans)
+	}
+}
+
+// startTelemetry reports capacity on its own clock, as soon as Start runs.
+func TestStartTelemetryReportsCapacityAtOnce(t *testing.T) {
+	p, _, _ := nodeFixture(t)
+	c := newCollector(t)
+	tel, _ := telemetryFixture(t, c, slog.NewJSONHandler(io.Discard, nil))
+	p.Telemetry = tel
+	p.startTelemetry()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(c.seen("/v1/metrics")) == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	p.Close()
+	tel.Close()
+	if len(c.seen("/v1/metrics")) == 0 {
+		t.Fatal("no capacity gauges reached the collector")
+	}
+}

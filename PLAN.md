@@ -1570,7 +1570,7 @@ side by side. A tenant's machines stay in one site in version 1.
 | Source | Path | Consumer |
 |---|---|---|
 | Node and guest metrics | Proxmox OpenTelemetry metric server (cluster-wide in `/etc/pve/status.cfg`) to sensorium | admin agents via sensorium MCP |
-| carrel control plane | WARN and ERROR log records as they happen, and each node's admission view once a minute, as OTLP/HTTP JSON to the collector in `telemetry_url` (built 2026-11-17, no SDK). One span per tool call is not built | admin agents |
+| carrel control plane | WARN and ERROR log records as they happen, each node's admission view once a minute, and one span per tool call (tool, tenant number, outcome code; the duration is the span's own), as OTLP/HTTP JSON to the collector in `telemetry_url` (built 2026-11-17, no SDK) | admin agents |
 | Host journald, Caddy, Keycloak | an OTel Collector (journald receiver, Prometheus scrape) to sensorium | admin agents |
 | Tenant view | `machine_metrics` reads Proxmox RRD data, `audit_log` reads the database | the tenant only |
 
