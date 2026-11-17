@@ -491,7 +491,7 @@ func (e *Execution) removeMachineRecord(n int, m D) {
 }
 
 // SweepDeletedMachines removes the records stuck in "deleting" whose VM is no
-// longer on its node: a delete that stopped after the node call leaves one,
+// longer on any node: a delete that stopped after the node call leaves one,
 // and it keeps counting against admission and the tenant's quota. A node that
 // does not answer, or a freeze that still holds the record, is left alone.
 func (e *Execution) SweepDeletedMachines() []D {
@@ -503,23 +503,25 @@ func (e *Execution) SweepDeletedMachines() []D {
 	}
 	nodes := e.P.Nodes()
 	inventories, _, failures := e.inventories(nodes, false)
-	present := map[string]map[int]bool{}
+	answered := map[string]bool{}
+	present := map[int]bool{}
 	for i, n := range nodes {
 		inventory := obj(inventories[i])
 		if failures[i] != nil || inventory["resources"] == nil {
 			continue
 		}
-		present[n.Name] = map[int]bool{}
+		answered[n.Name] = true
+		// /cluster/resources is cluster-wide: a VMID listed on any node counts,
+		// as a move may have left it somewhere other than the record's node.
 		for _, g := range dicts(inventory["resources"]) {
-			if (g["type"] == "qemu" || g["type"] == "lxc") && (inventory["node"] == nil || g["node"] == inventory["node"]) {
-				present[n.Name][integer(g["vmid"])] = true
+			if g["type"] == "qemu" || g["type"] == "lxc" {
+				present[integer(g["vmid"])] = true
 			}
 		}
 	}
 	removed := []D{}
 	for _, m := range stuck {
-		on, ok := present[str(m["node"])]
-		if !ok || on[integer(m["vmid"])] {
+		if !answered[str(m["node"])] || present[integer(m["vmid"])] {
 			continue
 		}
 		n := integer(m["tenant_n"])

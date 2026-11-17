@@ -111,7 +111,10 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     monkeypatch.setattr(module, "NODE", "fixture")
     (tmp_path / "node.json").write_text('{"storage": "local-zfs"}')
     responses = {
-        "/access/permissions": {"/storage/local-zfs": {"Datastore.Audit": 1, "Datastore.Allocate": 1}},
+        "/access/permissions": {
+            "/storage/local-zfs": {"Datastore.Audit": 1, "Datastore.Allocate": 1},
+            "/vms": {"VM.Audit": 1},
+        },
         "/cluster/resources": [],
         "/nodes/fixture/storage/local-zfs/status": {"total": 1000 * GIB, "used": 100 * GIB},
         "/nodes/fixture/status": {"cpuinfo": {"cpus": 8}, "memory": {"total": 64 * GIB}},
@@ -144,9 +147,17 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
     responses["/nodes/fixture/storage/local-zfs/status"]["used"] = 900 * GIB
     assert inventory()["storage"]["used"] == 900 * GIB
     assert reads.count(("/access/permissions", {"path": "/storage/local-zfs"})) == 2
+    assert reads.count(("/access/permissions", {"path": "/vms"})) == 2
     # PVEAuditor alone hides volumes: an incomplete grant never reaches admission.
     responses["/access/permissions"] = {"/storage/local-zfs": {"Datastore.Audit": 1}}
     with pytest.raises(RuntimeError, match="authority is incomplete"):
+        module.inventory_read("local-zfs")
+    # A token that cannot audit every VM would see a filtered guest list.
+    responses["/access/permissions"] = {
+        "/storage/local-zfs": {"Datastore.Audit": 1, "Datastore.Allocate": 1},
+        "/vms": {},
+    }
+    with pytest.raises(RuntimeError, match="guest inventory authority is incomplete"):
         module.inventory_read("local-zfs")
 
 

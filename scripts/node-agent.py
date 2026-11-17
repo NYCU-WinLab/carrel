@@ -150,6 +150,10 @@ def inventory_read(storage):
     authority = pve_get("/access/permissions", path=path).get(path, {})
     if authority.get("Datastore.Audit") != 1 or authority.get("Datastore.Allocate") != 1:
         raise RuntimeError("storage inventory authority is incomplete")
+    # An ACL-filtered /cluster/resources would list fewer guests, and a sweep
+    # reads a missing guest as gone. Refuse a token that cannot audit every VM.
+    if pve_get("/access/permissions", path="/vms").get("/vms", {}).get("VM.Audit") != 1:
+        raise RuntimeError("guest inventory authority is incomplete")
     return {
         "volumes": pve_get(f"/nodes/{NODE}{path}/content"),
         "resources": pve_get("/cluster/resources"),
