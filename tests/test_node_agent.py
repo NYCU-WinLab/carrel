@@ -1481,6 +1481,21 @@ def test_thaw_accepts_a_machine_that_an_earlier_attempt_restored(monkeypatch, tm
     assert not any(c[0] == "qmrestore" for c in commands)
 
 
+def test_thaw_gives_a_restored_vm_its_balloon_device_back(monkeypatch, tmp_path):
+    # An old backup carries "balloon: 0". Both a fresh restore and a retry after one fix it.
+    for i, (config, removed) in enumerate([({"balloon": 0}, True), ({}, False), ({"balloon": 2048}, False)]):
+        for restored in (None, {"name": MACHINE["name"]}):
+            case = tmp_path / f"{i}{bool(restored)}"
+            case.mkdir()
+            module, commands, _ = thawer(monkeypatch, case, config=restored)
+            monkeypatch.setattr(
+                module, "owned", lambda m, node=None, config=config: {"name": m["name"], **config}
+            )
+            assert module.thaw({"machine": dict(MACHINE), "volid": VOLID}) == {"state": "restored"}
+            assert (["qm", "set", "10100", "--delete", "balloon"] in commands) == removed
+            assert any(c[0] == "qmrestore" for c in commands) == (restored is None)
+
+
 def test_thaw_replaces_the_half_of_a_restore_that_was_cut_off(monkeypatch, tmp_path):
     module, commands, nodes = thawer(monkeypatch, tmp_path, config={"lock": "create"})
 
