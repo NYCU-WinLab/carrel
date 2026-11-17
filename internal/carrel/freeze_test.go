@@ -715,6 +715,9 @@ func TestReconcileRunRemovesDeletingRecordOfGoneVM(t *testing.T) {
 			inventory["resources"] = []D{{"type": "qemu", "vmid": 10202, "node": "carrel01", "status": "stopped"}}
 			return inventory, nil, true
 		}
+		if r["op"] == "vmids_present" {
+			return []any{}, nil, true
+		}
 		return nil, nil, false
 	})
 	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
@@ -770,6 +773,42 @@ func TestReconcileRunKeepsDeletingRecordOfGuestHiddenByACL(t *testing.T) {
 	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
 	if len(arr(result["deleted_records_removed"])) != 1 || p.Store.Get("machines", "10204") == nil || p.Store.Get("machines", "10205") != nil {
 		t.Fatalf("result %s", encoded(result))
+	}
+}
+
+// A failed or malformed confirmation keeps the deleting record: only a list of
+// requested VMIDs can confirm anything (#308).
+func TestReconcileRunKeepsDeletingRecordWhenConfirmationFails(t *testing.T) {
+	replies := map[string]func() (any, error){
+		"error":       func() (any, error) { return nil, errors.New("pmxcfs unreadable") },
+		"missing":     func() (any, error) { return nil, nil },
+		"not a list":  func() (any, error) { return D{"present": []any{}}, nil },
+		"unrequested": func() (any, error) { return []any{99999}, nil },
+		"non-integer": func() (any, error) { return []any{"10205"}, nil },
+	}
+	for name, reply := range replies {
+		t.Run(name, func(t *testing.T) {
+			p, b, _ := freezeSite(t)
+			m := seedMachine(p, "gone", 10205)
+			m["state"] = "deleting"
+			p.Store.Put("machines", m["vmid"], 1, m)
+			intercept(b, func(r D) (any, error, bool) {
+				switch r["op"] {
+				case "inventory":
+					return baseInventory(), nil, true
+				case "vmids_present":
+					v, err := reply()
+					return v, err, true
+				}
+				return nil, nil, false
+			})
+			r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
+			assertOK(t, r)
+			result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
+			if len(arr(result["deleted_records_removed"])) != 0 || p.Store.Get("machines", "10205") == nil {
+				t.Fatalf("result %s", encoded(result))
+			}
+		})
 	}
 }
 

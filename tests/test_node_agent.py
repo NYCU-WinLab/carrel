@@ -1828,6 +1828,29 @@ def test_vmids_present_sees_guests_on_any_node_regardless_of_acl(monkeypatch, tm
         module.vmids_present("10204")
 
 
+def test_vmids_present_scans_twice_so_a_migration_mid_scan_is_seen(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    (tmp_path / "pve01" / "qemu-server").mkdir(parents=True)
+    (tmp_path / "pve02" / "qemu-server").mkdir(parents=True)
+    conf = tmp_path / "pve02" / "qemu-server" / "10204.conf"
+    conf.write_text("")
+    monkeypatch.setattr(module, "PVE_NODES", tmp_path)
+    monkeypatch.setattr(module, "NODE", "pve01")
+    real = module.os.listdir
+    calls = []
+
+    def migrating(path):
+        # The first pass reads pve02 after the config left it; the second sees it on pve01.
+        calls.append(path)
+        if len(calls) == 1:
+            conf.rename(tmp_path / "pve01" / "qemu-server" / "10204.conf")
+            return []
+        return real(path)
+
+    monkeypatch.setattr(module.os, "listdir", migrating)
+    assert module.vmids_present([10204]) == [10204]
+
+
 def test_vmids_present_fails_when_the_config_tree_is_unreadable(monkeypatch, tmp_path):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "NODE", "pve01")
