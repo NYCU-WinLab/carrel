@@ -162,6 +162,26 @@ def inventory_read(storage):
     }
 
 
+def vmids_present(vmids):
+    # A per-VM ACL can hide a guest from /cluster/resources while the parent-path
+    # VM.Audit check passes. /etc/pve is cluster-wide and not ACL-filtered.
+    if not isinstance(vmids, list) or len(vmids) > 1000:
+        raise ValueError("invalid VMIDs")
+    wanted = {integer(v, 10000, 99999) for v in vmids}
+    # An unmounted pmxcfs or an unreadable directory must fail, not read as "absent".
+    if not (PVE_NODES / NODE).is_dir():
+        raise RuntimeError(f"{PVE_NODES / NODE} is not readable")
+    found = set()
+    with os.scandir(PVE_NODES) as nodes:
+        for node in nodes:
+            if node.is_dir():
+                with os.scandir(node.path) as kinds:
+                    for kind in kinds:
+                        if kind.is_dir():
+                            found.update(int(n[:-5]) for n in os.listdir(kind.path) if n.endswith(".conf") and n[:-5].isdigit())
+    return sorted(wanted & found)
+
+
 def topology_read():
     vnets = pve_get("/cluster/sdn/vnets")
     subnets = {
@@ -2569,7 +2589,7 @@ def main():
     long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
-        if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
+        if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store", "vmids_present"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         # Anything that may change or start a machine ends the proof that a
@@ -2609,6 +2629,8 @@ def main():
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
                 "snapshot_bytes": snapshot_bytes(storage_definition(storage)["pool"]),
             }
+        elif op == "vmids_present":
+            out = vmids_present(req["vmids"])
         elif op == "guest_memory":
             out = guest_memory()
         elif op == "storage_usage":

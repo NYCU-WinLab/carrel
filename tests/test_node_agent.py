@@ -1798,3 +1798,36 @@ def test_freeze_needs_a_site_name(monkeypatch, tmp_path, content):
     with pytest.raises(ValueError, match="names no site"):
         module.backup_sweep({"storage": "pbs"})
     assert not dumped(commands) and freed(commands) == []
+
+
+def test_vmids_present_sees_guests_on_any_node_regardless_of_acl(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    (tmp_path / "pve01" / "qemu-server").mkdir(parents=True)
+    (tmp_path / "pve02" / "lxc").mkdir(parents=True)
+    (tmp_path / "pve01" / "qemu-server" / "10204.conf").write_text("")
+    (tmp_path / "pve02" / "lxc" / "10206.conf").write_text("")
+    monkeypatch.setattr(module, "PVE_NODES", tmp_path)
+    monkeypatch.setattr(module, "NODE", "pve01")
+    assert module.vmids_present([10204, 10205, 10206]) == [10204, 10206]
+    with pytest.raises(ValueError):
+        module.vmids_present("10204")
+
+
+def test_vmids_present_fails_when_the_config_tree_is_unreadable(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "NODE", "pve01")
+    monkeypatch.setattr(module, "PVE_NODES", tmp_path / "missing")
+    with pytest.raises(RuntimeError, match="not readable"):
+        module.vmids_present([10204])
+    (tmp_path / "pve02" / "qemu-server").mkdir(parents=True)
+    monkeypatch.setattr(module, "PVE_NODES", tmp_path)
+    with pytest.raises(RuntimeError, match="not readable"):
+        module.vmids_present([10204])
+    (tmp_path / "pve01" / "qemu-server").mkdir(parents=True)
+
+    def denied(path):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(module.os, "listdir", denied)
+    with pytest.raises(PermissionError):
+        module.vmids_present([10204])

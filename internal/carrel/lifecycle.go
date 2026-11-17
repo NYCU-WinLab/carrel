@@ -519,9 +519,39 @@ func (e *Execution) SweepDeletedMachines() []D {
 			}
 		}
 	}
+	// A per-VM ACL can hide a guest from the reader token's /cluster/resources,
+	// so the node confirms absence from the cluster config files (#305).
+	confirmed := map[string]map[int]bool{}
+	for _, m := range stuck {
+		name := str(m["node"])
+		if !answered[name] || present[integer(m["vmid"])] || confirmed[name] != nil {
+			continue
+		}
+		confirmed[name] = map[int]bool{}
+		var vmids []any
+		for _, c := range stuck {
+			if str(c["node"]) == name && !present[integer(c["vmid"])] {
+				vmids = append(vmids, c["vmid"])
+			}
+		}
+		var target string
+		for _, n := range nodes {
+			if n.Name == name {
+				target = n.Target
+			}
+		}
+		if err := attempt(func() {
+			for _, v := range arr(e.Call(D{"op": "vmids_present", "vmids": vmids}, target)) {
+				confirmed[name][integer(v)] = true
+			}
+		}); err != nil {
+			slog.Warn("deleted_machine_absence_not_confirmed", "node", name, "error", describe(err))
+			answered[name] = false
+		}
+	}
 	removed := []D{}
 	for _, m := range stuck {
-		if !answered[str(m["node"])] || present[integer(m["vmid"])] {
+		if !answered[str(m["node"])] || present[integer(m["vmid"])] || confirmed[str(m["node"])][integer(m["vmid"])] {
 			continue
 		}
 		n := integer(m["tenant_n"])

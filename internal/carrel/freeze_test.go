@@ -721,3 +721,28 @@ func TestReconcileRunKeepsDeletingRecordOfVMOnAnotherNode(t *testing.T) {
 		t.Fatalf("result %s", encoded(result))
 	}
 }
+
+// A guest hidden from /cluster/resources by a per-VM ACL is still confirmed
+// present by the node's config files, so its record stays (#305).
+func TestReconcileRunKeepsDeletingRecordOfGuestHiddenByACL(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	for _, m := range []D{seedMachine(p, "hidden", 10204), seedMachine(p, "gone", 10205)} {
+		m["state"] = "deleting"
+		p.Store.Put("machines", m["vmid"], 1, m)
+	}
+	intercept(b, func(r D) (any, error, bool) {
+		switch r["op"] {
+		case "inventory":
+			return baseInventory(), nil, true
+		case "vmids_present":
+			return []any{10204}, nil, true
+		}
+		return nil, nil, false
+	})
+	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
+	assertOK(t, r)
+	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
+	if len(arr(result["deleted_records_removed"])) != 1 || p.Store.Get("machines", "10204") == nil || p.Store.Get("machines", "10205") != nil {
+		t.Fatalf("result %s", encoded(result))
+	}
+}
