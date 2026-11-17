@@ -318,12 +318,15 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "snapshots": "snapshots"} {
 			owned := filter(e.S.Objects(kind, n), func(x D) bool { return integer(x["vmid"]) == integer(m["vmid"]) })
 			delta[dim] = -len(owned)
-			if _, measured := e.snapshotGB(n); kind == "snapshots" && !measured {
+			if held, measured := e.snapshotGB(n); kind == "snapshots" && !measured {
 				sum := 0.0
 				for _, x := range owned {
 					sum += num(x["disk_gb"])
 				}
 				delta["snapshot_gb"] = -sum
+			} else if kind == "snapshots" && len(owned) > 0 && len(owned) == len(e.snapshots(n)) {
+				// Measured: the tenant's last snapshots go with the machine.
+				delta["snapshot_gb"] = -held
 			}
 		}
 	case "machine_power":

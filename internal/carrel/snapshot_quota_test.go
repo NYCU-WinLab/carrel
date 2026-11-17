@@ -55,12 +55,19 @@ func TestSnapshotQuotaCountsWhatSnapshotsHold(t *testing.T) {
 	if used, _ := snapshotGBOf(t, call("snapshot_delete", D{"machine": "web", "name": "s1", "dry_run": true})); used != 3 {
 		t.Fatal("delete preview", used)
 	}
-	if used := num(obj(obj(call("machine_delete", D{"machine": "web", "confirm": "web", "dry_run": true})["quota_after"])["used"])["snapshot_gb"]); used != 3 {
+	// The machine holds every snapshot the tenant has: deleting it leaves none.
+	if used := num(obj(obj(call("machine_delete", D{"machine": "web", "confirm": "web", "dry_run": true})["quota_after"])["used"])["snapshot_gb"]); used != 0 {
 		t.Fatal("machine delete preview", used)
 	}
+	p.Store.Remove("snapshots", "10100-s2")
+	if used, _ := snapshotGBOf(t, call("snapshot_delete", D{"machine": "web", "name": "s1", "dry_run": true})); used != 0 {
+		t.Fatal("last snapshot delete preview", used)
+	}
+	p.Store.Put("snapshots", "10100-s2", 1, D{"id": "10100-s2", "vmid": 10100, "name": "s2", "disk_gb": 80, "state": "ready"})
 
 	// A sample the nodes stopped renewing, or one a node could not take, is not trusted.
-	for _, stale := range []func(){func() { sampleSnapshots(p, 3, 16*time.Minute, true) }, func() { sampleSnapshots(p, 3, time.Minute, false) }} {
+	// Nor is one dated ahead of this clock: it would never grow old.
+	for _, stale := range []func(){func() { sampleSnapshots(p, 3, 16*time.Minute, true) }, func() { sampleSnapshots(p, 3, time.Minute, false) }, func() { sampleSnapshots(p, 3, -24*time.Hour, true) }} {
 		stale()
 		assertCode(t, call("snapshot_create", third), "quota_exceeded")
 		if used, counts := snapshotGBOf(t, call("snapshot_delete", D{"machine": "web", "name": "s1", "dry_run": true})); used != 80 || counts != "declared" {
@@ -120,5 +127,52 @@ func TestSnapshotCreatedUnderMeasuredQuotaKeepsItsRecord(t *testing.T) {
 	}
 	if s := p.Store.Get("snapshots", "10100-s3"); s["state"] != "ready" || num(s["disk_gb"]) != 80 {
 		t.Fatal(encoded(s))
+	}
+}
+
+// Snapshots grow without a request. A tenant over snapshot_gb is refused new
+// snapshots, not the requests that add nothing; any other dimension still is.
+func TestOverSnapshotSpaceBlocksOnlySnapshots(t *testing.T) {
+	p, _, _ := snapshotQuotaFixture(t)
+	e := p.execution(context.Background())
+	for _, over := range []func(){func() { sampleSnapshots(p, 201, time.Minute, true) }, func() {
+		// No sample: three snapshots of an 80 GiB disk count 240.
+		p.Store.Remove("storage_usage", "1")
+		p.Store.Put("snapshots", "10100-s3", 1, D{"id": "10100-s3", "vmid": 10100, "name": "s3", "disk_gb": 80, "state": "ready"})
+	}} {
+		over()
+		tenant := p.Store.TenantN(1)
+		if problem := attempt(func() { e.Quota(tenant, D{}) }); problem != nil {
+			t.Fatal(describe(problem))
+		}
+		if problem := attempt(func() { e.Quota(tenant, D{"domains": 1}) }); problem != nil {
+			t.Fatal(describe(problem))
+		}
+		if q := e.Quota(tenant); len(arr(q["over_limit"])) != 1 {
+			t.Fatal(encoded(q))
+		}
+	}
+	// Over in a dimension that only a request can raise: still refused.
+	tenant := p.Store.TenantN(1)
+	obj(tenant["quota"])["machines"] = 0
+	if problem := attempt(func() { e.Quota(tenant, D{}) }); problem == nil {
+		t.Fatal("a request that adds nothing passed while over machines")
+	}
+}
+
+func TestStorageSampleIsDatedByTheControlPlane(t *testing.T) {
+	p, _, _ := nodeFixture(t)
+	p.Store.Put("machines", 10100, 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "node": "carrel01", "disk_gb": 80})
+	p.Store.Put("snapshots", "10100-s1", 1, D{"id": "10100-s1", "vmid": 10100, "name": "s1", "disk_gb": 80, "state": "ready"})
+	e := p.execution(context.Background())
+	if _, measured := e.snapshotGB(1); measured {
+		t.Fatal("measured without a sample")
+	}
+	e.RefreshStorage()
+	if age := now() - num(p.Store.Get("storage_usage", "1")["sampled_at"]); age < 0 || age > 5 {
+		t.Fatal("sample age", age)
+	}
+	if held, measured := e.snapshotGB(1); !measured || held != 0 {
+		t.Fatal(held, measured)
 	}
 }

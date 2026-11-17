@@ -55,10 +55,13 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 	} else if !found {
 		fail("not_found", "Snapshot not found")
 	} else if tool == "snapshot_delete" {
-		// What a measured snapshot frees is known only after the next sample.
+		// What a measured snapshot frees is known only after the next sample,
+		// unless it is the tenant's last one.
 		delta = D{"snapshots": -1}
-		if _, measured := e.snapshotGB(n); !measured {
+		if held, measured := e.snapshotGB(n); !measured {
 			delta["snapshot_gb"] = -float64(snap.DiskGB)
+		} else if len(e.snapshots(n)) == 1 {
+			delta["snapshot_gb"] = -held
 		}
 	}
 	effects := D{}

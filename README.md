@@ -352,7 +352,7 @@ Snapshots use separate `snapshot_gb` (default 200 GiB) and `snapshots` (default 
 `snapshot_gb` counts the space that only the tenant's snapshots hold, as the nodes last measured
 it: a 40 GiB VM with two snapshots that differ from the disk by 3 GiB uses 40 GiB `disk_gb` and
 3 GiB `snapshot_gb`. A new snapshot holds nothing, so it is refused only while the tenant is already
-over its limit. Without a measurement from the last 15 minutes each snapshot counts at the size of
+over its limit; being over it blocks nothing else. Without a measurement from the last 15 minutes each snapshot counts at the size of
 its disk; `snapshot_storage.snapshot_gb_counts` says which applies (`held` or `declared`). Node
 admission counts snapshots the same way, at the bytes they hold now (ZFS `usedbysnapshots`, read
 with every check); a node that does not report it counts each snapshot at the size of its disk. A new
