@@ -393,7 +393,12 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 			}
 			e.removeMachineRecord(n, m)
 			if problem != nil {
-				panic(problem)
+				// The VM and record are gone: say so, instead of the generic
+				// "allocation retained" failure.
+				if e.Op != nil {
+					e.Op["resource_changes"] = true
+				}
+				fail("internal", "The machine was deleted, but the follow-up reconcile hit an internal error; the next reconcile pass will catch up", D{"recovery": "contact_administrator"})
 			}
 		case "machine_resize":
 			previous := obj(m["resize_from"])
