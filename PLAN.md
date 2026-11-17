@@ -1588,10 +1588,13 @@ not export:
 | `carrel.node.storage.utilization` | real use of the node's pool, 0 to 1: the watermark of section 5.2 |
 | `carrel.node.snapshot.counted`, `.declared` | what admission counts for snapshots, and the sum of their disks' sizes |
 
-A failed operation is logged at ERROR when the platform is at fault (`backend_unavailable`, or an
-error that is not a refusal), at WARN for `capacity_exhausted`, and at INFO when the member can fix
-it. The sender never blocks the control plane: a full queue drops records, and its own failures
-stay on stderr. B09 sends to the sensorium instance its alerting service reads.
+A failed operation is logged at INFO only when the member can fix it: the codes `invalid`,
+`not_found`, `forbidden`, `quota_exceeded` and `conflict`. `capacity_exhausted` and
+`guest_not_ready` are WARN. Everything else is ERROR: any other code, an error that is not a
+refusal, and any refusal whose `recovery` is `retry_infrastructure` or `contact_administrator`.
+The sender never blocks the control plane: a full queue drops records, one message leaves at most
+20 times a minute, and its own failures stay on stderr. B09 sends to the sensorium instance its
+alerting service reads.
 
 ### 9.2 Reconciler
 
@@ -1610,7 +1613,7 @@ B09 uses golem, which sends to Telegram (2026-11-17; no email sender was built).
 | Node memory saturated | Proxmox node memory metrics |
 | A node the control plane cannot read | `carrel.node.reachable` below 1 |
 | Reconciler drift it could not repair, backup failure, certificate failure | the ERROR log records, such as `reconcile_failed`, `gateway_config_rejected`, `backup_failed` and `certificate_issuance_failed` |
-| Admission out of room | the WARN record `operation_failed` with `code` `capacity_exhausted` |
+| Admission out of room, a guest that did not come up | the WARN record `operation_failed` with `code` `capacity_exhausted` or `guest_not_ready` |
 | Freshness | no new data for 10 minutes. Healthy services with stale data are the failure mode seen before |
 
 Nothing acts on a watermark by itself yet: an admin moves machines with `machine_migrate` or asks
@@ -1826,7 +1829,7 @@ starting proposal.
 | sandbox 104, kilo 116, vivado 100, agent-noir 105, sensorium-zyx 205 | tenant `zyx1121` | vivado has a 250 GB disk |
 | minecraft 103, kitbash 115 | tenant `zyx1121` | 25565 as a special port or `mc.winlab.tw` as an `srv` domain; `*.kitbash.zyx.tw` as a `delegated` domain in the `zyx.tw` zone |
 | video 114, agent-oai 201, agent-portal 203, dst 204, hams-bridge 206 | a lab services project tenant | `video`, `hams` and `door` names adopted as special domains |
-| sensorium-winlab 202 | infra (`N = 0`) | carrel's own telemetry goes there (section 9.1) |
+| sensorium-winlab 202 | infra (`N = 0`) | carrel's own telemetry was to go there; since 2026-11-17 it goes to sensorium-zyx, which the alerting service reads (section 9.1) |
 | gateway 200, template 9000 | stay | the old gateway keeps serving the names of the guests that stay |
 
 **Two gateways, one zone**: the old gateway keeps serving the names of the guests that stay, and

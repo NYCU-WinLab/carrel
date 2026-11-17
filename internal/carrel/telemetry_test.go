@@ -64,7 +64,7 @@ func (c *collector) seen(path string) []collected {
 func telemetryFixture(t *testing.T, c *collector, stderr slog.Handler) (*Telemetry, string) {
 	t.Helper()
 	token := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(token, []byte("first\n"), 0o600); err != nil {
+	if err := os.WriteFile(token, []byte("first-token-value\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return newTelemetry(Config{TelemetryURL: c.server.URL + "/", TelemetryTokenFile: token}, c.server.Client(), stderr), token
@@ -94,7 +94,7 @@ func TestTelemetrySendsWarningsAndErrorsOnly(t *testing.T) {
 	tel.Close()
 
 	posts := c.seen("/v1/logs")
-	if len(posts) != 1 || posts[0].authorization != "Bearer first" || posts[0].contentType != "application/json" {
+	if len(posts) != 1 || posts[0].authorization != "Bearer first-token-value" || posts[0].contentType != "application/json" {
 		t.Fatal(posts)
 	}
 	if walk(posts[0].body, "resourceLogs", 0, "resource", "attributes", 0, "value", "stringValue") != "carrel" {
@@ -155,8 +155,8 @@ func TestTelemetryFailureStaysLocalAndNeverBlocks(t *testing.T) {
 	tel, _ := telemetryFixture(t, c, stderr)
 	log := slog.New(tel.Handler(stderr))
 	started := time.Now()
-	for range telemetryQueue * 4 {
-		log.Error("reconcile_failed")
+	for i := range telemetryQueue * 4 {
+		log.Error("failure_" + strconv.Itoa(i))
 	}
 	if time.Since(started) > 2*time.Second {
 		t.Fatal("logging waited for the collector")
@@ -165,15 +165,98 @@ func TestTelemetryFailureStaysLocalAndNeverBlocks(t *testing.T) {
 	if n := strings.Count(local.String(), "telemetry_export_failed"); n != 1 {
 		t.Fatalf("%d failure lines", n)
 	}
+	if strings.Contains(local.String(), "first-token-value") {
+		t.Fatal("the token reached stderr")
+	}
 	if !strings.Contains(local.String(), `"level":"INFO","msg":"telemetry_export_failed","path":"/v1/logs","problem":"collector answered 503"`) {
 		t.Fatal(local.String())
 	}
 	for _, p := range c.seen("/v1/logs") {
 		for _, r := range arr(walk(p.body, "resourceLogs", 0, "scopeLogs", 0, "logRecords")) {
-			if walk(r, "body", "stringValue") != "reconcile_failed" {
+			if !strings.HasPrefix(str(walk(r, "body", "stringValue")), "failure_") {
 				t.Fatal("the exporter exported its own failure")
 			}
 		}
+	}
+}
+
+// A collector that never answers: logging stays fast, and Close gives up
+// after the send timeout instead of hanging the shutdown.
+func TestTelemetryCollectorThatHangs(t *testing.T) {
+	c := newCollector(t)
+	release := make(chan struct{})
+	c.server.Config.Handler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release })
+	t.Cleanup(func() { close(release) })
+	client := c.server.Client()
+	client.Timeout = 200 * time.Millisecond
+	var local bytes.Buffer
+	stderr := slog.NewJSONHandler(&local, nil)
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("first-token-value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tel := newTelemetry(Config{TelemetryURL: c.server.URL, TelemetryTokenFile: token}, client, stderr)
+	log := slog.New(tel.Handler(stderr))
+	started := time.Now()
+	for i := range 2000 {
+		log.Error("failure_" + strconv.Itoa(i))
+		tel.Gauge("x", "1", 1)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("logging waited for the collector")
+	}
+	tel.Close()
+	if time.Since(started) > 10*time.Second {
+		t.Fatal("Close waited for the collector")
+	}
+	// After Close nothing panics and nothing blocks.
+	log.Error("after_close")
+	tel.Gauge("x", "1", 1)
+	if !strings.Contains(local.String(), `"problem":"collector unreachable"`) || strings.Contains(local.String(), "first-token-value") {
+		t.Fatal("the hang was not what failed, or the token reached stderr")
+	}
+}
+
+// The token goes to the configured host only, never where a redirect points.
+func TestTelemetryDoesNotFollowRedirects(t *testing.T) {
+	elsewhere := newCollector(t)
+	c := newCollector(t)
+	c.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.server.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	})
+	var local bytes.Buffer
+	stderr := slog.NewJSONHandler(&local, nil)
+	tel, _ := telemetryFixture(t, c, stderr)
+	slog.New(tel.Handler(stderr)).Error("reconcile_failed")
+	tel.Close()
+	if len(elsewhere.seen("/v1/logs")) != 0 {
+		t.Fatal("the request followed a redirect")
+	}
+	if !strings.Contains(local.String(), "collector answered 307") {
+		t.Fatal(local.String())
+	}
+}
+
+// One message cannot crowd out the rest: a warning any outsider can cause
+// leaves at most telemetryRepeat times a minute.
+func TestTelemetryCapsARepeatedMessage(t *testing.T) {
+	c := newCollector(t)
+	stderr := slog.NewJSONHandler(io.Discard, nil)
+	tel, _ := telemetryFixture(t, c, stderr)
+	log := slog.New(tel.Handler(stderr))
+	for range telemetryQueue * 2 {
+		log.Warn("oauth_rate_limited", "client", "203.0.113.9")
+	}
+	log.Error("reconcile_failed")
+	tel.Close()
+	count := map[string]int{}
+	for _, p := range c.seen("/v1/logs") {
+		for _, r := range arr(walk(p.body, "resourceLogs", 0, "scopeLogs", 0, "logRecords")) {
+			count[str(walk(r, "body", "stringValue"))]++
+		}
+	}
+	if count["oauth_rate_limited"] != telemetryRepeat || count["reconcile_failed"] != 1 {
+		t.Fatal(count)
 	}
 }
 
@@ -257,31 +340,47 @@ func TestCapacityReportNamesEveryNode(t *testing.T) {
 	}
 }
 
-// A failed operation is an alert only when the platform is at fault.
+// A failed operation is quiet only when the member can fix it. The refusals
+// come from fail, as they do in the tools.
 func TestOperationFailureLevels(t *testing.T) {
 	p, _ := fixture(t)
 	var local bytes.Buffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&local, nil)))
 	t.Cleanup(func() { slog.SetDefault(old) })
-	fail := func(code string) any {
-		return Failure{D{"ok": false, "error": D{"code": code, "message": "x"}}}
+	refusal := func(code string, details ...D) any {
+		return attempt(func() { fail(code, "x", details...) })
 	}
 	for _, c := range []struct {
 		err   any
 		level string
 	}{
-		{fail("quota_exceeded"), "INFO"},
-		{fail("invalid"), "INFO"},
-		{fail("capacity_exhausted"), "WARN"},
-		{fail("backend_unavailable"), "ERROR"},
+		{refusal("invalid"), "INFO"},
+		{refusal("not_found"), "INFO"},
+		{refusal("forbidden"), "INFO"},
+		{refusal("quota_exceeded"), "INFO"},
+		{refusal("conflict"), "INFO"},
+		{refusal("capacity_exhausted"), "WARN"},
+		{refusal("guest_not_ready"), "WARN"},
+		{refusal("backend_unavailable"), "ERROR"},
+		// A damaged sealed value, a function host that is not set up.
+		{refusal("internal"), "ERROR"},
+		{refusal("unavailable"), "ERROR"},
+		// A code nobody listed is the operators' until someone lists it.
+		{refusal("something_new"), "ERROR"},
+		// The recovery names the operators, whatever the code.
+		{refusal("conflict", D{"recovery": "retry_infrastructure"}), "ERROR"},
+		{refusal("conflict", D{"recovery": "contact_administrator"}), "ERROR"},
+		{refusal("quota_exceeded", D{"recovery": "contact_administrator"}), "ERROR"},
+		{refusal("capacity_exhausted", D{"recovery": "retry_infrastructure"}), "ERROR"},
+		{refusal("conflict", D{"recovery": "revise_request"}), "INFO"},
 		{errors.New("unexpected"), "ERROR"},
 	} {
 		local.Reset()
 		e := p.execution(context.Background())
 		e.Op = D{"id": "op", "tool": "machine_create", "args": D{}}
 		p.Operations.handleError(e, c.err)
-		if !strings.Contains(local.String(), `"level":"`+c.level+`","msg":"operation_failed"`) {
+		if !strings.Contains(local.String(), `"level":"`+c.level+`","msg":"operation_failed"`) || !strings.Contains(local.String(), `"tool":"machine_create"`) {
 			t.Fatalf("%v: %s", c.err, local.String())
 		}
 	}

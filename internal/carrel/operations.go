@@ -379,22 +379,36 @@ func (o *Operations) handleError(e *Execution, err any) {
 	op["state"] = "failed"
 	op["phase"] = "failed"
 	op["error"] = failureResult(err)["error"]
-	// A refusal the member can fix is not the platform's fault. An admin
-	// must see the node or gateway failing (ERROR) and admission running
-	// out of room (WARN): those two reach the alerts (PLAN 9.3).
-	code, level := str(obj(op["error"])["code"]), slog.LevelInfo
-	if _, refusal := err.(Failure); !refusal || code == "backend_unavailable" {
-		level = slog.LevelError
-	} else if code == "capacity_exhausted" {
-		level = slog.LevelWarn
-	}
-	slog.Log(context.Background(), level, "operation_failed", "operation", op["id"], "tool", op["tool"], "code", code, "error_type", fmt.Sprintf("%T", err))
+	slog.Log(context.Background(), failureLevel(err), "operation_failed", "operation", op["id"], "tool", op["tool"], "code", obj(op["error"])["code"], "error_type", fmt.Sprintf("%T", err))
 	if op["tool"] == "deployment_apply" && textAt(obj(op["args"]), "on_failure", "rollback") == "rollback" {
 		op["state"] = "cleaning_up"
 		op["phase"] = "removing_new_resources"
 		o.Save(op)
 		e.CleanupOutcome()
 	}
+}
+
+// failureLevel says who must hear about a failed operation. INFO is only for
+// the refusals named here, which the member can fix. WARN is for admission
+// out of room and a guest that did not come up. Everything else is ERROR and
+// reaches the alerts (PLAN 9.3): a code nobody listed, an error that is not
+// a refusal, and any refusal whose recovery names the operators.
+func failureLevel(err any) slog.Level {
+	f, refusal := err.(Failure)
+	if !refusal {
+		return slog.LevelError
+	}
+	failure := obj(f.Result["error"])
+	if contains([]string{"contact_administrator", "retry_infrastructure"}, failure["recovery"]) {
+		return slog.LevelError
+	}
+	switch str(failure["code"]) {
+	case "invalid", "not_found", "forbidden", "quota_exceeded", "conflict":
+		return slog.LevelInfo
+	case "capacity_exhausted", "guest_not_ready":
+		return slog.LevelWarn
+	}
+	return slog.LevelError
 }
 func (o *Operations) saveOutcome(e *Execution) {
 	if o.p.ctx.Err() != nil {

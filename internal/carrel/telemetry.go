@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -28,6 +29,10 @@ type Telemetry struct {
 	done      chan struct{}
 	wg        sync.WaitGroup
 	failedAt  time.Time
+	// mu guards the count of records exported per message this minute.
+	mu     sync.Mutex
+	minute time.Time
+	sent   map[string]int
 }
 
 // telemetryItem is one OTLP log record or one OTLP metric.
@@ -42,6 +47,10 @@ const (
 	telemetryFlush = 2 * time.Second
 	telemetrySend  = 5 * time.Second
 	telemetryValue = 400
+	// telemetryRepeat is how many records with one message leave in a
+	// minute. Some warnings answer requests anyone can send: without a cap
+	// an outsider would set the export rate and crowd out other records.
+	telemetryRepeat = 20
 )
 
 // NewTelemetry starts the sender, or returns nil when the configuration
@@ -51,13 +60,13 @@ func NewTelemetry(c Config, stderr slog.Handler) *Telemetry {
 	if c.TelemetryURL == "" {
 		return nil
 	}
-	// The request carries the write token: it goes to the configured host
-	// and nowhere a redirect points.
-	client := &http.Client{Timeout: telemetrySend, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return newTelemetry(c, client, stderr)
+	return newTelemetry(c, &http.Client{Timeout: telemetrySend}, stderr)
 }
 
 func newTelemetry(c Config, client *http.Client, stderr slog.Handler) *Telemetry {
+	// The request carries the write token: it goes to the configured host
+	// and nowhere a redirect points.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t := &Telemetry{
 		url:       strings.TrimRight(c.TelemetryURL, "/"),
 		tokenFile: c.TelemetryTokenFile,
@@ -65,6 +74,7 @@ func newTelemetry(c Config, client *http.Client, stderr slog.Handler) *Telemetry
 		stderr:    stderr,
 		queue:     make(chan telemetryItem, telemetryQueue),
 		done:      make(chan struct{}),
+		sent:      map[string]int{},
 	}
 	t.wg.Add(1)
 	go t.loop()
@@ -81,8 +91,8 @@ func (t *Telemetry) Close() {
 }
 
 // Handler wraps the process's log handler: records at WARN and above also
-// go to the collector. Attributes bound with With stay on stderr only;
-// carrel binds none.
+// go to the collector, up to telemetryRepeat a minute for one message.
+// Attributes bound with With stay on stderr only; carrel binds none.
 func (t *Telemetry) Handler(h slog.Handler) slog.Handler {
 	if t == nil {
 		return h
@@ -109,6 +119,16 @@ func (h telemetryHandler) WithGroup(name string) slog.Handler {
 }
 
 func (t *Telemetry) log(r slog.Record) {
+	t.mu.Lock()
+	if r.Time.Sub(t.minute) >= time.Minute {
+		t.minute, t.sent = r.Time, map[string]int{}
+	}
+	t.sent[r.Message]++
+	repeated := t.sent[r.Message] > telemetryRepeat
+	t.mu.Unlock()
+	if repeated {
+		return
+	}
 	attrs := []D{}
 	r.Attrs(func(a slog.Attr) bool {
 		attrs = append(attrs, otlpString(a.Key, truncate(fmt.Sprint(a.Value.Resolve().Any()), telemetryValue)))
@@ -211,6 +231,9 @@ func (t *Telemetry) post(path string, body D) {
 		if err != nil {
 			return "token file unreadable"
 		}
+		if len(bytes.TrimSpace(token)) == 0 {
+			return "token file empty"
+		}
 		content, err := json.Marshal(body)
 		if err != nil {
 			return "encoding failed"
@@ -226,6 +249,8 @@ func (t *Telemetry) post(path string, body D) {
 			return "collector unreachable"
 		}
 		defer resp.Body.Close()
+		// Read to the end so the connection is used again.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			return "collector answered " + strconv.Itoa(resp.StatusCode)
 		}
