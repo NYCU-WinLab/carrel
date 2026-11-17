@@ -541,8 +541,33 @@ func (e *Execution) SweepDeletedMachines() []D {
 			}
 		}
 		if err := attempt(func() {
-			for _, v := range arr(e.Call(D{"op": "vmids_present", "vmids": vmids}, target)) {
-				confirmed[name][integer(v)] = true
+			// Anything but a list of requested VMIDs is a failed confirmation,
+			// not an empty one: a malformed reply must keep the records.
+			reply, ok := e.Call(D{"op": "vmids_present", "vmids": vmids}, target).([]any)
+			if !ok {
+				panic("vmids_present reply is not a list")
+			}
+			requested := map[int]bool{}
+			for _, v := range vmids {
+				requested[integer(v)] = true
+			}
+			for _, v := range reply {
+				var id int
+				switch x := v.(type) {
+				case float64:
+					id = int(x)
+					if float64(id) != x {
+						panic("vmids_present reply holds a non-integer")
+					}
+				case int:
+					id = x
+				default:
+					panic("vmids_present reply holds a non-number")
+				}
+				if !requested[id] {
+					panic("vmids_present reply holds a VMID that was not requested")
+				}
+				confirmed[name][id] = true
 			}
 		}); err != nil {
 			slog.Warn("deleted_machine_absence_not_confirmed", "node", name, "error", describe(err))

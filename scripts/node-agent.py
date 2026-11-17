@@ -171,14 +171,18 @@ def vmids_present(vmids):
     # An unmounted pmxcfs or an unreadable directory must fail, not read as "absent".
     if not (PVE_NODES / NODE).is_dir():
         raise RuntimeError(f"{PVE_NODES / NODE} is not readable")
+    # A guest migrating between nodes can be renamed after one directory was
+    # scanned and before the next, so it reads as absent in a single pass. Scan
+    # twice: a guest seen in either pass is present.
     found = set()
-    with os.scandir(PVE_NODES) as nodes:
-        for node in nodes:
-            if node.is_dir():
-                with os.scandir(node.path) as kinds:
-                    for kind in kinds:
-                        if kind.is_dir():
-                            found.update(int(n[:-5]) for n in os.listdir(kind.path) if n.endswith(".conf") and n[:-5].isdigit())
+    for _ in range(2):
+        with os.scandir(PVE_NODES) as nodes:
+            for node in nodes:
+                if node.is_dir():
+                    with os.scandir(node.path) as kinds:
+                        for kind in kinds:
+                            if kind.is_dir():
+                                found.update(int(n[:-5]) for n in os.listdir(kind.path) if n.endswith(".conf") and n[:-5].isdigit())
     return sorted(wanted & found)
 
 
