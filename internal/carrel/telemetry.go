@@ -286,7 +286,7 @@ func (p *Platform) reportCapacity() {
 		t.Gauge("carrel.node.reachable", "1", 1, "node", n.Name)
 		reservations, snapshots := e.nodeLoad(n, nil)
 		c := summarize(obj(inventories[i]), reservations, snapshots, times[i])
-		allocatable, disk := obj(c["allocatable"]), obj(obj(c["physical"])["disk"])
+		allocatable, disk, memory := obj(c["allocatable"]), obj(obj(c["physical"])["disk"]), obj(obj(c["physical"])["memory"])
 		for _, dim := range []struct {
 			key, name, unit string
 			scale           float64
@@ -300,6 +300,20 @@ func (p *Platform) reportCapacity() {
 		}
 		t.Gauge("carrel.node.snapshot.counted", "By", num(disk["snapshot_gib"])*GiB, "node", n.Name)
 		t.Gauge("carrel.node.snapshot.declared", "By", num(disk["snapshot_declared_gib"])*GiB, "node", n.Name)
+		if total := num(memory["total"]); total > 0 {
+			t.Gauge("carrel.node.memory.utilization", "1", num(memory["used"])/total, "node", n.Name)
+		}
+		// What the node's running machines need of the memory they were
+		// given, added up: the number a memory ratio would be set from
+		// (PLAN 5.2). Only machines with the balloon device report.
+		var guests D
+		if attempt(func() { guests = obj(e.Call(D{"op": "guest_memory"}, n.Target)) }) != nil {
+			continue
+		}
+		t.Gauge("carrel.node.guest.running", "{machine}", num(guests["running"]), "node", n.Name)
+		t.Gauge("carrel.node.guest.reporting", "{machine}", num(guests["reporting"]), "node", n.Name)
+		t.Gauge("carrel.node.guest.memory.assigned", "By", num(guests["assigned_bytes"]), "node", n.Name)
+		t.Gauge("carrel.node.guest.memory.needed", "By", num(guests["assigned_bytes"])-num(guests["available_bytes"]), "node", n.Name)
 	}
 }
 

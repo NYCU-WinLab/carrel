@@ -1295,6 +1295,53 @@ def snapshot_bytes(pool):
     return sum(int(row) for row in rows.splitlines())
 
 
+# One perl process asks every VM: loading the PVE modules costs 0.2 s, a
+# question 2 ms. A VM without the balloon device answers with an error, and
+# a monitor that does not answer costs 2 seconds, not the whole read.
+GUEST_STATS = """
+use PVE::QemuServer::Monitor; use JSON;
+my %out;
+for my $vmid (@ARGV) {
+    my $stats = eval { PVE::QemuServer::Monitor::mon_cmd($vmid, 'qom-get', timeout => 2,
+        path => '/machine/peripheral/balloon0', property => 'guest-stats') };
+    $out{$vmid} = $stats if ref($stats) eq 'HASH';
+}
+print encode_json(\\%out);
+"""
+
+
+def guest_memory():
+    """Add up what this node's running Carrel VMs need of their memory.
+
+    A VM with the balloon device reports the memory its kernel could still
+    hand out ("available": free pages and the cache it can drop). Assigned
+    minus available is what the VM needs now. PVE's own figure counts the
+    cache as used, so it only ever grows. The answer is one sum for the node:
+    what happens inside one machine is its owner's business (PLAN 9.1).
+    """
+    vms = [
+        v
+        for v in pve_get(f"/nodes/{NODE}/qemu")
+        if v.get("status") == "running" and "carrel" in str(v.get("tags", "")).split(";")
+    ]
+    out = {"node": NODE, "running": len(vms), "reporting": 0, "assigned_bytes": 0, "available_bytes": 0}
+    if not vms:
+        return out
+    stats = json.loads(run("perl", "-e", GUEST_STATS, *sorted(int(v["vmid"]) for v in vms), timeout=45))
+    now = time.time()
+    for v in vms:
+        reported = stats.get(str(v["vmid"])) or {}
+        available = (reported.get("stats") or {}).get("stat-available-memory")
+        assigned = int(v["maxmem"])
+        # A guest without the driver never updates; an old kernel has no "available".
+        if not isinstance(available, int) or not 0 <= available <= assigned or now - int(reported.get("last-update") or 0) > 120:
+            continue
+        out["reporting"] += 1
+        out["assigned_bytes"] += assigned
+        out["available_bytes"] += available
+    return out
+
+
 def vm_template(image):
     defaults = {"debian-13-minimal": None, "debian-13": 9000, "ubuntu-24.04": 9001}
     if image not in defaults:
@@ -1678,7 +1725,7 @@ def create_from_iso(m, exists, manifest, saved, marker):
     storage = storage_id()
     if not exists:
         args = ["qm", "create", vmid, "--name", m["name"], "--description", marker, "--tags", f"carrel;tenant-{n}",
-                "--cores", m["cpu"], "--memory", m["memory_mb"], "--balloon", "0", "--cpu", "x86-64-v3",
+                "--cores", m["cpu"], "--memory", m["memory_mb"], "--cpu", "x86-64-v3",
                 "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
                 "--scsihw", "virtio-scsi-single", "--scsi0", f"{storage}:{m['disk_gb']},iothread=1,discard=on,ssd=1",
                 "--ide2", f"{iso},media=cdrom", "--boot", "order=scsi0;ide2", "--ostype", "l26",
@@ -1855,8 +1902,6 @@ def create(m):
             m["cpu"],
             "--memory",
             m["memory_mb"],
-            "--balloon",
-            "0",
             "--cpu",
             "host" if m.get("nested_virt") else "x86-64-v3",
             "--net0",
@@ -2520,7 +2565,7 @@ def main():
     long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
-        if op not in ("inventory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
+        if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store"):
             fcntl.flock(lock, fcntl.LOCK_EX)
         journal = None
         # Anything that may change or start a machine ends the proof that a
@@ -2560,6 +2605,8 @@ def main():
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
                 "snapshot_bytes": snapshot_bytes(storage_definition(storage)["pool"]),
             }
+        elif op == "guest_memory":
+            out = guest_memory()
         elif op == "storage_usage":
             for m in req["machines"]:
                 machine(m)

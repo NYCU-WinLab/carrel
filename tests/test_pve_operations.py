@@ -150,6 +150,58 @@ def test_inventory_stays_fresh_and_counts_every_volume(tmp_path, monkeypatch, ca
         module.inventory_read("local-zfs")
 
 
+def test_guest_memory_adds_what_running_carrel_vms_report(monkeypatch):
+    module = script("node-agent.py")
+    now = 1_800_000_000
+    monkeypatch.setattr(module.time, "time", lambda: now)
+    vms = [
+        {"vmid": 10100, "status": "running", "tags": "carrel;tenant-1", "maxmem": 4 * GIB},
+        {"vmid": 10101, "status": "running", "tags": "carrel;tenant-1", "maxmem": 2 * GIB},
+        # No balloon device yet, a guest without the driver, a kernel without "available".
+        {"vmid": 10200, "status": "running", "tags": "carrel;tenant-2", "maxmem": 8 * GIB},
+        {"vmid": 10201, "status": "running", "tags": "carrel;tenant-2", "maxmem": 8 * GIB},
+        {"vmid": 10202, "status": "running", "tags": "carrel;tenant-2", "maxmem": 8 * GIB},
+        # A figure larger than the machine is not a measurement.
+        {"vmid": 10203, "status": "running", "tags": "carrel;tenant-2", "maxmem": 1 * GIB},
+        # Not running, a template, and a guest Carrel does not own.
+        {"vmid": 10300, "status": "stopped", "tags": "carrel;tenant-3", "maxmem": 16 * GIB},
+        {"vmid": 9030, "status": "running", "tags": "carrel-template", "maxmem": 2 * GIB},
+        {"vmid": 200, "status": "running", "maxmem": 32 * GIB},
+    ]
+    monkeypatch.setattr(module, "pve_get", lambda resource: vms)
+    stats = {
+        "10100": {"last-update": now - 2, "stats": {"stat-available-memory": 3 * GIB}},
+        "10101": {"last-update": now - 2, "stats": {"stat-available-memory": GIB // 2}},
+        "10201": {"last-update": 0, "stats": {"stat-available-memory": 7 * GIB}},
+        "10202": {"last-update": now - 2, "stats": {"stat-free-memory": 7 * GIB}},
+        "10203": {"last-update": now - 2, "stats": {"stat-available-memory": 2 * GIB}},
+    }
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args) or json.dumps(stats))
+    assert module.guest_memory() == {
+        "node": module.NODE,
+        "running": 6,
+        "reporting": 2,
+        "assigned_bytes": 6 * GIB,
+        "available_bytes": 3 * GIB + GIB // 2,
+    }
+    # One process asks about the 6 running machines, and no other guest.
+    assert (
+        len(calls) == 1
+        and calls[0][0] == "perl"
+        and calls[0][3:] == (10100, 10101, 10200, 10201, 10202, 10203)
+    )
+    # Nothing running: nothing to ask.
+    monkeypatch.setattr(module, "pve_get", lambda resource: vms[6:7])
+    assert module.guest_memory()["running"] == 0 and len(calls) == 1
+
+
+def test_no_machine_is_created_with_the_balloon_device_off():
+    # "balloon: 0" removes the device, and with it what the guest reports
+    # about its memory (PLAN 5.2). Both creation paths leave the key unset.
+    assert "--balloon" not in (Path(__file__).parents[1] / "scripts" / "node-agent.py").read_text()
+
+
 def test_topology_observes_missing_subnets(tmp_path, monkeypatch):
     module = script("node-agent.py")
 

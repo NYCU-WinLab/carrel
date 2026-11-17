@@ -406,6 +406,7 @@ snapshot space (100 GiB) retain their existing defaults. A machine created with
 | Quota | The sum of all quotas may exceed capacity, because most tenants are idle most of the time |
 | CPU admission | All allocated Carrel machines, including stopped ones, reserve vCPU; shared vCPU at most 4 times host threads |
 | Memory admission | All allocated Carrel machines, including stopped ones, reserve RAM; unmanaged running infrastructure also counts |
+| Memory measurement | VMs keep the balloon device (2026-11-17): the guest reports what it needs, and returns freed pages to the node. Nothing shrinks a machine, and admission still reserves all assigned RAM. Each node's sum of assigned and needed memory is recorded (section 9.1); a memory ratio is set only from that record. Machines created earlier get the device at their next cold boot |
 | Disk admission | Allocated disk at most 1.5 times the pool: volumes at their declared size, snapshots at the bytes they hold (2026-11-17; a node that does not measure them counts each at the size of its disk). A snapshot whose disk would not fit in the node's physical headroom is refused |
 | Disk watermark | Real use of a node's pool: `warning` above 70 percent, `blocked` above 80 (nothing on the node grows), `critical` above 85. `capacity_get` and `node_list` report it; alerts are in section 9.3. Snapshots and thin disks grow after admission, so the watermark, not admission, is what guards a pool |
 | Addresses, ports, domains | Fixed allocations, never oversubscribed |
@@ -925,6 +926,7 @@ within 90 days of it.
 | `fstrim.timer` on, disks `discard=on`, `ssd=1`, `iothread=1`, `virtio-scsi-single` | Space freed in the guest returns to the pool |
 | Unattended security upgrades, timezone Asia/Taipei | Tenants forget |
 | CPU type `x86-64-v3` (AVX2, FMA; every node is an E5-2630 v4); `host` only with `nested_virt` | Machines can migrate between nodes |
+| Balloon device on, with free page reporting; no target below the assigned memory | Memory the guest frees returns to the node, and the node learns what the guest needs (section 5.2) |
 | Serial console on | Needed for `machine_console_log` |
 
 The prepared `debian-13-minimal` image contains cloud-init, SSH, sudo, Python for management,
@@ -1587,6 +1589,9 @@ not export:
 | `carrel.node.disk.committed`, `.limit` | the same for disk, in bytes |
 | `carrel.node.storage.utilization` | real use of the node's pool, 0 to 1: the watermark of section 5.2 |
 | `carrel.node.snapshot.counted`, `.declared` | what admission counts for snapshots, and the sum of their disks' sizes |
+| `carrel.node.memory.utilization` | real use of the node's memory, 0 to 1 |
+| `carrel.node.guest.running`, `.reporting` | the node's running Carrel VMs, and how many of them report their memory through the balloon device |
+| `carrel.node.guest.memory.assigned`, `.needed` | for the VMs that report: the memory they were given, and that minus what their kernels could still hand out. One sum for the node, never one machine |
 
 A failed operation is logged at INFO only when the member can fix it: the codes `invalid`,
 `not_found`, `forbidden`, `quota_exceeded` and `conflict`. `capacity_exhausted` and
@@ -1610,7 +1615,7 @@ B09 uses golem, which sends to Telegram (2026-11-17; no email sender was built).
 | Alert | Signal |
 |---|---|
 | A node's pool passes a watermark | `carrel.node.storage.utilization` above 0.7 is a warning and above 0.85 an error |
-| Node memory saturated | Proxmox node memory metrics |
+| Node memory saturated | `carrel.node.memory.utilization` above 0.9 |
 | A node the control plane cannot read | `carrel.node.reachable` below 1 |
 | Reconciler drift it could not repair, backup failure, certificate failure | the ERROR log records, such as `reconcile_failed`, `gateway_config_rejected`, `backup_failed` and `certificate_issuance_failed` |
 | Admission out of room, a guest that did not come up | the WARN record `operation_failed` with `code` `capacity_exhausted` or `guest_not_ready` |
