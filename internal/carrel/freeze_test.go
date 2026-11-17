@@ -474,6 +474,22 @@ func TestDeletingAThawedMachineWhoseBackupRemainedRemovesTheBackup(t *testing.T)
 	}
 }
 
+// A reconcile that fails after the VM is gone must not leave the record in
+// "deleting", where it keeps counting against admission and quota (#298).
+func TestDeleteRemovesTheRecordWhenReconcileFails(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "reconcile" {
+			return nil, errors.New("node unreachable"), true
+		}
+		return nil, nil, false
+	})
+	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("the record stayed after the reconcile failed")
+	}
+}
+
 // A delete of a machine whose thaw is restoring it waits for the thaw
 // (CheckBusy), so the restore is never cut off under it (#192, item 1).
 func TestDeleteWaitsForAThawInProgress(t *testing.T) {
