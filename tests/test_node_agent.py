@@ -1836,17 +1836,32 @@ def test_vmids_present_scans_twice_so_a_migration_mid_scan_is_seen(monkeypatch, 
     conf.write_text("")
     monkeypatch.setattr(module, "PVE_NODES", tmp_path)
     monkeypatch.setattr(module, "NODE", "pve01")
-    real = module.os.listdir
-    calls = []
+    real_listdir = module.os.listdir
+    real_scandir = module.os.scandir
+    moved = []
+
+    class Ordered:
+        # List the node directories as pve01 then pve02, whatever the filesystem order.
+        def __init__(self, path):
+            self.scan = real_scandir(path)
+
+        def __enter__(self):
+            entries = list(self.scan.__enter__())
+            return iter(sorted(entries, key=lambda e: e.name))
+
+        def __exit__(self, *exc):
+            return self.scan.__exit__(*exc)
 
     def migrating(path):
-        # The first pass reads pve02 after the config left it; the second sees it on pve01.
-        calls.append(path)
-        if len(calls) == 1:
+        # The first pass reads pve01, then pve02 after the config moved to pve01,
+        # so a single pass misses it; the second pass sees it on pve01.
+        if not moved and "pve02" in str(path):
+            moved.append(path)
             conf.rename(tmp_path / "pve01" / "qemu-server" / "10204.conf")
             return []
-        return real(path)
+        return real_listdir(path)
 
+    monkeypatch.setattr(module.os, "scandir", Ordered)
     monkeypatch.setattr(module.os, "listdir", migrating)
     assert module.vmids_present([10204]) == [10204]
 
