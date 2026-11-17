@@ -658,3 +658,27 @@ func TestFreezeKeepsTheDomainForTheGateway(t *testing.T) {
 		t.Fatalf("the name is not parked during the freeze:\n%s", caddy)
 	}
 }
+
+// reconcile_run removes a record stuck in "deleting" whose VM is gone, and
+// keeps one whose VM is still on the node (#294).
+func TestReconcileRunRemovesDeletingRecordOfGoneVM(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	for _, m := range []D{seedMachine(p, "gone", 10201), seedMachine(p, "alive", 10202)} {
+		m["state"] = "deleting"
+		p.Store.Put("machines", m["vmid"], 1, m)
+	}
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "inventory" {
+			inventory := baseInventory()
+			inventory["resources"] = []D{{"type": "qemu", "vmid": 10202, "node": "carrel01", "status": "stopped"}}
+			return inventory, nil, true
+		}
+		return nil, nil, false
+	})
+	r := p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true))
+	assertOK(t, r)
+	result := obj(awaitState(t, p, opOf(r), "succeeded")["result"])
+	if len(arr(result["deleted_records_removed"])) != 1 || p.Store.Get("machines", "10201") != nil || p.Store.Get("machines", "10202") == nil {
+		t.Fatalf("result %s", encoded(result))
+	}
+}

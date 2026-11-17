@@ -373,12 +373,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 				}
 			}
 			e.Reconcile()
-			e.removeApps(filter(e.S.Objects("apps", n), func(a D) bool { return integer(a["vmid"]) == integer(m["vmid"]) }))
-			e.Transaction(func(tx *Execution) {
-				tx.removeRunners(n, m["vmid"])
-				tx.forgetMachine(n, m)
-				tx.S.Remove("machines", m["vmid"])
-			})
+			e.removeMachineRecord(n, m)
 		case "machine_resize":
 			previous := obj(m["resize_from"])
 			m["resize"] = resizeCompletion(m, previous, spec)

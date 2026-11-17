@@ -48,6 +48,9 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		r := e.Reconcile()
 		e.RefreshStorage()
 		out := D{"dry_run": false, "result": r, "cloud_init_collected": e.CollectCloudInit(), "disk_volumes_collected": e.CollectDiskVolumes()}
+		if gone := e.SweepDeletedMachines(); len(gone) > 0 {
+			out["deleted_records_removed"] = gone
+		}
 		// The sweep is a side task: a backup server that does not answer
 		// must not fail a reconcile that already ran.
 		var swept D
