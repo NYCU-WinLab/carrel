@@ -203,7 +203,7 @@ address instead of one machine, so the public entry follows whichever machine ho
 its own goes to one machine and port, so an ingress controller can route by Host. It counts as one
 domain. The gateway ends TLS and forwards plain HTTP with the original `Host` header,
 `X-Forwarded-For` and `X-Forwarded-Proto`; WebSockets pass through.
-Defaults for domains (10), networks (4), snapshots (4) and snapshot space (100 GiB) are unchanged.
+Defaults for domains (10), networks (4), snapshots (4) and snapshot space (200 GiB) are unchanged.
 
 When a preview is wanted, dry-run `machine_create` for one VM, or use the read-only `deployment_plan` for a group of new
 machines, allowed connections and public endpoints. Plans resolve names within the selected tenant and check
@@ -348,11 +348,14 @@ When a temporary quota grant expires, the limit returns to its previous value an
 reports any excess. Existing machines keep running. Growth in the exceeded dimension is blocked;
 cleanup and reductions remain available. Administrator suspension is a separate explicit action.
 
-Snapshots use separate `snapshot_gb` (default 200 GiB) and `snapshots` (default 4) limits. A 40 GiB
-VM with two snapshots consumes 40 GiB `disk_gb` and 80 GiB `snapshot_gb`. The latter is a worst-case
-charge against the tenant's quota, **not a claim about current physical usage**. Node admission
-counts snapshots like thin disks, at the bytes they hold now (ZFS `usedbysnapshots`, read with
-every check); a node that does not report it counts each snapshot at the size of its disk. A new
+Snapshots use separate `snapshot_gb` (default 200 GiB) and `snapshots` (default 4) limits.
+`snapshot_gb` counts the space that only the tenant's snapshots hold, as the nodes last measured
+it: a 40 GiB VM with two snapshots that differ from the disk by 3 GiB uses 40 GiB `disk_gb` and
+3 GiB `snapshot_gb`. A new snapshot holds nothing, so it is refused only while the tenant is already
+over its limit. Without a measurement from the last 15 minutes each snapshot counts at the size of
+its disk; `snapshot_storage.snapshot_gb_counts` says which applies (`held` or `declared`). Node
+admission counts snapshots the same way, at the bytes they hold now (ZFS `usedbysnapshots`, read
+with every check); a node that does not report it counts each snapshot at the size of its disk. A new
 snapshot is refused when its disk would not fit in the node's physical headroom, or when the node's
 storage is above the admission ceiling. `capacity_get` reports the storage watermark (`ok`,
 `warning` above 70 percent real use, `blocked` above 80, `critical` above 85). `quota_get` and

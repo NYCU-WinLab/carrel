@@ -318,7 +318,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "snapshots": "snapshots"} {
 			owned := filter(e.S.Objects(kind, n), func(x D) bool { return integer(x["vmid"]) == integer(m["vmid"]) })
 			delta[dim] = -len(owned)
-			if kind == "snapshots" {
+			if _, measured := e.snapshotGB(n); kind == "snapshots" && !measured {
 				sum := 0.0
 				for _, x := range owned {
 					sum += num(x["disk_gb"])

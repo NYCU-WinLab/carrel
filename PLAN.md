@@ -381,8 +381,9 @@ search first, read how it was solved, and file only what is new.
 
 `vcpu`, `memory_mb`, `disk_gb`, `machines`, `ips`, `public_ports`, `domains`, `snapshots`,
 `snapshot_gb`, `frozen_gb`, `networks`. Member and project tenants use the same dimensions. `images_gb` is
-reserved for deferred image support and hidden from the current API. Each snapshot reserves the
-machine disk size against `snapshot_gb`; measured retained bytes are reported separately.
+reserved for deferred image support and hidden from the current API. `snapshot_gb` counts the space
+that only a tenant's snapshots hold, as the nodes last measured it (2026-11-17; before that each
+snapshot counted at the size of its disk). The rule is in section 5.2.
 A frozen machine (section 10.1) holds its configured disk size in `frozen_gb` (default: the `disk_gb`
 default) and its address in `ips`, and nothing else.
 Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
@@ -397,7 +398,7 @@ Eight default 1 vCPU / 1024 MiB / 10 GiB machines consume 8 vCPU / 8 GiB / 80 Gi
 then requires quota headroom or approval; stopping does not release reservations. Every machine
 uses one of the tenant's 10 public ports for SSH, leaving two for extra TCP/UDP publications.
 HTTPS domains do not consume this port block. Domains (10), networks (4), snapshots (4) and
-snapshot space (100 GiB) retain their existing defaults. A machine created with
+snapshot space (200 GiB) retain their existing defaults. A machine created with
 `public_ssh: false` takes no public port and is reached through the platform SSH jump host
 (CT 102, issue #98), so the machine quota, not the port block, bounds how many a tenant runs.
 
@@ -408,6 +409,7 @@ snapshot space (100 GiB) retain their existing defaults. A machine created with
 | Memory admission | All allocated Carrel machines, including stopped ones, reserve RAM; unmanaged running infrastructure also counts |
 | Memory measurement | VMs keep the balloon device (2026-11-17): the guest reports what it needs, and returns freed pages to the node. Nothing shrinks a machine, and admission still reserves all assigned RAM. Each node's sum of assigned and needed memory is recorded (section 9.1); a memory ratio is set only from that record. Machines created earlier get the device at their next cold boot |
 | Disk admission | Allocated disk at most 1.5 times the pool: volumes at their declared size, snapshots at the bytes they hold (2026-11-17; a node that does not measure them counts each at the size of its disk). A snapshot whose disk would not fit in the node's physical headroom is refused |
+| Snapshot quota | `snapshot_gb` is the space only the tenant's snapshots hold (ZFS `usedbysnapshots` of its volumes, sampled every 300 seconds and after each snapshot operation). A new snapshot holds nothing, so it is refused only while the tenant is already over the limit; `snapshots` bounds how many there are. The limit is a line where growth stops, not a cap: snapshots keep growing as the disk changes, up to the size of the disk each. Without a sample from the last 15 minutes each snapshot counts at the size of its disk, as it did before |
 | Disk watermark | Real use of a node's pool: `warning` above 70 percent, `blocked` above 80 (nothing on the node grows), `critical` above 85. `capacity_get` and `node_list` report it; alerts are in section 9.3. Snapshots and thin disks grow after admission, so the watermark, not admission, is what guards a pool |
 | Addresses, ports, domains | Fixed allocations, never oversubscribed |
 
@@ -2091,7 +2093,7 @@ Administrator deployment order (scripts have fixed B09 IDs/addresses and refuse 
 The initial quota was a conservative shared default: 8 vCPU, 16 GiB RAM, 100 GiB allocated disk
 (raised to 16 vCPU, 32 GiB and 200 GiB on 2026-11-13: 9 creates failed on quota in 27 days while the nodes ran at about 15% of their admission limit),
 4 machines/IPs (raised to 8 in section 15.14), 10 public ports/domains, 4 private networks and 4 snapshots. Project/subgroup-specific
-policy remains open decision 2. Snapshots reserve a full disk size before adapter work; rollback refuses changed NIC or
+policy remains open decision 2. Snapshots reserved a full disk size before adapter work (they count at the space they hold since 2026-11-17, section 5.2); rollback refuses changed NIC or
 resource configuration. Interrupted disk growth keeps the larger quota reservation and can be
 retried with the same `machine_resize` arguments. Temporary quota expiry stops over-limit machines and prevents restarting
 until allocations fit. Mutations currently serialize through one process-wide lock; long image or
