@@ -280,3 +280,22 @@ func TestOriginRetriesBackOff(t *testing.T) {
 		t.Fatal("a success did not reset")
 	}
 }
+
+// An unreadable certificate is an infrastructure failure, so the post-delete
+// reconcile tolerates it instead of treating it as a bug (#316).
+func TestOriginPairReportsAnUnreadableCertificateAsFailure(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := filepath.Join(dir, "fullchain.pem"), filepath.Join(dir, "privkey.pem")
+	for _, present := range []string{"", crt} {
+		if present != "" {
+			must(os.WriteFile(present, []byte("pem"), 0o600))
+		}
+		f, ok := attempt(func() { originPair(crt, key) }).(Failure)
+		if !ok {
+			t.Fatalf("a missing file was not a Failure (present=%q)", present)
+		}
+		if e := obj(f.Result["error"]); e["code"] != "backend_unavailable" || e["recovery"] != "retry_infrastructure" {
+			t.Fatalf("unexpected failure: %v", f.Result)
+		}
+	}
+}
