@@ -20,6 +20,16 @@ type Backend interface {
 type SSHBackend struct{ Config string }
 type operationLogKey struct{}
 
+// levelUnlessStopping demotes a failure to INFO once ctx is cancelled: a
+// process that is shutting down cancels its own work, and that is not an
+// incident for the telemetry sink.
+func levelUnlessStopping(ctx context.Context, level slog.Level) slog.Level {
+	if ctx.Err() != nil {
+		return slog.LevelInfo
+	}
+	return level
+}
+
 func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, error) {
 	if target == "" {
 		target = "carrel-node"
@@ -29,6 +39,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		// Hashing and importing up to 20 GB over NFS (PLAN 7.8).
 		timeout = 3 * time.Hour
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	started := time.Now()
@@ -54,7 +65,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		}
 		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": "node_adapter", "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}
 		// The adapter's own error text stays in the operator log.
-		slog.Error("adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "detail", truncate(str(result["error"]), 400), "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
+		slog.Log(parent, levelUnlessStopping(parent, slog.LevelError), "adapter_failed", "event", "adapter_failed", "component", target, "backend_code", code, "detail", truncate(str(result["error"]), 400), "action", details["action"], "operation", details["operation"], "request_id", details["request_id"], "seconds", time.Since(started).Seconds())
 		return nil, Failure{D{"ok": false, "error": details}}
 	}
 	slog.Info("adapter_completed", "event", "adapter_completed", "op", request["op"], "target", target,

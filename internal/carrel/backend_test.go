@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,5 +23,19 @@ func TestAdapterFailureIsBoundedAndCorrelated(t *testing.T) {
 	detail := obj(result["error"])
 	if detail["code"] != "backend_unavailable" || detail["backend_code"] != "command_failed" || detail["operation"] != "op-test" || detail["request_id"] != "receipt-test" || strings.Contains(string(encoded(result)), "secret-node-output") {
 		t.Fatalf("unsafe or unhelpful adapter failure: %s", encoded(result))
+	}
+}
+
+func TestShutdownCancellationLogsBelowWarn(t *testing.T) {
+	live, cancelled := context.Background(), func() context.Context {
+		c, cancel := context.WithCancel(context.Background())
+		cancel()
+		return c
+	}()
+	if levelUnlessStopping(live, slog.LevelError) != slog.LevelError || levelUnlessStopping(live, slog.LevelWarn) != slog.LevelWarn {
+		t.Fatal("live context must keep its level")
+	}
+	if levelUnlessStopping(cancelled, slog.LevelError) != slog.LevelInfo || levelUnlessStopping(cancelled, slog.LevelWarn) != slog.LevelInfo {
+		t.Fatal("cancelled context must log at INFO")
 	}
 }
