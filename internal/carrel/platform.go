@@ -277,9 +277,7 @@ func (e *Execution) Usage(t D) D {
 		used["ips"] = num(used["ips"]) + 1
 		used["frozen_gb"] = num(used["frozen_gb"]) + num(f["disk_gb"])
 	}
-	for _, s := range e.snapshots(n) {
-		used["snapshot_gb"] = num(used["snapshot_gb"]) + float64(s.DiskGB)
-	}
+	used["snapshot_gb"], _ = e.snapshotGB(n)
 	used["functions"] = len(e.S.Objects("functions", n))
 	used["function_gb"] = math.Round(e.functionBytes(n)/GiB*100) / 100
 	return used
@@ -303,7 +301,10 @@ func (e *Execution) Quota(t D, delta ...D) D {
 		remaining[k] = num(limit[k]) - num(v)
 		if num(v) > num(limit[k]) {
 			over = append(over, k)
-			if len(delta) > 0 && delta[0] != nil && (len(d) == 0 || num(d[k]) > 0) {
+			// A request that adds nothing is refused while any dimension is over.
+			// Not for snapshot_gb: snapshots grow as the disk under them changes,
+			// so being over it is an ordinary state that stops only new snapshots.
+			if len(delta) > 0 && delta[0] != nil && (len(d) == 0 && k != "snapshot_gb" || num(d[k]) > 0) {
 				violations = append(violations, D{"dimension": k, "used": v, "limit": limit[k]})
 			}
 		}
@@ -314,11 +315,43 @@ func (e *Execution) Quota(t D, delta ...D) D {
 	}
 	return result
 }
-func (e *Execution) SnapshotUsage(t D) D {
-	if u, ok := rowOf[storageUsage](e.S, "storage_usage", str(t["n"])); ok {
-		return D{"accounting": u.Accounting, "available": u.Available, "retained_snapshot_bytes": u.RetainedSnapshotBytes, "sampled_at": u.SampledAt, "unique_total_bytes": u.UniqueTotalBytes}
+
+// A storage sample older than this many seconds is not trusted. Nodes are
+// sampled every 300 seconds and after each snapshot operation.
+const snapshotSampleMaxAge = 900
+
+// snapshotGB is what a tenant's snapshots count against snapshot_gb, and
+// whether the nodes measured it. Measured, it is the space that only the
+// snapshots hold. Without a fresh sample each snapshot counts at the size of
+// its disk, the most it can ever hold.
+func (e *Execution) snapshotGB(n int) (float64, bool) {
+	u, ok := rowOf[storageUsage](e.S, "storage_usage", fmt.Sprint(n))
+	// RefreshStorage dates a sample by this clock. One dated ahead of it was
+	// not: it would stay fresh for as long as it is ahead.
+	age := now() - u.SampledAt
+	measured := ok && u.Available && age > -60 && age < snapshotSampleMaxAge
+	snaps := e.snapshots(n)
+	if len(snaps) == 0 {
+		return 0, measured
 	}
-	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample; snapshot_gb reserves worst-case size"}
+	if measured {
+		return math.Round(float64(u.RetainedSnapshotBytes)/GiB*100) / 100, true
+	}
+	declared := 0.0
+	for _, s := range snaps {
+		declared += float64(s.DiskGB)
+	}
+	return declared, false
+}
+func (e *Execution) SnapshotUsage(t D) D {
+	counts := "declared"
+	if _, measured := e.snapshotGB(integer(t["n"])); measured {
+		counts = "held"
+	}
+	if u, ok := rowOf[storageUsage](e.S, "storage_usage", str(t["n"])); ok {
+		return D{"accounting": u.Accounting, "available": u.Available, "retained_snapshot_bytes": u.RetainedSnapshotBytes, "sampled_at": u.SampledAt, "unique_total_bytes": u.UniqueTotalBytes, "snapshot_gb_counts": counts}
+	}
+	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample", "snapshot_gb_counts": counts}
 }
 
 const maxBootstrapArgumentBytes = 64 * 1024

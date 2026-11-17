@@ -34,10 +34,20 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			fail("conflict", "Snapshot exists", D{"recovery": "revise_request"})
 		}
 		delta = D{}
+		measured := false
 		if !found {
-			delta = D{"snapshots": 1, "snapshot_gb": m["disk_gb"]}
+			delta = D{"snapshots": 1}
+			if _, measured = e.snapshotGB(n); !measured {
+				delta["snapshot_gb"] = m["disk_gb"]
+			}
 		}
-		e.Quota(t, delta)
+		q := e.Quota(t, delta)
+		// A new snapshot holds nothing yet, so measured space has no size to
+		// check it against: a tenant already over its limit gets no more.
+		if used, limit := obj(q["used"])["snapshot_gb"], obj(q["limit"])["snapshot_gb"]; !found && measured && num(used) > num(limit) {
+			over := D{"dimension": "snapshot_gb", "used": used, "limit": limit}
+			fail("quota_exceeded", "Tenant quota would be exceeded", merge(over, D{"violations": []D{over}, "quota_after": q}))
+		}
 		if !found {
 			e.Admission(e.P.nodeOf(m), 0, 0, num(m["disk_gb"]), nil, true)
 			snap = snapshotRecord{ID: id, VMID: integer(m["vmid"]), Name: str(a["name"]), DiskGB: integer(m["disk_gb"]), Configuration: configuration}
@@ -45,7 +55,14 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 	} else if !found {
 		fail("not_found", "Snapshot not found")
 	} else if tool == "snapshot_delete" {
-		delta = D{"snapshots": -1, "snapshot_gb": -float64(snap.DiskGB)}
+		// What a measured snapshot frees is known only after the next sample,
+		// unless it is the tenant's last one.
+		delta = D{"snapshots": -1}
+		if held, measured := e.snapshotGB(n); !measured {
+			delta["snapshot_gb"] = -float64(snap.DiskGB)
+		} else if len(e.snapshots(n)) == 1 {
+			delta["snapshot_gb"] = -held
+		}
 	}
 	effects := D{}
 	if tool == "snapshot_rollback" {

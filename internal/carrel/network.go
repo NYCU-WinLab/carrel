@@ -499,7 +499,11 @@ func (e *Execution) RefreshStorage() {
 				totals[t] = sample
 			}
 		}
+		// Dated by this clock, not a node's: the snapshot quota trusts a
+		// sample by its age (snapshotGB).
+		at := now()
 		for t, sample := range totals {
+			sample["sampled_at"] = at
 			e.Put("storage_usage", t, t, sample)
 		}
 	})
