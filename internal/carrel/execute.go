@@ -452,5 +452,7 @@ func (e *Execution) capabilities() D {
 	c["machine_freeze"] = e.P.Config.BackupStorage != ""
 	// Public addresses per machine (issue #91): how many the pool has free.
 	c["public_ips"] = D{"offered": len(e.publicPool()) > 0, "free": len(e.freePublicIPs())}
+	// Routed IPv6 per machine (issue #142): machine_create ipv6=true.
+	c["ipv6"] = e.P.Config.IPv6Prefix != ""
 	return c
 }

@@ -429,6 +429,16 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 		token = random(32)
 	}
 	m := merge(spec, D{"name": a["name"], "kind": kind, "image": image, "ssh_keys": keys, "nested_virt": boolean(a["nested_virt"]), "swap_mb": intAt(a, "swap_mb", swap), "packages": arr(a["packages"]), "runcmd": arr(a["runcmd"]), "health_checks": arr(a["health_checks"]), "network_access": textAt(a, "network_access", "tenant"), "readiness_token": token, "guest_management": 1, "nics": []D{}})
+	if boolean(a["ipv6"]) {
+		if e.P.Config.IPv6Prefix == "" {
+			fail("invalid", "This site has no IPv6", D{"recovery": "revise_request"})
+		}
+		if tenantImage {
+			fail("invalid", "IPv6 is set up by cloud-init or pct; an imported image configures its own network", D{"recovery": "revise_request"})
+		}
+		// Only when asked: a machine record without IPv6 stays as it was.
+		m["ipv6"] = true
+	}
 	if a["public_ssh"] == false {
 		// Reached through the jump host only (issue #98).
 		m["public_ssh"] = false
@@ -525,6 +535,9 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	safe["access"] = D{"inbound": textAt(m, "network_access", "tenant"), "private_nics": "unfiltered_experiment_networks", "allowed_connections": allowed}
 	if unmanaged(m) && len(servicePortsOf(m)) == 0 {
 		safe["install"] = installInfo(m)
+	}
+	if v := e.machineIPv6(m); v != nil {
+		safe["ipv6"] = v
 	}
 	if b := e.machinePublicIP(m); b != nil {
 		safe["public_ip"] = b

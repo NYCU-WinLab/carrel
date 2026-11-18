@@ -897,6 +897,59 @@ and abuse handling of 6.6 apply to the bound address too.
 **Exit node.** The NAT rules live on the exit node, so each bound address follows the exit node
 failover of #89: the address moves with the active node.
 
+### 6.13 Site IPv6 (issue #142)
+
+The lab and the campus have no IPv6. A lab member (N0Ball, AS214821) offered a /48 from his
+own allocation; carrel routes it in over one WireGuard tunnel and gives each machine that asks a
+public IPv6 address. This is site IPv6, not per-member "bring your own prefix": one /48 for the
+site, one peer, no customer gateway objects.
+
+**Off by default, byte for byte.** A site file without an `ipv6` block produces exactly the files it
+did before (tests/test_ipv6_off_golden.py): guest firewalls, host nft, sysctl, cloud-init. A site
+with the block changes nothing for a machine that did not opt in.
+
+```json
+"ipv6": {"prefix": "2a14:7581:880::/48",
+         "peer": {"endpoint": "<IPv4>:<port>", "public_key": "<WireGuard key>"}, "mtu": 1420}
+```
+
+The control plane's `/etc/carrel/config.json` gets the same prefix as `ipv6_prefix`; with it,
+`catalog_get` reports `capabilities.ipv6` and `machine_create` accepts `ipv6: true`.
+
+**Addresses.** Tenant N has `<prefix>:N::/64` with N written in decimal digits, so a machine's
+address mirrors its IPv4 one: `10.200.17.11` is `<prefix>:17::11`, gateway `<prefix>:17::1` (the
+EVPN anycast gateway, as for IPv4). Static, from cloud-init (`accept-ra: false`) or `pct`
+(`ip6`, `gw6`); the gateway sends no router advertisements. Each tenant VNet gets a second PVE
+subnet with `snat 0`: the addresses are routed, never translated.
+
+**Path.** The first exit node holds `wg-v6`, enslaved to `vrf_tenants`, with `AllowedIPs ::/0`
+and the VRF's IPv6 default route through it. Its UDP leaves from the public address (fwmark
+`0x60`, table 160) on port 31000, which no tenant VPN uses, and keeps the path open with a 25 s
+keepalive, so `carrel_public` needs no new input rule. The tunnel's MTU is 1420; `carrel_tenant_host`
+clamps IPv6 TCP MSS to 1360, and the base guest chains let ICMPv6 Packet Too Big through.
+
+**Filters.**
+- `inet carrel_v6` on the exit node: from the tunnel, sources inside the /48 are dropped (spoofing)
+  and only opted-in machine addresses are reachable; into the tunnel, only those addresses leave.
+- `inet carrel_tenant_host` on every node: IPv6 forwarding is global in Linux, so forwarded IPv6
+  that enters or leaves anything but the tenant VRF and its links is dropped (management,
+  `tailscale0`, other bridges). Neighbour discovery from guests to the gateway is accepted before
+  the tenant input drop. The file is loaded before the forwarding sysctl is set.
+- Guest firewall of an opted-in machine: `ndp: 1` (`radv: 0` stays), the machine's /128,
+  `fe80::/64` and `::` in its ipfilter set (the nftables firewall adds no link-local to an explicit
+  set), the two `::/0` drops removed, and IPv6 twins of the tenant rules: its own /64 out (not the
+  gateway), its tenant's /64 in when `network_access` is `tenant`, the rest of the /48, ULA,
+  link-local, multicast and loopback dropped out. Rules without an address already apply to both
+  families (SMTP drop, port grants). From the internet: SSH only.
+
+**Removal.** Dropping the `ipv6` block removes the tunnel, `carrel_v6`, the IPv6 subnets (one SDN
+reload) and the forwarding sysctl; a node that stops being the first exit node removes its tunnel.
+
+**Not yet.** Turning IPv6 on for an existing machine (its guest needs the address configured by
+hand), more inbound ports than SSH, and a watchdog that withdraws the IPv6 default when the
+tunnel is down (until then a dead tunnel is a black hole for IPv6, and clients fall back to IPv4
+after their own timeout).
+
 ## 7. Machines
 
 ### 7.1 Images
@@ -1876,7 +1929,7 @@ old host.
 
 - GPU passthrough or sharing.
 - VPN access into tenant networks (public SSH ports and the jump host are the path; design in 6.11).
-- IPv6 (open decision 13.6).
+- IPv6 from the campus (open decision 13.6); a member's routed /48 over a tunnel is 6.13.
 - Machines spanning sites, live migration across sites.
 - A web UI, apart from the machine console page (section 7.8).
 - Builds inside carrel. Apps build in GitHub Actions and carrel only stores and hands out releases
@@ -1922,7 +1975,7 @@ old host.
 5. How `machine_console_log` captures serial output: a QEMU chardev log file, or a capture of the
    Proxmox terminal proxy.
 6. Whether the campus offers IPv6 for the new host. With it, every machine could have a public
-   address and port NAT becomes optional.
+   address and port NAT becomes optional. Until then, 6.13 routes a member's /48 over a tunnel.
 7. Resolved for B09: SQLite/WAL in CT 100. Daily consistent database/config/certificate backups go to the independent old PVE, with 14 daily archives. Full guest backups still need PBS.
 8. Resolved 2026-09-30 for B09: admin SSH uses ProxyJump through the B09 jump host. This is
    separate from member-facing ingress (13.13).

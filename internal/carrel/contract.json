@@ -136,6 +136,11 @@
           "nested_virt": {
             "type": "boolean"
           },
+          "ipv6": {
+            "type": "boolean",
+            "default": false,
+            "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH only. Set at creation."
+          },
           "network_access": {
             "enum": [
               "tenant",
@@ -4335,6 +4340,11 @@
                 "nested_virt": {
                   "type": "boolean"
                 },
+                "ipv6": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH only. Set at creation."
+                },
                 "network_access": {
                   "enum": [
                     "tenant",
@@ -4695,6 +4705,11 @@
                 },
                 "nested_virt": {
                   "type": "boolean"
+                },
+                "ipv6": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH only. Set at creation."
                 },
                 "network_access": {
                   "enum": [

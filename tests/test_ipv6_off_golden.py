@@ -5,7 +5,6 @@ deliberate IPv4 change, never to make an IPv6 change pass.
 """
 
 import importlib.util
-import json
 from pathlib import Path
 
 import pytest
