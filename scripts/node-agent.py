@@ -977,6 +977,9 @@ def ipv6_apply(v6, addresses):
     write(path, conf, 0o600)
     run("wg", "syncconf", V6_DEV, path)
     run("ip", "link", "set", V6_DEV, "up")
+    # Without this a withdrawn tunnel route falls through to the main table
+    # instead of failing fast.
+    run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", *V6_UNREACHABLE)
     run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
     out = {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
     # The route above is only kept while the tunnel is alive.
@@ -996,6 +999,8 @@ def ipv6_apply(v6, addresses):
 # route so it fails fast, and restore it when a fresh handshake appears. Run by
 # the reconcile and by the vip-probe loop, the agent's one periodic hook.
 V6_STALE = 180
+# Last resort in the VRF's IPv6 table, behind the tunnel route.
+V6_UNREACHABLE = ("unreachable", "default", "metric", "4278198272")
 
 
 def v6_watchdog(run=run, now=time.time):
@@ -1003,16 +1008,24 @@ def v6_watchdog(run=run, now=time.time):
     {"handshake": age in seconds or None if never, "route": whether it is installed}."""
     if not Path(f"/sys/class/net/{V6_DEV}").exists():
         return None
-    stamps = [int(line.split()[1]) for line in run("wg", "show", V6_DEV, "latest-handshakes").splitlines() if len(line.split()) == 2]
-    stamp = max(stamps, default=0)
-    age = max(0, int(now()) - stamp) if stamp else None
-    fresh = age is not None and age <= V6_STALE
+    def sample():
+        stamps = [int(line.split()[1]) for line in run("wg", "show", V6_DEV, "latest-handshakes").splitlines() if len(line.split()) == 2]
+        stamp = max(stamps, default=0)
+        age = max(0, int(now()) - stamp) if stamp else None
+        return age, age is not None and age <= V6_STALE
+
+    age, fresh = sample()
     route = ["-6", "route", "show", "vrf", "vrf_tenants", "default", "dev", V6_DEV]
     present = bool(run("ip", *route))
     if fresh and not present:
         run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
         present = True
     elif not fresh and present:
+        # The other caller may have restored the route on a new handshake since
+        # the sample above: look again right before deleting a healthy route.
+        age, fresh = sample()
+        if fresh:
+            return {"handshake": age, "route": True}
         try:
             run("ip", "-6", "route", "del", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
         except CommandFailure:
