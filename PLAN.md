@@ -914,7 +914,7 @@ with the block changes nothing for a machine that did not opt in.
 ```
 
 The control plane's `/etc/carrel/config.json` gets the same prefix as `ipv6_prefix`; with it,
-`catalog_get` reports `capabilities.ipv6` and `machine_create` accepts `ipv6: true`.
+`catalog_get` reports `capabilities.ipv6: true` and `machine_create` accepts `ipv6: true`.
 
 **Addresses.** Tenant N has `<prefix>:N::/64` with N written in decimal digits, so a machine's
 address mirrors its IPv4 one: `10.200.17.11` is `<prefix>:17::11`, gateway `<prefix>:17::1` (the
