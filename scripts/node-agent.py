@@ -2029,7 +2029,9 @@ def create(m):
                 write(staged, content)
                 run("pct", "push", vmid, staged, path, "--perms", "0644")
                 staged.unlink(missing_ok=True)
-            run("pct", "exec", vmid, "--", "sshd", "-t")
+            # Ubuntu 24.04 starts sshd from ssh.socket on the first login, so
+            # /run/sshd, which sshd -t needs, may not exist yet.
+            run("pct", "exec", vmid, "--", "sh", "-c", "mkdir -p -m 0755 /run/sshd && sshd -t")
             # Restart, not reload: ssh.socket holds port 22, and a reloaded sshd binds it itself.
             run("pct", "exec", vmid, "--", "systemctl", "try-restart", "ssh.service")
     write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
