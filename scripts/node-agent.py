@@ -1197,6 +1197,10 @@ def keys(values):
     return "\n".join(values) + "\n"
 
 
+# A line of a principals file: a username or a project group (machine_access).
+CA_PRINCIPAL = r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}"
+
+
 def ca_files(m, user):
     """The lab SSH user CA files for a new guest: the CA key, an sshd drop-in
     and the login user's principals file. Empty when Carrel has no CA set."""
@@ -1205,7 +1209,7 @@ def ca_files(m, user):
         return []
     if not re.fullmatch(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}", ca):
         raise ValueError("invalid SSH user CA")
-    if not principals or any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}", str(p)) for p in principals):
+    if not principals or any(not re.fullmatch(CA_PRINCIPAL, str(p)) for p in principals):
         raise ValueError("invalid certificate principal")
     return [
         ("/etc/ssh/ssh_user_ca.pub", ca + "\n"),
@@ -2178,6 +2182,23 @@ def action(req):
             run("qm", "set", vmid, "--name", name)
         else:
             run("pct", "set", vmid, "--hostname", name)
+    elif op == "principals":
+        # machine_access on a CT: the whole principals file for root. A VM
+        # pulls its file through the guest reporter instead.
+        if cmd != "pct":
+            raise ValueError("only a CT takes principals from its node")
+        lines = req.get("principals")
+        if not isinstance(lines, list) or not lines or len(lines) > 51 or any(not isinstance(p, str) or not re.fullmatch(CA_PRINCIPAL, p) for p in lines):
+            raise ValueError("invalid certificate principal")
+        if "running" not in run("pct", "status", vmid):
+            raise ValueError("the CT is not running")
+        staged = STATE / f"{vmid}-principals"
+        write(staged, "".join(p + "\n" for p in lines))
+        try:
+            run("pct", "push", vmid, staged, "/etc/ssh/principals/root", "--perms", "0644")
+        finally:
+            staged.unlink(missing_ok=True)
+        return {"state": "applied"}
     elif op == "resize":
         cpu = integer(req["cpu"], 1, 64)
         mem = integer(req["memory_mb"], 512, 131072)

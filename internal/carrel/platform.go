@@ -494,13 +494,16 @@ func (e *Execution) AllocatePort(t D) int {
 	return 0
 }
 func (e *Execution) PublicMachine(m D, ports []portGrant) D {
-	safe := without(m, "ssh_keys", "runcmd", "user_data", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node", "disk_volume", "thaw_backup")
+	safe := without(m, "ssh_keys", "runcmd", "user_data", "mac", "host", "tenant_n", "resize_from", "readiness_token", "access_operation", "network_configured_at", "node", "disk_volume", "thaw_backup", "ca_grants", "ca_applied", "ca_sync")
 	report := e.S.guestReport(m["vmid"])
 	if m["kind"] == "ct" && m["state"] == "ready" {
 		report.InitializationStatus, report.ApplicationStatus = "complete", "not_checked"
 	}
 	safe["readiness"] = D{"ssh_ready": boolean(m["ssh_ready"]), "initialization_status": or(report.InitializationStatus, "unknown"), "application_status": or(report.ApplicationStatus, "not_checked"), "checks": orEmpty(report.Checks), "reported_at": optional(report.ReportedAt), "private_interfaces": orEmpty(report.Interfaces), "failed_step": optional(report.FailedStep)}
 	presentReadiness(safe, report)
+	if access := e.caAccess(m); access != nil {
+		safe["lab_ca"] = access
+	}
 	if len(servicePortsOf(m)) > 0 {
 		// No SSH and no guest reports (issue #125): machine_get fills in the
 		// port check instead.

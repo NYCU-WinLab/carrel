@@ -47,5 +47,11 @@ func (e *Execution) withSSHUserCA(t, m, a D) D {
 	if project := projectTenant.FindStringSubmatch(str(t["subject"])); project != nil {
 		principal = "project:" + project[1]
 	}
-	return merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}})
+	// How the machine takes later changes of who logs in (machine_access):
+	// a VM's guest reporter pulls them, a CT's node pushes them.
+	sync := "pull"
+	if m["kind"] == "ct" {
+		sync = "push"
+	}
+	return merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": sync})
 }

@@ -613,6 +613,16 @@ access until their certificate expires (at most 24 hours). A VM gets `/etc/ssh/s
 for `root` at creation. ISO installs and images that serve their own ports get nothing. Existing
 machines are not changed. Without the setting nothing changes.
 
+`machine_access` lets the tenant name other members who may log in with a certificate: grant and
+revoke take portal usernames, and the machine's principals file becomes its own principal followed
+by the grants. A VM's guest reporter (`scripts/guest-report.py`) sends the file it has and writes the
+list Carrel answers, so a change lands within 15 seconds while the VM runs; a CT's node pushes the
+file with `pct push` when the grants change, so the CT must be running. The machine record keeps
+`ca_sync` (`pull` or `push`); a machine created before it has no puller, and the tool says so instead
+of saving a grant it cannot apply. `machine_get` shows the list and whether the machine has it
+(`lab_ca.applied`). A grant needs no new certificate (the username is in every member's), hand
+edits of the principals file are replaced on the next change, and on a CT a grant logs in as root.
+
 ### Telemetry
 
 With `telemetry_url` and `telemetry_token_file` in `config.json`, the control plane sends its WARN
