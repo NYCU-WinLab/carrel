@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -33,5 +34,29 @@ func TestConfigRejectsABadIPv6Prefix(t *testing.T) {
 	c := Config{PublicAddress: "140.113.60.184", Origin: "https://carrel.example", Database: "x", Nodes: []NodeConfig{{Name: "n1"}}, IPv6Prefix: "fd00::/48"}
 	if err := c.Validate(); err == nil {
 		t.Fatal("private prefix accepted")
+	}
+}
+
+func TestCheckIPv6Prefix(t *testing.T) {
+	node := func(prefix string) D { return D{"ipv6": D{"public_key": "k", "port": 51820, "prefix": prefix}} }
+	ok := node("2a14:7581:880::/48")
+	checkIPv6Prefix("2a14:7581:880::/48", ok)
+	if _, bad := ok["ipv6"].(D)["error"]; bad {
+		t.Fatalf("equal prefixes reported %v", ok)
+	}
+	diff := node("2a14:7581:881::/48")
+	checkIPv6Prefix("2a14:7581:880::/48", diff)
+	msg, _ := diff["ipv6"].(D)["error"].(string)
+	if !strings.Contains(msg, "2a14:7581:881::/48") || !strings.Contains(msg, "2a14:7581:880::/48") {
+		t.Fatalf("error does not name both: %q", msg)
+	}
+	// No ipv6 result, or a site without ipv6: nothing to compare.
+	for _, n := range []any{D{}, D{"ipv6": D{"error": "x"}}, "x"} {
+		checkIPv6Prefix("2a14:7581:880::/48", n)
+	}
+	none := node("2a14:7581:880::/48")
+	checkIPv6Prefix("", none)
+	if _, bad := none["ipv6"].(D)["error"]; bad {
+		t.Fatal("site without ipv6 reported")
 	}
 }

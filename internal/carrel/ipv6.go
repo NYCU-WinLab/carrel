@@ -75,3 +75,30 @@ func (e *Execution) machineIPv6(m D) D {
 	return D{"address": addr.String(), "prefix_length": 64, "gateway": gw.String(), "inbound_from_internet": inbound,
 		"note": "Routed, not translated. Other tenants cannot reach this address."}
 }
+
+// checkIPv6Prefix compares the /48 the first exit node reports (cluster.json
+// ipv6.prefix) with ipv6_prefix in config.json. They are configured apart, and
+// a mismatch gives machines addresses the tunnel filter does not allow, so the
+// node's ipv6 result carries an error naming both. Like other tunnel problems
+// it is reported, not raised.
+func checkIPv6Prefix(configured string, node any) any {
+	result, ok := node.(D)
+	if !ok {
+		return node
+	}
+	v6, ok := result["ipv6"].(D)
+	if !ok {
+		return node
+	}
+	reported := str(v6["prefix"])
+	if reported == "" || configured == "" {
+		return node
+	}
+	a, errA := netip.ParsePrefix(reported)
+	b, errB := netip.ParsePrefix(configured)
+	if errA == nil && errB == nil && a == b {
+		return node
+	}
+	v6["error"] = "ipv6 prefix mismatch: node-agent has " + reported + " (sites/<site>/cluster.json ipv6.prefix), control plane has " + configured + " (/etc/carrel/config.json ipv6_prefix)"
+	return node
+}
