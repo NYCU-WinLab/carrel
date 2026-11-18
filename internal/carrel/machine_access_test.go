@@ -124,8 +124,30 @@ func TestMachineAccessOnACTPushesFromTheNode(t *testing.T) {
 	if r := app.Call(ctx, "machine_access", D{"machine": "ct", "grant": []any{"carol"}}, alice); boolean(r["ok"]) {
 		t.Fatalf("stopped CT: %s", encoded(r))
 	}
-	if a := accessOf(t, app.Call(ctx, "machine_access", D{"machine": "ct"}, alice)); len(dicts(a["grants"])) != 1 {
-		t.Fatalf("kept: %s", encoded(a))
+	if a := accessOf(t, app.Call(ctx, "machine_access", D{"machine": "ct"}, alice)); len(dicts(a["grants"])) != 1 || a["applied"] != "pending" {
+		t.Fatalf("kept, pending: %s", encoded(a))
+	}
+	// A push that changed the CT but lost its answer: the recorded list is
+	// pushed back, and only then is it applied again.
+	calls := 0
+	b.call = func(r D, _ string) (any, error) {
+		if r["action"] == "principals" {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("connection reset")
+			}
+			if !equal(r["principals"], []any{"alice", "bob"}) {
+				t.Fatalf("restore pushed %s", encoded(r["principals"]))
+			}
+			return D{"state": "applied"}, nil
+		}
+		return D{"status": "running"}, nil
+	}
+	if r := app.Call(ctx, "machine_access", D{"machine": "ct", "grant": []any{"dave"}}, alice); boolean(r["ok"]) {
+		t.Fatalf("lost answer: %s", encoded(r))
+	}
+	if a := accessOf(t, app.Call(ctx, "machine_access", D{"machine": "ct"}, alice)); a["applied"] != "applied" || calls != 2 {
+		t.Fatalf("restored: %d %s", calls, encoded(a))
 	}
 }
 

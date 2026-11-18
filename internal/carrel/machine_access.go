@@ -154,8 +154,26 @@ func (e *Execution) MachineAccess(a, w, t D) D {
 		return D{"machine": m["name"], "access": e.caAccess(planned), "dry_run": true}
 	}
 	if m["ca_sync"] == "push" {
-		// The node first: if the CT cannot take the file, nothing changed.
-		if str(obj(e.Call(D{"op": "action", "machine": m, "action": "principals", "principals": caPrincipals(planned)}))["state"]) != "applied" {
+		// Pending is saved before the node is asked: a push whose answer is
+		// lost may have changed the CT, so the old list is no longer known
+		// to be there.
+		e.Transaction(func(tx *Execution) {
+			cur := tx.Machine(t, a["machine"])
+			if cur["vmid"] != m["vmid"] || !equal(cur["ca_grants"], m["ca_grants"]) {
+				fail("conflict", "Access to this machine changed meanwhile; try again", D{"recovery": "retry"})
+			}
+			cur["ca_applied"], cur["ca_changed_at"] = nil, now()
+			tx.S.Put("machines", cur["vmid"], n, cur)
+			m = cur
+		})
+		applied := false
+		err := attempt(func() {
+			applied = str(obj(e.Call(D{"op": "action", "machine": m, "action": "principals", "principals": caPrincipals(planned)}))["state"]) == "applied"
+		})
+		if err != nil || !applied {
+			// Put the recorded list back; it stays pending if that fails too.
+			e.caRestored(m, true)
+			e.S.Put("machines", m["vmid"], n, m)
 			fail("unavailable", "The CT did not take the new list; is it running?", D{"recovery": "resolve_prerequisite"})
 		}
 		planned["ca_applied"] = caPrincipals(planned)

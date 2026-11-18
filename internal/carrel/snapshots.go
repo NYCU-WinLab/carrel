@@ -92,6 +92,12 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			snap.State = "creating"
 			e.Put("snapshots", id, n, snap)
 		}
+		if tool == "snapshot_rollback" && m["ca_sync"] != nil {
+			// Saved before the disk goes back: if a later step fails, the
+			// older principals file it may hold is shown as pending.
+			e.caRestored(m, false)
+			e.Put("machines", m["vmid"], n, m)
+		}
 		action := map[string]string{"snapshot_create": "snapshot", "snapshot_delete": "delsnapshot", "snapshot_rollback": "rollback"}[tool]
 		e.Call(D{"op": "action", "machine": m, "name": a["name"], "action": action})
 		if tool == "snapshot_create" {
