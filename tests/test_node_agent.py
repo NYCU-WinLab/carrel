@@ -1884,3 +1884,71 @@ def test_vmids_present_fails_when_the_config_tree_is_unreadable(monkeypatch, tmp
     monkeypatch.setattr(module.os, "listdir", denied)
     with pytest.raises(PermissionError):
         module.vmids_present([10204])
+
+
+USER_CA = "ecdsa-sha2-nistp256 " + "A" * 140 + "="
+
+
+def cloud_config(module, monkeypatch, m):
+    root = Path(__file__).parents[1]
+    files = {}
+    monkeypatch.setattr(module, "write", lambda path, data, mode: files.update({path: data}))
+    monkeypatch.setattr(
+        module,
+        "Path",
+        lambda path: (
+            root / "scripts/guest-report.py"
+            if path == "/usr/local/lib/carrel/guest-report.py"
+            else Path(path)
+        ),
+    )
+    module.cloud_init(m)
+    return json.loads(files[f"/var/lib/vz/snippets/carrel-{m['vmid']}-user.json"].split("\n", 1)[1])
+
+
+@pytest.mark.parametrize("token", ["test-only", None])
+def test_a_vm_trusts_the_lab_ca_for_its_creator_before_sshd_starts(monkeypatch, token):
+    module = load("node-agent.py")
+    m = {**MACHINE, "readiness_token": token, "ssh_user_ca": USER_CA, "ca_principals": ["alice"]}
+    config = cloud_config(module, monkeypatch, m)
+    files = {f["path"]: f for f in config["write_files"]}
+    assert files["/etc/ssh/ssh_user_ca.pub"]["content"] == USER_CA + "\n"
+    assert files["/etc/ssh/sshd_config.d/50-carrel-user-ca.conf"]["content"] == (
+        "TrustedUserCAKeys /etc/ssh/ssh_user_ca.pub\nAuthorizedPrincipalsFile /etc/ssh/principals/%u\n"
+    )
+    assert files["/etc/ssh/principals/user"]["content"] == "alice\n"
+    assert all(files[p]["permissions"] == "0644" for p in files if p.startswith("/etc/ssh/"))
+    # Keys stay: the CA is in addition to them.
+    assert config["users"][0]["ssh_authorized_keys"] == [KEY]
+    # write_files, not runcmd: nothing waits for a reload.
+    assert not any("ssh" in " ".join(c) for c in config["runcmd"])
+
+
+def test_a_vm_without_a_lab_ca_gets_no_ca_files(monkeypatch):
+    module = load("node-agent.py")
+    config = cloud_config(module, monkeypatch, dict(MACHINE))
+    assert not any(f["path"].startswith("/etc/ssh/") for f in config["write_files"])
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"ssh_user_ca": USER_CA + " comment", "ca_principals": ["alice"]},
+        {"ssh_user_ca": USER_CA + "\nssh-ed25519 AAAA", "ca_principals": ["alice"]},
+        {"ssh_user_ca": USER_CA, "ca_principals": []},
+        {"ssh_user_ca": USER_CA, "ca_principals": ["alice\nroot"]},
+        {"ssh_user_ca": USER_CA, "ca_principals": ["../root"]},
+    ],
+)
+def test_ca_files_refuse_anything_but_one_key_and_plain_usernames(bad):
+    module = load("node-agent.py")
+    with pytest.raises(ValueError):
+        module.ca_files({**MACHINE, **bad}, "user")
+
+
+def test_a_ct_gets_the_ca_files_for_root():
+    module = load("node-agent.py")
+    files = dict(
+        module.ca_files({**MACHINE, "kind": "ct", "ssh_user_ca": USER_CA, "ca_principals": ["alice"]}, "root")
+    )
+    assert files["/etc/ssh/principals/root"] == "alice\n"

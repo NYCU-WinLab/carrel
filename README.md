@@ -163,6 +163,13 @@ The key is copied at creation. Removing it on the portal later does not remove i
 that already exist, and in a group tenant it reaches the tenant's machines through the jump host,
 as an inline key does.
 
+With the lab SSH CA set (`ssh_user_ca`, below), every new VM and CT also trusts a lab certificate
+that names its creator: run `step ssh login --provisioner winlab` once a day (the `lab-ssh` skill in
+`nycu-winlab/marketplace` automates it) and ssh in with no key on the machine. The keys above still
+work. The machine's `/etc/ssh/principals/<login user>` lists who may log in with a certificate,
+one Keycloak username per line; Carrel writes it at creation and will manage it later, so edit it
+knowing a later Carrel change may rewrite it.
+
 ### Shared machines in a group tenant
 
 A machine trusts only its creator's key at first. To let every member of the tenant in, the owner
@@ -585,6 +592,23 @@ The URL is https, and is a portal SSH service's route (a portal admin makes the 
 the file holds its read key, mode 600. carrel asks for one username at a time, the caller's own,
 when the call arrives, and keeps the key type and key only. Without these two settings nothing
 changes.
+
+### Lab SSH CA
+
+With `ssh_user_ca` in `config.json`, every new VM and CT trusts SSH user certificates from the
+lab CA (`https://ca.winlab.tw`) for its creator:
+
+```json
+"ssh_user_ca": "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2eUS00sJeJA9ebfrquCmA8reWrgdWSL4yGkfm4bKEuRyPmVJoM72JdUwzhH/v3VWkAkfPQ6sxMtzgruck="
+```
+
+The value is one public key with no comment (`public/ssh_user_ca.pub` in `NYCU-WinLab/pki`).
+carrel takes the caller's Keycloak `preferred_username` when the call arrives; a caller cannot
+name another. A VM gets `/etc/ssh/ssh_user_ca.pub`, `/etc/ssh/sshd_config.d/50-carrel-user-ca.conf`
+(`TrustedUserCAKeys` and `AuthorizedPrincipalsFile /etc/ssh/principals/%u`) and
+`/etc/ssh/principals/user` through cloud-init, before sshd first starts; a CT gets the same files
+for `root` at creation. ISO installs and images that serve their own ports get nothing. Existing
+machines are not changed. Without the setting nothing changes.
 
 ### Telemetry
 
