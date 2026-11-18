@@ -1,0 +1,2 @@
+carrel-11710-network.json
+{"version": 2, "ethernets": {"primary": {"match": {"macaddress": "02:ca:11:00:00:0b"}, "addresses": ["10.200.17.11/24"], "routes": [{"to": "0.0.0.0/0", "via": "10.200.17.1"}], "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": 1450}}}

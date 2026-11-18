@@ -1,0 +1,52 @@
+[OPTIONS]
+enable: 1
+ipfilter: 1
+macfilter: 1
+dhcp: 0
+ndp: 0
+radv: 0
+policy_in: DROP
+policy_out: ACCEPT
+
+[IPSET ipfilter-net0]
+10.200.17.11
+0.0.0.0
+
+[RULES]
+OUT DROP -dest ::/0
+IN DROP -source ::/0
+OUT DROP -source 0.0.0.0
+IN ACCEPT -p icmp -icmp-type fragmentation-needed
+OUT ACCEPT -dest 10.200.0.2 -p udp -dport 53
+OUT ACCEPT -dest 10.200.0.2 -p tcp -dport 53
+OUT ACCEPT -dest 10.200.0.3 -p tcp -dport 8080
+OUT ACCEPT -dest 10.200.17.12 -p tcp -dport 5432
+IN ACCEPT -source 10.200.3.0/24 -p udp -dport 8080
+OUT DROP -dest 10.200.17.1
+OUT ACCEPT -dest 10.200.17.0/24
+OUT ACCEPT -dest 140.113.60.184/32 -p tcp -dport 443
+OUT ACCEPT -dest 140.113.194.229/32 -p tcp -dport 443
+OUT ACCEPT -dest 140.113.194.229/32 -p tcp -dport 20010:22549
+OUT ACCEPT -dest 140.113.194.229/32 -p udp -dport 20010:22549
+OUT ACCEPT -dest 140.113.194.229/32 -p tcp -dport 25565
+OUT ACCEPT -dest 140.113.60.184/32 -p tcp -dport 20010:22549
+OUT ACCEPT -dest 140.113.60.184/32 -p udp -dport 20010:22549
+OUT ACCEPT -dest 140.113.60.184/32 -p tcp -dport 25565
+OUT DROP -dest 10.0.0.0/8
+OUT DROP -dest 172.16.0.0/12
+OUT DROP -dest 192.168.0.0/16
+OUT DROP -dest 100.64.0.0/10
+OUT DROP -dest 169.254.0.0/16
+OUT DROP -dest 127.0.0.0/8
+OUT DROP -dest 224.0.0.0/4
+OUT DROP -dest 192.168.19.101/32
+OUT DROP -dest 140.113.60.184/32
+OUT DROP -dest 140.113.194.229/32
+OUT DROP -p tcp -dport 25
+IN ACCEPT -p tcp -dport 22
+IN ACCEPT -source 10.200.0.2 -p tcp -dport 3000
+IN ACCEPT -source 10.200.0.3 -p tcp -dport 3000
+IN ACCEPT -source 10.200.0.3 -p tcp -dport 80
+IN ACCEPT -source 10.200.0.4 -p tcp -dport 80
+IN ACCEPT -source 10.200.0.3 -p tcp -dport 443
+IN ACCEPT -source 10.200.0.4 -p tcp -dport 443

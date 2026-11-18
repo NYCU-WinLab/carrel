@@ -114,7 +114,7 @@ func operationSummary(op D) D {
 }
 
 func machineSummary(m D) D {
-	r := pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "state", "power_state", "ssh_ready", "runtime", "reason", "ssh", "ssh_short", "ssh_config", "ssh_short_requires", "ssh_jump", "install", "ip", "access", "network_verification", "resize", "netbox", "public_ip", "lab_ca")
+	r := pick(m, "name", "kind", "image", "cpu", "memory_mb", "disk_gb", "state", "power_state", "ssh_ready", "runtime", "reason", "ssh", "ssh_short", "ssh_config", "ssh_short_requires", "ssh_jump", "install", "ip", "access", "network_verification", "resize", "netbox", "public_ip", "ipv6", "lab_ca")
 	// A machine from before #182 is shown with the spelling of today.
 	r["image"] = imageName(str(m["image"]))
 	if len(arr(m["nics"])) > 0 {

@@ -8,6 +8,7 @@ EVPN and VXLAN peers, the exit nodes and the underlay filter for every node.
 import argparse
 import ipaddress
 import json
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -18,6 +19,39 @@ from pathlib import Path
 # 1450 (tenant and infra MTU) minus 40 bytes of IPv4 and TCP headers.
 TENANT_MSS = 1410
 TENANT_IFACES = ", ".join([f'"t{d}*"' for d in range(10)] + ['"tap*"'])
+# IPv6 (issue #142, PLAN 6.13) rides a WireGuard tunnel at 1420: 1420 minus 60
+# bytes of IPv6 and TCP headers.
+TENANT_MSS_V6 = 1360
+# Where forwarded IPv6 may enter or leave: the tenant VRF and its links only.
+# Nothing else on a node (management, tailscale0, other bridges) is routed.
+TENANT_V6_IFACES = ", ".join(
+    [f'"t{d}*"' for d in range(10)]
+    + ['"tap*"', '"veth*"', '"vxlan_t*"', '"vrf_tenants"', '"vrfbr_tenants"', '"vrfvx_tenants"', '"xvrf*"', '"wg-v6"']
+)
+
+
+def site_ipv6(site):
+    """The site's IPv6 block (issue #142), checked, or None when the site has none.
+
+    {"prefix": "2a14:7581:880::/48", "peer": {"endpoint": "198.51.100.7:51820",
+    "public_key": "..."}, "mtu": 1420}. One /48 for the site; tenant N gets a /64.
+    """
+    block = site.get("ipv6")
+    if block is None:
+        return None
+    prefix = ipaddress.IPv6Network(block["prefix"])
+    if prefix.prefixlen != 48 or not prefix.is_global:
+        raise SystemExit("ipv6.prefix must be a global /48")
+    host, _, port = str(block["peer"]["endpoint"]).rpartition(":")
+    ipaddress.IPv4Address(host)
+    if not port.isdigit() or not 1 <= int(port) <= 65535:
+        raise SystemExit("ipv6.peer.endpoint must be IPv4:port")
+    if not re.fullmatch(r"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=", str(block["peer"]["public_key"])):
+        raise SystemExit("ipv6.peer.public_key is not a WireGuard key")
+    mtu = block.get("mtu", 1420)
+    if type(mtu) is not int or not 1280 <= mtu <= 1420:
+        raise SystemExit("ipv6.mtu must be 1280 to 1420")
+    return {"prefix": str(prefix), "endpoint": f"{host}:{port}", "public_key": block["peer"]["public_key"], "mtu": mtu}
 
 def underlay_rules(interface, address, peers):
     # PLAN 6.3: VXLAN and BGP only on the underlay interface, to this node's own
@@ -30,8 +64,20 @@ def underlay_rules(interface, address, peers):
     return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
 
 
-def tenant_host_nft(underlay):
+def tenant_host_nft(underlay, ipv6=False):
     rules = "\n".join("  " + rule for rule in underlay)
+    # Neighbour discovery between a guest and its anycast gateway: the drops
+    # below would take it, and IPv6 has no ARP to fall back on.
+    nd = (
+        f"  iifname {{ {TENANT_IFACES}, \"vrf_tenants\" }} icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit }} ip6 hoplimit 255 accept\n"
+        if ipv6 else ""
+    )
+    forward6 = (
+        f"  tcp flags syn / syn,rst meta nfproto ipv6 tcp option maxseg size > {TENANT_MSS_V6} tcp option maxseg size set {TENANT_MSS_V6}\n"
+        f"  meta nfproto ipv6 iifname != {{ {TENANT_V6_IFACES} }} counter drop\n"
+        f"  meta nfproto ipv6 oifname != {{ {TENANT_V6_IFACES} }} counter drop\n"
+        if ipv6 else ""
+    )
     return f"""add table inet carrel_tenant_host
 flush table inet carrel_tenant_host
 table inet carrel_tenant_host {{
@@ -42,7 +88,7 @@ table inet carrel_tenant_host {{
   # forwarded to a tenant port (issue #48); nothing new from tenants.
   ip saddr 10.200.0.0/16 ct direction reply ct state established accept
   ip saddr 10.200.0.0/16 counter drop
-  iifname {{ {TENANT_IFACES} }} counter drop
+{nd}  iifname {{ {TENANT_IFACES} }} counter drop
   iifname "vrf_tenants" counter drop
 {rules}
  }}
@@ -52,7 +98,7 @@ table inet carrel_tenant_host {{
   # 1500 (ifupdown2 in a CT, Docker in a VM) advertises MSS 1460 and its
   # peers' full segments are dropped: clamp every forwarded SYN, both ways.
   tcp flags syn / syn,rst tcp option maxseg size > {TENANT_MSS} tcp option maxseg size set {TENANT_MSS}
- }}
+{forward6} }}
 }}
 """
 
@@ -174,7 +220,8 @@ def site_layout(node, site):
             "public": {"interface": f'{site["underlay_interface"]}.{int(site["public"]["vlan"])}',
                        "cidr": str(cidr), "address": str(cidr.ip),
                        "gateway": str(ipaddress.IPv4Address(site["public"]["gateway"]))}
-            if node == exits[0] else None}
+            if node == exits[0] else None,
+            "ipv6": site_ipv6(site)}
 
 
 def check_underlay(interface, address, node):
@@ -271,7 +318,7 @@ def main():
     node_config.write_text(json.dumps(config))
     # A separate owned table, never a flush of Proxmox/staging/edge rules.
     Path("/etc/carrel/tenant-host.nft").write_text(
-        tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"]))
+        tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"]), ipv6=bool(layout["ipv6"]))
     )
     public = layout.get("public")
     if public:
@@ -304,7 +351,19 @@ WantedBy=multi-user.target
             # Only a missing one: deleting a present rule would leave a gap.
             priority = rule.rsplit(" ", 1)[1]
             subprocess.run(["sh", "-c", f"ip rule list priority {priority} | grep -q . || ip rule add {rule}"], check=True)
-    Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
+    # IPv6 forwarding is global in Linux. It is never in sysctl.d, which runs
+    # before any firewall at boot: carrel-tenant-host turns it on only after
+    # carrel_tenant_host, which limits it to the tenant VRF, has loaded, and
+    # a failed load leaves it off.
+    forward6 = ("ExecStartPost=/usr/sbin/sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1\n"
+                if layout["ipv6"] else "")
+    # Marks that this installer may have turned IPv6 forwarding on. Written
+    # before the unit that can turn it on, and kept until forwarding is off
+    # again, so an interrupted run or removal is finished by the rerun.
+    forward6_mark = Path("/etc/carrel/ipv6-forwarding")
+    if layout["ipv6"]:
+        mark(forward6_mark)
+    Path("/etc/systemd/system/carrel-tenant-host.service").write_text(f"""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
 Before=pve-guests.service
@@ -312,10 +371,18 @@ Before=pve-guests.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
-ExecReload=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
+{forward6}ExecReload=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
 [Install]
 WantedBy=multi-user.target
 """)
+    if layout["ipv6"]:
+        run("nft", "-c", "-f", "/etc/carrel/tenant-host.nft")
+        run("nft", "-f", "/etc/carrel/tenant-host.nft")
+        run("sysctl", "-w", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1")
+    elif forward6_mark.exists():
+        # The site dropped its ipv6 block: forwarding off before the IPv6 rules go.
+        run("sysctl", "-w", "net.ipv6.conf.all.forwarding=0", "net.ipv6.conf.default.forwarding=0")
+        forward6_mark.unlink()
     Path("/etc/sysctl.d/91-carrel-tenants.conf").write_text(
         "net.ipv4.ip_forward=1\nnet.ipv4.udp_l3mdev_accept=1\nnet.ipv4.conf.all.rp_filter=0\nnet.ipv4.conf.default.rp_filter=0\n"
     )

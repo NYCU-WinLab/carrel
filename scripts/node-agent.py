@@ -228,6 +228,8 @@ def guest_firewall(m, state, config):
     # restricted machine's private NICs stay unfiltered (issue #75).
     machine(m)
     n = m["tenant_n"]
+    v6 = site_ipv6()
+    address6 = machine_ipv6(m, v6)
     rules = [
         "[OPTIONS]",
         "enable: 1",
@@ -235,7 +237,10 @@ def guest_firewall(m, state, config):
         "macfilter: 1",
         # Guests use static addresses from cloud-init or pct; no DHCP server answers.
         "dhcp: 0",
-        "ndp: 0",
+        # Neighbour discovery only for a machine with IPv6 (issue #142). Its
+        # chain runs before the rules below, and it never lets a guest send
+        # router advertisements (radv: 0).
+        "ndp: 1" if address6 else "ndp: 0",
         "radv: 0",
         "policy_in: DROP",
         "policy_out: ACCEPT",
@@ -244,6 +249,10 @@ def guest_firewall(m, state, config):
         m["ip"],
         *vip_addresses(m, state),
         "0.0.0.0",
+        # The nftables firewall adds no link-local address to an explicit set:
+        # the guest's own fe80 address (neighbour discovery) and :: (its
+        # duplicate address check) go in by hand.
+        *([address6, "fe80::/64", "::"] if address6 else []),
         "",
     ]
     binding = next((b for b in public_bindings(state, config.get("protected_addresses", [])) if b[1]["vmid"] == m["vmid"]), None)
@@ -251,8 +260,7 @@ def guest_firewall(m, state, config):
         rules += ["[IPSET internet]", *INTERNET_IPSET, ""]
     rules += [
         "[RULES]",
-        "OUT DROP -dest ::/0",
-        "IN DROP -source ::/0",
+        *([] if address6 else ["OUT DROP -dest ::/0", "IN DROP -source ::/0"]),
         "OUT DROP -source 0.0.0.0",
         # Path MTU discovery for the guest's own sends. proxmox-firewall's
         # allow-icmp chain accepts this today; the rule keeps it if that changes.
@@ -281,6 +289,21 @@ def guest_firewall(m, state, config):
         rules.append(f"IN ACCEPT -source 10.200.{n}.0/24")
         # The tenant's VPN clients count as its network (PLAN 6.11).
         rules.append(f"IN ACCEPT -source 10.201.{n}.0/24")
+    if address6:
+        # Rules without an address apply to IPv6 too; these are the IPv6 twins
+        # of the tenant and private-range rules (PLAN 6.13).
+        own = v6_net(v6["prefix"], n)
+        rules += [f"OUT DROP -dest {own.network_address + 1}", f"OUT ACCEPT -dest {own}"]
+        if m.get("network_access", "tenant") == "tenant":
+            rules.append(f"IN ACCEPT -source {own}")
+        rules += [f"OUT DROP -dest {block}" for block in (v6["prefix"], "fc00::/7", "fe80::/10", "ff00::/8", "::1/128")]
+        # The rest of the site's /48 is other tenants: nothing from there,
+        # whatever the port rules below open (they have no address, so they
+        # apply to IPv6 too and open the machine's granted ports to the internet).
+        rules.append(f"IN DROP -source {v6['prefix']}")
+        if m.get("public_ssh") is not False:
+            # From the internet: SSH, like a public address's default (issue #91).
+            rules.append("IN ACCEPT -source ::/0 -p tcp -dport 22")
     # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
@@ -803,6 +826,185 @@ def vpn_apply(tenants):
     return out
 
 
+# IPv6 (issue #142, PLAN 6.13): one site /48 routed over a WireGuard tunnel from
+# the first exit node into the tenant VRF, no NAT. Tenant N gets <prefix>:N::/64,
+# with N written in decimal digits so 10.200.17.11 is <prefix>:17::11; the
+# gateway is ::1. A machine opts in (m["ipv6"]). No ipv6 block, nothing changes.
+V6_DEV = "wg-v6"
+# 31000 itself is no tenant's VPN port (31000 + N, N >= 1); grantable() keeps it.
+V6_PORT = VPN_PORT_BASE
+V6_FWMARK = "0x60"
+V6_OWNED = STATE / "ipv6-prefixes.json"  # install-network.py's PUBLIC_MARK: the tunnel leaves by the public uplink.
+
+
+def site_ipv6():
+    """The site's checked IPv6 block, or None."""
+    if not SITE.exists():
+        return None
+    block = site().get("ipv6")
+    if block is None:
+        return None
+    prefix = ipaddress.IPv6Network(block["prefix"])
+    if prefix.prefixlen != 48 or not prefix.is_global:
+        raise ValueError("ipv6.prefix must be a global /48")
+    host, _, port = str(block["peer"]["endpoint"]).rpartition(":")
+    ipaddress.IPv4Address(host)
+    if not port.isdigit():
+        raise ValueError("ipv6.peer.endpoint must be IPv4:port")
+    integer(int(port), 1, 65535)
+    if not WG_KEY.fullmatch(str(block["peer"]["public_key"])):
+        raise ValueError("invalid ipv6 peer public key")
+    return {"prefix": str(prefix), "endpoint": f"{host}:{int(port)}", "public_key": block["peer"]["public_key"],
+            "mtu": integer(block.get("mtu", VPN_MTU), 1280, VPN_MTU)}
+
+
+def v6_net(prefix, n):
+    """Tenant N's /64: the fourth group spells N in decimal digits."""
+    base = ipaddress.IPv6Network(prefix)
+    return ipaddress.IPv6Network((int(base.network_address) | int(str(integer(n, 1, 254)), 16) << 64, 64))
+
+
+def v6_address(prefix, m):
+    """A machine's address: its IPv4 host number, in decimal digits, in its tenant's /64."""
+    n = m["tenant_n"]
+    address = ipaddress.IPv4Address(m["ip"])
+    if address not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 2 <= int(address) % 256 <= 254:
+        raise ValueError("machine address outside its tenant network")
+    return v6_net(prefix, n).network_address + int(str(int(address) % 256), 16)
+
+
+def link_local(mac):
+    """The EUI-64 link-local address of a MAC (RFC 4291 appendix A)."""
+    b = bytes.fromhex(mac.replace(":", ""))
+    if len(b) != 6:
+        raise ValueError("invalid MAC address")
+    eui = bytes([b[0] ^ 2]) + b[1:3] + b"\xff\xfe" + b[3:]
+    return str(ipaddress.IPv6Address(b"\xfe\x80" + bytes(6) + eui))
+
+
+def nd_nft(machines):
+    """Neighbour advertisements from a guest name only its own addresses.
+
+    The IPv6 twin of the ipfilter ARP check: the firewall's ndp option checks
+    the source address, not the target, so a guest could otherwise answer for
+    the gateway or a neighbour and take their traffic within its tenant."""
+    rules = []
+    for m, address6 in machines:
+        dev = f"{'tap' if m['kind'] == 'vm' else 'veth'}{machine(m)}i0"
+        rules.append(f'iifname "{dev}" icmpv6 type nd-neighbor-advert icmpv6 taddr {{ {address6}, {link_local(m["mac"])} }} accept')
+        rules.append(f'iifname "{dev}" icmpv6 type nd-neighbor-advert counter drop')
+    body = "\n".join("  " + r for r in rules)
+    return f"""add table bridge carrel_nd
+flush table bridge carrel_nd
+table bridge carrel_nd {{
+ chain prerouting {{
+  type filter hook prerouting priority -200; policy accept;
+{body}
+ }}
+}}
+"""
+
+
+ND_UNIT = """[Unit]
+Description=Carrel neighbour advertisement filter
+After=network.target
+Before=pve-guests.service
+ConditionPathExists=/etc/carrel/nd.nft
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/carrel/nd.nft
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def machine_ipv6(m, v6):
+    """The machine's IPv6 address when the site has IPv6 and the machine opted in, else None."""
+    if not v6 or m.get("ipv6") is not True:
+        return None
+    return str(v6_address(v6["prefix"], m))
+
+
+def v6_nft(v6, addresses):
+    """Only opted-in machines are reachable through the tunnel, and only they
+    leave by it; nothing with a source inside the site's own /48 comes in."""
+    allowed = ", ".join(sorted(addresses))
+    accept_in = f'  iifname "{V6_DEV}" ip6 daddr {{ {allowed} }} accept\n' if addresses else ""
+    accept_out = f'  oifname "{V6_DEV}" ip6 saddr {{ {allowed} }} accept\n' if addresses else ""
+    return f"""add table inet carrel_v6
+flush table inet carrel_v6
+table inet carrel_v6 {{
+ chain prerouting {{
+  type filter hook prerouting priority -150; policy accept;
+  iifname "{V6_DEV}" ip6 saddr {v6["prefix"]} counter drop
+{accept_in}  iifname "{V6_DEV}" counter drop
+ }}
+ chain forward {{
+  type filter hook forward priority -25; policy accept;
+{accept_out}  oifname "{V6_DEV}" counter drop
+ }}
+}}
+"""
+
+
+def ipv6_apply(v6, addresses):
+    # The filter goes first, so the tunnel is never up without it.
+    rules = v6_nft(v6, addresses)
+    write("/etc/carrel/v6.nft", rules)
+    run("nft", "-c", "-f", "/etc/carrel/v6.nft")
+    run("nft", "-f", "/etc/carrel/v6.nft")
+    if not shutil.which("wg"):
+        raise CommandFailure("wireguard-tools is not installed on the exit node")
+    key = VPN_KEYS / "v6.key"
+    if not key.exists():
+        VPN_KEYS.mkdir(mode=0o700, parents=True, exist_ok=True)
+        private = run("wg", "genkey")
+        with os.fdopen(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+            f.write(private + "\n")
+    private = key.read_text().strip()
+    if not Path(f"/sys/class/net/{V6_DEV}").exists():
+        run("ip", "link", "add", V6_DEV, "type", "wireguard")
+    run("ip", "link", "set", V6_DEV, "master", "vrf_tenants", "mtu", str(v6["mtu"]))
+    # A source for the tunnel's own ICMPv6 (Packet Too Big) inside the site's prefix.
+    run("ip", "-6", "address", "replace", str(ipaddress.IPv6Network(v6["prefix"]).network_address + 1) + "/128", "dev", V6_DEV)
+    conf = (f"[Interface]\nListenPort = {V6_PORT}\nPrivateKey = {private}\nFwMark = {V6_FWMARK}\n"
+            f"\n[Peer]\nPublicKey = {v6['public_key']}\nEndpoint = {v6['endpoint']}\nAllowedIPs = ::/0\n"
+            # Carrel calls out and keeps the path open: the public input chain
+            # then lets the answers in as an established flow.
+            "PersistentKeepalive = 25\n")
+    path = VPN_KEYS / f"{V6_DEV}.conf"
+    write(path, conf, 0o600)
+    run("wg", "syncconf", V6_DEV, path)
+    run("ip", "link", "set", V6_DEV, "up")
+    run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
+    return {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
+
+
+def ipv6_remove():
+    """Take the tunnel and its filter away: the site has no ipv6 block, or this
+    node is no longer the first exit node. Nothing to do on a node that never had them."""
+    if Path(f"/sys/class/net/{V6_DEV}").exists():
+        run("ip", "link", "del", V6_DEV)
+    if Path("/etc/carrel/v6.nft").exists():
+        # Nothing loads it at boot: after a restart the table is already gone.
+        subprocess.run(["nft", "delete", "table", "inet", "carrel_v6"], capture_output=True, check=False)
+        Path("/etc/carrel/v6.nft").unlink()
+    (VPN_KEYS / f"{V6_DEV}.conf").unlink(missing_ok=True)
+
+
+def ipv6(state, v6):
+    """The site tunnel on the first exit node; its public key and port for the
+    peer's operator. A failure here stays here, like the client VPN's."""
+    try:
+        if not v6 or not public_ingress():
+            ipv6_remove()
+            return {}
+        return ipv6_apply(v6, [a for a in (machine_ipv6(m, v6) for m in state["machines"]) if a])
+    except Exception as e:  # noqa: BLE001 - reported to the control plane
+        return {"error": f"{type(e).__name__}: {e}"[:300]}
+
+
 def first_exit_node():
     # The first exit node reconciles before the others. It alone serves
     # private DHCP (a private network is one layer 2 segment across the
@@ -948,6 +1150,7 @@ def reconcile(state, first=True):
     # One fresh observation per reconciliation. Mutations remain serialized
     # by the node adapter's infrastructure lock.
     vnets, subnets_by_vnet = topology_read()
+    v6 = site_ipv6()
     for t in state["tenants"]:
         n, vnet = tenant_config(t)
         if ensure(
@@ -965,6 +1168,27 @@ def reconcile(state, first=True):
                 snat=1,
             )
             changed.append(f"subnet-{n}")
+        if v6:
+            net6 = v6_net(v6["prefix"], n)
+            if not any(x.get("cidr") == str(net6) for x in subnets):
+                # Routed, never translated: the addresses are the machines' own.
+                api("create", f"/cluster/sdn/vnets/{vnet}/subnets", subnet=str(net6), type="subnet",
+                    gateway=str(net6.network_address + 1), snat=0)
+                changed.append(f"subnet6-{n}")
+    # The prefixes this node has made subnets in (V6_OWNED). Only subnets
+    # inside one of them, and outside the current prefix, are taken away: a
+    # site that never had an ipv6 block deletes nothing.
+    owned = [ipaddress.IPv6Network(p) for p in json.loads(V6_OWNED.read_text())] if V6_OWNED.exists() else []
+    if v6 and ipaddress.IPv6Network(v6["prefix"]) not in owned:
+        owned.append(ipaddress.IPv6Network(v6["prefix"]))
+        write(V6_OWNED, json.dumps([str(p) for p in owned]))
+    stale = [p for p in owned if not (v6 and str(p) == v6["prefix"])]
+    for vnet, subnets in subnets_by_vnet.items():
+        for x in subnets:
+            cidr = str(x.get("cidr", ""))
+            if ":" in cidr and any(ipaddress.IPv6Network(cidr).subnet_of(p) for p in stale):
+                api("delete", f"/cluster/sdn/vnets/{vnet}/subnets/{x['subnet']}")
+                changed.append(f"removed-{x['subnet']}")
     if state.get("fetch"):
         # The fetch network (PLAN 6.1, N = 255): only the fetch container.
         if ensure("/cluster/sdn/vnets", "vnet", "t255", existing=vnets, zone="tenants", tag=100255, alias="carrel-fetch"):
@@ -1013,6 +1237,12 @@ def reconcile(state, first=True):
                 raise RuntimeError(
                     "SDN reload left a missing tenant bridge; inspect the node networking task"
                 )
+    if stale:
+        # Deleted and reloaded: forget the old prefixes.
+        if v6:
+            write(V6_OWNED, json.dumps([v6["prefix"]]))
+        else:
+            V6_OWNED.unlink()
     # Only exit nodes have the cross-VRF pair; other nodes route to them over EVPN.
     if state["tenants"] and Path("/sys/class/net/xvrfp_tenants").exists():
         # Route through the cross-VRF pair in both directions. Separate tracking
@@ -1050,6 +1280,7 @@ def reconcile(state, first=True):
     interface_rule = (
         "iifname { " + ", ".join('"' + i + '"' for i in interfaces) + " } ct zone set 1" if interfaces else ""
     )
+    v6_zone = f'\n  iifname "{V6_DEV}" ct zone set 1' if v6 and public_ingress() else ""
     tracking = f"""add table bridge carrel_conntrack
 flush table bridge carrel_conntrack
 table bridge carrel_conntrack {{
@@ -1062,7 +1293,7 @@ flush table inet carrel_conntrack
 table inet carrel_conntrack {{
  chain prerouting {{ type filter hook prerouting priority -300; policy accept;
   iifname {{ "xvrfp_tenants", "vrf_tenants", "vrfbr_tenants" }} ct zone set 1
-  iifname "wg-t*" ct zone set 1
+  iifname "wg-t*" ct zone set 1{v6_zone}
  }}
 }}
 """
@@ -1070,6 +1301,16 @@ table inet carrel_conntrack {{
     run("nft", "-c", "-f", "/etc/carrel/conntrack.nft")
     run("nft", "-f", "/etc/carrel/conntrack.nft")
     run("systemctl", "start", "carrel-conntrack")
+    # Every node, as the guests' taps are local: on before any guest has ndp: 1.
+    with_v6 = [(m, a) for m, a in ((m, machine_ipv6(m, v6)) for m in state["machines"]) if a]
+    if with_v6 or Path("/etc/carrel/nd.nft").exists():
+        write("/etc/carrel/nd.nft", nd_nft(with_v6))
+        run("nft", "-c", "-f", "/etc/carrel/nd.nft")
+        run("nft", "-f", "/etc/carrel/nd.nft")
+        # And at boot, before the guests start: their firewall keeps ndp: 1.
+        if write("/etc/systemd/system/carrel-nd.service", ND_UNIT):
+            run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "carrel-nd")
     # Per-guest filtering protects routed and same-node bridged paths. Private
     # experiment NICs deliberately have firewall=0; primary NIC is mandatory.
     # The files are cluster-wide: one node writes them.
@@ -1109,15 +1350,19 @@ WantedBy=multi-user.target
             run("systemctl", "daemon-reload")
             run("systemctl", "enable", "carrel-ports")
     tunnels = vpn(state)
+    site6 = ipv6(state, v6)
     write(STATE / "vips.json", json.dumps(vip_targets(state)))
     if write("/etc/systemd/system/carrel-vip-probe.service", VIP_PROBE_UNIT):
         run("systemctl", "daemon-reload")
     # Every time, so an enable that failed once is retried.
     run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
+    out = {"changed": changed}
     if tunnels:
-        return {"changed": changed, "vpn": tunnels}
-    return {"changed": changed}
+        out["vpn"] = tunnels
+    if site6:
+        out["ipv6"] = site6
+    return out
 
 
 # Virtual addresses across nodes (issue #96). A remote EVPN neighbour entry is
@@ -1307,13 +1552,30 @@ def cloud_init(m, *, prepared=False, environment="development"):
     return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
 
 
+def ct_ipv6(m):
+    """The net0 options that give an opted-in container its IPv6 address, or nothing."""
+    v6 = site_ipv6()
+    address6 = machine_ipv6(m, v6)
+    if not address6:
+        return ""
+    return f",ip6={address6}/64,gw6={v6_net(v6['prefix'], m['tenant_n']).network_address + 1}"
+
+
 def network_file(m):
     network_name = f"carrel-{m['vmid']}-network.json"
-    network = {"version": 2, "ethernets": {"primary": {
+    primary = {
         "match": {"macaddress": m["mac"]}, "addresses": [m["ip"] + "/24"],
         "routes": [{"to": "0.0.0.0/0", "via": f"10.200.{m['tenant_n']}.1"}],
         "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": 1450,
-    }}}
+    }
+    v6 = site_ipv6()
+    address6 = machine_ipv6(m, v6)
+    if address6:
+        # Static, like IPv4: the gateway sends no router advertisements (radv: 0).
+        primary["addresses"].append(address6 + "/64")
+        primary["accept-ra"] = False
+        primary["routes"].append({"to": "::/0", "via": str(v6_net(v6["prefix"], m["tenant_n"]).network_address + 1)})
+    network = {"version": 2, "ethernets": {"primary": primary}}
     write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
     return network_name
 
@@ -1998,7 +2260,7 @@ def create(m):
                 "--rootfs",
                 f"{storage_id()}:{m['disk_gb']}",
                 "--net0",
-                net + f",name=eth0,ip={m['ip']}/24,gw=10.200.{n}.1,type=veth",
+                net + f",name=eth0,ip={m['ip']}/24,gw=10.200.{n}.1,type=veth" + ct_ipv6(m),
                 "--nameserver",
                 "10.200.0.2",
                 "--ssh-public-keys",
