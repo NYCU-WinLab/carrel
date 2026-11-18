@@ -980,7 +980,13 @@ def ipv6_apply(v6, addresses):
     run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
     out = {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
     # The route above is only kept while the tunnel is alive.
-    watch = v6_watchdog()
+    # The vip-probe loop runs it too, without the lock: a failure here is
+    # reported beside the key and port, never instead of them.
+    try:
+        watch = v6_watchdog()
+    except Exception as e:  # noqa: BLE001 - reported to the control plane
+        out["watchdog_error"] = f"{type(e).__name__}: {e}"[:300]
+        return out
     if watch and watch["handshake"] is not None:
         out["handshake"] = watch["handshake"]
     return out
@@ -1007,7 +1013,12 @@ def v6_watchdog(run=run, now=time.time):
         run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
         present = True
     elif not fresh and present:
-        run("ip", "-6", "route", "del", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
+        try:
+            run("ip", "-6", "route", "del", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
+        except CommandFailure:
+            # The other caller may have withdrawn it first: only a route still there is a failure.
+            if run("ip", *route):
+                raise
         present = False
     return {"handshake": age, "route": present}
 

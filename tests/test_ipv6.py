@@ -199,7 +199,7 @@ def test_watchdog_keeps_route_on_fresh_handshake(agent, monkeypatch):
 
 
 def test_watchdog_withdraws_then_restores(agent, monkeypatch):
-    calls, state, go = watchdog_stubs(agent, monkeypatch, 200)
+    _, state, go = watchdog_stubs(agent, monkeypatch, 200)
     assert go() == {"handshake": 200, "route": False}
     assert not state["route"]
     state["age"] = 3
@@ -208,7 +208,7 @@ def test_watchdog_withdraws_then_restores(agent, monkeypatch):
 
 
 def test_watchdog_treats_no_handshake_as_stale(agent, monkeypatch):
-    _, state, go = watchdog_stubs(agent, monkeypatch, None)
+    _, _, go = watchdog_stubs(agent, monkeypatch, None)
     assert go() == {"handshake": None, "route": False}
 
 
@@ -216,3 +216,36 @@ def test_watchdog_does_nothing_without_tunnel(agent, monkeypatch):
     calls, _, go = watchdog_stubs(agent, monkeypatch, 500, tunnel=False)
     assert go() is None
     assert calls == []
+
+
+def test_watchdog_tolerates_a_route_already_withdrawn(agent, monkeypatch):
+    # The vip-probe loop deleted the route between this caller's show and del.
+    _, state, _ = watchdog_stubs(agent, monkeypatch, 200)
+
+    def racing_run(*a, **k):
+        if a[:4] == ("ip", "-6", "route", "del"):
+            state["route"] = False
+            raise agent.CommandFailure("ip -6 failed: RTNETLINK answers: No such process")
+        if a[0] == "wg":
+            return "PEER\t1"
+        return "default dev wg-v6" if a[3] == "show" and state["route"] else ""
+
+    assert agent.v6_watchdog(run=racing_run, now=lambda: 1_000_000) == {"handshake": 999_999, "route": False}
+
+
+def test_watchdog_failure_keeps_key_and_port(agent, monkeypatch, tmp_path):
+    keys = tmp_path / "wg"
+    keys.mkdir()
+    (keys / "v6.key").write_text("PRIVATE\n")
+    monkeypatch.setattr(agent, "VPN_KEYS", keys)
+    monkeypatch.setattr(agent, "write", lambda *a, **k: True)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(agent, "run", lambda *a, **k: "PUBKEY" if a[:2] == ("wg", "pubkey") else "")
+
+    def broken(*a, **k):
+        raise agent.CommandFailure("ip -6 failed: busy")
+
+    monkeypatch.setattr(agent, "v6_watchdog", broken)
+    out = agent.ipv6_apply({"prefix": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
+    assert out["public_key"] == "PUBKEY" and out["port"] == agent.V6_PORT
+    assert out["watchdog_error"].startswith("CommandFailure")
