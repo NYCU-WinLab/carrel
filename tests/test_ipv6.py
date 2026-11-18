@@ -134,3 +134,33 @@ def test_site_check_in_installer():
     assert n.site_ipv6({"ipv6": SITE6})["mtu"] == 1420
     with pytest.raises(SystemExit):
         n.site_ipv6({"ipv6": dict(SITE6, prefix="2a14:7581:880::/64")})
+
+
+def test_other_tenants_and_public_ssh(agent):
+    rules = agent.guest_firewall(machine(ipv6=True), STATE, CONFIG).splitlines()
+    own, rest = (
+        rules.index("IN ACCEPT -source 2a14:7581:880:17::/64"),
+        rules.index("IN DROP -source 2a14:7581:880::/48"),
+    )
+    grant = rules.index("IN ACCEPT -p tcp -dport 22")
+    assert own < rest < grant
+    no_ssh = agent.guest_firewall(machine(ipv6=True, public_ssh=False), STATE, CONFIG).splitlines()
+    assert "IN ACCEPT -source ::/0 -p tcp -dport 22" not in no_ssh
+
+
+def test_neighbour_advertisements_name_only_own_addresses(agent):
+    assert agent.link_local("02:ca:11:00:00:0b") == "fe80::ca:11ff:fe00:b"
+    nft = agent.nd_nft(
+        [
+            (machine(ipv6=True), "2a14:7581:880:17::11"),
+            (machine(kind="ct", vmid=11711), "2a14:7581:880:17::12"),
+        ]
+    )
+    lines = [x.strip() for x in nft.splitlines()]
+    assert (
+        'iifname "tap11710i0" icmpv6 type nd-neighbor-advert icmpv6 taddr { 2a14:7581:880:17::11, fe80::ca:11ff:fe00:b } accept'
+        in lines
+    )
+    assert lines.index('iifname "tap11710i0" icmpv6 type nd-neighbor-advert counter drop') > 0
+    assert 'iifname "veth11711i0" icmpv6 type nd-neighbor-advert counter drop' in lines
+    assert "nd-neighbor-advert" not in agent.nd_nft([])

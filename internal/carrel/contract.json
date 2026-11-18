@@ -139,7 +139,7 @@
           "ipv6": {
             "type": "boolean",
             "default": false,
-            "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH only. Set at creation."
+            "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH (unless public_ssh=false) and the machine's open ports; other tenants cannot reach it. Set at creation."
           },
           "network_access": {
             "enum": [
@@ -4343,7 +4343,7 @@
                 "ipv6": {
                   "type": "boolean",
                   "default": false,
-                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH only. Set at creation."
+                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH (unless public_ssh=false) and the machine's open ports; other tenants cannot reach it. Set at creation."
                 },
                 "network_access": {
                   "enum": [
@@ -4709,7 +4709,7 @@
                 "ipv6": {
                   "type": "boolean",
                   "default": false,
-                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH only. Set at creation."
+                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH (unless public_ssh=false) and the machine's open ports; other tenants cannot reach it. Set at creation."
                 },
                 "network_access": {
                   "enum": [

@@ -12,9 +12,12 @@ import (
 // the gateway is <prefix>:17::1. node-agent derives the same addresses
 // (v6_net, v6_address); a machine opts in at creation.
 
+// documentation is 2001:db8::/32 (RFC 3849), which node-agent refuses too.
+var documentation = netip.MustParsePrefix("2001:db8::/32")
+
 func ipv6Prefix(s string) (netip.Prefix, error) {
 	p, err := netip.ParsePrefix(s)
-	if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() || p.Bits() != 48 || p.Masked() != p || !p.Addr().IsGlobalUnicast() || p.Addr().IsPrivate() {
+	if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() || p.Bits() != 48 || p.Masked() != p || !p.Addr().IsGlobalUnicast() || p.Addr().IsPrivate() || documentation.Overlaps(p) {
 		return netip.Prefix{}, errors.New("ipv6_prefix must be a global IPv6 /48")
 	}
 	return p, nil
@@ -65,6 +68,10 @@ func (e *Execution) machineIPv6(m D) D {
 	if !ok {
 		return nil
 	}
-	return D{"address": addr.String(), "prefix_length": 64, "gateway": gw.String(), "inbound": []string{"tcp/22"},
-		"note": "Routed, not translated. Inbound from the internet is SSH only; other ports stay closed on IPv6."}
+	inbound := []string{"tcp/22", "the machine's open ports (port_open)"}
+	if m["public_ssh"] == false {
+		inbound = inbound[1:]
+	}
+	return D{"address": addr.String(), "prefix_length": 64, "gateway": gw.String(), "inbound_from_internet": inbound,
+		"note": "Routed, not translated. Other tenants cannot reach this address."}
 }

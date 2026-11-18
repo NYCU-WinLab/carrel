@@ -22,7 +22,7 @@ func TestIPv6MachineAddressMatchesNodeAgent(t *testing.T) {
 			t.Fatalf("%s accepted", ip)
 		}
 	}
-	for _, bad := range []string{"2a14:7581:880::/56", "fd00:1::/48", "10.0.0.0/8", "2a14:7581:880:1::/48", ""} {
+	for _, bad := range []string{"2a14:7581:880::/56", "fd00:1::/48", "10.0.0.0/8", "2a14:7581:880:1::/48", "2001:db8:880::/48", ""} {
 		if _, err := ipv6Prefix(bad); err == nil {
 			t.Fatalf("%q accepted", bad)
 		}

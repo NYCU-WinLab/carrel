@@ -939,8 +939,13 @@ clamps IPv6 TCP MSS to 1360, and the base guest chains let ICMPv6 Packet Too Big
   `fe80::/64` and `::` in its ipfilter set (the nftables firewall adds no link-local to an explicit
   set), the two `::/0` drops removed, and IPv6 twins of the tenant rules: its own /64 out (not the
   gateway), its tenant's /64 in when `network_access` is `tenant`, the rest of the /48, ULA,
-  link-local, multicast and loopback dropped out. Rules without an address already apply to both
-  families (SMTP drop, port grants). From the internet: SSH only.
+  link-local, multicast and loopback dropped out, and nothing in from the rest of the /48. Rules
+  without an address already apply to both families (SMTP drop, port grants), so from the
+  internet a machine takes SSH (unless `public_ssh` is false) and its open ports.
+- `bridge carrel_nd` on every node: a guest's neighbour advertisements may name only its own
+  address and its EUI-64 link-local. `ndp: 1` checks the source, not the target; without this a
+  guest could answer for the gateway or a neighbour (the IPv6 form of ARP spoofing, which
+  ipfilter stops for IPv4).
 
 **Removal.** Dropping the `ipv6` block removes the tunnel, `carrel_v6`, the IPv6 subnets (one SDN
 reload) and the forwarding sysctl; a node that stops being the first exit node removes its tunnel.

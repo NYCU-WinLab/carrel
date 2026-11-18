@@ -297,8 +297,13 @@ def guest_firewall(m, state, config):
         if m.get("network_access", "tenant") == "tenant":
             rules.append(f"IN ACCEPT -source {own}")
         rules += [f"OUT DROP -dest {block}" for block in (v6["prefix"], "fc00::/7", "fe80::/10", "ff00::/8", "::1/128")]
-        # From the internet: SSH, like a public address's default (issue #91).
-        rules.append("IN ACCEPT -source ::/0 -p tcp -dport 22")
+        # The rest of the site's /48 is other tenants: nothing from there,
+        # whatever the port rules below open (they have no address, so they
+        # apply to IPv6 too and open the machine's granted ports to the internet).
+        rules.append(f"IN DROP -source {v6['prefix']}")
+        if m.get("public_ssh") is not False:
+            # From the internet: SSH, like a public address's default (issue #91).
+            rules.append("IN ACCEPT -source ::/0 -p tcp -dport 22")
     # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
@@ -868,6 +873,38 @@ def v6_address(prefix, m):
     return v6_net(prefix, n).network_address + int(str(int(address) % 256), 16)
 
 
+def link_local(mac):
+    """The EUI-64 link-local address of a MAC (RFC 4291 appendix A)."""
+    b = bytes.fromhex(mac.replace(":", ""))
+    if len(b) != 6:
+        raise ValueError("invalid MAC address")
+    eui = bytes([b[0] ^ 2]) + b[1:3] + b"\xff\xfe" + b[3:]
+    return str(ipaddress.IPv6Address(b"\xfe\x80" + bytes(6) + eui))
+
+
+def nd_nft(machines):
+    """Neighbour advertisements from a guest name only its own addresses.
+
+    The IPv6 twin of the ipfilter ARP check: the firewall's ndp option checks
+    the source address, not the target, so a guest could otherwise answer for
+    the gateway or a neighbour and take their traffic within its tenant."""
+    rules = []
+    for m, address6 in machines:
+        dev = f"{'tap' if m['kind'] == 'vm' else 'veth'}{machine(m)}i0"
+        rules.append(f'iifname "{dev}" icmpv6 type nd-neighbor-advert icmpv6 taddr {{ {address6}, {link_local(m["mac"])} }} accept')
+        rules.append(f'iifname "{dev}" icmpv6 type nd-neighbor-advert counter drop')
+    body = "\n".join("  " + r for r in rules)
+    return f"""add table bridge carrel_nd
+flush table bridge carrel_nd
+table bridge carrel_nd {{
+ chain prerouting {{
+  type filter hook prerouting priority -200; policy accept;
+{body}
+ }}
+}}
+"""
+
+
 def machine_ipv6(m, v6):
     """The machine's IPv6 address when the site has IPv6 and the machine opted in, else None."""
     if not v6 or m.get("ipv6") is not True:
@@ -936,7 +973,8 @@ def ipv6_remove():
     if Path(f"/sys/class/net/{V6_DEV}").exists():
         run("ip", "link", "del", V6_DEV)
     if Path("/etc/carrel/v6.nft").exists():
-        run("nft", "delete", "table", "inet", "carrel_v6")
+        # Nothing loads it at boot: after a restart the table is already gone.
+        subprocess.run(["nft", "delete", "table", "inet", "carrel_v6"], capture_output=True)
         Path("/etc/carrel/v6.nft").unlink()
     (VPN_KEYS / f"{V6_DEV}.conf").unlink(missing_ok=True)
 
@@ -1249,6 +1287,12 @@ table inet carrel_conntrack {{
     run("nft", "-c", "-f", "/etc/carrel/conntrack.nft")
     run("nft", "-f", "/etc/carrel/conntrack.nft")
     run("systemctl", "start", "carrel-conntrack")
+    # Every node, as the guests' taps are local: on before any guest has ndp: 1.
+    with_v6 = [(m, a) for m, a in ((m, machine_ipv6(m, v6)) for m in state["machines"]) if a]
+    if with_v6 or Path("/etc/carrel/nd.nft").exists():
+        write("/etc/carrel/nd.nft", nd_nft(with_v6))
+        run("nft", "-c", "-f", "/etc/carrel/nd.nft")
+        run("nft", "-f", "/etc/carrel/nd.nft")
     # Per-guest filtering protects routed and same-node bridged paths. Private
     # experiment NICs deliberately have firewall=0; primary NIC is mandatory.
     # The files are cluster-wide: one node writes them.
