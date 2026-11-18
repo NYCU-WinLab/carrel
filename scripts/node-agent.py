@@ -304,6 +304,8 @@ def guest_firewall(m, state, config):
         if m.get("public_ssh") is not False:
             # From the internet: SSH, like a public address's default (issue #91).
             rules.append("IN ACCEPT -source ::/0 -p tcp -dport 22")
+        # Ping from the internet, as RFC 4890 4.3.1 recommends.
+        rules.append("IN ACCEPT -source ::/0 -p ipv6-icmp -icmp-type echo-request")
     # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
@@ -834,6 +836,9 @@ V6_DEV = "wg-v6"
 # 31000 itself is no tenant's VPN port (31000 + N, N >= 1); grantable() keeps it.
 V6_PORT = VPN_PORT_BASE
 V6_FWMARK = "0x60"
+# ifupdown2 owns what its files declare: every SDN apply runs ifreload -a, which
+# strips an address or a VRF route it was not told about (issue #336).
+V6_IFACE = Path("/etc/network/interfaces.d/carrel-v6")
 V6_OWNED = STATE / "ipv6-prefixes.json"  # install-network.py's PUBLIC_MARK: the tunnel leaves by the public uplink.
 
 
@@ -905,6 +910,36 @@ table bridge carrel_nd {{
 """
 
 
+def v6_iface(v6):
+    """The tunnel as ifupdown2 sees it, so an ifreload keeps its VRF, address and route.
+    The key and peer stay with wg syncconf: a reload never deletes the link."""
+    gateway = ipaddress.IPv6Network(v6["prefix"]).network_address + 1
+    return f"""# Written by the Carrel node agent: the site IPv6 tunnel (issue #142).
+auto {V6_DEV}
+iface {V6_DEV}
+    pre-up ip link add {V6_DEV} type wireguard 2>/dev/null || true
+    vrf vrf_tenants
+    mtu {v6["mtu"]}
+    address {gateway}/128
+    post-up ip -6 route replace vrf vrf_tenants default dev {V6_DEV}
+"""
+
+
+ND_RULES = Path("/etc/carrel/nd.nft")
+ND_UNIT_FILE = Path("/etc/systemd/system/carrel-nd.service")
+
+
+def nd_remove():
+    """No guest has IPv6 any more: the filter and its boot unit go. The rules
+    file goes last, so a failed run is retried by the next reconcile."""
+    subprocess.run(["nft", "delete", "table", "bridge", "carrel_nd"], capture_output=True, check=False)
+    if ND_UNIT_FILE.exists():
+        run("systemctl", "disable", "--now", "carrel-nd")
+        ND_UNIT_FILE.unlink()
+        run("systemctl", "daemon-reload")
+    ND_RULES.unlink(missing_ok=True)
+
+
 ND_UNIT = """[Unit]
 Description=Carrel neighbour advertisement filter
 After=network.target
@@ -968,6 +1003,7 @@ def ipv6_apply(v6, addresses):
     run("ip", "link", "set", V6_DEV, "master", "vrf_tenants", "mtu", str(v6["mtu"]))
     # A source for the tunnel's own ICMPv6 (Packet Too Big) inside the site's prefix.
     run("ip", "-6", "address", "replace", str(ipaddress.IPv6Network(v6["prefix"]).network_address + 1) + "/128", "dev", V6_DEV)
+    write(V6_IFACE, v6_iface(v6), 0o644)
     conf = (f"[Interface]\nListenPort = {V6_PORT}\nPrivateKey = {private}\nFwMark = {V6_FWMARK}\n"
             f"\n[Peer]\nPublicKey = {v6['public_key']}\nEndpoint = {v6['endpoint']}\nAllowedIPs = ::/0\n"
             # Carrel calls out and keeps the path open: the public input chain
@@ -1026,6 +1062,8 @@ def v6_watchdog(run=run, now=time.time):
 def ipv6_remove():
     """Take the tunnel and its filter away: the site has no ipv6 block, or this
     node is no longer the first exit node. Nothing to do on a node that never had them."""
+    # The file first: an ifreload in between must not bring the link back.
+    V6_IFACE.unlink(missing_ok=True)
     if Path(f"/sys/class/net/{V6_DEV}").exists():
         run("ip", "link", "del", V6_DEV)
     if Path("/etc/carrel/v6.nft").exists():
@@ -1345,7 +1383,10 @@ table inet carrel_conntrack {{
     run("systemctl", "start", "carrel-conntrack")
     # Every node, as the guests' taps are local: on before any guest has ndp: 1.
     with_v6 = [(m, a) for m, a in ((m, machine_ipv6(m, v6)) for m in state["machines"]) if a]
-    if with_v6 or Path("/etc/carrel/nd.nft").exists():
+    if not with_v6:
+        if ND_RULES.exists():
+            nd_remove()
+    else:
         write("/etc/carrel/nd.nft", nd_nft(with_v6))
         run("nft", "-c", "-f", "/etc/carrel/nd.nft")
         run("nft", "-f", "/etc/carrel/nd.nft")
@@ -1607,7 +1648,8 @@ def ct_ipv6(m):
     address6 = machine_ipv6(m, v6)
     if not address6:
         return ""
-    return f",ip6={address6}/64,gw6={v6_net(v6['prefix'], m['tenant_n']).network_address + 1}"
+    # The tunnel's MTU, as in network_file.
+    return f",ip6={address6}/64,gw6={v6_net(v6['prefix'], m['tenant_n']).network_address + 1},mtu={v6['mtu']}"
 
 
 def network_file(m):
@@ -1624,6 +1666,9 @@ def network_file(m):
         primary["addresses"].append(address6 + "/64")
         primary["accept-ra"] = False
         primary["routes"].append({"to": "::/0", "via": str(v6_net(v6["prefix"], m["tenant_n"]).network_address + 1)})
+        # The tunnel's MTU, so no send needs a Packet Too Big: the exit node's
+        # would come from a link-local address that other nodes never route back.
+        primary["mtu"] = v6["mtu"]
     network = {"version": 2, "ethernets": {"primary": primary}}
     write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
     return network_name
