@@ -164,3 +164,88 @@ def test_neighbour_advertisements_name_only_own_addresses(agent):
     assert lines.index('iifname "tap11710i0" icmpv6 type nd-neighbor-advert counter drop') > 0
     assert 'iifname "veth11711i0" icmpv6 type nd-neighbor-advert counter drop' in lines
     assert "nd-neighbor-advert" not in agent.nd_nft([])
+
+
+def watchdog_stubs(agent, monkeypatch, stamp_age, route=True, tunnel=True):
+    """Stub wg and ip. Returns the calls, the state the stubs share, and a runner."""
+    now = 1_000_000
+    state = {"route": route, "age": stamp_age}
+    calls = []
+
+    def fake_run(*a, **k):
+        calls.append(a)
+        if a[0] == "wg":
+            return f"PEER\t{now - state['age'] if state['age'] is not None else 0}"
+        if a[:2] == ("ip", "-6") and a[2] == "route":
+            if a[3] == "show":
+                return "default dev wg-v6" if state["route"] else ""
+            state["route"] = a[3] == "replace"
+        return ""
+
+    real = Path
+
+    class Net:
+        def exists(self):
+            return tunnel
+
+    monkeypatch.setattr(agent, "Path", lambda p: Net() if "/sys/class/net" in str(p) else real(p))
+    return calls, state, lambda: agent.v6_watchdog(run=fake_run, now=lambda: now)
+
+
+def test_watchdog_keeps_route_on_fresh_handshake(agent, monkeypatch):
+    calls, state, go = watchdog_stubs(agent, monkeypatch, 10)
+    assert go() == {"handshake": 10, "route": True}
+    assert state["route"] and not any(c[3] in ("del", "replace") for c in calls if c[0] == "ip")
+
+
+def test_watchdog_withdraws_then_restores(agent, monkeypatch):
+    _, state, go = watchdog_stubs(agent, monkeypatch, 200)
+    assert go() == {"handshake": 200, "route": False}
+    assert not state["route"]
+    state["age"] = 3
+    assert go() == {"handshake": 3, "route": True}
+    assert state["route"]
+
+
+def test_watchdog_treats_no_handshake_as_stale(agent, monkeypatch):
+    _, _, go = watchdog_stubs(agent, monkeypatch, None)
+    assert go() == {"handshake": None, "route": False}
+
+
+def test_watchdog_does_nothing_without_tunnel(agent, monkeypatch):
+    calls, _, go = watchdog_stubs(agent, monkeypatch, 500, tunnel=False)
+    assert go() is None
+    assert calls == []
+
+
+def test_watchdog_tolerates_a_route_already_withdrawn(agent, monkeypatch):
+    # The vip-probe loop deleted the route between this caller's show and del.
+    _, state, _ = watchdog_stubs(agent, monkeypatch, 200)
+
+    def racing_run(*a, **k):
+        if a[:4] == ("ip", "-6", "route", "del"):
+            state["route"] = False
+            raise agent.CommandFailure("ip -6 failed: RTNETLINK answers: No such process")
+        if a[0] == "wg":
+            return "PEER\t1"
+        return "default dev wg-v6" if a[3] == "show" and state["route"] else ""
+
+    assert agent.v6_watchdog(run=racing_run, now=lambda: 1_000_000) == {"handshake": 999_999, "route": False}
+
+
+def test_watchdog_failure_keeps_key_and_port(agent, monkeypatch, tmp_path):
+    keys = tmp_path / "wg"
+    keys.mkdir()
+    (keys / "v6.key").write_text("PRIVATE\n")
+    monkeypatch.setattr(agent, "VPN_KEYS", keys)
+    monkeypatch.setattr(agent, "write", lambda *a, **k: True)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(agent, "run", lambda *a, **k: "PUBKEY" if a[:2] == ("wg", "pubkey") else "")
+
+    def broken(*a, **k):
+        raise agent.CommandFailure("ip -6 failed: busy")
+
+    monkeypatch.setattr(agent, "v6_watchdog", broken)
+    out = agent.ipv6_apply({"prefix": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
+    assert out["public_key"] == "PUBKEY" and out["port"] == agent.V6_PORT
+    assert out["watchdog_error"].startswith("CommandFailure")

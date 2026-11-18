@@ -978,7 +978,49 @@ def ipv6_apply(v6, addresses):
     run("wg", "syncconf", V6_DEV, path)
     run("ip", "link", "set", V6_DEV, "up")
     run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
-    return {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
+    out = {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
+    # The route above is only kept while the tunnel is alive.
+    # The vip-probe loop runs it too, without the lock: a failure here is
+    # reported beside the key and port, never instead of them.
+    try:
+        watch = v6_watchdog()
+    except Exception as e:  # noqa: BLE001 - reported to the control plane
+        out["watchdog_error"] = f"{type(e).__name__}: {e}"[:300]
+        return out
+    if watch and watch["handshake"] is not None:
+        out["handshake"] = watch["handshake"]
+    return out
+
+
+# A tunnel without a recent handshake black-holes IPv6: withdraw the default
+# route so it fails fast, and restore it when a fresh handshake appears. Run by
+# the reconcile and by the vip-probe loop, the agent's one periodic hook.
+V6_STALE = 180
+
+
+def v6_watchdog(run=run, now=time.time):
+    """Returns None on a node without the tunnel (nothing touched), else
+    {"handshake": age in seconds or None if never, "route": whether it is installed}."""
+    if not Path(f"/sys/class/net/{V6_DEV}").exists():
+        return None
+    stamps = [int(line.split()[1]) for line in run("wg", "show", V6_DEV, "latest-handshakes").splitlines() if len(line.split()) == 2]
+    stamp = max(stamps, default=0)
+    age = max(0, int(now()) - stamp) if stamp else None
+    fresh = age is not None and age <= V6_STALE
+    route = ["-6", "route", "show", "vrf", "vrf_tenants", "default", "dev", V6_DEV]
+    present = bool(run("ip", *route))
+    if fresh and not present:
+        run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
+        present = True
+    elif not fresh and present:
+        try:
+            run("ip", "-6", "route", "del", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
+        except CommandFailure:
+            # The other caller may have withdrawn it first: only a route still there is a failure.
+            if run("ip", *route):
+                raise
+        present = False
+    return {"handshake": age, "route": present}
 
 
 def ipv6_remove():
@@ -1415,6 +1457,7 @@ def vip_probe_once(targets, run=run):
 
 def vip_probe():
     started = Path(__file__).stat().st_mtime
+    ticks = 0
     while True:
         # A deploy replaces this file: run the new code.
         if Path(__file__).stat().st_mtime != started:
@@ -1424,6 +1467,12 @@ def vip_probe():
             vip_probe_once(json.loads(path.read_text()) if path.exists() else [])
         except Exception as e:  # noqa: BLE001 - the loop outlives one bad round
             print(f"vip-probe: {type(e).__name__}", file=sys.stderr)
+        if ticks % 10 == 0:
+            try:
+                v6_watchdog()
+            except Exception as e:  # noqa: BLE001 - the loop outlives one bad round
+                print(f"v6-watchdog: {type(e).__name__}", file=sys.stderr)
+        ticks += 1
         time.sleep(1)
 
 
