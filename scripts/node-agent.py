@@ -988,7 +988,7 @@ def ipv6_remove():
         run("ip", "link", "del", V6_DEV)
     if Path("/etc/carrel/v6.nft").exists():
         # Nothing loads it at boot: after a restart the table is already gone.
-        subprocess.run(["nft", "delete", "table", "inet", "carrel_v6"], capture_output=True)
+        subprocess.run(["nft", "delete", "table", "inet", "carrel_v6"], capture_output=True, check=False)
         Path("/etc/carrel/v6.nft").unlink()
     (VPN_KEYS / f"{V6_DEV}.conf").unlink(missing_ok=True)
 
