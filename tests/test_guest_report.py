@@ -35,6 +35,12 @@ def test_it_keeps_the_file_on_anything_else(tmp_path, bad):
     assert module.PRINCIPALS.read_text() == "alice\n"
 
 
+def test_a_garbled_file_does_not_stop_the_report(tmp_path):
+    module = load(tmp_path)
+    module.PRINCIPALS.write_bytes(b"alice\n\xff\n")
+    assert module.current_principals() is None
+
+
 def test_without_the_ca_files_it_writes_nothing(tmp_path):
     module = load(tmp_path)
     module.PRINCIPALS = tmp_path / "missing" / "user"

@@ -73,6 +73,8 @@ func TestMachineAccessOnAVM(t *testing.T) {
 		r := app.Call(ctx, "machine_access", D{"machine": "box", "grant": []any{bad}}, alice)
 		assertCode(t, r, "invalid")
 	}
+	// The same name in grant and revoke is refused.
+	assertCode(t, app.Call(ctx, "machine_access", D{"machine": "box", "grant": []any{"erin"}, "revoke": []any{"erin"}}, alice), "invalid")
 	// Another tenant cannot touch it.
 	assertCode(t, app.Call(ctx, "machine_access", D{"machine": "box", "grant": []any{"mallory"}}, person("bob", false)), "not_found")
 	// A machine without a puller says so instead of pretending.
@@ -136,8 +138,13 @@ func TestANewMachineRecordsHowItSyncsAccess(t *testing.T) {
 	key := []any{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInlineKeyInTheRequest"}
 	for kind, want := range map[string]string{"vm": "pull", "ct": "push"} {
 		a := e.withCAPrincipal("machine_create", e.withPortalKeys("machine_create", D{"name": "box", "kind": kind, "ssh_keys": key}, alice), alice)
-		if m := e.MachineSpec(tenant, a, false); m["ca_sync"] != want {
+		m := e.MachineSpec(tenant, a, false)
+		if m["ca_sync"] != want {
 			t.Fatalf("%s: %s", kind, encoded(m))
+		}
+		// A new CT has its file from creation: applied, not pending.
+		if kind == "ct" && e.caAccess(m)["applied"] != "applied" {
+			t.Fatalf("new CT: %s", encoded(e.caAccess(m)))
 		}
 	}
 }

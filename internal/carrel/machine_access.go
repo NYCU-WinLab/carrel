@@ -111,6 +111,11 @@ func (e *Execution) MachineAccess(a, w, t D) D {
 	if state := str(m["state"]); state != "ready" {
 		fail("conflict", "The machine is "+state+"; change access once it is ready", D{"recovery": "resolve_prerequisite"})
 	}
+	for _, v := range grant {
+		if contains(revoke, v) {
+			fail("invalid", "A username is in both grant and revoke", D{"recovery": "revise_request", "username": v})
+		}
+	}
 	grants := caGrantsOf(m)
 	has := func(u string) int {
 		for i, g := range grants {
