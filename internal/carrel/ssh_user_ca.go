@@ -30,13 +30,22 @@ func (e *Execution) withCAPrincipal(tool string, a, w D) D {
 	return a
 }
 
-// withSSHUserCA adds the lab CA and the creator's principal to a machine that
-// boots a managed image with SSH. ISO installs and images that serve their
-// own ports have no sshd Carrel configures.
-func (e *Execution) withSSHUserCA(m, a D) D {
+// projectTenant is a project tenant's Keycloak subject; its name is the
+// shape the lab CA allows in a project:<name> principal.
+var projectTenant = regexp.MustCompile(`^winlab-projects/([a-z0-9][a-z0-9-]{0,62})$`)
+
+// withSSHUserCA adds the lab CA and one principal to a machine that boots a
+// managed image with SSH: project:<name> in a project tenant, so every
+// current member of that Keycloak group logs in, else the creator's
+// username. ISO installs and images that serve their own ports have no sshd
+// Carrel configures.
+func (e *Execution) withSSHUserCA(t, m, a D) D {
 	ca, principal := e.P.Config.SSHUserCA, str(a["ca_principal"])
 	if ca == "" || !portalUsername.MatchString(principal) || len(arr(m["service_ports"])) > 0 {
 		return m
+	}
+	if project := projectTenant.FindStringSubmatch(str(t["subject"])); project != nil {
+		principal = "project:" + project[1]
 	}
 	return merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}})
 }

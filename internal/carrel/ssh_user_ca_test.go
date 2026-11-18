@@ -36,6 +36,17 @@ func TestANewMachineTrustsTheLabCAForItsCreator(t *testing.T) {
 	if m := spec(D{"name": "box", "ssh_keys": key, "ca_principal": "root"}); !equal(m["ca_principals"], []any{"alice"}) {
 		t.Fatalf("forged principal: %s", encoded(m["ca_principals"]))
 	}
+	// A project tenant's machine admits the whole project group instead.
+	project := merge(tenant, D{"subject": "winlab-projects/iii-edge-ai"})
+	a := e.withCAPrincipal("machine_create", e.withPortalKeys("machine_create", D{"name": "proj", "ssh_keys": key}, alice), alice)
+	if m := e.MachineSpec(project, a, false); !equal(m["ca_principals"], []any{"project:iii-edge-ai"}) {
+		t.Fatalf("project machine: %s", encoded(m["ca_principals"]))
+	}
+	// A project name the CA would not sign falls back to the creator.
+	odd := merge(tenant, D{"subject": "winlab-projects/Odd_Name"})
+	if m := e.MachineSpec(odd, a, false); !equal(m["ca_principals"], []any{"alice"}) {
+		t.Fatalf("odd project: %s", encoded(m["ca_principals"]))
+	}
 	// Every machine of a deployment gets the creator.
 	d := e.withCAPrincipal("deployment_apply", e.withPortalKeys("deployment_apply", D{"machines": []any{D{"name": "a", "ca_principal": "root"}, D{"name": "b"}}}, alice), alice)
 	for _, m := range dicts(d["machines"]) {

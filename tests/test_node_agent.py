@@ -1938,6 +1938,10 @@ def test_a_vm_without_a_lab_ca_gets_no_ca_files(monkeypatch):
         {"ssh_user_ca": USER_CA, "ca_principals": []},
         {"ssh_user_ca": USER_CA, "ca_principals": ["alice\nroot"]},
         {"ssh_user_ca": USER_CA, "ca_principals": ["../root"]},
+        {"ssh_user_ca": USER_CA, "ca_principals": ["project:"]},
+        {"ssh_user_ca": USER_CA, "ca_principals": ["project:Demo"]},
+        {"ssh_user_ca": USER_CA, "ca_principals": ["project:demo\nroot"]},
+        {"ssh_user_ca": USER_CA, "ca_principals": ["svc:demo"]},
     ],
 )
 def test_ca_files_refuse_anything_but_one_key_and_plain_usernames(bad):
@@ -1952,3 +1956,9 @@ def test_a_ct_gets_the_ca_files_for_root():
         module.ca_files({**MACHINE, "kind": "ct", "ssh_user_ca": USER_CA, "ca_principals": ["alice"]}, "root")
     )
     assert files["/etc/ssh/principals/root"] == "alice\n"
+
+
+def test_a_project_machine_admits_the_project_group():
+    module = load("node-agent.py")
+    files = dict(module.ca_files({**MACHINE, "ssh_user_ca": USER_CA, "ca_principals": ["project:iii-edge-ai"]}, "user"))
+    assert files["/etc/ssh/principals/user"] == "project:iii-edge-ai\n"
