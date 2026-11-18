@@ -105,16 +105,16 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 			w.WriteHeader(405)
 			return
 		}
-		var body D
+		var body, out D
 		err := attempt(func() {
 			must(json.NewDecoder(r.Body).Decode(&body))
 			host, _, _ := net.SplitHostPort(r.RemoteAddr)
-			p.execution(r.Context()).GuestReport(body, host)
+			out = p.execution(r.Context()).GuestReport(body, host)
 		})
 		if err != nil {
 			jsonResponse(w, 403, D{"ok": false})
 		} else {
-			jsonResponse(w, 200, D{"ok": true})
+			jsonResponse(w, 200, merge(out, D{"ok": true}))
 		}
 	})
 	mux.HandleFunc("POST /internal/guest-keys", func(w http.ResponseWriter, r *http.Request) {

@@ -363,7 +363,7 @@ func probeSSH(ctx context.Context, m D) bool {
 	line, _ := bufio.NewReaderSize(conn, 1024).ReadSlice('\n')
 	return strings.HasPrefix(string(line), "SSH-")
 }
-func (e *Execution) GuestReport(body D, source string) {
+func (e *Execution) GuestReport(body D, source string) D {
 	m := e.guestMachine(body, source)
 	init, app := str(body["initialization_status"]), str(body["application_status"])
 	if !contains([]string{"running", "complete", "failed"}, init) || !contains([]string{"pending", "healthy", "failed", "not_checked"}, app) {
@@ -406,8 +406,13 @@ func (e *Execution) GuestReport(body D, source string) {
 			ifs = append(ifs, pick(i, "mac", "ip", "mtu"))
 		}
 	}
-	e.S.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"vmid": m["vmid"], "initialization_status": init, "application_status": app, "checks": safe, "interfaces": ifs, "failed_step": body["failed_step"], "boot_id": body["boot_id"], "reported_at": now()})
+	e.S.Put("guest_reports", m["vmid"], integer(m["tenant_n"]), D{"vmid": m["vmid"], "initialization_status": init, "application_status": app, "checks": safe, "interfaces": ifs, "failed_step": body["failed_step"], "boot_id": body["boot_id"], "reported_at": now(), "principals": guestPrincipals(body["principals"])})
 	e.P.notifyReport(integer(m["vmid"]))
+	// The VM's principals file (machine_access): the reporter writes it.
+	if m["ca_sync"] == "pull" {
+		return D{"principals": caPrincipals(m)}
+	}
+	return D{}
 }
 
 // keepCloudInit stores the files a node reported for a VM, unchanged.

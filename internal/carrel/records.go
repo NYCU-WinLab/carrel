@@ -43,6 +43,7 @@ type guestReport struct {
 	FailedStep           *int     `json:"failed_step"`
 	InitializationStatus string   `json:"initialization_status"`
 	Interfaces           []D      `json:"interfaces"`
+	Principals           []any    `json:"principals,omitempty"`
 	ReportedAt           *float64 `json:"reported_at"`
 	VMID                 int      `json:"vmid"`
 }

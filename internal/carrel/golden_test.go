@@ -388,6 +388,7 @@ func goldenScenario(g *goldenRun) {
 	call("rename", "machine_rename", D{"machine": "box", "name": "crate", "confirm": "box", "dry_run": true}, alice)
 	call("rename", "machine_rename", D{"machine": "box", "name": "crate", "confirm": "box"}, alice)
 	call("rename", "machine_rename", D{"machine": "crate", "name": "box", "confirm": "crate"}, alice)
+	call("access", "machine_access", D{"machine": "box"}, alice)
 
 	call("network", "network_create", D{"name": "lab", "dry_run": true}, alice)
 	call("network", "network_create", D{"name": "lab"}, alice)
