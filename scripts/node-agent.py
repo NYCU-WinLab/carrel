@@ -905,6 +905,20 @@ table bridge carrel_nd {{
 """
 
 
+ND_UNIT = """[Unit]
+Description=Carrel neighbour advertisement filter
+After=network.target
+Before=pve-guests.service
+ConditionPathExists=/etc/carrel/nd.nft
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/carrel/nd.nft
+[Install]
+WantedBy=multi-user.target
+"""
+
+
 def machine_ipv6(m, v6):
     """The machine's IPv6 address when the site has IPv6 and the machine opted in, else None."""
     if not v6 or m.get("ipv6") is not True:
@@ -1293,6 +1307,10 @@ table inet carrel_conntrack {{
         write("/etc/carrel/nd.nft", nd_nft(with_v6))
         run("nft", "-c", "-f", "/etc/carrel/nd.nft")
         run("nft", "-f", "/etc/carrel/nd.nft")
+        # And at boot, before the guests start: their firewall keeps ndp: 1.
+        if write("/etc/systemd/system/carrel-nd.service", ND_UNIT):
+            run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "carrel-nd")
     # Per-guest filtering protects routed and same-node bridged paths. Private
     # experiment NICs deliberately have firewall=0; primary NIC is mandatory.
     # The files are cluster-wide: one node writes them.

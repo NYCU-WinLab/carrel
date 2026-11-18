@@ -357,6 +357,12 @@ WantedBy=multi-user.target
     # a failed load leaves it off.
     forward6 = ("ExecStartPost=/usr/sbin/sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1\n"
                 if layout["ipv6"] else "")
+    # Marks that this installer may have turned IPv6 forwarding on. Written
+    # before the unit that can turn it on, and kept until forwarding is off
+    # again, so an interrupted run or removal is finished by the rerun.
+    forward6_mark = Path("/etc/carrel/ipv6-forwarding")
+    if layout["ipv6"]:
+        mark(forward6_mark)
     Path("/etc/systemd/system/carrel-tenant-host.service").write_text(f"""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
@@ -369,11 +375,7 @@ ExecStart=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
 [Install]
 WantedBy=multi-user.target
 """)
-    # Marks that this installer turned IPv6 forwarding on. It stays until
-    # forwarding is off again, so an interrupted removal is finished by the rerun.
-    forward6_mark = Path("/etc/carrel/ipv6-forwarding")
     if layout["ipv6"]:
-        mark(forward6_mark)
         run("nft", "-c", "-f", "/etc/carrel/tenant-host.nft")
         run("nft", "-f", "/etc/carrel/tenant-host.nft")
         run("sysctl", "-w", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1")
