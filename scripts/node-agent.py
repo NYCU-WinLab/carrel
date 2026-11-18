@@ -883,16 +883,34 @@ def link_local(mac):
 
 
 def nd_nft(machines):
-    """Neighbour advertisements from a guest name only its own addresses.
+    """Neighbour discovery from a guest names only its own addresses.
 
     The IPv6 twin of the ipfilter ARP check: the firewall's ndp option checks
     the source address, not the target, so a guest could otherwise answer for
-    the gateway or a neighbour and take their traffic within its tenant."""
+    the gateway or a neighbour and take their traffic within its tenant.
+
+    A guest may use its global address, its EUI-64 link-local address, or any
+    other link-local address (NetworkManager stable-privacy), but never the
+    EUI-64 link-local address of another machine. nft cannot compare the
+    target of an advertisement with the packet source, so a link-local address
+    outside the EUI-64 set is only bound to the guest's MAC address."""
     rules = []
+    locals6 = sorted(link_local(m["mac"]) for m, _ in machines)
     for m, address6 in machines:
         dev = f"{'tap' if m['kind'] == 'vm' else 'veth'}{machine(m)}i0"
-        rules.append(f'iifname "{dev}" icmpv6 type nd-neighbor-advert icmpv6 taddr {{ {address6}, {link_local(m["mac"])} }} accept')
-        rules.append(f'iifname "{dev}" icmpv6 type nd-neighbor-advert counter drop')
+        own = link_local(m["mac"])
+        mac = m["mac"].lower()
+        others = ", ".join(x for x in locals6 if x != own)
+        pre = f'iifname "{dev}" icmpv6 type'
+        rules.append(f'{pre} nd-neighbor-advert icmpv6 taddr {{ {address6}, {own} }} accept')
+        if others:
+            rules.append(f'{pre} nd-neighbor-advert icmpv6 taddr {{ {others} }} counter drop')
+            rules.append(f'{pre} nd-neighbor-solicit ip6 saddr {{ {others} }} counter drop')
+        rules.append(f'{pre} nd-neighbor-advert ether saddr {mac} ip6 saddr fe80::/64 icmpv6 taddr fe80::/64 accept')
+        rules.append(f'{pre} nd-neighbor-advert counter drop')
+        rules.append(f'{pre} nd-neighbor-solicit ip6 saddr {{ ::, {address6}, {own} }} accept')
+        rules.append(f'{pre} nd-neighbor-solicit ether saddr {mac} ip6 saddr fe80::/64 accept')
+        rules.append(f'{pre} nd-neighbor-solicit counter drop')
     body = "\n".join("  " + r for r in rules)
     return f"""add table bridge carrel_nd
 flush table bridge carrel_nd
