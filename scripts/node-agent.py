@@ -828,7 +828,8 @@ def vpn_apply(tenants):
 V6_DEV = "wg-v6"
 # 31000 itself is no tenant's VPN port (31000 + N, N >= 1); grantable() keeps it.
 V6_PORT = VPN_PORT_BASE
-V6_FWMARK = "0x60"  # install-network.py's PUBLIC_MARK: the tunnel leaves by the public uplink.
+V6_FWMARK = "0x60"
+V6_OWNED = STATE / "ipv6-prefixes.json"  # install-network.py's PUBLIC_MARK: the tunnel leaves by the public uplink.
 
 
 def site_ipv6():
@@ -1122,10 +1123,18 @@ def reconcile(state, first=True):
                 api("create", f"/cluster/sdn/vnets/{vnet}/subnets", subnet=str(net6), type="subnet",
                     gateway=str(net6.network_address + 1), snat=0)
                 changed.append(f"subnet6-{n}")
+    # The prefixes this node has made subnets in (V6_OWNED). Only subnets
+    # inside one of them, and outside the current prefix, are taken away: a
+    # site that never had an ipv6 block deletes nothing.
+    owned = [ipaddress.IPv6Network(p) for p in json.loads(V6_OWNED.read_text())] if V6_OWNED.exists() else []
+    if v6 and ipaddress.IPv6Network(v6["prefix"]) not in owned:
+        owned.append(ipaddress.IPv6Network(v6["prefix"]))
+        write(V6_OWNED, json.dumps([str(p) for p in owned]))
+    stale = [p for p in owned if not (v6 and str(p) == v6["prefix"])]
     for vnet, subnets in subnets_by_vnet.items():
         for x in subnets:
-            # IPv6 subnets this site no longer routes: no ipv6 block, or another prefix.
-            if ":" in str(x.get("cidr", "")) and not (v6 and ipaddress.ip_network(x["cidr"]).subnet_of(ipaddress.IPv6Network(v6["prefix"]))):
+            cidr = str(x.get("cidr", ""))
+            if ":" in cidr and any(ipaddress.IPv6Network(cidr).subnet_of(p) for p in stale):
                 api("delete", f"/cluster/sdn/vnets/{vnet}/subnets/{x['subnet']}")
                 changed.append(f"removed-{x['subnet']}")
     if state.get("fetch"):
@@ -1176,6 +1185,12 @@ def reconcile(state, first=True):
                 raise RuntimeError(
                     "SDN reload left a missing tenant bridge; inspect the node networking task"
                 )
+    if stale:
+        # Deleted and reloaded: forget the old prefixes.
+        if v6:
+            write(V6_OWNED, json.dumps([v6["prefix"]]))
+        else:
+            V6_OWNED.unlink()
     # Only exit nodes have the cross-VRF pair; other nodes route to them over EVPN.
     if state["tenants"] and Path("/sys/class/net/xvrfp_tenants").exists():
         # Route through the cross-VRF pair in both directions. Separate tracking

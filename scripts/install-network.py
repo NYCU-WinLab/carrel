@@ -351,7 +351,13 @@ WantedBy=multi-user.target
             # Only a missing one: deleting a present rule would leave a gap.
             priority = rule.rsplit(" ", 1)[1]
             subprocess.run(["sh", "-c", f"ip rule list priority {priority} | grep -q . || ip rule add {rule}"], check=True)
-    Path("/etc/systemd/system/carrel-tenant-host.service").write_text("""[Unit]
+    # IPv6 forwarding is global in Linux. It is never in sysctl.d, which runs
+    # before any firewall at boot: carrel-tenant-host turns it on only after
+    # carrel_tenant_host, which limits it to the tenant VRF, has loaded, and
+    # a failed load leaves it off.
+    forward6 = ("ExecStartPost=/usr/sbin/sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.default.forwarding=1\n"
+                if layout["ipv6"] else "")
+    Path("/etc/systemd/system/carrel-tenant-host.service").write_text(f"""[Unit]
 Description=Carrel tenant host and underlay protection
 After=network.target
 Before=pve-guests.service
@@ -359,20 +365,25 @@ Before=pve-guests.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
-ExecReload=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
+{forward6}ExecReload=/usr/sbin/nft -f /etc/carrel/tenant-host.nft
 [Install]
 WantedBy=multi-user.target
 """)
-    sysctl = "net.ipv4.ip_forward=1\nnet.ipv4.udp_l3mdev_accept=1\nnet.ipv4.conf.all.rp_filter=0\nnet.ipv4.conf.default.rp_filter=0\n"
-    sysctl_file = Path("/etc/sysctl.d/91-carrel-tenants.conf")
-    had_v6 = sysctl_file.exists() and "net.ipv6.conf.all.forwarding=1" in sysctl_file.read_text()
+    # Marks that this installer turned IPv6 forwarding on. It stays until
+    # forwarding is off again, so an interrupted removal is finished by the rerun.
+    forward6_mark = Path("/etc/carrel/ipv6-forwarding")
     if layout["ipv6"]:
-        # Forwarding is global for IPv6: carrel_tenant_host, which limits it to the
-        # tenant VRF, is loaded first, so no other interface is ever routed.
-        sysctl += "net.ipv6.conf.all.forwarding=1\nnet.ipv6.conf.default.forwarding=1\n"
+        mark(forward6_mark)
         run("nft", "-c", "-f", "/etc/carrel/tenant-host.nft")
         run("nft", "-f", "/etc/carrel/tenant-host.nft")
-    sysctl_file.write_text(sysctl)
+        run("sysctl", "-w", "net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.default.forwarding=1")
+    elif forward6_mark.exists():
+        # The site dropped its ipv6 block: forwarding off before the IPv6 rules go.
+        run("sysctl", "-w", "net.ipv6.conf.all.forwarding=0", "net.ipv6.conf.default.forwarding=0")
+        forward6_mark.unlink()
+    Path("/etc/sysctl.d/91-carrel-tenants.conf").write_text(
+        "net.ipv4.ip_forward=1\nnet.ipv4.udp_l3mdev_accept=1\nnet.ipv4.conf.all.rp_filter=0\nnet.ipv4.conf.default.rp_filter=0\n"
+    )
     Path("/etc/network/if-up.d/carrel-vrf").write_text(
         '#!/bin/sh\n[ "$IFACE" = xvrfp_tenants ] || exit 0\nip route replace vrf vrf_tenants default via 10.255.255.1 dev xvrfp_tenants\n'
     )
@@ -390,9 +401,6 @@ ExecStart=/usr/sbin/nft -f /etc/carrel/conntrack.nft
 WantedBy=multi-user.target
 """)
     run("sysctl", "-p", "/etc/sysctl.d/91-carrel-tenants.conf")
-    if had_v6 and not layout["ipv6"]:
-        # The site dropped its ipv6 block: the file no longer sets it, so undo it now.
-        run("sysctl", "-w", "net.ipv6.conf.all.forwarding=0", "net.ipv6.conf.default.forwarding=0")
     firewall = Path("/etc/pve/firewall/cluster.fw")
     if not firewall.exists():
         firewall.write_text("[OPTIONS]\nenable: 1\npolicy_in: ACCEPT\npolicy_out: ACCEPT\n")
