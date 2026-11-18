@@ -75,3 +75,27 @@ func (e *Execution) machineIPv6(m D) D {
 	return D{"address": addr.String(), "prefix_length": 64, "gateway": gw.String(), "inbound_from_internet": inbound,
 		"note": "Routed, not translated. Other tenants cannot reach this address."}
 }
+
+// recordIPv6 keeps the site tunnel's latest report from a reconcile: the
+// exit node's public key and port, or the error it returned. A node that
+// reports nothing (no ipv6 block, or an older agent) clears it.
+func (e *Execution) recordIPv6(node any) {
+	report := obj(obj(node)["ipv6"])
+	switch {
+	case report["public_key"] != nil:
+		e.S.SitePut("ipv6", "tunnel", D{"public_key": str(report["public_key"]), "port": integer(report["port"])})
+	case report["error"] != nil:
+		e.S.SitePut("ipv6", "tunnel", D{"error": str(report["error"])})
+	default:
+		e.S.SiteRemove("ipv6", "tunnel")
+	}
+}
+
+// ipv6Status is the tunnel as the site status shows it, or nil when the
+// site has no IPv6 or nothing has been reported.
+func (e *Execution) ipv6Status() D {
+	if e.P.Config.IPv6Prefix == "" {
+		return nil
+	}
+	return e.S.SiteGet("ipv6", "tunnel")
+}

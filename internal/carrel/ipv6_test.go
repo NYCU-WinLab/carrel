@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"context"
 	"net/netip"
 	"testing"
 )
@@ -33,5 +34,34 @@ func TestConfigRejectsABadIPv6Prefix(t *testing.T) {
 	c := Config{PublicAddress: "140.113.60.184", Origin: "https://carrel.example", Database: "x", Nodes: []NodeConfig{{Name: "n1"}}, IPv6Prefix: "fd00::/48"}
 	if err := c.Validate(); err == nil {
 		t.Fatal("private prefix accepted")
+	}
+}
+
+func TestStatusShowsTheIPv6TunnelFromReconcile(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.IPv6Prefix = "2a14:7581:880::/48"
+	var node D
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "reconcile" {
+			return node, nil
+		}
+		return D{}, nil
+	}
+	status := func() D {
+		e := p.execution(context.Background())
+		e.Reconcile()
+		return e.PublicStatus()
+	}
+	node = D{"ipv6": D{"public_key": "pub=", "port": 51821}}
+	if v6 := obj(status()["ipv6"]); v6["public_key"] != "pub=" || integer(v6["port"]) != 51821 {
+		t.Fatalf("key and port: %s", encoded(v6))
+	}
+	node = D{"ipv6": D{"error": "CommandFailure: wg missing"}}
+	if v6 := obj(status()["ipv6"]); v6["error"] != "CommandFailure: wg missing" || v6["public_key"] != nil {
+		t.Fatalf("error: %s", encoded(v6))
+	}
+	node = D{"changed": []any{}}
+	if s := status(); s["ipv6"] != nil {
+		t.Fatalf("no ipv6 must show nothing: %s", encoded(s))
 	}
 }
