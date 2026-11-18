@@ -978,7 +978,8 @@ def ipv6_apply(v6, addresses):
     run("wg", "syncconf", V6_DEV, path)
     run("ip", "link", "set", V6_DEV, "up")
     run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
-    return {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
+    # The prefix lets the control plane check it against its own ipv6_prefix.
+    return {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT, "prefix": str(ipaddress.IPv6Network(v6["prefix"]))}
 
 
 def ipv6_remove():

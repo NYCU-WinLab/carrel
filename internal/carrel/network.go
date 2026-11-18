@@ -417,7 +417,7 @@ func (e *Execution) Reconcile() D {
 	}
 	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants", "delegated_names")}
 	nodes := e.P.Nodes()
-	result := D{"node": e.Call(request, nodes[0].Target)}
+	result := D{"node": checkIPv6Prefix(e.P.Config.IPv6Prefix, e.Call(request, nodes[0].Target))}
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.
 	var held map[string]any
