@@ -1197,6 +1197,24 @@ def keys(values):
     return "\n".join(values) + "\n"
 
 
+def ca_files(m, user):
+    """The lab SSH user CA files for a new guest: the CA key, an sshd drop-in
+    and the login user's principals file. Empty when Carrel has no CA set."""
+    ca, principals = m.get("ssh_user_ca"), m.get("ca_principals") or []
+    if not ca:
+        return []
+    if not re.fullmatch(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}", ca):
+        raise ValueError("invalid SSH user CA")
+    if not principals or any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", str(p)) for p in principals):
+        raise ValueError("invalid certificate principal")
+    return [
+        ("/etc/ssh/ssh_user_ca.pub", ca + "\n"),
+        ("/etc/ssh/sshd_config.d/50-carrel-user-ca.conf",
+         "TrustedUserCAKeys /etc/ssh/ssh_user_ca.pub\nAuthorizedPrincipalsFile /etc/ssh/principals/%u\n"),
+        ("/etc/ssh/principals/" + user, "".join(str(p) + "\n" for p in principals)),
+    ]
+
+
 def cloud_init(m, *, prepared=False, environment="development"):
     name = f"carrel-{m['vmid']}-user.json"
     if m.get("service_ports"):
@@ -1231,6 +1249,8 @@ def cloud_init(m, *, prepared=False, environment="development"):
         "write_files": [
             {"path": "/etc/qemu/qemu-ga.conf", "content": "[general]\nblock-rpcs=" + blocked + "\n"},
             {"path": "/etc/sysctl.d/90-carrel.conf", "content": "vm.swappiness=10\n"},
+            # Written before sshd first starts, so the first login can use a certificate.
+            *({"path": path, "content": content, "permissions": "0644"} for path, content in ca_files(m, "user")),
         ],
         "runcmd": [
             ["systemctl", "enable", "--now", "qemu-guest-agent", "fstrim.timer"],
@@ -2002,6 +2022,15 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
         if command := mirror_command(m["image"]):
             run("pct", "exec", vmid, "--", "sh", "-c", command)
+        if files := ca_files(m, "root"):
+            run("pct", "exec", vmid, "--", "mkdir", "-p", "/etc/ssh/principals", "/etc/ssh/sshd_config.d")
+            for i, (path, content) in enumerate(files):
+                staged = STATE / f"{vmid}-ca-{i}"
+                write(staged, content)
+                run("pct", "push", vmid, staged, path, "--perms", "0644")
+                staged.unlink(missing_ok=True)
+            run("pct", "exec", vmid, "--", "sshd", "-t")
+            run("pct", "exec", vmid, "--", "systemctl", "try-reload-or-restart", "ssh.service")
     write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
     keyfile.unlink(missing_ok=True)
     return {"state": "running", "vmid": vmid, **cloud_init_files(m)}

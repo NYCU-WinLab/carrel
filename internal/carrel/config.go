@@ -41,6 +41,11 @@ type Config struct {
 	PortalKeysURL       string `json:"portal_keys_url,omitempty"`
 	PortalKeysTokenFile string `json:"portal_keys_token_file,omitempty"`
 
+	// SSHUserCA is the lab SSH user CA public key, one authorized_keys line
+	// (ca.winlab.tw). Set: every new VM and CT also trusts certificates it
+	// signs for the creator's Keycloak username. Empty: keys only.
+	SSHUserCA string `json:"ssh_user_ca,omitempty"`
+
 	// TelemetryURL is an OTLP/HTTP collector, e.g. https://sensorium.zyx.tw:
 	// WARN and ERROR log records and each node's capacity go to its
 	// /v1/logs and /v1/metrics. TelemetryTokenFile holds the bearer token.
@@ -177,6 +182,9 @@ func (c Config) Validate() error {
 		if c.PortalKeysTokenFile == "" {
 			return errors.New("portal_keys_url needs portal_keys_token_file")
 		}
+	}
+	if c.SSHUserCA != "" && !sshUserCA.MatchString(c.SSHUserCA) {
+		return errors.New("ssh_user_ca must be one SSH public key: type and base64, no comment")
 	}
 	if c.TelemetryURL != "" {
 		// https only: every request carries the write token.
