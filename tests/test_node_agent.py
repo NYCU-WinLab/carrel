@@ -1973,7 +1973,9 @@ def test_a_ct_takes_principals_only_as_a_clean_list(monkeypatch):
     monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a) or "status: running")
     monkeypatch.setattr(module, "write", lambda *a, **kw: None)
     ct = {**MACHINE, "kind": "ct"}
-    assert module.action({"machine": ct, "action": "principals", "principals": ["alice", "bob"]}) == {"state": "applied"}
+    assert module.action({"machine": ct, "action": "principals", "principals": ["alice", "bob"]}) == {
+        "state": "applied"
+    }
     assert any(c[:2] == ("pct", "push") and c[-3] == "/etc/ssh/principals/root" for c in calls)
     for bad in ([], ["alice\nroot"], ["svc:x"], "alice", ["a"] * 52):
         with pytest.raises(ValueError):

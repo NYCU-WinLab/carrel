@@ -152,3 +152,58 @@ func TestGuestPrincipalsAreChecked(t *testing.T) {
 		t.Fatal("refused a good list")
 	}
 }
+
+func TestARevokeIsNotAppliedByAnOlderReport(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, nil)
+	ctx := context.Background()
+	alice := person("alice", false)
+	m := caMachine(p, "box", 10100, "vm", "pull")
+	e := p.execution(ctx)
+	report := D{"vmid": 10100, "token": "test-token", "boot_id": "00000000-0000-0000-0000-000000000001", "initialization_status": "complete", "application_status": "not_checked", "principals": []any{"alice"}}
+	// The VM reports [alice]; bob is granted and revoked before it reports again.
+	e.GuestReport(report, str(m["ip"]))
+	accessOf(t, app.Call(ctx, "machine_access", D{"machine": "box", "grant": []any{"bob"}}, alice))
+	a := accessOf(t, app.Call(ctx, "machine_access", D{"machine": "box", "revoke": []any{"bob"}}, alice))
+	if a["applied"] != "pending" {
+		t.Fatalf("an older report counted: %s", encoded(a))
+	}
+	// A report after the change does.
+	e.GuestReport(report, str(m["ip"]))
+	if a := accessOf(t, app.Call(ctx, "machine_access", D{"machine": "box"}, alice)); a["applied"] != "applied" {
+		t.Fatalf("fresh report: %s", encoded(a))
+	}
+}
+
+func TestARolledBackCTGetsTheCurrentListAgain(t *testing.T) {
+	p, b := fixture(t)
+	ctx := context.Background()
+	e := p.execution(ctx)
+	m := caMachine(p, "ct", 10100, "ct", "push")
+	m["ca_grants"] = []any{D{"username": "carol", "by": "alice", "at": 1.0}}
+	m["ca_applied"] = []any{"alice", "carol"}
+	pushes := 0
+	b.call = func(r D, _ string) (any, error) {
+		if r["action"] == "principals" {
+			pushes++
+			return D{"state": "applied"}, nil
+		}
+		return D{"status": "running"}, nil
+	}
+	// Rolled back and running: pushed again.
+	e.caRestored(m, true)
+	if pushes != 1 || !equal(m["ca_applied"], []any{"alice", "carol"}) {
+		t.Fatalf("running: %d %s", pushes, encoded(m["ca_applied"]))
+	}
+	// Rolled back and stopped: pending until it starts.
+	e.caRestored(m, false)
+	if pushes != 1 || m["ca_applied"] != nil || e.caAccess(m)["applied"] != "pending" {
+		t.Fatalf("stopped: %d %s", pushes, encoded(m))
+	}
+	// The node refusing leaves it pending.
+	b.call = func(r D, _ string) (any, error) { return nil, errors.New("no") }
+	e.caRestored(m, true)
+	if m["ca_applied"] != nil {
+		t.Fatalf("refused push counted: %s", encoded(m["ca_applied"]))
+	}
+}

@@ -65,7 +65,10 @@ func (e *Execution) caAccess(m D) D {
 	want := caPrincipals(m)
 	switch str(m["ca_sync"]) {
 	case "pull":
-		if equal(e.S.guestReport(m["vmid"]).Principals, want) {
+		// Only a report made after the last change counts: an older one may
+		// show a list the VM has since replaced.
+		r := e.S.guestReport(m["vmid"])
+		if equal(r.Principals, want) && r.ReportedAt != nil && *r.ReportedAt > num(m["ca_changed_at"]) {
 			out["applied"] = "applied"
 		} else {
 			out["applied"] = "pending"
@@ -157,7 +160,7 @@ func (e *Execution) MachineAccess(a, w, t D) D {
 		if cur["vmid"] != m["vmid"] || !equal(cur["ca_grants"], m["ca_grants"]) {
 			fail("conflict", "Access to this machine changed meanwhile; try again", D{"recovery": "retry"})
 		}
-		cur["ca_grants"], cur["ca_applied"] = planned["ca_grants"], planned["ca_applied"]
+		cur["ca_grants"], cur["ca_applied"], cur["ca_changed_at"] = planned["ca_grants"], planned["ca_applied"], now()
 		tx.S.Put("machines", cur["vmid"], n, cur)
 		m = cur
 	})
@@ -167,6 +170,32 @@ func (e *Execution) MachineAccess(a, w, t D) D {
 	}
 	e.S.Log(by, n, "machine_access", D{"vmid": m["vmid"], "grant": grant, "revoke": revoke, "grants": names}, "ok")
 	return D{"machine": m["name"], "access": e.caAccess(m), "dry_run": false}
+}
+
+// caRestored is called when a machine's disk may hold an older principals
+// file (snapshot rollback, start): a VM's next report must show the current
+// list again, and a running CT gets it pushed now. A CT that cannot take it
+// stays pending.
+func (e *Execution) caRestored(m D, running bool) {
+	if m["ca_sync"] == nil {
+		return
+	}
+	m["ca_changed_at"] = now()
+	if m["ca_sync"] != "push" {
+		return
+	}
+	want := caPrincipals(m)
+	m["ca_applied"] = nil
+	if !running {
+		return
+	}
+	if attempt(func() {
+		if str(obj(e.Call(D{"op": "action", "machine": m, "action": "principals", "principals": want}))["state"]) == "applied" {
+			m["ca_applied"] = want
+		}
+	}) != nil {
+		e.S.Log("system", integer(m["tenant_n"]), "machine_access_restore_failed", D{"vmid": m["vmid"]}, "failed")
+	}
 }
 
 // guestPrincipals checks the principals a guest says its file holds.

@@ -112,6 +112,8 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 				m["state"] = "stopped"
 			}
 			m["power_state"] = state
+			// The disk may hold an older principals file (machine_access).
+			e.caRestored(m, state == "running")
 			e.Put("machines", m["vmid"], n, m)
 			effects = D{"power_state": state, "power_state_restored": true}
 		}
