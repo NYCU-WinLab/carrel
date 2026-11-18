@@ -1,0 +1,22 @@
+# Managed by carrel install-network.py: the site's public address (PLAN 15.15).
+auto vmbr0.60
+iface vmbr0.60 inet static
+    address 140.113.60.184/27
+    pre-up nft list table inet carrel_public > /dev/null
+    post-up echo 1 > /proc/sys/net/ipv6/conf/vmbr0.60/disable_ipv6
+    post-up ip route replace 140.113.60.160/27 dev vmbr0.60 table 160
+    post-up ip route replace default via 140.113.60.190 dev vmbr0.60 table 160
+    post-up ip rule del from 140.113.60.184 to 10.200.0.0/16 lookup main priority 1599 2>/dev/null; ip rule add from 140.113.60.184 to 10.200.0.0/16 lookup main priority 1599
+    post-up ip rule del fwmark 0x60 lookup 160 priority 1600 2>/dev/null; ip rule add fwmark 0x60 lookup 160 priority 1600
+    post-up ip rule del from 140.113.60.184 lookup 160 priority 1601 2>/dev/null; ip rule add from 140.113.60.184 lookup 160 priority 1601
+    post-up ip rule del iif xvrf_tenants lookup local priority 1602 2>/dev/null; ip rule add iif xvrf_tenants lookup local priority 1602
+    post-up ip rule del iif xvrf_tenants to 10.200.0.0/16 lookup main priority 1603 2>/dev/null; ip rule add iif xvrf_tenants to 10.200.0.0/16 lookup main priority 1603
+    post-up ip rule del iif xvrf_tenants lookup 160 priority 1604 2>/dev/null; ip rule add iif xvrf_tenants lookup 160 priority 1604
+    post-up ip rule del from 10.200.0.4 ipproto tcp sport 22 lookup 160 priority 1605 2>/dev/null; ip rule add from 10.200.0.4 ipproto tcp sport 22 lookup 160 priority 1605
+    pre-down ip rule del from 140.113.60.184 to 10.200.0.0/16 lookup main priority 1599 2>/dev/null || true
+    pre-down ip rule del fwmark 0x60 lookup 160 priority 1600 2>/dev/null || true
+    pre-down ip rule del from 140.113.60.184 lookup 160 priority 1601 2>/dev/null || true
+    pre-down ip rule del iif xvrf_tenants lookup local priority 1602 2>/dev/null || true
+    pre-down ip rule del iif xvrf_tenants to 10.200.0.0/16 lookup main priority 1603 2>/dev/null || true
+    pre-down ip rule del iif xvrf_tenants lookup 160 priority 1604 2>/dev/null || true
+    pre-down ip rule del from 10.200.0.4 ipproto tcp sport 22 lookup 160 priority 1605 2>/dev/null || true

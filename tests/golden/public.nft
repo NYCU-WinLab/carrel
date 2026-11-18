@@ -1,0 +1,28 @@
+add table inet carrel_public
+flush table inet carrel_public
+table inet carrel_public {
+ chain prerouting {
+  type filter hook prerouting priority mangle; policy accept;
+  iifname "vmbr0.60" ct state new ct mark set 0x60
+  ct mark 0x60 ct direction reply meta mark set 0x60
+ }
+ chain input {
+  type filter hook input priority -30; policy accept;
+  iifname "vmbr0.60" ct state established,related accept
+  iifname "vmbr0.60" meta nfproto ipv4 icmp type echo-request limit rate 10/second accept
+  # The tenants' client VPN endpoints (PLAN 6.11): WireGuard on 31000 + N.
+  iifname "vmbr0.60" udp dport 31001-31254 accept
+  iifname "vmbr0.60" counter drop
+ }
+ chain forward {
+  type filter hook forward priority -30; policy accept;
+  iifname "vmbr0.60" ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } counter drop
+  iifname "vmbr0.60" ct state established,related accept
+  iifname "vmbr0.60" ct status dnat accept
+  iifname "vmbr0.60" counter drop
+ }
+ chain postrouting {
+  type nat hook postrouting priority srcnat; policy accept;
+  oifname "vmbr0.60" ip saddr 10.200.0.0/16 snat to 140.113.60.184
+ }
+}
