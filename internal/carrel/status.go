@@ -49,7 +49,7 @@ func (e *Execution) PublicStatus() D {
 		}
 		return str(tenants[i]["name"]) < str(tenants[j]["name"])
 	})
-	return D{
+	out := D{
 		"checked_at": c["checked_at"],
 		"node": D{
 			"cpu":        D{"logical_cpus": cpu["logical_cpus"], "utilization": cpu["utilization"]},
@@ -61,6 +61,10 @@ func (e *Execution) PublicStatus() D {
 		"tenants":   tenants,
 		"others":    others,
 	}
+	if v6 := e.ipv6Status(); v6 != nil {
+		out["ipv6"] = v6
+	}
+	return out
 }
 
 // budget is the part of a quota the status page shows.
