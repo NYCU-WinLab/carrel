@@ -1205,7 +1205,7 @@ def ca_files(m, user):
         return []
     if not re.fullmatch(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}", ca):
         raise ValueError("invalid SSH user CA")
-    if not principals or any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", str(p)) for p in principals):
+    if not principals or any(not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}", str(p)) for p in principals):
         raise ValueError("invalid certificate principal")
     return [
         ("/etc/ssh/ssh_user_ca.pub", ca + "\n"),

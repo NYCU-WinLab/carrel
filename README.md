@@ -604,7 +604,10 @@ lab CA (`https://ca.winlab.tw`) for its creator:
 
 The value is one public key with no comment (`public/ssh_user_ca.pub` in `NYCU-WinLab/pki`).
 carrel takes the caller's Keycloak `preferred_username` when the call arrives; a caller cannot
-name another. A VM gets `/etc/ssh/ssh_user_ca.pub`, `/etc/ssh/sshd_config.d/50-carrel-user-ca.conf`
+name another. In a project tenant (`winlab-projects/<name>`) the principal is `project:<name>`
+instead, so every current member of that Keycloak group logs in: the portal puts
+`project:<name>` in a member's certificate for each such group. Someone who leaves the group keeps
+access until their certificate expires (at most 24 hours). A VM gets `/etc/ssh/ssh_user_ca.pub`, `/etc/ssh/sshd_config.d/50-carrel-user-ca.conf`
 (`TrustedUserCAKeys` and `AuthorizedPrincipalsFile /etc/ssh/principals/%u`) and
 `/etc/ssh/principals/user` through cloud-init, before sshd first starts; a CT gets the same files
 for `root` at creation. ISO installs and images that serve their own ports get nothing. Existing

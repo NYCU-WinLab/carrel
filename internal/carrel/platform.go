@@ -438,7 +438,7 @@ func (e *Execution) MachineSpec(t, a D, dry bool) D {
 	} else if a["user_data"] != nil {
 		fail("invalid", "user_data applies only to an image imported with ports", D{"recovery": "revise_request"})
 	}
-	m = e.withSSHUserCA(m, a)
+	m = e.withSSHUserCA(t, m, a)
 	return m
 }
 func machineDelta(m D) D {
