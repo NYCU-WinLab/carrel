@@ -1960,5 +1960,7 @@ def test_a_ct_gets_the_ca_files_for_root():
 
 def test_a_project_machine_admits_the_project_group():
     module = load("node-agent.py")
-    files = dict(module.ca_files({**MACHINE, "ssh_user_ca": USER_CA, "ca_principals": ["project:iii-edge-ai"]}, "user"))
+    files = dict(
+        module.ca_files({**MACHINE, "ssh_user_ca": USER_CA, "ca_principals": ["project:iii-edge-ai"]}, "user")
+    )
     assert files["/etc/ssh/principals/user"] == "project:iii-edge-ai\n"
