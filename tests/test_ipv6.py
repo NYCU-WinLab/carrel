@@ -148,7 +148,7 @@ def test_other_tenants_and_public_ssh(agent):
     assert "IN ACCEPT -source ::/0 -p tcp -dport 22" not in no_ssh
 
 
-def test_neighbour_advertisements_name_only_own_addresses(agent):
+def test_neighbour_discovery_names_only_own_addresses(agent):
     assert agent.link_local("02:ca:11:00:00:0b") == "fe80::ca:11ff:fe00:b"
     nft = agent.nd_nft(
         [
@@ -157,10 +157,34 @@ def test_neighbour_advertisements_name_only_own_addresses(agent):
         ]
     )
     lines = [x.strip() for x in nft.splitlines()]
-    assert (
-        'iifname "tap11710i0" icmpv6 type nd-neighbor-advert icmpv6 taddr { 2a14:7581:880:17::11, fe80::ca:11ff:fe00:b } accept'
-        in lines
-    )
-    assert lines.index('iifname "tap11710i0" icmpv6 type nd-neighbor-advert counter drop') > 0
+    tap = 'iifname "tap11710i0" icmpv6 type '
+    own_na = tap + "nd-neighbor-advert icmpv6 taddr { 2a14:7581:880:17::11, fe80::ca:11ff:fe00:b } accept"
+    assert own_na in lines
+    # Another machine's global address is never in the accept list, so it falls to the drop.
+    assert "2a14:7581:880:17::12" not in own_na
+    assert lines.index(tap + "nd-neighbor-advert counter drop") > lines.index(own_na)
     assert 'iifname "veth11711i0" icmpv6 type nd-neighbor-advert counter drop' in lines
     assert "nd-neighbor-advert" not in agent.nd_nft([])
+
+
+def test_non_eui64_link_local_advertisement_is_accepted(agent):
+    nft = agent.nd_nft([(machine(ipv6=True), "2a14:7581:880:17::11")])
+    lines = [x.strip() for x in nft.splitlines()]
+    mac = machine(ipv6=True)["mac"].lower()
+    accept = f'iifname "tap11710i0" icmpv6 type nd-neighbor-advert ether saddr {mac} ip6 saddr fe80::/64 icmpv6 taddr fe80::/64 accept'
+    assert accept in lines
+    assert lines.index(accept) < lines.index('iifname "tap11710i0" icmpv6 type nd-neighbor-advert counter drop')
+
+
+def test_peer_link_local_cannot_be_advertised_or_used_as_solicit_source(agent):
+    peer = machine(kind="ct", vmid=11711, mac="02:ca:11:00:00:0c")
+    nft = agent.nd_nft([(machine(ipv6=True), "2a14:7581:880:17::11"), (peer, "2a14:7581:880:17::12")])
+    lines = [x.strip() for x in nft.splitlines()]
+    peer_ll = agent.link_local(peer["mac"])
+    tap = 'iifname "tap11710i0" icmpv6 type '
+    na_drop = tap + f"nd-neighbor-advert icmpv6 taddr {{ {peer_ll} }} counter drop"
+    ns_drop = tap + f"nd-neighbor-solicit ip6 saddr {{ {peer_ll} }} counter drop"
+    assert na_drop in lines and ns_drop in lines
+    assert lines.index(ns_drop) < lines.index(tap + "nd-neighbor-solicit ether saddr " + machine(ipv6=True)["mac"].lower() + " ip6 saddr fe80::/64 accept")
+    assert lines.index(na_drop) < lines.index([x for x in lines if x.startswith(tap + "nd-neighbor-advert ether saddr")][0])
+    assert tap + "nd-neighbor-solicit counter drop" in lines
