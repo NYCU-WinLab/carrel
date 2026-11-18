@@ -59,7 +59,8 @@ func TestMachineAccessOnAVM(t *testing.T) {
 		t.Fatalf("after revoke: %s", encoded(got))
 	}
 	// The creator's own principal cannot be revoked or doubled.
-	a = accessOf(t, app.Call(ctx, "machine_access", D{"machine": "box", "grant": []any{"alice"}, "revoke": []any{"alice"}}, alice))
+	accessOf(t, app.Call(ctx, "machine_access", D{"machine": "box", "grant": []any{"alice"}}, alice))
+	a = accessOf(t, app.Call(ctx, "machine_access", D{"machine": "box", "revoke": []any{"alice"}}, alice))
 	if a["principal"] != "alice" || len(dicts(a["grants"])) != 1 {
 		t.Fatalf("own principal: %s", encoded(a))
 	}
