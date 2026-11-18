@@ -2030,7 +2030,8 @@ def create(m):
                 run("pct", "push", vmid, staged, path, "--perms", "0644")
                 staged.unlink(missing_ok=True)
             run("pct", "exec", vmid, "--", "sshd", "-t")
-            run("pct", "exec", vmid, "--", "systemctl", "try-reload-or-restart", "ssh.service")
+            # Restart, not reload: ssh.socket holds port 22, and a reloaded sshd binds it itself.
+            run("pct", "exec", vmid, "--", "systemctl", "try-restart", "ssh.service")
     write(manifest, json.dumps({**saved, "marker": marker, "complete": True}), 0o600)
     keyfile.unlink(missing_ok=True)
     return {"state": "running", "vmid": vmid, **cloud_init_files(m)}
