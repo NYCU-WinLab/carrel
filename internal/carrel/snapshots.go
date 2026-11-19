@@ -27,6 +27,20 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 		}
 	}
 	var delta D
+	unlock := func() {}
+	if tool == "snapshot_create" && !dry {
+		// Admission and the creating record are one step, so a concurrent
+		// request sees this snapshot in the headroom.
+		e.P.snapshotting.Lock()
+		unlocked := false
+		unlock = func() {
+			if !unlocked {
+				unlocked = true
+				e.P.snapshotting.Unlock()
+			}
+		}
+		defer unlock()
+	}
 	// iso_volume: a rollback brings PVE's ide2 back, so the record must match.
 	configuration := pick(m, "cpu", "memory_mb", "disk_gb", "nics", "iso_volume")
 	if tool == "snapshot_create" {
@@ -92,6 +106,7 @@ func (e *Execution) SnapshotAction(tool string, a, t D) D {
 			snap.State = "creating"
 			e.Put("snapshots", id, n, snap)
 		}
+		unlock()
 		if tool == "snapshot_rollback" && m["ca_sync"] != nil {
 			// Saved before the disk goes back: if a later step fails, the
 			// older principals file it may hold is shown as pending.
