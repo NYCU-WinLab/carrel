@@ -3,7 +3,7 @@
 
 Runs in CT 102 for the control plane's key (configure-nodes.py installs it). One
 JSON request on stdin: {"op": "sync", "authorized": text}, {"op": "certs",
-"certs": {"ca": key, "principals": {name: [address:22, ...]}}} or
+"certs": {"ca": key, "principals": {name: [address:22, ...]}} or null} or
 {"op": "status"}. Every line must forward only to tenant machines: port 22
 (issue #98), or a port a machine without SSH declares (issue #94), which its
 firewall admits. The certificate map lets jump-cert.py forward a lab
@@ -14,6 +14,7 @@ its principals.
 import fcntl
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -78,13 +79,21 @@ def main():
     if op == "status" and not request:
         return {"sha256": hashlib.sha256(KEYS.read_bytes()).hexdigest() if KEYS.exists() else None}
     if op == "certs" and set(request) == {"certs"}:
-        text = check_certs(request["certs"])
+        # null: the site has no CA any more, so no certificate passes.
+        text = None if request["certs"] is None else check_certs(request["certs"])
         with open(STATE / "lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
+            if text is None:
+                changed = CERTS.exists()
+                CERTS.unlink(missing_ok=True)
+                return {"changed": changed, "principals": 0}
             CERTS.parent.mkdir(mode=0o755, exist_ok=True)
             changed = not CERTS.exists() or CERTS.read_text() != text
             if changed:
                 write(CERTS, text)
+            else:
+                # The age is the proof a control plane still keeps the map.
+                os.utime(CERTS)
         return {"changed": changed, "sha256": hashlib.sha256(text.encode()).hexdigest(), "principals": len(request["certs"]["principals"])}
     if op != "sync" or set(request) != {"authorized"}:
         raise ValueError("unknown operation")

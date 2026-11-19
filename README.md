@@ -631,7 +631,7 @@ reconcile and right after `machine_access`. sshd runs `scripts/jump-cert.py` as 
 any of the certificate's principals opens. One line, because sshd uses only the first line that
 matches. sshd still checks the signature, the validity period and the principal itself.
 `configure-nodes.py` installs the script and its sshd file; a jump host without them keeps taking
-keys, and the reconcile reports `keys_only`.
+keys, and the reconcile reports `keys_only`. Without a CA the map goes as null and the jump host drops it; a map no control plane has refreshed for 30 minutes (Carrel rolled back or stopped) admits no certificate.
 
 ### Telemetry
 

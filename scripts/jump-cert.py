@@ -8,16 +8,22 @@ that open a machine, and permitopen for port 22 of every machine that one of
 them opens, from the map jump-sync.py keeps (Carrel sends it). One line for
 all of them, because sshd uses only the first line that matches. sshd itself
 still checks the signature, the validity period and that a principal matches;
-this only reads the principals to choose the targets. Anything else prints
-nothing, and sshd goes on to the keys file.
+this only reads the principals to choose the targets. A map older than
+MAX_AGE admits nothing: every reconcile (5 minutes) rewrites or touches it, so
+an old one means no control plane keeps it current (Carrel rolled back to a
+version without certificates, or stopped), and revocations would not reach
+it. Anything else prints nothing, and sshd goes on to the keys file.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 
 CERTS = "/etc/carrel-jump/certs.json"
+MAX_AGE = 30 * 60
 TYPE = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa)-cert-v01@openssh\.com", re.ASCII)
 BLOB = re.compile(r"[A-Za-z0-9+/]{1,16384}={0,2}", re.ASCII)
 CA = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}", re.ASCII)
@@ -46,6 +52,8 @@ def line(user, key_type, blob):
     if user != "jump" or not TYPE.fullmatch(key_type) or not BLOB.fullmatch(blob):
         return None
     try:
+        if time.time() - os.stat(CERTS).st_mtime > MAX_AGE:
+            return None
         with open(CERTS) as f:
             certs = json.load(f)
     except (OSError, ValueError):

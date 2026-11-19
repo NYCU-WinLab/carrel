@@ -84,7 +84,8 @@ const maxSavedKeys = 50
 // or project:<name>, then the machine_access grants. On the jump host,
 // jump-cert.py joins the addresses of all the principals in one certificate
 // into a single line, because sshd uses only the first line that matches.
-// Only machines that trust the site's CA and serve SSH count.
+// Only machines that trust the site's CA and serve SSH count. Without a CA it
+// is nil, which tells the jump host to drop its map.
 func jumpCertificates(s *Store, ca string) D {
 	if ca == "" {
 		return nil
@@ -132,15 +133,14 @@ func (e *Execution) syncJumpNow() {
 
 // SyncJump sends the jump host its keys, then the certificate map in a
 // separate request, so a jump host that predates certificates still takes
-// keys. A jump host that cannot be reached costs members only that path, so
-// it does not fail the reconcile.
+// keys. The map goes every time, nil included: the jump host drops it when
+// the site has no CA, and stops using it when no control plane has sent one
+// for a while (jump-cert.py). A jump host that cannot be reached costs
+// members only that path, so it does not fail the reconcile.
 func (e *Execution) SyncJump(keys string, certs D) any {
 	if f := attempt(func() { e.Call(D{"op": "sync", "authorized": keys}, "carrel-jump") }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		return "unavailable"
-	}
-	if certs == nil {
-		return "synced"
 	}
 	if f := attempt(func() { e.Call(D{"op": "certs", "certs": certs}, "carrel-jump") }); f != nil {
 		slog.Error("jump_certs_failed", "event", "jump_certs_failed")

@@ -665,6 +665,23 @@ def test_jump_sync_keeps_a_certificate_map_of_port_22_targets_only():
             module.check_certs(bad)
 
 
+def test_jump_sync_drops_the_map_on_null_and_touches_an_unchanged_one(monkeypatch, tmp_path):
+    module = load("jump-sync.py")
+    monkeypatch.setattr(module, "CERTS", tmp_path / "certs.json")
+    monkeypatch.setattr(module, "STATE", tmp_path / "state")
+    certs = {"ca": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==", "principals": {"alice": ["10.200.1.10:22"]}}
+    monkeypatch.setattr(sys, "stdin", type("S", (), {"buffer": __import__("io").BytesIO(json.dumps({"op": "certs", "certs": certs}).encode())})())
+    assert module.main()["changed"] is True
+    old = time.time() - 3600
+    __import__("os").utime(tmp_path / "certs.json", (old, old))
+    monkeypatch.setattr(sys, "stdin", type("S", (), {"buffer": __import__("io").BytesIO(json.dumps({"op": "certs", "certs": certs}).encode())})())
+    assert module.main()["changed"] is False
+    assert (tmp_path / "certs.json").stat().st_mtime > old + 3000
+    monkeypatch.setattr(sys, "stdin", type("S", (), {"buffer": __import__("io").BytesIO(b'{"op": "certs", "certs": null}')})())
+    assert module.main() == {"changed": True, "principals": 0}
+    assert not (tmp_path / "certs.json").exists()
+
+
 def certificate(tmp_path, principals, host=False):
     """A user certificate from a throwaway CA: (ca public key, type, blob)."""
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", tmp_path / "ca"], check=True)
@@ -696,6 +713,18 @@ def test_jump_cert_joins_every_principals_machines_in_one_line(monkeypatch, tmp_
     certs.write_text(json.dumps({"ca": ca, "principals": {"bob": ["10.200.3.10:22"]}}))
     assert module.line("jump", kind, blob) is None
     certs.write_text("not json")
+    assert module.line("jump", kind, blob) is None
+
+
+def test_jump_cert_admits_nothing_from_a_map_no_control_plane_keeps(monkeypatch, tmp_path):
+    module = load("jump-cert.py")
+    ca, kind, blob = certificate(tmp_path, ["alice"])
+    certs = tmp_path / "certs.json"
+    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}}))
+    monkeypatch.setattr(module, "CERTS", str(certs))
+    assert module.line("jump", kind, blob) is not None
+    old = time.time() - module.MAX_AGE - 60
+    __import__("os").utime(certs, (old, old))
     assert module.line("jump", kind, blob) is None
 
 

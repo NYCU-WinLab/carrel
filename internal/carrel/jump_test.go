@@ -122,3 +122,25 @@ func TestJumpCertificatesMapEachPrincipalToTheMachinesThatLetItIn(t *testing.T) 
 		t.Fatal("suspended tenant still reachable")
 	}
 }
+
+func TestSyncJumpAlwaysSendsTheCertificateMapAndKeepsKeysWhenItFails(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	// No CA: the map still goes, as null, so the jump host drops an old one.
+	if r := e.SyncJump("", nil); r != "synced" || b.count("certs") != 1 {
+		t.Fatal(r, b.calls)
+	}
+	if last := b.calls[len(b.calls)-1]; last["certs"] != nil {
+		t.Fatal(last)
+	}
+	// A jump host without certificate support still takes keys.
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "certs" {
+			return nil, fmt.Errorf("unknown operation")
+		}
+		return D{}, nil
+	}
+	if r := e.SyncJump("", D{"ca": "x", "principals": D{}}); r != "keys_only" || b.count("sync") != 2 {
+		t.Fatal(r)
+	}
+}
