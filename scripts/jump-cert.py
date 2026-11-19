@@ -2,8 +2,11 @@
 """The SSH jump host's AuthorizedKeysCommand for lab certificates.
 
 sshd runs it as `jump-cert.py %u %t %k` (user, key type, base64 key) for
-every key a client offers. For a user certificate offered to the jump user it
-prints one authorized_keys line: the lab CA, the certificate's principals
+every key a client offers. Certificates go to their own user, `ca`, which
+has no keys file: sshd offers the certificate from `step ssh login` before a
+member's keys and uses the first line that matches, so on the `jump` user a
+certificate line would shut a member out of targets their keys open. For a
+user certificate offered to `ca` it prints one authorized_keys line: the lab CA, the certificate's principals
 that open a machine, and permitopen for port 22 of every machine that one of
 them opens, from the map jump-sync.py keeps (Carrel sends it). One line for
 all of them, because sshd uses only the first line that matches. sshd itself
@@ -12,7 +15,7 @@ this only reads the principals to choose the targets. A map older than
 MAX_AGE admits nothing: every reconcile (5 minutes) rewrites or touches it, so
 an old one means no control plane keeps it current (Carrel rolled back to a
 version without certificates, or stopped), and revocations would not reach
-it. Anything else prints nothing, and sshd goes on to the keys file.
+it. Anything else prints nothing.
 """
 
 import json
@@ -23,6 +26,7 @@ import sys
 import time
 
 CERTS = "/etc/carrel-jump/certs.json"
+USER = "ca"
 MAX_AGE = 30 * 60
 TYPE = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa)-cert-v01@openssh\.com", re.ASCII)
 BLOB = re.compile(r"[A-Za-z0-9+/]{1,16384}={0,2}", re.ASCII)
@@ -49,7 +53,7 @@ def principals(key_type, blob):
 
 
 def line(user, key_type, blob):
-    if user != "jump" or not TYPE.fullmatch(key_type) or not BLOB.fullmatch(blob):
+    if user != USER or not TYPE.fullmatch(key_type) or not BLOB.fullmatch(blob):
         return None
     try:
         if time.time() - os.stat(CERTS).st_mtime > MAX_AGE:

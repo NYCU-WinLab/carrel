@@ -33,7 +33,7 @@ GATEWAY_SYNC = "/usr/local/lib/carrel/gateway-sync.py"
 JUMP = {"name": "carrel-jump", "target": "carrel-jump", "host": "10.200.0.4"}
 JUMP_SYNC = "/usr/local/lib/carrel/jump-sync.py"
 JUMP_CERT = "/usr/local/lib/carrel/jump-cert.py"
-# Lab certificates on the jump host: jump-cert.py turns a certificate's
+# Lab certificates on the jump host, for the user ca: jump-cert.py turns a certificate's
 # principals into one line naming the machines they open (certs.json, which
 # jump-sync.py keeps). The script and its folder belong to root, as sshd
 # requires of an AuthorizedKeysCommand.
@@ -124,6 +124,9 @@ def jump(key):
     run("pct", "push", "102", JUMP_SYNC, JUMP_SYNC, "--perms", "755")
     run("pct", "push", "102", JUMP_CERT, JUMP_CERT, "--perms", "755")
     run("pct", "exec", "102", "--", "chown", "root:root", JUMP_SYNC, JUMP_CERT)
+    # The certificate user: no keys file, so it takes only lab certificates.
+    run("pct", "exec", "102", "--", "sh", "-c",
+        "id ca >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent ca")
     # sshd -t before the restart, so a bad file never takes the jump host down.
     # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
     run("pct", "exec", "102", "--", "sh", "-c",

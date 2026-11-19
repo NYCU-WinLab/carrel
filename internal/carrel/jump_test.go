@@ -43,6 +43,15 @@ func TestAMachineWithoutAPublicPortConnectsThroughTheJumpHost(t *testing.T) {
 	if withPort["ssh"] != "ssh -p 20010 user@carrel.winlab.tw" || withPort["ssh_jump"] == nil {
 		t.Fatal(withPort)
 	}
+	// A lab certificate goes through the certificate user, only to a
+	// machine that trusts the CA.
+	if pub["ssh_jump_certificate"] != nil {
+		t.Fatal(pub)
+	}
+	m["ssh_user_ca"] = "ecdsa-sha2-nistp256 AAAA"
+	if got := e.PublicMachine(m, nil)["ssh_jump_certificate"]; got != "ssh -J ca@carrel.winlab.tw user@10.200.1.10" {
+		t.Fatal(got)
+	}
 }
 
 func TestSavedKeysAreBounded(t *testing.T) {

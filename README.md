@@ -623,15 +623,21 @@ of saving a grant it cannot apply. `machine_get` shows the list and whether the 
 (`lab_ca.applied`). A grant needs no new certificate (the username is in every member's), hand
 edits of the principals file are replaced on the next change, and on a CT a grant logs in as root.
 
-The jump host takes the same certificates, so a machine with `public_ssh=false` needs no saved key.
-Carrel sends it a map from each principal to port 22 of the machines whose principals file names
-it (`op: certs` to `scripts/jump-sync.py`, kept in `/etc/carrel-jump/certs.json`), with every
-reconcile and right after `machine_access`. sshd runs `scripts/jump-cert.py` as its
-`AuthorizedKeysCommand`: for a user certificate it prints one line that forwards to every machine
-any of the certificate's principals opens. One line, because sshd uses only the first line that
-matches. sshd still checks the signature, the validity period and the principal itself.
-`configure-nodes.py` installs the script and its sshd file; a jump host without them keeps taking
-keys, and the reconcile reports `keys_only`. Without a CA the map goes as null and the jump host drops it; a map no control plane has refreshed for 30 minutes (Carrel rolled back or stopped) admits no certificate.
+The jump host takes the same certificates on its own user, `ca`, so a member needs no saved key:
+`ssh -J ca@carrel.winlab.tw user@<address>` (`ssh_jump_certificate` in `machine_get`). `jump@` keeps
+taking only keys. A separate user, because the client offers the certificate from `step ssh login`
+before its keys and sshd uses the first line that matches: on `jump@` a certificate line would shut a
+member out of service ports and teammates' machines that their keys open. Carrel sends the jump host
+a map from each principal to port 22 of the machines whose principals file names it (`op: certs` to
+`scripts/jump-sync.py`, kept in `/etc/carrel-jump/certs.json`), with every reconcile and right after
+`machine_access`, so `ca@` reaches exactly the machines that let the certificate log in. sshd runs
+`scripts/jump-cert.py` as its `AuthorizedKeysCommand`: for a user certificate offered to `ca` it
+prints one line that forwards to every machine any of the certificate's principals opens. One line,
+because sshd uses only the first line that matches. sshd still checks the signature, the validity
+period and the principal itself. `configure-nodes.py` installs the script, the user and the sshd
+file; a jump host without them keeps taking keys, and the reconcile reports `keys_only`. Without a CA
+the map goes as null and the jump host drops it; a map no control plane has refreshed for 30 minutes
+(Carrel rolled back or stopped) admits no certificate.
 
 ### Telemetry
 
