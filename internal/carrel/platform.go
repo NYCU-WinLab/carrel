@@ -158,6 +158,8 @@ func subjects(w D) [][2]string {
 func (e *Execution) Register(w D, name string, overview bool) []D {
 	e.P.registration.Lock()
 	defer e.P.registration.Unlock()
+	// After registering, so a new personal tenant gets its username at once.
+	defer func() { _ = attempt(func() { e.rememberUsername(w) }) }()
 	ss := subjects(w)
 	if !overview {
 		if name == "" {

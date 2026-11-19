@@ -643,12 +643,16 @@ def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
     assert module.check("") == ""
 
 
-def test_jump_sync_keeps_a_certificate_map_of_port_22_targets_only():
+def test_jump_sync_keeps_a_certificate_map_of_tenant_targets_only():
     module = load("jump-sync.py")
     ca = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY="
     good = {
         "ca": ca,
-        "principals": {"alice": ["10.200.1.10:22"], "project:robotics": ["10.200.2.10:22", "10.200.2.11:22"]},
+        "principals": {
+            "alice": ["10.200.1.10:22"],
+            "project:robotics": ["10.200.2.10:22", "10.200.2.11:8080"],
+        },
+        "users": ["alice"],
     }
     assert json.loads(module.check_certs(good)) == good
     for bad in [
@@ -660,7 +664,10 @@ def test_jump_sync_keeps_a_certificate_map_of_port_22_targets_only():
         {**good, "principals": {'a",b': ["10.200.1.10:22"]}},
         {**good, "principals": {"project:Robotics": ["10.200.1.10:22"]}},
         {**good, "principals": {"alice": []}},
-        {**good, "principals": {"alice": ["10.200.1.10:80"]}},
+        {key: good[key] for key in ("ca", "principals")},
+        {**good, "users": ["project:robotics"]},
+        {**good, "users": "alice"},
+        {**good, "principals": {"alice": ["10.200.1.10:0"]}},
         {**good, "principals": {"alice": ["10.200.0.3:22"]}},
         {**good, "principals": {"alice": ['10.200.1.10:22",permitopen="1.1.1.1:22']}},
     ]:
@@ -672,7 +679,11 @@ def test_jump_sync_drops_the_map_on_null_and_touches_an_unchanged_one(monkeypatc
     module = load("jump-sync.py")
     monkeypatch.setattr(module, "CERTS", tmp_path / "certs.json")
     monkeypatch.setattr(module, "STATE", tmp_path / "state")
-    certs = {"ca": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==", "principals": {"alice": ["10.200.1.10:22"]}}
+    certs = {
+        "ca": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==",
+        "principals": {"alice": ["10.200.1.10:22"]},
+        "users": ["alice"],
+    }
     monkeypatch.setattr(
         sys,
         "stdin",
@@ -722,23 +733,32 @@ def test_jump_cert_joins_every_principals_machines_in_one_line(monkeypatch, tmp_
             {
                 "ca": ca,
                 "principals": {
-                    "alice": ["10.200.1.10:22"],
+                    "alice": ["10.200.1.10:22", "10.200.1.20:80"],
                     "project:robotics": ["10.200.2.10:22", "10.200.1.10:22"],
                     "bob": ["10.200.3.10:22"],
                 },
+                "users": ["alice", "bob"],
             }
         )
     )
     monkeypatch.setattr(module, "CERTS", str(certs))
     assert module.line("jump", kind, blob) == (
         'cert-authority,principals="alice,project:robotics",restrict,port-forwarding,command="/usr/sbin/nologin",'
-        f'permitopen="10.200.1.10:22",permitopen="10.200.2.10:22" {ca}'
+        f'permitopen="10.200.1.10:22",permitopen="10.200.1.20:80",permitopen="10.200.2.10:22" {ca}'
     )
     # Nothing for another user, a plain key, a bad blob or no machine.
     assert module.line("root", kind, blob) is None
     assert module.line("jump", "ssh-ed25519", blob) is None
     assert module.line("jump", kind, blob + "\n") is None
-    certs.write_text(json.dumps({"ca": ca, "principals": {"bob": ["10.200.3.10:22"]}}))
+    certs.write_text(json.dumps({"ca": ca, "principals": {"bob": ["10.200.3.10:22"]}, "users": ["bob"]}))
+    assert module.line("jump", kind, blob) is None
+    # A certificate whose member Carrel cannot vouch for goes on to the keys,
+    # even when a project or a grant would open something: the keys may open more.
+    certs.write_text(
+        json.dumps({"ca": ca, "principals": {"project:robotics": ["10.200.2.10:22"]}, "users": ["bob"]})
+    )
+    assert module.line("jump", kind, blob) is None
+    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}}))
     assert module.line("jump", kind, blob) is None
     certs.write_text("not json")
     assert module.line("jump", kind, blob) is None
@@ -748,7 +768,7 @@ def test_jump_cert_admits_nothing_from_a_map_no_control_plane_keeps(monkeypatch,
     module = load("jump-cert.py")
     ca, kind, blob = certificate(tmp_path, ["alice"])
     certs = tmp_path / "certs.json"
-    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}}))
+    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}, "users": ["alice"]}))
     monkeypatch.setattr(module, "CERTS", str(certs))
     assert module.line("jump", kind, blob) is not None
     old = time.time() - module.MAX_AGE - 60
@@ -760,7 +780,7 @@ def test_jump_cert_ignores_host_certificates(monkeypatch, tmp_path):
     module = load("jump-cert.py")
     ca, kind, blob = certificate(tmp_path, ["alice"], host=True)
     certs = tmp_path / "certs.json"
-    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}}))
+    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}, "users": ["alice"]}))
     monkeypatch.setattr(module, "CERTS", str(certs))
     assert module.line("jump", kind, blob) is None
 

@@ -87,39 +87,68 @@ func TestMachinesWithoutPublicSSHUseNoPort(t *testing.T) {
 	}
 }
 
-func TestJumpCertificatesMapEachPrincipalToTheMachinesThatLetItIn(t *testing.T) {
+func TestJumpCertificatesOpenWhatTheMembersKeysOpen(t *testing.T) {
 	p, _ := fixture(t)
 	ca := "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY="
 	if jumpCertificates(p.Store, "") != nil {
 		t.Fatal("a site without a CA sent a map")
 	}
+	// Alice's key sits in her own tenant and in the shared project.
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
+	p.Store.Put("keys", "1-k", 1, D{"id": "k", "key": key})
+	p.Store.Put("keys", "3-k", 3, D{"id": "k", "key": key})
 	own := seedMachine(p, "own", 10100)
 	own["ssh_user_ca"], own["ca_principals"] = ca, []any{"alice"}
 	own["ca_grants"] = []D{{"username": "bob", "by": "alice", "at": 1.0}}
 	p.Store.Put("machines", 10100, 1, own)
-	project := D{"name": "lab", "vmid": 10200, "tenant_n": 2, "ip": "10.200.2.10", "state": "ready", "ssh_user_ca": ca, "ca_principals": []any{"project:robotics"}}
-	p.Store.Put("machines", 10200, 2, project)
-	// Not counted: no CA, another CA, a web image without SSH, being deleted.
-	plain := D{"name": "plain", "vmid": 10201, "tenant_n": 2, "ip": "10.200.2.11", "state": "ready", "ca_principals": []any{"alice"}}
-	other := merge(plain, D{"name": "other", "vmid": 10202, "ip": "10.200.2.12", "ssh_user_ca": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther"})
-	web := merge(plain, D{"name": "web", "vmid": 10203, "ip": "10.200.2.13", "ssh_user_ca": ca, "service_ports": []any{80}})
-	gone := merge(plain, D{"name": "gone", "vmid": 10204, "ip": "10.200.2.14", "ssh_user_ca": ca, "state": "deleting"})
-	for _, m := range []D{plain, other, web, gone} {
-		p.Store.Put("machines", m["vmid"], 2, m)
-	}
+	p.Store.Put("machines", 10300, 3, D{"name": "site", "vmid": 10300, "tenant_n": 3, "ip": "10.200.3.10", "state": "ready", "service_ports": []any{80}})
+	p.Store.Put("machines", 10301, 3, D{"name": "db", "vmid": 10301, "tenant_n": 3, "ip": "10.200.3.11", "state": "ready"})
+	robotics := D{"name": "lab", "vmid": 10200, "tenant_n": 2, "ip": "10.200.2.10", "state": "ready", "ssh_user_ca": ca, "ca_principals": []any{"project:robotics"}}
+	p.Store.Put("machines", 10200, 2, robotics)
+	// Bob's username is not recorded, so his own machine is not in the map.
+	gone := merge(robotics, D{"name": "gone", "vmid": 10201, "ip": "10.200.2.11", "state": "deleting", "ca_principals": []any{"project:gone"}})
+	p.Store.Put("machines", 10201, 2, gone)
+	e := p.execution(context.Background())
+	e.rememberUsername(person("alice", false))
+	e.rememberUsername(person("carol", false))
 	got := jumpCertificates(p.Store, ca)
-	want := D{"ca": ca, "principals": D{
-		"alice":            []string{"10.200.1.10:22"},
+	want := D{"ca": ca, "users": []string{"alice"}, "principals": D{
+		"alice":            []string{"10.200.1.10:22", "10.200.3.10:80", "10.200.3.11:22"},
 		"bob":              []string{"10.200.1.10:22"},
 		"project:robotics": []string{"10.200.2.10:22"},
+		"project:shared":   []string{"10.200.3.10:80", "10.200.3.11:22"},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%#v", got)
+	}
+	// A username two accounts claim vouches for neither.
+	p.Store.SitePut("usernames", "user:bob", D{"username": "alice"})
+	if users := jumpCertificates(p.Store, ca)["users"]; len(users.([]string)) != 0 {
+		t.Fatal(users)
 	}
 	// A suspended tenant's machines take no certificate through the jump host.
 	p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=2")
 	if _, ok := obj(jumpCertificates(p.Store, ca)["principals"])["project:robotics"]; ok {
 		t.Fatal("suspended tenant still reachable")
+	}
+}
+
+func TestEveryCallRecordsTheUsernameOfItsPersonalTenant(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	e.Register(person("alice", false), "", false)
+	if r := p.Store.SiteGet("usernames", "user:alice"); r == nil || r["username"] != "alice" {
+		t.Fatal(r)
+	}
+	// A renamed account keeps its tenant and takes the new name.
+	e.Register(D{"sub": "alice", "username": "alice.c", "projects": []string{}}, "", false)
+	if r := p.Store.SiteGet("usernames", "user:alice"); r["username"] != "alice.c" {
+		t.Fatal(r)
+	}
+	// An account without a personal tenant records nothing.
+	e.rememberUsername(person("carol", false))
+	if p.Store.SiteGet("usernames", "user:carol") != nil {
+		t.Fatal("recorded a username without a tenant")
 	}
 }
 
