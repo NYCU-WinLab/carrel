@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -83,5 +84,41 @@ func TestMachinesWithoutPublicSSHUseNoPort(t *testing.T) {
 	}
 	if len(e.ports(1)) != 0 {
 		t.Fatal("ports were granted")
+	}
+}
+
+func TestJumpCertificatesMapEachPrincipalToTheMachinesThatLetItIn(t *testing.T) {
+	p, _ := fixture(t)
+	ca := "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY="
+	if jumpCertificates(p.Store, "") != nil {
+		t.Fatal("a site without a CA sent a map")
+	}
+	own := seedMachine(p, "own", 10100)
+	own["ssh_user_ca"], own["ca_principals"] = ca, []any{"alice"}
+	own["ca_grants"] = []D{{"username": "bob", "by": "alice", "at": 1.0}}
+	p.Store.Put("machines", 10100, 1, own)
+	project := D{"name": "lab", "vmid": 10200, "tenant_n": 2, "ip": "10.200.2.10", "state": "ready", "ssh_user_ca": ca, "ca_principals": []any{"project:robotics"}}
+	p.Store.Put("machines", 10200, 2, project)
+	// Not counted: no CA, another CA, a web image without SSH, being deleted.
+	plain := D{"name": "plain", "vmid": 10201, "tenant_n": 2, "ip": "10.200.2.11", "state": "ready", "ca_principals": []any{"alice"}}
+	other := merge(plain, D{"name": "other", "vmid": 10202, "ip": "10.200.2.12", "ssh_user_ca": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther"})
+	web := merge(plain, D{"name": "web", "vmid": 10203, "ip": "10.200.2.13", "ssh_user_ca": ca, "service_ports": []any{80}})
+	gone := merge(plain, D{"name": "gone", "vmid": 10204, "ip": "10.200.2.14", "ssh_user_ca": ca, "state": "deleting"})
+	for _, m := range []D{plain, other, web, gone} {
+		p.Store.Put("machines", m["vmid"], 2, m)
+	}
+	got := jumpCertificates(p.Store, ca)
+	want := D{"ca": ca, "principals": D{
+		"alice":            []string{"10.200.1.10:22"},
+		"bob":              []string{"10.200.1.10:22"},
+		"project:robotics": []string{"10.200.2.10:22"},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%#v", got)
+	}
+	// A suspended tenant's machines take no certificate through the jump host.
+	p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=2")
+	if _, ok := obj(jumpCertificates(p.Store, ca)["principals"])["project:robotics"]; ok {
+		t.Fatal("suspended tenant still reachable")
 	}
 }

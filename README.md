@@ -623,6 +623,16 @@ of saving a grant it cannot apply. `machine_get` shows the list and whether the 
 (`lab_ca.applied`). A grant needs no new certificate (the username is in every member's), hand
 edits of the principals file are replaced on the next change, and on a CT a grant logs in as root.
 
+The jump host takes the same certificates, so a machine with `public_ssh=false` needs no saved key.
+Carrel sends it a map from each principal to port 22 of the machines whose principals file names
+it (`op: certs` to `scripts/jump-sync.py`, kept in `/etc/carrel-jump/certs.json`), with every
+reconcile and right after `machine_access`. sshd runs `scripts/jump-cert.py` as its
+`AuthorizedKeysCommand`: for a user certificate it prints one line that forwards to every machine
+any of the certificate's principals opens. One line, because sshd uses only the first line that
+matches. sshd still checks the signature, the validity period and the principal itself.
+`configure-nodes.py` installs the script and its sshd file; a jump host without them keeps taking
+keys, and the reconcile reports `keys_only`.
+
 ### Telemetry
 
 With `telemetry_url` and `telemetry_token_file` in `config.json`, the control plane sends its WARN

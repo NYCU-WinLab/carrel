@@ -32,6 +32,15 @@ GATEWAY = {"name": "carrel-gateway", "target": "carrel-gateway", "host": "10.200
 GATEWAY_SYNC = "/usr/local/lib/carrel/gateway-sync.py"
 JUMP = {"name": "carrel-jump", "target": "carrel-jump", "host": "10.200.0.4"}
 JUMP_SYNC = "/usr/local/lib/carrel/jump-sync.py"
+JUMP_CERT = "/usr/local/lib/carrel/jump-cert.py"
+# Lab certificates on the jump host: jump-cert.py turns a certificate's
+# principals into one line naming the machines they open (certs.json, which
+# jump-sync.py keeps). The script and its folder belong to root, as sshd
+# requires of an AuthorizedKeysCommand.
+JUMP_CERT_SSHD = f"""# Managed by carrel configure-nodes.py: lab certificates.
+AuthorizedKeysCommand {JUMP_CERT} %u %t %k
+AuthorizedKeysCommandUser nobody
+"""
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'
 BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
@@ -113,6 +122,16 @@ def jump(key):
     """Install jump-sync.py in CT 102 as the forced command for CT 100's key (issue #98)."""
     run("pct", "exec", "102", "--", "install", "-d", "-m", "755", "/usr/local/lib/carrel")
     run("pct", "push", "102", JUMP_SYNC, JUMP_SYNC, "--perms", "755")
+    run("pct", "push", "102", JUMP_CERT, JUMP_CERT, "--perms", "755")
+    run("pct", "exec", "102", "--", "chown", "root:root", JUMP_SYNC, JUMP_CERT)
+    # sshd -t before the restart, so a bad file never takes the jump host down.
+    # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
+    run("pct", "exec", "102", "--", "sh", "-c",
+        "umask 022 && cat > /etc/ssh/sshd_config.d/carrel-jump-certs.conf.next"
+        " && mv /etc/ssh/sshd_config.d/carrel-jump-certs.conf.next /etc/ssh/sshd_config.d/carrel-jump-certs.conf"
+        " && if sshd -t; then systemctl try-restart ssh.service;"
+        " else rm -f /etc/ssh/sshd_config.d/carrel-jump-certs.conf; exit 1; fi",
+        input=JUMP_CERT_SSHD)
     current = run("pct", "exec", "102", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
     kept = [x for x in current.splitlines() if JUMP_SYNC not in x]
     line = f'from="10.200.0.3",restrict,command="{JUMP_SYNC}" {key}'
@@ -184,7 +203,7 @@ def main():
     nodes = targets(site, node)
     me = nodes[0]
     infra = [GATEWAY, JUMP] if site.get("ssh_jump") else [GATEWAY]
-    for program in [*PROGRAMS, "gateway-sync.py", *(["jump-sync.py"] if site.get("ssh_jump") else [])]:
+    for program in [*PROGRAMS, "gateway-sync.py", *(["jump-sync.py", "jump-cert.py"] if site.get("ssh_jump") else [])]:
         if not Path("/usr/local/lib/carrel", program).exists():
             raise SystemExit(f"install the node programs here first ({program} missing)")
     # 1. Node programs on the other nodes, the same version as here.
