@@ -152,11 +152,15 @@ func TestOverSnapshotSpaceBlocksOnlySnapshots(t *testing.T) {
 			t.Fatal(encoded(q))
 		}
 	}
-	// Over in a dimension that only a request can raise: still refused.
+	// Over in a dimension that only a request can raise: a request that adds
+	// nothing passes, growth is refused.
 	tenant := p.Store.TenantN(1)
 	obj(tenant["quota"])["machines"] = 0
-	if problem := attempt(func() { e.Quota(tenant, D{}) }); problem == nil {
-		t.Fatal("a request that adds nothing passed while over machines")
+	if problem := attempt(func() { e.Quota(tenant, D{}) }); problem != nil {
+		t.Fatal(describe(problem))
+	}
+	if problem := attempt(func() { e.Quota(tenant, D{"machines": 1}) }); problem == nil {
+		t.Fatal("growth passed while over machines")
 	}
 }
 

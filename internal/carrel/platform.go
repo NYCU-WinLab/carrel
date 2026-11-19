@@ -301,10 +301,9 @@ func (e *Execution) Quota(t D, delta ...D) D {
 		remaining[k] = num(limit[k]) - num(v)
 		if num(v) > num(limit[k]) {
 			over = append(over, k)
-			// A request that adds nothing is refused while any dimension is over.
-			// Not for snapshot_gb: snapshots grow as the disk under them changes,
-			// so being over it is an ordinary state that stops only new snapshots.
-			if len(delta) > 0 && delta[0] != nil && (len(d) == 0 && k != "snapshot_gb" || num(d[k]) > 0) {
+			// Only growth in an exceeded dimension is refused. A request that adds
+			// nothing (a redeploy, a replayed request) passes while over.
+			if len(delta) > 0 && delta[0] != nil && num(d[k]) > 0 {
 				violations = append(violations, D{"dimension": k, "used": v, "limit": limit[k]})
 			}
 		}
