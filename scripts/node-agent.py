@@ -925,6 +925,22 @@ iface {V6_DEV}
 """
 
 
+IPV6_CONF = Path("/proc/sys/net/ipv6/conf")
+
+
+def untracked_na(value):
+    """RFC 9131 on the tenant bridges. Every node answers as the gateway with
+    the same MAC, so a guest's reply to the exit node's solicitation lands on
+    the guest's own node. With 2 that node learns the address from it, and
+    EVPN gives the exit node a host route. Without it a guest that moved, or
+    never spoke from its global address, is unreachable from the tunnel (#336).
+    2 takes only addresses in the bridge's own subnets; carrel_nd keeps each
+    guest to its own address."""
+    for f in sorted(IPV6_CONF.glob("t[0-9][0-9][0-9]/accept_untracked_na")):
+        if f.read_text().strip() != str(value):
+            f.write_text(str(value))
+
+
 ND_RULES = Path("/etc/carrel/nd.nft")
 ND_UNIT_FILE = Path("/etc/systemd/system/carrel-nd.service")
 
@@ -939,6 +955,7 @@ def nd_remove():
         run("systemctl", "disable", "--now", "carrel-nd")
         ND_UNIT_FILE.unlink()
         run("systemctl", "daemon-reload")
+    untracked_na(0)
     ND_RULES.unlink(missing_ok=True)
 
 
@@ -951,6 +968,7 @@ ConditionPathExists=/etc/carrel/nd.nft
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/carrel/nd.nft
+ExecStart=/bin/sh -c 'for f in /proc/sys/net/ipv6/conf/t[0-9][0-9][0-9]/accept_untracked_na; do [ -e "$$f" ] || continue; echo 2 > "$$f"; done'
 [Install]
 WantedBy=multi-user.target
 """
@@ -1392,6 +1410,8 @@ table inet carrel_conntrack {{
         write("/etc/carrel/nd.nft", nd_nft(with_v6))
         run("nft", "-c", "-f", "/etc/carrel/nd.nft")
         run("nft", "-f", "/etc/carrel/nd.nft")
+        # After the filter: the bridges then learn only what it lets through.
+        untracked_na(2)
         # And at boot, before the guests start: their firewall keeps ndp: 1.
         if write("/etc/systemd/system/carrel-nd.service", ND_UNIT):
             run("systemctl", "daemon-reload")
@@ -1650,6 +1670,21 @@ def guest_mtu(m):
     its PTB comes from a link-local address other nodes never route back (#336)."""
     v6 = site_ipv6()
     return v6["mtu"] if machine_ipv6(m, v6) else 1450
+
+
+def ct_mtu_command(mtu):
+    """net0's mtu= sizes the veth at start, but the guest's own network setup
+    then resets eth0 to 1500 without an mtu line of its own (#336). PVE keeps
+    the line when it rewrites the stanza at the next start."""
+    mtu = integer(mtu, 1280, 1500)
+    return (
+        "set -e; f=/etc/network/interfaces; "
+        f"if grep -q '^iface eth0 inet static' $f 2>/dev/null && ! grep -q '^[[:space:]]*mtu ' $f; then "
+        f"sed -i '/^iface eth0 inet static/a\\\tmtu {mtu}' $f; fi; "
+        "if [ -e /etc/systemd/network/eth0.network ]; then mkdir -p /etc/systemd/network/eth0.network.d; "
+        f"printf '[Link]\\nMTUBytes={mtu}\\n' > /etc/systemd/network/eth0.network.d/carrel-mtu.conf; fi; "
+        f"ip link set eth0 mtu {mtu}"
+    )
 
 
 def ct_ipv6(m):
@@ -2386,6 +2421,7 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "daemon-reload")
         run("pct", "exec", vmid, "--", "systemctl", "reset-failed", "systemd-journald")
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
+        run("pct", "exec", vmid, "--", "sh", "-c", ct_mtu_command(guest_mtu(m)))
         if command := mirror_command(m["image"]):
             run("pct", "exec", vmid, "--", "sh", "-c", command)
         if files := ca_files(m, "root"):

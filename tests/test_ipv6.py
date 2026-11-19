@@ -289,6 +289,7 @@ def test_neighbour_filter_removed_with_the_last_ipv6_guest(agent, monkeypatch, t
     unit.write_text(agent.ND_UNIT)
     monkeypatch.setattr(agent, "ND_RULES", rules)
     monkeypatch.setattr(agent, "ND_UNIT_FILE", unit)
+    monkeypatch.setattr(agent, "IPV6_CONF", tmp_path / "conf")
     calls = []
     monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
     monkeypatch.setattr(agent.subprocess, "run", lambda a, **k: agent.subprocess.CompletedProcess(a, 0))
@@ -314,3 +315,27 @@ def test_container_net0_has_one_mtu(agent, monkeypatch, tmp_path):
             agent.create(m)
         net0 = next(c[c.index("--net0") + 1] for c in calls if c[:2] == ("pct", "create"))
         assert net0.count("mtu=") == 1 and mtu in net0.split(","), net0
+
+
+def test_container_keeps_its_mtu_inside(agent):
+    # net0's mtu= sizes the veth, but ifupdown2 in the guest resets eth0 to 1500 (#336).
+    command = agent.ct_mtu_command(1420)
+    assert "/^iface eth0 inet static/a\\\tmtu 1420" in command
+    assert "MTUBytes=1420" in command and command.endswith("ip link set eth0 mtu 1420")
+    with pytest.raises(ValueError):
+        agent.ct_mtu_command("1420; reboot")
+
+
+def test_tenant_bridges_learn_untracked_advertisements(agent, monkeypatch, tmp_path):
+    # RFC 9131: a guest's NA reaches its own node, not the exit node (#336).
+    for dev in ("t003", "t017", "vmbr0"):
+        (tmp_path / dev).mkdir()
+        (tmp_path / dev / "accept_untracked_na").write_text("0\n")
+    monkeypatch.setattr(agent, "IPV6_CONF", tmp_path)
+    agent.untracked_na(2)
+    assert [
+        (tmp_path / d / "accept_untracked_na").read_text().strip() for d in ("t003", "t017", "vmbr0")
+    ] == ["2", "2", "0"]
+    agent.untracked_na(0)
+    assert (tmp_path / "t003" / "accept_untracked_na").read_text().strip() == "0"
+    assert 'echo 2 > "$$f"' in agent.ND_UNIT
