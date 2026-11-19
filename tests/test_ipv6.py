@@ -1,5 +1,6 @@
 """Site IPv6 (issue #142, PLAN 6.13): addresses, guest rules, tunnel filter and host rules."""
 
+import contextlib
 import importlib.util
 import json
 from pathlib import Path
@@ -94,7 +95,8 @@ def test_network_file_and_container_options(agent):
     assert primary["accept-ra"] is False
     # The tunnel's MTU: no send needs a Packet Too Big from the exit node (#336).
     assert primary["mtu"] == 1420
-    assert agent.ct_ipv6(machine(ipv6=True)) == ",ip6=2a14:7581:880:17::11/64,gw6=2a14:7581:880:17::1,mtu=1420"
+    assert agent.ct_ipv6(machine(ipv6=True)) == ",ip6=2a14:7581:880:17::11/64,gw6=2a14:7581:880:17::1"
+    assert agent.guest_mtu(machine(ipv6=True)) == 1420 and agent.guest_mtu(machine()) == 1450
     agent.network_file(machine())
     assert json.loads(files["/var/lib/vz/snippets/" + name])["ethernets"]["primary"]["mtu"] == 1450
     assert agent.ct_ipv6(machine()) == ""
@@ -262,8 +264,12 @@ def test_tunnel_declared_to_ifupdown(agent):
     # ifreload -a, run by every SDN apply, keeps only what its files declare (#336).
     text = agent.v6_iface(agent.site_ipv6())
     assert "auto wg-v6\niface wg-v6\n" in text
-    for line in ("vrf vrf_tenants", "mtu 1420", "address 2a14:7581:880::1/128",
-                 "post-up ip -6 route replace vrf vrf_tenants default dev wg-v6"):
+    for line in (
+        "vrf vrf_tenants",
+        "mtu 1420",
+        "address 2a14:7581:880::1/128",
+        "post-up ip -6 route replace vrf vrf_tenants default dev wg-v6",
+    ):
         assert "    " + line + "\n" in text
 
 
@@ -285,8 +291,26 @@ def test_neighbour_filter_removed_with_the_last_ipv6_guest(agent, monkeypatch, t
     monkeypatch.setattr(agent, "ND_UNIT_FILE", unit)
     calls = []
     monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
-    monkeypatch.setattr(agent.subprocess, "run", lambda a, **k: calls.append(tuple(a)))
+    monkeypatch.setattr(agent.subprocess, "run", lambda a, **k: agent.subprocess.CompletedProcess(a, 0))
     agent.nd_remove()
     assert ("nft", "delete", "table", "bridge", "carrel_nd") in calls
     assert ("systemctl", "disable", "--now", "carrel-nd") in calls
     assert not rules.exists() and not unit.exists()
+
+
+def test_container_net0_has_one_mtu(agent, monkeypatch, tmp_path):
+    # pct rejects a duplicate key in net0 (#348 review).
+    monkeypatch.setattr(agent, "STATE", tmp_path)
+    monkeypatch.setattr(agent, "PVE_NODES", tmp_path / "nodes")
+    monkeypatch.setattr(agent, "ct_template", lambda image: "local:vztmpl/t")
+    monkeypatch.setattr(agent, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(agent, "first_firewall", lambda m: None)
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "status: running")
+    for m, mtu in ((machine(kind="ct", ipv6=True), "mtu=1420"), (machine(kind="ct"), "mtu=1450")):
+        calls.clear()
+        # Only the pct create call matters here.
+        with contextlib.suppress(Exception):
+            agent.create(m)
+        net0 = next(c[c.index("--net0") + 1] for c in calls if c[:2] == ("pct", "create"))
+        assert net0.count("mtu=") == 1 and mtu in net0.split(","), net0

@@ -932,7 +932,9 @@ ND_UNIT_FILE = Path("/etc/systemd/system/carrel-nd.service")
 def nd_remove():
     """No guest has IPv6 any more: the filter and its boot unit go. The rules
     file goes last, so a failed run is retried by the next reconcile."""
-    subprocess.run(["nft", "delete", "table", "bridge", "carrel_nd"], capture_output=True, check=False)
+    # Gone already after a reboot (the unit was disabled); any other failure stops here.
+    if subprocess.run(["nft", "list", "table", "bridge", "carrel_nd"], capture_output=True, check=False).returncode == 0:
+        run("nft", "delete", "table", "bridge", "carrel_nd")
     if ND_UNIT_FILE.exists():
         run("systemctl", "disable", "--now", "carrel-nd")
         ND_UNIT_FILE.unlink()
@@ -1642,14 +1644,21 @@ def cloud_init(m, *, prepared=False, environment="development"):
     return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
 
 
+def guest_mtu(m):
+    """net0's MTU: the tenant network's 1450, or the IPv6 tunnel's for an
+    opted-in machine, so no send needs a Packet Too Big from the exit node:
+    its PTB comes from a link-local address other nodes never route back (#336)."""
+    v6 = site_ipv6()
+    return v6["mtu"] if machine_ipv6(m, v6) else 1450
+
+
 def ct_ipv6(m):
     """The net0 options that give an opted-in container its IPv6 address, or nothing."""
     v6 = site_ipv6()
     address6 = machine_ipv6(m, v6)
     if not address6:
         return ""
-    # The tunnel's MTU, as in network_file.
-    return f",ip6={address6}/64,gw6={v6_net(v6['prefix'], m['tenant_n']).network_address + 1},mtu={v6['mtu']}"
+    return f",ip6={address6}/64,gw6={v6_net(v6['prefix'], m['tenant_n']).network_address + 1}"
 
 
 def network_file(m):
@@ -1657,7 +1666,7 @@ def network_file(m):
     primary = {
         "match": {"macaddress": m["mac"]}, "addresses": [m["ip"] + "/24"],
         "routes": [{"to": "0.0.0.0/0", "via": f"10.200.{m['tenant_n']}.1"}],
-        "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": 1450,
+        "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": guest_mtu(m),
     }
     v6 = site_ipv6()
     address6 = machine_ipv6(m, v6)
@@ -1666,9 +1675,6 @@ def network_file(m):
         primary["addresses"].append(address6 + "/64")
         primary["accept-ra"] = False
         primary["routes"].append({"to": "::/0", "via": str(v6_net(v6["prefix"], m["tenant_n"]).network_address + 1)})
-        # The tunnel's MTU, so no send needs a Packet Too Big: the exit node's
-        # would come from a link-local address that other nodes never route back.
-        primary["mtu"] = v6["mtu"]
     network = {"version": 2, "ethernets": {"primary": primary}}
     write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
     return network_name
@@ -2283,7 +2289,7 @@ def create(m):
     keyfile = STATE / f"{vmid}.pub"
     if not m.get("service_ports"):
         write(keyfile, keys(m["ssh_keys"]), 0o600)
-    net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450"
+    net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu={guest_mtu(m)}"
     if m["kind"] == "vm" and m.get("import_volume") and not exists:
         # A tenant's cloud image (PLAN 7.8): checked against its checksum,
         # then imported as the boot disk; the rest is an ordinary VM.
