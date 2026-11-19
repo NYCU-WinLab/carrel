@@ -643,6 +643,130 @@ def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
     assert module.check("") == ""
 
 
+def test_jump_sync_keeps_a_certificate_map_of_port_22_targets_only():
+    module = load("jump-sync.py")
+    ca = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY="
+    good = {
+        "ca": ca,
+        "principals": {"alice": ["10.200.1.10:22"], "project:robotics": ["10.200.2.10:22", "10.200.2.11:22"]},
+    }
+    assert json.loads(module.check_certs(good)) == good
+    for bad in [
+        {"ca": ca},
+        {**good, "extra": 1},
+        {**good, "ca": ca + " comment"},
+        {**good, "ca": ca + "\nssh-ed25519 AAAA"},
+        {**good, "principals": {"Alice": ["10.200.1.10:22"]}},
+        {**good, "principals": {'a",b': ["10.200.1.10:22"]}},
+        {**good, "principals": {"project:Robotics": ["10.200.1.10:22"]}},
+        {**good, "principals": {"alice": []}},
+        {**good, "principals": {"alice": ["10.200.1.10:80"]}},
+        {**good, "principals": {"alice": ["10.200.0.3:22"]}},
+        {**good, "principals": {"alice": ['10.200.1.10:22",permitopen="1.1.1.1:22']}},
+    ]:
+        with pytest.raises(ValueError):
+            module.check_certs(bad)
+
+
+def test_jump_sync_drops_the_map_on_null_and_touches_an_unchanged_one(monkeypatch, tmp_path):
+    module = load("jump-sync.py")
+    monkeypatch.setattr(module, "CERTS", tmp_path / "certs.json")
+    monkeypatch.setattr(module, "STATE", tmp_path / "state")
+    certs = {"ca": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==", "principals": {"alice": ["10.200.1.10:22"]}}
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        type(
+            "S",
+            (),
+            {"buffer": __import__("io").BytesIO(json.dumps({"op": "certs", "certs": certs}).encode())},
+        )(),
+    )
+    assert module.main()["changed"] is True
+    old = time.time() - 3600
+    __import__("os").utime(tmp_path / "certs.json", (old, old))
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        type(
+            "S",
+            (),
+            {"buffer": __import__("io").BytesIO(json.dumps({"op": "certs", "certs": certs}).encode())},
+        )(),
+    )
+    assert module.main()["changed"] is False
+    assert (tmp_path / "certs.json").stat().st_mtime > old + 3000
+    monkeypatch.setattr(
+        sys, "stdin", type("S", (), {"buffer": __import__("io").BytesIO(b'{"op": "certs", "certs": null}')})()
+    )
+    assert module.main() == {"changed": True, "principals": 0}
+    assert not (tmp_path / "certs.json").exists()
+
+
+def certificate(tmp_path, principals, host=False):
+    """A user certificate from a throwaway CA: (ca public key, type, blob)."""
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", tmp_path / "ca"], check=True)
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", tmp_path / "id"], check=True)
+    args = ["ssh-keygen", "-q", "-s", tmp_path / "ca", "-I", "test", "-n", ",".join(principals)]
+    subprocess.run([*args, *(["-h"] if host else []), tmp_path / "id.pub"], check=True)
+    cert = (tmp_path / "id-cert.pub").read_text().split()
+    return " ".join((tmp_path / "ca.pub").read_text().split()[:2]), cert[0], cert[1]
+
+
+def test_jump_cert_joins_every_principals_machines_in_one_line(monkeypatch, tmp_path):
+    module = load("jump-cert.py")
+    ca, kind, blob = certificate(tmp_path, ["alice", "project:robotics", "svc:b09", "carol"])
+    certs = tmp_path / "certs.json"
+    certs.write_text(
+        json.dumps(
+            {
+                "ca": ca,
+                "principals": {
+                    "alice": ["10.200.1.10:22"],
+                    "project:robotics": ["10.200.2.10:22", "10.200.1.10:22"],
+                    "bob": ["10.200.3.10:22"],
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(module, "CERTS", str(certs))
+    assert module.line("ca", kind, blob) == (
+        'cert-authority,principals="alice,project:robotics",restrict,port-forwarding,command="/usr/sbin/nologin",'
+        f'permitopen="10.200.1.10:22",permitopen="10.200.2.10:22" {ca}'
+    )
+    # Nothing for another user (the jump user keeps to its keys), a plain
+    # key, a bad blob or no machine.
+    assert module.line("jump", kind, blob) is None
+    assert module.line("root", kind, blob) is None
+    assert module.line("ca", "ssh-ed25519", blob) is None
+    assert module.line("ca", kind, blob + "\n") is None
+    certs.write_text(json.dumps({"ca": ca, "principals": {"bob": ["10.200.3.10:22"]}}))
+    assert module.line("ca", kind, blob) is None
+    certs.write_text("not json")
+    assert module.line("ca", kind, blob) is None
+
+
+def test_jump_cert_admits_nothing_from_a_map_no_control_plane_keeps(monkeypatch, tmp_path):
+    module = load("jump-cert.py")
+    ca, kind, blob = certificate(tmp_path, ["alice"])
+    certs = tmp_path / "certs.json"
+    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}}))
+    monkeypatch.setattr(module, "CERTS", str(certs))
+    assert module.line("ca", kind, blob) is not None
+    old = time.time() - module.MAX_AGE - 60
+    __import__("os").utime(certs, (old, old))
+    assert module.line("ca", kind, blob) is None
+
+
+def test_jump_cert_ignores_host_certificates(monkeypatch, tmp_path):
+    module = load("jump-cert.py")
+    ca, kind, blob = certificate(tmp_path, ["alice"], host=True)
+    certs = tmp_path / "certs.json"
+    certs.write_text(json.dumps({"ca": ca, "principals": {"alice": ["10.200.1.10:22"]}}))
+    monkeypatch.setattr(module, "CERTS", str(certs))
+    assert module.line("ca", kind, blob) is None
+
+
 def test_the_fetch_container_reaches_only_public_web_and_the_resolver():
     module = load("node-agent.py")
     rules = module.fetch_firewall({"protected_addresses": ["140.113.60.184/32"]}).splitlines()

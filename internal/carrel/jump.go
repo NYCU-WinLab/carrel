@@ -79,20 +79,72 @@ func (e *Execution) jumpEnabled() bool { return e.P.Config.SSHJump }
 // maxSavedKeys bounds ssh_key_add, which also keeps the jump file small.
 const maxSavedKeys = 50
 
-// syncJumpNow sends a key change to the jump host at once instead of with
-// the next reconcile.
+// jumpCertificates maps each principal a lab certificate may carry to the
+// SSH address of every machine whose principals file names it: the creator
+// or project:<name>, then the machine_access grants. On the jump host,
+// jump-cert.py joins the addresses of all the principals in one certificate
+// into a single line, because sshd uses only the first line that matches.
+// Only machines that trust the site's CA and serve SSH count. Without a CA it
+// is nil, which tells the jump host to drop its map.
+func jumpCertificates(s *Store, ca string) D {
+	if ca == "" {
+		return nil
+	}
+	reach := map[string]map[string]bool{}
+	for _, t := range s.Tenants() {
+		if t["status"] != "active" {
+			continue
+		}
+		for _, m := range s.Objects("machines", integer(t["n"])) {
+			if m["state"] == "deleting" || str(m["ssh_user_ca"]) != ca || str(m["ip"]) == "" || len(arr(m["service_ports"])) > 0 {
+				continue
+			}
+			for _, p := range caPrincipals(m) {
+				name := str(p)
+				if !caPrincipal.MatchString(name) {
+					continue
+				}
+				if reach[name] == nil {
+					reach[name] = map[string]bool{}
+				}
+				reach[name][str(m["ip"])+":22"] = true
+			}
+		}
+	}
+	principals := D{}
+	for name, targets := range reach {
+		list := make([]string, 0, len(targets))
+		for t := range targets {
+			list = append(list, t)
+		}
+		sort.Strings(list)
+		principals[name] = list
+	}
+	return D{"ca": ca, "principals": principals}
+}
+
+// syncJumpNow sends a key or access change to the jump host at once instead
+// of with the next reconcile.
 func (e *Execution) syncJumpNow() {
 	if e.jumpEnabled() {
-		e.SyncJump(jumpAuthorizedKeys(e.S))
+		e.SyncJump(jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA))
 	}
 }
 
-// SyncJump sends the jump host its keys. A jump host that cannot be reached
-// costs members only that path, so it does not fail the reconcile.
-func (e *Execution) SyncJump(keys string) any {
+// SyncJump sends the jump host its keys, then the certificate map in a
+// separate request, so a jump host that predates certificates still takes
+// keys. The map goes every time, nil included: the jump host drops it when
+// the site has no CA, and stops using it when no control plane has sent one
+// for a while (jump-cert.py). A jump host that cannot be reached costs
+// members only that path, so it does not fail the reconcile.
+func (e *Execution) SyncJump(keys string, certs D) any {
 	if f := attempt(func() { e.Call(D{"op": "sync", "authorized": keys}, "carrel-jump") }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		return "unavailable"
+	}
+	if f := attempt(func() { e.Call(D{"op": "certs", "certs": certs}, "carrel-jump") }); f != nil {
+		slog.Error("jump_certs_failed", "event", "jump_certs_failed")
+		return "keys_only"
 	}
 	return "synced"
 }

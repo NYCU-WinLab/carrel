@@ -594,6 +594,11 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 			safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName %s\n  User %s\n  ProxyJump jump@carrel.winlab.tw\n", alias, alias, str(m["ip"]), user)
 			safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
 		}
+		// With a lab certificate (step ssh login) and no saved key: the
+		// jump host's certificate user forwards to machines that trust it.
+		if str(m["ssh_user_ca"]) != "" && len(servicePortsOf(m)) == 0 {
+			safe["ssh_jump_certificate"] = fmt.Sprintf("ssh -J ca@carrel.winlab.tw %s@%s", user, str(m["ip"]))
+		}
 	}
 	return safe
 }

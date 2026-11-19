@@ -241,9 +241,11 @@ OUT ACCEPT -p tcp -dport 443
 
 
 def jump(vmid):
-    """The SSH jump host: one locked account, forwarding only."""
+    """The SSH jump host: locked accounts, forwarding only. jump takes saved
+    keys; ca takes lab certificates (configure-nodes.py also adds it)."""
     run("pct", "exec", str(vmid), "--", "sh", "-c",
         "id jump >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent jump; "
+        "id ca >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent ca; "
         "install -d -m 755 /etc/carrel-jump; touch /etc/carrel-jump/jump; chmod 644 /etc/carrel-jump/jump")
     conf = Path("/tmp/carrel-jump-sshd.conf")
     conf.write_text(JUMP_SSHD)

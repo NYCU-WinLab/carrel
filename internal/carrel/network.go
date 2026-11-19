@@ -432,11 +432,11 @@ func (e *Execution) Reconcile() D {
 	var jump any
 	if e.jumpEnabled() {
 		// Store reads stay on this goroutine; only the request runs beside.
-		keys := jumpAuthorizedKeys(e.S)
+		keys, certs := jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
 		gatewayDone.Add(1)
 		go func() {
 			defer gatewayDone.Done()
-			jump = e.SyncJump(keys)
+			jump = e.SyncJump(keys, certs)
 		}()
 	}
 	if len(nodes) > 1 {

@@ -192,6 +192,8 @@ func (e *Execution) MachineAccess(a, w, t D) D {
 		names = append(names, g.Username)
 	}
 	e.S.Log(by, n, "machine_access", D{"vmid": m["vmid"], "grant": grant, "revoke": revoke, "grants": names}, "ok")
+	// The jump host forwards a certificate only to the machines that let it in.
+	e.syncJumpNow()
 	return D{"machine": m["name"], "access": e.caAccess(m), "dry_run": false}
 }
 
