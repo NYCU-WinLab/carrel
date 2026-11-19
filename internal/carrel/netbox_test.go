@@ -1,9 +1,11 @@
 package carrel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -1411,5 +1413,28 @@ func TestNetBoxLeavesTheOperatorsTunnelEnds(t *testing.T) {
 	ends := f.all("vpn/tunnel-terminations/")
 	if len(ends) != 2 || obj(find(ends, func(o D) bool { return integer(o["id"]) == 50 })["role"])["value"] != "spoke" || integer(find(ends, func(o D) bool { return integer(o["id"]) != 50 })["termination_id"]) != integer(hub["termination_id"]) {
 		t.Fatal("ends wrong", ends)
+	}
+}
+
+func TestNetBoxFailureLogCarriesTheErrorUnlessShuttingDown(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	p, f, _ := netboxPlatform(t)
+	seedNetBoxWorld(p)
+	f.objects["users/owners/"] = nil
+	syncNetBox(t, p)
+	if out := buf.String(); !strings.Contains(out, "netbox_sync_failed") || !strings.Contains(out, "owner carrel does not exist") {
+		t.Fatal(out)
+	}
+
+	buf.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.execution(ctx).netboxRecord(nbResult{Errors: []string{"context canceled"}})
+	if buf.Len() != 0 {
+		t.Fatal(buf.String())
 	}
 }

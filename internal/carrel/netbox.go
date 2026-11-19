@@ -1327,7 +1327,10 @@ func (e *Execution) netboxRecord(r nbResult) {
 		if old == nil || old["last_error"] != last {
 			e.S.Log("netbox", nil, "netbox_sync", D{}, "failed: "+last)
 		}
-		slog.Error("netbox_sync_failed", "event", "netbox_sync_failed", "errors", len(r.Errors))
+		// A cancelled context means shutdown, not a sync problem.
+		if e.Ctx == nil || e.Ctx.Err() == nil {
+			slog.Error("netbox_sync_failed", "event", "netbox_sync_failed", "errors", len(r.Errors), "error", last)
+		}
 	}
 	e.S.SitePut("netbox", "status", status)
 }
