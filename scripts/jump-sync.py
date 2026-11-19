@@ -3,12 +3,12 @@
 
 Runs in CT 102 for the control plane's key (configure-nodes.py installs it). One
 JSON request on stdin: {"op": "sync", "authorized": text}, {"op": "certs",
-"certs": {"ca": key, "principals": {name: [address:port, ...]}, "users": [name,
-...]} or null} or {"op": "status"}. Every line must forward only to tenant
-machines: port 22 (issue #98), or a port a machine without SSH declares (issue
-#94), which its firewall admits. The certificate map lets jump-cert.py forward
-a lab certificate to the addresses its principals open; "users" are the
-usernames whose entry covers everything their keys open.
+"certs": {"ca": key, "principals": {name: [address:22, ...]}} or null} or
+{"op": "status"}. Every line must forward only to tenant machines: port 22
+(issue #98), or a port a machine without SSH declares (issue #94), which its
+firewall admits. The certificate map lets jump-cert.py forward a lab
+certificate to port 22 of the machines whose principals file names one of
+its principals.
 """
 
 import fcntl
@@ -22,11 +22,8 @@ from pathlib import Path
 KEYS = Path("/etc/carrel-jump/jump")
 CERTS = Path("/etc/carrel-jump/certs.json")
 STATE = Path("/var/lib/carrel-jump")
-ADDRESS = (
-    r"10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d)"
-    r":(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d\d|655[0-2]\d|6553[0-5])"
-)
-TARGET = 'permitopen="' + ADDRESS + '"'
+ADDRESS = r"10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d)"
+TARGET = r'permitopen="10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d):(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d\d|655[0-2]\d|6553[0-5])"'
 LINE = re.compile(
     r'restrict,port-forwarding,command="/usr/sbin/nologin",' + TARGET + "(?:," + TARGET + ")*"
     r" (?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,3}",
@@ -45,27 +42,24 @@ def check(text):
 
 
 # The lab CA's public key, with no comment; a principal as Carrel writes it in
-# a machine's principals file; a username; a forwarded port of a tenant machine.
+# a machine's principals file; port 22 of a tenant machine.
 CA = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}", re.ASCII)
 PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}", re.ASCII)
-USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}", re.ASCII)
-FORWARD = re.compile(ADDRESS, re.ASCII)
+SSH_TARGET = re.compile(ADDRESS + ":22", re.ASCII)
 
 
 def check_certs(certs):
-    if not isinstance(certs, dict) or set(certs) != {"ca", "principals", "users"}:
+    if not isinstance(certs, dict) or set(certs) != {"ca", "principals"}:
         raise ValueError("expected a certificate map")
-    ca, principals, users = certs["ca"], certs["principals"], certs["users"]
+    ca, principals = certs["ca"], certs["principals"]
     if not isinstance(ca, str) or not CA.fullmatch(ca) or not isinstance(principals, dict):
         raise ValueError("expected a certificate map")
     for name, targets in principals.items():
         if not PRINCIPAL.fullmatch(name) or not isinstance(targets, list) or not targets:
             raise ValueError("refusing a principal")
-        if not all(isinstance(t, str) and FORWARD.fullmatch(t) for t in targets):
+        if not all(isinstance(t, str) and SSH_TARGET.fullmatch(t) for t in targets):
             raise ValueError("refusing a certificate target")
-    if not isinstance(users, list) or not all(isinstance(u, str) and USERNAME.fullmatch(u) for u in users):
-        raise ValueError("refusing a username")
-    return json.dumps({"ca": ca, "principals": principals, "users": users}, sort_keys=True) + "\n"
+    return json.dumps({"ca": ca, "principals": principals}, sort_keys=True) + "\n"
 
 
 def write(path, content):

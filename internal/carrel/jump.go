@@ -3,9 +3,7 @@ package carrel
 import (
 	"fmt"
 	"log/slog"
-	"maps"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 )
@@ -18,11 +16,9 @@ import (
 
 var jumpKey = regexp.MustCompile(`^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/]+={0,3}`)
 
-// jumpReach maps each saved or installed key to the addresses it opens: every
-// port a machine of a tenant that holds it forwards. It also returns the keys
-// of each tenant.
-func jumpReach(s *Store) (map[string]map[string]bool, map[int][]string) {
-	reach, held := map[string]map[string]bool{}, map[int][]string{}
+// jumpAuthorizedKeys renders the jump user's authorized_keys file.
+func jumpAuthorizedKeys(s *Store) string {
+	reach := map[string]map[string]bool{}
 	for _, t := range s.Tenants() {
 		if t["status"] != "active" {
 			continue
@@ -44,37 +40,21 @@ func jumpReach(s *Store) (map[string]map[string]bool, map[int][]string) {
 			if key == "" {
 				continue
 			}
-			held[n] = append(held[n], key)
 			if reach[key] == nil {
 				reach[key] = map[string]bool{}
 			}
 			for _, m := range machines {
-				for _, a := range jumpTargets(m) {
-					reach[key][a] = true
+				// A machine without SSH forwards its declared ports (#94).
+				ports := servicePortsOf(m)
+				if len(ports) == 0 {
+					ports = []int{22}
+				}
+				for _, p := range ports {
+					reach[key][fmt.Sprintf("%s:%d", str(m["ip"]), p)] = true
 				}
 			}
 		}
 	}
-	return reach, held
-}
-
-// jumpTargets is what the jump host forwards to a machine: port 22, or the
-// ports a machine without SSH declares (#94).
-func jumpTargets(m D) []string {
-	ports := servicePortsOf(m)
-	if len(ports) == 0 {
-		ports = []int{22}
-	}
-	out := []string{}
-	for _, p := range ports {
-		out = append(out, fmt.Sprintf("%s:%d", str(m["ip"]), p))
-	}
-	return out
-}
-
-// jumpAuthorizedKeys renders the jump user's authorized_keys file.
-func jumpAuthorizedKeys(s *Store) string {
-	reach, _ := jumpReach(s)
 	keys := make([]string, 0, len(reach))
 	for k := range reach {
 		if len(reach[k]) > 0 {
@@ -100,95 +80,47 @@ func (e *Execution) jumpEnabled() bool { return e.P.Config.SSHJump }
 const maxSavedKeys = 50
 
 // jumpCertificates maps each principal a lab certificate may carry to the
-// addresses the jump host forwards it to. sshd offers a member's certificate
-// before their keys and uses the first line that matches, so a certificate
-// must open at least what the member's keys open, or it would shut them out
-// of machines their keys reach. The map does that for a member whose username
-// Carrel has recorded (rememberUsername): the username opens every address
-// any key of their personal tenant opens, and project:<name> opens every
-// machine of that project. "users" lists those usernames; jump-cert.py admits
-// a certificate only when it names one of them, and otherwise prints nothing
-// so sshd goes on to the keys. On top, a machine that trusts the site's CA
-// opens port 22 to the names in its principals file (machine_access). Without
-// a CA it is nil, which tells the jump host to drop its map.
+// SSH address of every machine whose principals file names it: the creator
+// or project:<name>, then the machine_access grants. On the jump host,
+// jump-cert.py joins the addresses of all the principals in one certificate
+// into a single line, because sshd uses only the first line that matches.
+// Only machines that trust the site's CA and serve SSH count. Without a CA it
+// is nil, which tells the jump host to drop its map.
 func jumpCertificates(s *Store, ca string) D {
 	if ca == "" {
 		return nil
 	}
 	reach := map[string]map[string]bool{}
-	add := func(name string, targets ...string) {
-		if !caPrincipal.MatchString(name) || len(targets) == 0 {
-			return
-		}
-		if reach[name] == nil {
-			reach[name] = map[string]bool{}
-		}
-		for _, t := range targets {
-			reach[name][t] = true
-		}
-	}
-	keys, held := jumpReach(s)
-	owners := map[string][]int{}
 	for _, t := range s.Tenants() {
 		if t["status"] != "active" {
 			continue
 		}
-		n, subject := integer(t["n"]), str(t["subject"])
-		machines := filter(s.Objects("machines", n), func(m D) bool { return m["state"] != "deleting" && str(m["ip"]) != "" })
-		if project := projectTenant.FindStringSubmatch(subject); project != nil {
-			for _, m := range machines {
-				add("project:"+project[1], jumpTargets(m)...)
-			}
-		}
-		if r := s.SiteGet("usernames", subject); strings.HasPrefix(subject, "user:") && r != nil && portalUsername.MatchString(str(r["username"])) {
-			owners[str(r["username"])] = append(owners[str(r["username"])], n)
-		}
-		for _, m := range machines {
-			if str(m["ssh_user_ca"]) != ca || len(arr(m["service_ports"])) > 0 {
+		for _, m := range s.Objects("machines", integer(t["n"])) {
+			if m["state"] == "deleting" || str(m["ssh_user_ca"]) != ca || str(m["ip"]) == "" || len(arr(m["service_ports"])) > 0 {
 				continue
 			}
 			for _, p := range caPrincipals(m) {
-				add(str(p), str(m["ip"])+":22")
+				name := str(p)
+				if !caPrincipal.MatchString(name) {
+					continue
+				}
+				if reach[name] == nil {
+					reach[name] = map[string]bool{}
+				}
+				reach[name][str(m["ip"])+":22"] = true
 			}
 		}
 	}
-	users := []string{}
-	for name, tenants := range owners {
-		// Two accounts that once had the same username: neither is sure.
-		if len(tenants) != 1 {
-			continue
-		}
-		users = append(users, name)
-		for _, k := range held[tenants[0]] {
-			add(name, slices.Collect(maps.Keys(keys[k]))...)
-		}
-		for _, m := range s.Objects("machines", tenants[0]) {
-			if m["state"] != "deleting" && str(m["ip"]) != "" {
-				add(name, jumpTargets(m)...)
-			}
-		}
-	}
-	sort.Strings(users)
 	principals := D{}
 	for name, targets := range reach {
-		principals[name] = slices.Sorted(maps.Keys(targets))
+		list := make([]string, 0, len(targets))
+		for t := range targets {
+			list = append(list, t)
+		}
+		sort.Strings(list)
+		principals[name] = list
 	}
-	return D{"ca": ca, "principals": principals, "users": users}
-}
-
-// rememberUsername records the Keycloak username of the caller's personal
-// tenant, from the token of each call, for jumpCertificates: a lab
-// certificate names its member by username, and a personal tenant is known
-// only by the account's subject.
-func (e *Execution) rememberUsername(w D) {
-	username, subject := str(w["username"]), "user:"+str(w["sub"])
-	if !portalUsername.MatchString(username) || str(w["sub"]) == "" || e.S.Tenant(subject) == nil {
-		return
-	}
-	if r := e.S.SiteGet("usernames", subject); r != nil && r["username"] == username {
-		return
-	}
-	e.S.SitePut("usernames", subject, D{"username": username})
+	return D{"ca": ca, "principals": principals}
 }
 
 // syncJumpNow sends a key or access change to the jump host at once instead

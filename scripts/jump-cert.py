@@ -2,21 +2,17 @@
 """The SSH jump host's AuthorizedKeysCommand for lab certificates.
 
 sshd runs it as `jump-cert.py %u %t %k` (user, key type, base64 key) for
-every key a client offers. sshd offers a member's certificate before their
-keys and uses the first line that matches, so a certificate line must open at
-least what the member's keys open, or the certificate would shut them out of
-machines their keys reach. Carrel's map (jump-sync.py keeps it) vouches for
-that only for the usernames in "users". So for a user certificate offered to
-the jump user that names one of them, this prints one line: the lab CA, the
-certificate's principals in the map, and permitopen for every address one of
-them opens. One line for all of them, because sshd uses only the first line
-that matches. sshd itself still checks the signature, the validity period and
-that a principal matches; this only reads the principals to choose the
-targets. A map older than MAX_AGE admits nothing: every reconcile (5 minutes)
-rewrites or touches it, so an old one means no control plane keeps it current
-(Carrel rolled back to a version without certificates, or stopped), and
-revocations would not reach it. Anything else prints nothing, and sshd goes on
-to the keys file.
+every key a client offers. For a user certificate offered to the jump user it
+prints one authorized_keys line: the lab CA, the certificate's principals
+that open a machine, and permitopen for port 22 of every machine that one of
+them opens, from the map jump-sync.py keeps (Carrel sends it). One line for
+all of them, because sshd uses only the first line that matches. sshd itself
+still checks the signature, the validity period and that a principal matches;
+this only reads the principals to choose the targets. A map older than
+MAX_AGE admits nothing: every reconcile (5 minutes) rewrites or touches it, so
+an old one means no control plane keeps it current (Carrel rolled back to a
+version without certificates, or stopped), and revocations would not reach
+it. Anything else prints nothing, and sshd goes on to the keys file.
 """
 
 import json
@@ -32,11 +28,7 @@ TYPE = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa)-cert
 BLOB = re.compile(r"[A-Za-z0-9+/]{1,16384}={0,2}", re.ASCII)
 CA = re.compile(r"(?:ssh-ed25519|ecdsa-sha2-nistp(?:256|384|521)|ssh-rsa) [A-Za-z0-9+/]+={0,2}", re.ASCII)
 PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}", re.ASCII)
-FORWARD = re.compile(
-    r"10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d)"
-    r":(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d\d|655[0-2]\d|6553[0-5])",
-    re.ASCII,
-)
+SSH_TARGET = re.compile(r"10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d):22", re.ASCII)
 
 
 def principals(key_type, blob):
@@ -66,17 +58,14 @@ def line(user, key_type, blob):
             certs = json.load(f)
     except (OSError, ValueError):
         return None
-    ca, reach, users = certs.get("ca"), certs.get("principals"), certs.get("users")
-    if not isinstance(ca, str) or not CA.fullmatch(ca) or not isinstance(reach, dict) or not isinstance(users, list):
-        return None
-    named = principals(key_type, blob)
-    if not any(name in users for name in named):
+    ca, reach = certs.get("ca"), certs.get("principals")
+    if not isinstance(ca, str) or not CA.fullmatch(ca) or not isinstance(reach, dict):
         return None
     names, targets = [], set()
-    for name in named:
+    for name in principals(key_type, blob):
         if PRINCIPAL.fullmatch(name) and isinstance(reach.get(name), list) and name not in names:
             names.append(name)
-            targets.update(t for t in reach[name] if isinstance(t, str) and FORWARD.fullmatch(t))
+            targets.update(t for t in reach[name] if isinstance(t, str) and SSH_TARGET.fullmatch(t))
     if not targets:
         return None
     opens = ",".join(f'permitopen="{t}"' for t in sorted(targets))
