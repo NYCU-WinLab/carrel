@@ -52,6 +52,7 @@ type Platform struct {
 	Telemetry    *Telemetry
 	HTTP         *http.Client
 	writer       sync.Mutex
+	snapshotting sync.Mutex
 	originRetry  backoff
 	certificates sync.Mutex
 	registration sync.Mutex

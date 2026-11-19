@@ -104,3 +104,28 @@ func TestCombinedCapacityNamesTheFullestNode(t *testing.T) {
 		t.Fatal(policy)
 	}
 }
+
+// A snapshot still being taken holds nothing, but a second request on the
+// node must see its disk taken out of the headroom.
+func TestSnapshotAdmissionCountsSnapshotsBeingTaken(t *testing.T) {
+	p, b := fixture(t)
+	b.mu.Lock()
+	b.inventory["snapshot_bytes"] = 0.0
+	b.mu.Unlock()
+	e := p.execution(context.Background())
+	node := p.Nodes()[0]
+	admit := func(gb float64) any {
+		return attempt(func() { e.Admission(node, 0, 0, gb, nil, true) })
+	}
+	if admit(1000) != nil {
+		t.Fatal("headroom before")
+	}
+	p.Store.Put("snapshots", "10100-new", 1, D{"id": "10100-new", "vmid": 10100, "name": "new", "disk_gb": 600, "state": "creating"})
+	if admit(590) != nil || admit(600) == nil {
+		t.Fatal("snapshot being taken not counted")
+	}
+	p.Store.Put("snapshots", "10100-new", 1, D{"id": "10100-new", "vmid": 10100, "name": "new", "disk_gb": 600, "state": "ready"})
+	if admit(1000) != nil {
+		t.Fatal("ready snapshot counted twice")
+	}
+}

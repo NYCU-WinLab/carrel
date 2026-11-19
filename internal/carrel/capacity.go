@@ -72,6 +72,13 @@ func summarize(inventory D, reservations []D, snapshots []snapshotRecord, at tim
 	held, accounting, headroom := declared, "declared", totalDisk*diskCeiling-usedDisk-declared
 	if v := inventory["snapshot_bytes"]; v != nil {
 		held, accounting, headroom = num(v), "held", totalDisk*diskCeiling-usedDisk
+		// A snapshot being taken holds nothing yet, but its disk is claimed:
+		// a second request must see the headroom the first one used.
+		for _, s := range snapshots {
+			if s.State == "creating" {
+				headroom -= float64(s.DiskGB) * GiB
+			}
+		}
 	}
 	disk += held
 	cpuLimit := num(info["cpus"]) * 4
