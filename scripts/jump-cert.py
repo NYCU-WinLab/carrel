@@ -35,7 +35,7 @@ def principals(key_type, blob):
     """The principals of a user certificate, as ssh-keygen reads them."""
     p = subprocess.run(["ssh-keygen", "-L", "-f", "-"], input=f"{key_type} {blob}\n",
                        capture_output=True, text=True, timeout=5, check=False)
-    if p.returncode or not re.search(r"^\s+Type: \S+ user certificate$", p.stdout, re.M):
+    if p.returncode or not re.search(r"^\s+Type: \S+ user certificate$", p.stdout, re.MULTILINE):
         return []
     out, inside = [], False
     for line in p.stdout.splitlines():
