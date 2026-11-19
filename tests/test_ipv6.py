@@ -1,5 +1,6 @@
 """Site IPv6 (issue #142, PLAN 6.13): addresses, guest rules, tunnel filter and host rules."""
 
+import contextlib
 import importlib.util
 import json
 from pathlib import Path
@@ -75,6 +76,8 @@ def test_opted_in_machine_rules(agent):
     for block in ("fc00::/7", "fe80::/10", "ff00::/8"):
         assert f"OUT DROP -dest {block}" in rules
     assert "IN ACCEPT -source ::/0 -p tcp -dport 22" in rules
+    ping = rules.index("IN ACCEPT -source ::/0 -p ipv6-icmp -icmp-type echo-request")
+    assert rules.index("IN DROP -source 2a14:7581:880::/48") < ping
     # Restricted: no tenant-wide IPv6 inbound either.
     restricted = agent.guest_firewall(
         machine(ipv6=True, network_access="restricted"), STATE, CONFIG
@@ -90,7 +93,12 @@ def test_network_file_and_container_options(agent):
     assert primary["addresses"] == ["10.200.17.11/24", "2a14:7581:880:17::11/64"]
     assert {"to": "::/0", "via": "2a14:7581:880:17::1"} in primary["routes"]
     assert primary["accept-ra"] is False
+    # The tunnel's MTU: no send needs a Packet Too Big from the exit node (#336).
+    assert primary["mtu"] == 1420
     assert agent.ct_ipv6(machine(ipv6=True)) == ",ip6=2a14:7581:880:17::11/64,gw6=2a14:7581:880:17::1"
+    assert agent.guest_mtu(machine(ipv6=True)) == 1420 and agent.guest_mtu(machine()) == 1450
+    agent.network_file(machine())
+    assert json.loads(files["/var/lib/vz/snippets/" + name])["ethernets"]["primary"]["mtu"] == 1450
     assert agent.ct_ipv6(machine()) == ""
 
 
@@ -109,6 +117,7 @@ def test_tunnel_removed_off_the_exit_node(agent, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
     monkeypatch.setattr(agent, "public_ingress", lambda: None)
+    monkeypatch.setattr(agent, "V6_IFACE", tmp_path / "carrel-v6")
     assert agent.ipv6({"machines": []}, agent.site_ipv6()) == {}
     assert not any(c[:2] == ("ip", "link") and "add" in c for c in calls)
 
@@ -249,3 +258,59 @@ def test_watchdog_failure_keeps_key_and_port(agent, monkeypatch, tmp_path):
     out = agent.ipv6_apply({"prefix": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
     assert out["public_key"] == "PUBKEY" and out["port"] == agent.V6_PORT
     assert out["watchdog_error"].startswith("CommandFailure")
+
+
+def test_tunnel_declared_to_ifupdown(agent):
+    # ifreload -a, run by every SDN apply, keeps only what its files declare (#336).
+    text = agent.v6_iface(agent.site_ipv6())
+    assert "auto wg-v6\niface wg-v6\n" in text
+    for line in (
+        "vrf vrf_tenants",
+        "mtu 1420",
+        "address 2a14:7581:880::1/128",
+        "post-up ip -6 route replace vrf vrf_tenants default dev wg-v6",
+    ):
+        assert "    " + line + "\n" in text
+
+
+def test_tunnel_removal_drops_the_ifupdown_file(agent, monkeypatch, tmp_path):
+    iface = tmp_path / "carrel-v6"
+    iface.write_text("auto wg-v6\n")
+    monkeypatch.setattr(agent, "V6_IFACE", iface)
+    monkeypatch.setattr(agent, "VPN_KEYS", tmp_path)
+    monkeypatch.setattr(agent, "run", lambda *a, **k: "")
+    agent.ipv6_remove()
+    assert not iface.exists()
+
+
+def test_neighbour_filter_removed_with_the_last_ipv6_guest(agent, monkeypatch, tmp_path):
+    rules, unit = tmp_path / "nd.nft", tmp_path / "carrel-nd.service"
+    rules.write_text("table bridge carrel_nd {}\n")
+    unit.write_text(agent.ND_UNIT)
+    monkeypatch.setattr(agent, "ND_RULES", rules)
+    monkeypatch.setattr(agent, "ND_UNIT_FILE", unit)
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
+    monkeypatch.setattr(agent.subprocess, "run", lambda a, **k: agent.subprocess.CompletedProcess(a, 0))
+    agent.nd_remove()
+    assert ("nft", "delete", "table", "bridge", "carrel_nd") in calls
+    assert ("systemctl", "disable", "--now", "carrel-nd") in calls
+    assert not rules.exists() and not unit.exists()
+
+
+def test_container_net0_has_one_mtu(agent, monkeypatch, tmp_path):
+    # pct rejects a duplicate key in net0 (#348 review).
+    monkeypatch.setattr(agent, "STATE", tmp_path)
+    monkeypatch.setattr(agent, "PVE_NODES", tmp_path / "nodes")
+    monkeypatch.setattr(agent, "ct_template", lambda image: "local:vztmpl/t")
+    monkeypatch.setattr(agent, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(agent, "first_firewall", lambda m: None)
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "status: running")
+    for m, mtu in ((machine(kind="ct", ipv6=True), "mtu=1420"), (machine(kind="ct"), "mtu=1450")):
+        calls.clear()
+        # Only the pct create call matters here.
+        with contextlib.suppress(Exception):
+            agent.create(m)
+        net0 = next(c[c.index("--net0") + 1] for c in calls if c[:2] == ("pct", "create"))
+        assert net0.count("mtu=") == 1 and mtu in net0.split(","), net0
