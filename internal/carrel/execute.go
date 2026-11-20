@@ -179,13 +179,13 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			e.Put("keys", fmt.Sprintf("%d-%s", n, id), n, D{"id": id, "key": a["key"], "by": w["username"]})
 			e.syncJumpNow()
 		}
-		return D{"id": id, "dry_run": dry, "quota_after": e.Quota(t)}
+		return e.withJump(D{"id": id, "dry_run": dry, "quota_after": e.Quota(t)})
 	case "ssh_key_remove":
 		if !dry {
 			e.S.Remove("keys", fmt.Sprintf("%d-%s", n, str(a["id"])))
 			e.syncJumpNow()
 		}
-		return D{"dry_run": dry, "quota_after": e.Quota(t)}
+		return e.withJump(D{"dry_run": dry, "quota_after": e.Quota(t)})
 	case "machine_list", "machine_get":
 		ms := e.S.Objects("machines", n)
 		if tool == "machine_get" {

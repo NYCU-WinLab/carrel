@@ -165,6 +165,34 @@ func (e *Execution) syncJumpNow() {
 	go p.jumpWorker()
 }
 
+// jumpStatus is the jump field of a key or access result: "pending" while a
+// queued sync has not confirmed, the last failed outcome ("unavailable" or
+// "keys_only") after it, and "" when jump is disabled or the host took the
+// change.
+func (e *Execution) jumpStatus() string {
+	if !e.jumpEnabled() {
+		return ""
+	}
+	p := e.P
+	p.jumpQueueMu.Lock()
+	defer p.jumpQueueMu.Unlock()
+	if p.jumpPending || p.jumpRunning {
+		return "pending"
+	}
+	if p.jumpLast == "synced" {
+		return ""
+	}
+	return p.jumpLast
+}
+
+// withJump adds the jump field to a handler result when there is one to show.
+func (e *Execution) withJump(r D) D {
+	if s := e.jumpStatus(); s != "" {
+		r["jump"] = s
+	}
+	return r
+}
+
 func (p *Platform) jumpWorker() {
 	defer p.wg.Done()
 	e := p.execution(p.ctx)
@@ -178,13 +206,17 @@ func (p *Platform) jumpWorker() {
 		}
 		p.jumpPending = false
 		p.jumpQueueMu.Unlock()
+		var outcome any = "unavailable"
 		if f := attempt(func() {
 			keys, certs := e.lockJumpState()
 			defer p.jumpMu.Unlock()
-			e.SyncJump(keys, certs)
+			outcome = e.SyncJump(keys, certs)
 		}); f != nil {
 			slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		}
+		p.jumpQueueMu.Lock()
+		p.jumpLast, _ = outcome.(string)
+		p.jumpQueueMu.Unlock()
 	}
 }
 

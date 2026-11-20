@@ -78,10 +78,12 @@ type Platform struct {
 	// jumpMu makes a jump sync read the store and send under one lock.
 	jumpMu sync.Mutex
 	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
-	jumpQueueMu        sync.Mutex
-	jumpPending        bool
-	jumpRunning        bool
-	jumpClosed         bool
+	jumpQueueMu sync.Mutex
+	jumpPending bool
+	jumpRunning bool
+	jumpClosed  bool
+	// jumpLast is the outcome of the last background SyncJump ("" before any).
+	jumpLast           string
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
