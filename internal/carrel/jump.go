@@ -139,14 +139,48 @@ func (e *Execution) lockJumpState() (keys string, certs D) {
 	return keys, certs
 }
 
-// syncJumpNow sends a key or access change to the jump host at once instead
-// of with the next reconcile. Like the reconcile path, it reads the store
-// and sends under jumpMu, so the last request sent carries the latest state.
+// syncJumpNow asks for a jump sync after a key or access change and returns
+// at once, so a request never waits for the jump host. One worker runs at a
+// time; asks that arrive while it sends coalesce into one more pass. The pass
+// reads the store and sends under jumpMu, like the reconcile path, so the last
+// request sent carries the latest state. A failed send is logged by SyncJump
+// and the next reconcile repairs it.
 func (e *Execution) syncJumpNow() {
-	if e.jumpEnabled() {
-		e.P.jumpMu.Lock()
-		defer e.P.jumpMu.Unlock()
-		e.SyncJump(jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA))
+	if !e.jumpEnabled() {
+		return
+	}
+	p := e.P
+	p.jumpQueueMu.Lock()
+	defer p.jumpQueueMu.Unlock()
+	p.jumpPending = true
+	if p.jumpRunning {
+		return
+	}
+	p.jumpRunning = true
+	p.wg.Add(1)
+	go p.jumpWorker()
+}
+
+func (p *Platform) jumpWorker() {
+	defer p.wg.Done()
+	e := p.execution(p.ctx)
+	for {
+		p.jumpQueueMu.Lock()
+		if !p.jumpPending || p.ctx.Err() != nil {
+			p.jumpRunning = false
+			p.jumpPending = false
+			p.jumpQueueMu.Unlock()
+			return
+		}
+		p.jumpPending = false
+		p.jumpQueueMu.Unlock()
+		if f := attempt(func() {
+			keys, certs := e.lockJumpState()
+			defer p.jumpMu.Unlock()
+			e.SyncJump(keys, certs)
+		}); f != nil {
+			slog.Error("jump_sync_failed", "event", "jump_sync_failed")
+		}
 	}
 }
 
