@@ -201,15 +201,27 @@ func (p *Platform) jumpWorker() {
 // keys. The map goes every time, nil included: the jump host drops it when
 // the site has no CA, and stops using it when no control plane has sent one
 // for a while (jump-cert.py). Both requests carry gen, so jump-sync.py can
-// refuse a write older than the one it holds. A jump host that cannot be reached costs
+// refuse a write older than the one it holds; a refused keys write reports
+// "stale" and a refused certs write "keys_only". A jump host that cannot be reached costs
 // members only that path, so it does not fail the reconcile.
 func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
-	if f := attempt(func() { e.Call(D{"op": "sync", "authorized": keys, "gen": gen}, jumpTarget) }); f != nil {
+	var res any
+	if f := attempt(func() { res = e.Call(D{"op": "sync", "authorized": keys, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		return "unavailable"
 	}
-	if f := attempt(func() { e.Call(D{"op": "certs", "certs": certs, "gen": gen}, jumpTarget) }); f != nil {
+	// jumpMu orders this process's writes, so a refusal means the jump host
+	// holds a generation ahead of ours: the old keys stay, which is an error.
+	if obj(res)["stale"] == true {
+		slog.Error("jump_sync_stale", "event", "jump_sync_stale", "gen", gen)
+		return "stale"
+	}
+	if f := attempt(func() { res = e.Call(D{"op": "certs", "certs": certs, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_certs_failed", "event", "jump_certs_failed")
+		return "keys_only"
+	}
+	if obj(res)["stale"] == true {
+		slog.Error("jump_certs_stale", "event", "jump_certs_stale", "gen", gen)
 		return "keys_only"
 	}
 	return "synced"

@@ -428,3 +428,22 @@ func TestEachJumpSyncSendsAHigherGenOnBothOps(t *testing.T) {
 		t.Fatal(n, b.calls)
 	}
 }
+
+func TestARefusedJumpWriteIsNotReportedAsSynced(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	for op, want := range map[string]string{"sync": "stale", "certs": "keys_only"} {
+		b.call = func(r D, _ string) (any, error) {
+			if r["op"] == op {
+				return D{"changed": false, "stale": true}, nil
+			}
+			return D{"changed": true}, nil
+		}
+		if r := e.SyncJump("", nil, 1); r != want {
+			t.Fatal(op, r)
+		}
+	}
+	if b.count("certs") != 1 {
+		t.Fatal("certs went after a refused keys write", b.calls)
+	}
+}
