@@ -680,3 +680,33 @@ func TestMachineAccessRevokeQueuesAJumpCertificateSync(t *testing.T) {
 		t.Fatal("machine_access queued no jump sync")
 	}
 }
+
+func TestTheStartPushArrivesWhileTheFirstNodeReconcileIsBlocked(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	seedMachine(p, "web", 10100)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	b.call = func(r D, target string) (any, error) {
+		if target != "carrel-jump" {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+		return D{}, nil
+	}
+	p.Start()
+	// Deferred last-in first-out: release the node call before Close waits.
+	defer p.Close()
+	defer unblock()
+	waitFor(t, entered, "the first reconcile never called a node")
+	deadline := time.Now().Add(5 * time.Second)
+	for b.count("sync") < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("no jump sync arrived while the first node call was blocked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	unblock()
+}
