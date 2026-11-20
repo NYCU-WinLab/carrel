@@ -502,6 +502,54 @@ func TestDeleteRemovesTheRecordWhenReconcileFails(t *testing.T) {
 	}
 }
 
+// forgetMachine runs before the post-delete reconcile, so a failing reconcile
+// must not leave ports, domains, peers, a VIP holder or a public IP binding
+// behind (#309).
+func TestDeleteForgetsWhatHangsOffTheMachineWhenReconcileFails(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	st := p.Store
+	st.Put("ports", "g1", 1, D{"id": "g1", "tenant_n": 1, "vmid": 10100, "ip": "10.200.1.10", "port": 80, "public_port": 20080, "proto": "tcp"})
+	st.Put("ports", "g2", 1, D{"id": "g2", "tenant_n": 1, "vmid": 10200, "ip": "10.200.1.11", "port": 80, "public_port": 20081, "proto": "tcp"})
+	st.Put("domains", "d1", 1, D{"id": "d1", "tenant_n": 1, "vmid": 10100, "sub": "web", "slug": "alice", "name": "web.alice.winlab.tw", "target_port": 8080, "state": "ready", "ready_at": 1})
+	st.Put("domains", "d2", 1, D{"id": "d2", "tenant_n": 1, "vmid": 10200, "sub": "other", "slug": "alice", "name": "other.alice.winlab.tw", "target_port": 8080, "state": "ready", "ready_at": 1})
+	st.Put("peers", "p1", 1, D{"id": "p1", "tenant_n": 1, "source": "10.200.1.20/32", "target": "10.200.1.10", "port": 22, "proto": "tcp"})
+	st.Put("peers", "p2", 1, D{"id": "p2", "tenant_n": 1, "source": "10.200.1.10/32", "target": "10.200.1.20", "port": 22, "proto": "tcp"})
+	st.Put("peers", "p3", 1, D{"id": "p3", "tenant_n": 1, "source": "10.200.1.30/32", "target": "10.200.1.20", "port": 22, "proto": "tcp"})
+	st.Put("vips", "v1", 1, D{"id": "v1", "tenant_n": 1, "name": "api", "address": "10.200.9.1", "vmids": []int{10100, 10200}})
+	st.Put("public_ips", "ip1", 1, D{"id": "ip1", "address": "140.113.1.1", "tenant_n": 1, "vmid": 10100, "ports": []string{"80/tcp"}, "bound_at": 5})
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "reconcile" {
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "node unreachable", "recovery": "retry_infrastructure"}}}, true
+		}
+		return nil, nil, false
+	})
+	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("the record stayed after the reconcile failed")
+	}
+	for _, g := range [][2]string{{"ports", "g1"}, {"domains", "d1"}, {"peers", "p1"}, {"peers", "p2"}} {
+		if st.Get(g[0], g[1]) != nil {
+			t.Fatalf("%s %s of the deleted machine stayed", g[0], g[1])
+		}
+	}
+	for _, g := range [][2]string{{"ports", "g2"}, {"domains", "d2"}, {"peers", "p3"}} {
+		if st.Get(g[0], g[1]) == nil {
+			t.Fatalf("%s %s of another machine was removed", g[0], g[1])
+		}
+	}
+	vip := st.Get("vips", "v1")
+	if vip == nil {
+		t.Fatal("the VIP address was released")
+	}
+	if holders := arr(obj(vip)["vmids"]); len(holders) != 1 || integer(holders[0]) != 10200 {
+		t.Fatalf("the deleted machine still holds the VIP: %v", holders)
+	}
+	ip := obj(st.Get("public_ips", "ip1"))
+	if ip == nil || integer(ip["vmid"]) != 0 || ip["ports"] != nil || num(ip["bound_at"]) != 0 {
+		t.Fatalf("the public IP stayed bound or was released: %v", ip)
+	}
+}
+
 // The first node reconciles, then the gateway step fails: the delete still
 // succeeds and the record is gone, since the next reconcile pass catches up.
 func TestDeleteRemovesTheRecordWhenOnlyTheGatewayFails(t *testing.T) {
