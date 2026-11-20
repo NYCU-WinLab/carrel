@@ -55,8 +55,14 @@ def test_certs_keep_their_own_generation(monkeypatch, module):
     other = {**CERTS, "principals": {"bob": ["10.200.2.10:22"]}}
     assert run(monkeypatch, module, {"op": "certs", "certs": CERTS, "gen": 3})["changed"] is True
     before = module.CERTS.read_text()
-    assert run(monkeypatch, module, {"op": "certs", "certs": other, "gen": 2}) == {"changed": False, "stale": True}
-    assert run(monkeypatch, module, {"op": "certs", "certs": None, "gen": 1}) == {"changed": False, "stale": True}
+    assert run(monkeypatch, module, {"op": "certs", "certs": other, "gen": 2}) == {
+        "changed": False,
+        "stale": True,
+    }
+    assert run(monkeypatch, module, {"op": "certs", "certs": None, "gen": 1}) == {
+        "changed": False,
+        "stale": True,
+    }
     assert module.CERTS.read_text() == before
     assert sync(monkeypatch, module, KEY, gen=1)["changed"] is True
     assert run(monkeypatch, module, {"op": "certs", "certs": other, "gen": 4})["changed"] is True
