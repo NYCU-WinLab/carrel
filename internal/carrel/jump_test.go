@@ -560,3 +560,59 @@ func TestARefusedJumpWriteIsNotReportedAsSynced(t *testing.T) {
 		t.Fatal("certs went after a refused keys write", b.calls)
 	}
 }
+
+func TestTheStartPushRetriesUntilTheJumpHostTakesIt(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	p.jumpBackoff, p.jumpBackoffMax = time.Millisecond, 4*time.Millisecond
+	var mu sync.Mutex
+	fails := 3
+	b.call = func(r D, target string) (any, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if target == "carrel-jump" && fails > 0 {
+			fails--
+			return nil, fmt.Errorf("jump host down")
+		}
+		return D{}, nil
+	}
+	p.execution(context.Background()).syncJumpUntilSynced()
+	waitJumpIdle(t, p)
+	if got := p.execution(context.Background()).jumpStatus(); got != "" {
+		t.Fatalf("jumpStatus = %q", got)
+	}
+	if n := b.count("sync"); n != 4 {
+		t.Fatalf("sync sent %d times, want 3 failures and 1 success", n)
+	}
+	// Synced once: the retry is over.
+	if n := b.count("certs"); n != 1 {
+		t.Fatalf("certs sent %d times", n)
+	}
+	p.jumpQueueMu.Lock()
+	retry := p.jumpRetry
+	p.jumpQueueMu.Unlock()
+	if retry {
+		t.Fatal("retry still on after a synced push")
+	}
+}
+
+func TestCloseEndsTheStartPushRetryWhileItBacksOff(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	p.jumpBackoff, p.jumpBackoffMax = time.Hour, time.Hour
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" {
+			return nil, fmt.Errorf("jump host down")
+		}
+		return D{}, nil
+	}
+	p.execution(context.Background()).syncJumpUntilSynced()
+	deadline := time.Now().Add(5 * time.Second)
+	for b.count("sync") < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	done := make(chan struct{})
+	go func() { p.Close(); close(done) }()
+	waitFor(t, done, "Close was held up by the jump retry")
+	waitJumpIdle(t, p)
+}

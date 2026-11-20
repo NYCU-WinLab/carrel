@@ -84,6 +84,14 @@ type Platform struct {
 	jumpPending bool
 	jumpRunning bool
 	jumpClosed  bool
+	// jumpRetry makes the worker resend with backoff until one sync reports
+	// "synced"; Start sets it. jumpWake ends a backoff wait early when a new
+	// ask arrives. Both are guarded by jumpQueueMu.
+	jumpRetry bool
+	jumpWake  chan struct{}
+	// jumpBackoff and jumpBackoffMax bound the retry wait (tests shorten them).
+	jumpBackoff    time.Duration
+	jumpBackoffMax time.Duration
 	// jumpLast is the outcome of the last background SyncJump ("" before any).
 	jumpLast           string
 	reports            map[int]chan struct{}
