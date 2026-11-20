@@ -131,12 +131,15 @@ def jump(key):
     run("pct", "exec", "102", "--", "sh", "-c",
         "id ca >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent ca")
     # sshd -t before the restart, so a bad file never takes the jump host down.
-    # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
+    # The previous drop-in comes back when the new one fails, so `ca` keeps its
+    # lab certificates. Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
+    f = "/etc/ssh/sshd_config.d/carrel-jump-certs.conf"
     run("pct", "exec", "102", "--", "sh", "-c",
-        "umask 022 && cat > /etc/ssh/sshd_config.d/carrel-jump-certs.conf.next"
-        " && mv /etc/ssh/sshd_config.d/carrel-jump-certs.conf.next /etc/ssh/sshd_config.d/carrel-jump-certs.conf"
-        " && if sshd -t; then systemctl try-restart ssh.service;"
-        " else rm -f /etc/ssh/sshd_config.d/carrel-jump-certs.conf; exit 1; fi",
+        f"umask 022 && cat > {f}.next && {{ ! [ -e {f} ] || cp -p {f} {f}.prev; }} && mv {f}.next {f}"
+        f" && {{ sshd -t && systemctl try-restart ssh.service; }}"
+        f" && rm -f {f}.prev"
+        f" || {{ if [ -e {f}.prev ]; then mv {f}.prev {f}; else rm -f {f}; fi;"
+        " systemctl try-restart ssh.service; exit 1; }",
         input=JUMP_CERT_SSHD)
     current = run("pct", "exec", "102", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
     kept = [x for x in current.splitlines() if JUMP_SYNC not in x]
