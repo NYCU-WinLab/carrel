@@ -374,3 +374,31 @@ func TestAJumpAskAfterCloseStartsNoWorker(t *testing.T) {
 		t.Fatal("a jump worker started after Close")
 	}
 }
+
+func TestReconcileWithDeferredJumpDoesNotPushJump(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	var mu sync.Mutex
+	pushes := 0
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" && r["op"] == "sync" {
+			mu.Lock()
+			pushes++
+			mu.Unlock()
+		}
+		return D{}, nil
+	}
+	count := func() int { mu.Lock(); defer mu.Unlock(); return pushes }
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	e.deferJump = true
+	e.Reconcile()
+	if n := count(); n != 0 {
+		t.Fatalf("reconcile pushed the jump state under the writer: %d syncs", n)
+	}
+	e.syncJumpNow()
+	waitJumpIdle(t, p)
+	if count() == 0 {
+		t.Fatal("the deferred jump push never ran")
+	}
+}

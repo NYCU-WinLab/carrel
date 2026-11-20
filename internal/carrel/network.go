@@ -430,7 +430,7 @@ func (e *Execution) Reconcile() D {
 		gatewayFailure = attempt(func() { held = e.SyncGateway(state) })
 	}()
 	var jump any
-	if e.jumpEnabled() {
+	if e.jumpEnabled() && !e.deferJump {
 		// Store reads stay on this goroutine; only the request runs beside.
 		// jumpMu is taken before the read and released after the send, so an
 		// older map cannot follow a newer one (syncJumpNow).

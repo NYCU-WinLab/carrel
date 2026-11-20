@@ -99,6 +99,9 @@ type Execution struct {
 	Op                  D
 	publicationPrepared bool
 	placement           nodeRef
+	// deferJump leaves the jump push out of Reconcile; the caller sends it
+	// with syncJumpNow after it releases the writer.
+	deferJump bool
 }
 
 func NewPlatform(s *Store, b Backend, c Config) *Platform {
