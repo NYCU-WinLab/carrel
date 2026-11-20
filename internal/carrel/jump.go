@@ -152,6 +152,10 @@ func (e *Execution) syncJumpNow() {
 	p := e.P
 	p.jumpQueueMu.Lock()
 	defer p.jumpQueueMu.Unlock()
+	if p.jumpClosed {
+		// Shutting down: the push at the next Start carries this change.
+		return
+	}
 	p.jumpPending = true
 	if p.jumpRunning {
 		return

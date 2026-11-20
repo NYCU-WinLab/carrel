@@ -290,6 +290,9 @@ func (p *Platform) Start() {
 	p.Operations.Recover()
 	p.startNetBox()
 	p.startTelemetry()
+	// Push the jump state once at start, so a revoke committed around the last
+	// shutdown does not wait for a node to answer the first reconcile.
+	p.execution(p.ctx).syncJumpNow()
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
@@ -326,7 +329,14 @@ func (p *Platform) Start() {
 		}
 	}()
 }
-func (p *Platform) Close() { p.cancel(); p.wg.Wait() }
+func (p *Platform) Close() {
+	// Closing the jump queue first means no handler can p.wg.Add(1) while Wait runs.
+	p.jumpQueueMu.Lock()
+	p.jumpClosed = true
+	p.jumpQueueMu.Unlock()
+	p.cancel()
+	p.wg.Wait()
+}
 
 // Slow certificate renewal runs without the infrastructure writer. Revalidate
 // each domain under the writer before routing an orphaned publication.

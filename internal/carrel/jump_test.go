@@ -302,3 +302,75 @@ func TestAJumpSyncDoesNotHoldUpTheRequest(t *testing.T) {
 		t.Fatalf("expected the sync to arrive once or twice, got %d", syncs)
 	}
 }
+
+func TestAJumpRevokeCommittedDuringASendIsPushedOnce(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJumpRevokeTestKey"
+	m := seedMachine(p, "web", 10100)
+	m["ssh_keys"] = []string{key}
+	p.Store.Put("machines", 10100, 1, m)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	var sent []string
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" && r["op"] == "sync" {
+			first := false
+			once.Do(func() { first = true })
+			if first {
+				entered <- struct{}{}
+				<-release
+			}
+			mu.Lock()
+			sent = append(sent, str(r["authorized"]))
+			mu.Unlock()
+		}
+		return D{}, nil
+	}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	e := p.execution(context.Background())
+	e.syncJumpNow()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first send never reached the backend")
+	}
+	m["ssh_keys"] = []string{}
+	p.Store.Put("machines", 10100, 1, m)
+	for i := 0; i < 5; i++ {
+		e.syncJumpNow()
+	}
+	close(release)
+	waitJumpIdle(t, p)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 2 {
+		t.Fatalf("expected the blocked send and one follow-up, got %d", len(sent))
+	}
+	if !strings.Contains(sent[0], "AAAAC3NzaC1lZDI1NTE5AAAAIJumpRevokeTestKey") {
+		t.Fatal("the first send did not carry the key")
+	}
+	if sent[1] != "" {
+		t.Fatalf("the follow-up still carries the revoked key: %q", sent[1])
+	}
+}
+
+func TestAJumpAskAfterCloseStartsNoWorker(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	p.Close()
+	e.syncJumpNow()
+	if p.jumpRunning || b.count("sync") != 0 {
+		t.Fatal("a jump worker started after Close")
+	}
+}
