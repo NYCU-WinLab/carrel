@@ -53,8 +53,9 @@ type Config struct {
 	TelemetryURL       string `json:"telemetry_url,omitempty"`
 	TelemetryTokenFile string `json:"telemetry_token_file,omitempty"`
 
-	// IPv6Prefix is the site's routed /48 (issue #142, sites/<site>/cluster.json
-	// ipv6.prefix). Empty: machines have IPv4 only and machine_create refuses ipv6.
+	// IPv6Prefix is the site's tenant pool (issue #142, sites/<site>/cluster.json
+	// ipv6.tenants, by default the first /48 of ipv6.prefix). Empty: machines
+	// have IPv4 only and machine_create refuses ipv6.
 	IPv6Prefix string `json:"ipv6_prefix,omitempty"`
 
 	HostedRedirects []string `json:"hosted_redirects,omitempty"`
