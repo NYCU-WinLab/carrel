@@ -984,6 +984,19 @@ def untracked_na(value):
 
 
 ND_RULES = Path("/etc/carrel/nd.nft")
+
+
+def nd_install(rules):
+    # Check on a staged path: a rejected file must never become the boot file.
+    staged = ND_RULES.with_name(ND_RULES.name + ".new")
+    write(staged, rules)
+    try:
+        run("nft", "-c", "-f", staged)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    os.replace(staged, ND_RULES)
+    run("nft", "-f", ND_RULES)
 ND_UNIT_FILE = Path("/etc/systemd/system/carrel-nd.service")
 
 
@@ -1480,9 +1493,7 @@ table inet carrel_conntrack {{
         if ND_RULES.exists():
             nd_remove()
     else:
-        write("/etc/carrel/nd.nft", nd_nft(with_v6))
-        run("nft", "-c", "-f", "/etc/carrel/nd.nft")
-        run("nft", "-f", "/etc/carrel/nd.nft")
+        nd_install(nd_nft(with_v6))
         # After the filter: the bridges then learn only what it lets through.
         untracked_na(2)
         # And at boot, before the guests start: their firewall keeps ndp: 1.

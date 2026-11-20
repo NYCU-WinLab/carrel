@@ -346,6 +346,35 @@ def test_neighbour_filter_removed_with_the_last_ipv6_guest(agent, monkeypatch, t
     assert not rules.exists() and not unit.exists()
 
 
+def test_rejected_neighbour_filter_keeps_the_boot_file(agent, monkeypatch, tmp_path):
+    rules = tmp_path / "nd.nft"
+    rules.write_text("old\n")
+    monkeypatch.setattr(agent, "ND_RULES", rules)
+    calls = []
+
+    def run(*a, **k):
+        calls.append(a)
+        if "-c" in a:
+            raise agent.CommandFailure("nft failed")
+
+    monkeypatch.setattr(agent, "run", run)
+    with pytest.raises(agent.CommandFailure):
+        agent.nd_install("new\n")
+    assert rules.read_text() == "old\n"
+    assert not (tmp_path / "nd.nft.new").exists()
+    assert not any(a[1:2] == ("-f",) for a in calls)
+
+
+def test_checked_neighbour_filter_replaces_the_boot_file(agent, monkeypatch, tmp_path):
+    rules = tmp_path / "nd.nft"
+    rules.write_text("old\n")
+    monkeypatch.setattr(agent, "ND_RULES", rules)
+    monkeypatch.setattr(agent, "run", lambda *a, **k: "")
+    agent.nd_install("new\n")
+    assert rules.read_text() == "new\n"
+    assert not (tmp_path / "nd.nft.new").exists()
+
+
 def test_container_net0_has_one_mtu(agent, monkeypatch, tmp_path):
     # pct rejects a duplicate key in net0 (#348 review).
     monkeypatch.setattr(agent, "STATE", tmp_path)
