@@ -535,7 +535,8 @@ func TestKeyToolsReportAPendingJumpSyncWithoutWaiting(t *testing.T) {
 	// Once the host took the change, the field is gone.
 	r = app.Call(context.Background(), "ssh_key_remove", D{"tenant": "shared", "id": r["id"]}, alice)
 	assertOK(t, r)
-	if got := r["jump"]; got != "pending" {
+	// The worker may already have finished: pending or absent, never a failure.
+	if got := r["jump"]; got != nil && got != "pending" {
 		t.Fatalf("jump = %v: %s", got, encoded(r))
 	}
 	waitJumpIdle(t, p)
