@@ -902,3 +902,44 @@ func TestAnUnusableJumpAcknowledgmentIsNotReportedAsSynced(t *testing.T) {
 		}
 	}
 }
+
+func TestAReconcileResendsAfterAStaleRefusal(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	held := time.Now().UnixMicro() + 1_000_000_000
+	b.call = func(r D, target string) (any, error) {
+		if target == jumpTarget && r["gen"].(int64) < held {
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
+		}
+		if target == jumpTarget {
+			return D{"changed": true}, nil
+		}
+		return nil, nil
+	}
+	e := p.execution(context.Background())
+	var res D
+	attempt(func() { res = e.Reconcile() })
+	ops, gens := jumpGens(b)
+	n := len(gens)
+	if n < 2 || fmt.Sprint(ops[n-2:]) != "[sync certs]" || gens[n-2] != float64(held+1) || gens[n-1] != gens[n-2] {
+		t.Fatal(ops, gens, held)
+	}
+	if res["jump"] != "synced" {
+		t.Fatal(res["jump"])
+	}
+}
+
+func TestAHeldGenOutsideTheExactIntegerRangeIsIgnored(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	for _, held := range []float64{-5, 1.5, 1 << 53, 1e300} {
+		e.raiseJumpGen(D{"held": held})
+		if p.jumpGen != 0 {
+			t.Fatal(held, p.jumpGen)
+		}
+	}
+	e.raiseJumpGen(D{"held": float64(42)})
+	if p.jumpGen != 42 {
+		t.Fatal(p.jumpGen)
+	}
+}
