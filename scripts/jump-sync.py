@@ -7,8 +7,10 @@ JSON request on stdin: {"op": "sync", "authorized": text}, {"op": "certs",
 {"op": "status"}. Every line must forward only to tenant machines: port 22
 (issue #98), or a port a machine without SSH declares (issue #94), which its
 firewall admits.
-Both requests take an optional integer "gen"; a write older than the last one accepted
-for that file is refused with {"changed": false, "stale": true}. The certificate map lets jump-cert.py forward a lab
+Both writes take a non-negative integer "gen"; a write older than the last one accepted
+for that file is refused with {"changed": false, "stale": true}. Until a file has a
+recorded generation the "gen" may be left out (deploy order, issue #371); after that an
+unversioned write is refused, and so is a write when the recorded generation is unreadable. The certificate map lets jump-cert.py forward a lab
 certificate to port 22 of the machines whose principals file names one of
 its principals.
 """
@@ -73,13 +75,20 @@ def write(path, content):
 
 def stale(name, gen):
     """The held generation when gen is older than the last accepted one, else None (and records gen). Call under the lock."""
-    if gen is None:
-        return None
     path = STATE / name
     try:
         held = int(path.read_text())
-    except (FileNotFoundError, ValueError):
+        if held < 0:
+            raise ValueError("negative generation")
+    except FileNotFoundError:
         held = None
+    except ValueError as e:
+        # A damaged sidecar must not reset the guard.
+        raise RuntimeError("unreadable generation file") from e
+    if gen is None:
+        if held is not None:
+            raise ValueError("expected a generation")
+        return None
     if held is not None and gen < held:
         return held
     if held != gen:
@@ -93,9 +102,11 @@ def main():
         raise ValueError("request too large")
     request = json.loads(raw)
     op = request.pop("op", None) if isinstance(request, dict) else None
-    gen = request.pop("gen", None) if isinstance(request, dict) else None
-    if gen is not None and (type(gen) is not int or gen < 0):
-        raise ValueError("expected an integer generation")
+    gen = None
+    if op in ("sync", "certs") and "gen" in request:
+        gen = request.pop("gen")
+        if type(gen) is not int or gen < 0:
+            raise ValueError("expected an integer generation")
     STATE.mkdir(parents=True, exist_ok=True)
     if op == "status" and not request:
         return {"sha256": hashlib.sha256(KEYS.read_bytes()).hexdigest() if KEYS.exists() else None}

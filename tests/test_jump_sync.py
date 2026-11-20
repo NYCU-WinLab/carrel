@@ -45,10 +45,18 @@ def test_a_higher_gen_writes_and_a_lower_one_is_refused(monkeypatch, module):
     assert sync(monkeypatch, module, "", gen=6)["changed"] is True
 
 
-def test_a_missing_gen_still_writes(monkeypatch, module):
+def test_a_missing_gen_writes_only_before_one_is_recorded(monkeypatch, module):
+    assert sync(monkeypatch, module, KEY)["changed"] is True
     sync(monkeypatch, module, KEY, gen=9)
-    assert sync(monkeypatch, module, "")["changed"] is True
-    assert module.KEYS.read_text() == ""
+    with pytest.raises(ValueError):
+        sync(monkeypatch, module, "")
+    assert module.KEYS.read_text() == KEY
+    # certs keep their own file: keys.gen does not make a certs write need gen.
+    assert run(monkeypatch, module, {"op": "certs", "certs": CERTS})["changed"] is True
+    run(monkeypatch, module, {"op": "certs", "certs": CERTS, "gen": 1})
+    with pytest.raises(ValueError):
+        run(monkeypatch, module, {"op": "certs", "certs": None})
+    assert module.CERTS.exists()
 
 
 def test_certs_keep_their_own_generation(monkeypatch, module):
@@ -85,3 +93,23 @@ def test_a_refusal_says_which_generation_is_held(monkeypatch, module):
         "stale": True,
         "held": 50,
     }
+
+
+def test_gen_is_checked_per_operation(monkeypatch, module):
+    with pytest.raises(ValueError):
+        run(monkeypatch, module, {"op": "status", "gen": 5})
+    for gen in (None, "1"):
+        with pytest.raises(ValueError):
+            sync(monkeypatch, module, "", gen=gen)
+        with pytest.raises(ValueError):
+            run(monkeypatch, module, {"op": "certs", "certs": None, "gen": gen})
+    assert run(monkeypatch, module, {"op": "status"}) == {"sha256": None}
+
+
+def test_a_damaged_generation_file_fails_the_write(monkeypatch, module):
+    sync(monkeypatch, module, KEY, gen=5)
+    (module.STATE / "keys.gen").write_text("junk\n")
+    for gen in (1, 9):
+        with pytest.raises(RuntimeError):
+            sync(monkeypatch, module, "", gen=gen)
+    assert module.KEYS.read_text() == KEY

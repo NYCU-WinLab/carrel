@@ -10,6 +10,7 @@ import getpass
 import importlib.util
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -35,9 +36,17 @@ OWNER, OTHER = "10.200.1.10:22", "10.200.2.10:22"
 NEWER_DIRECTIVES = ("PerSourcePenaltyExemptList",)
 
 
+REJECTED = re.compile(r"(?:Bad configuration option:|Unsupported option)\s+(\S+)\s*$")
+TERMINATING = re.compile(r"terminating, \d+ bad configuration options?$")
+
+
 def skip_if_older_sshd(stderr):
-    errors = [x for x in stderr.splitlines() if "Bad configuration option" in x or "Unsupported option" in x]
-    if errors and all(any(d in x for d in NEWER_DIRECTIVES) for x in errors):
+    # Skip only when every error line is a rejected directive named exactly in
+    # NEWER_DIRECTIVES, plus sshd's final "terminating" line. Any other error
+    # line (a typo, an invalid argument) is a real failure.
+    lines = [x.strip() for x in stderr.splitlines() if x.strip()]
+    rejected = [REJECTED.search(x) for x in lines if not TERMINATING.search(x)]
+    if rejected and all(m and m.group(1) in NEWER_DIRECTIVES for m in rejected):
         pytest.skip("this sshd is older than the production one: " + stderr.strip()[:200])
 
 
@@ -215,3 +224,19 @@ def test_the_match_block_does_not_leak_into_later_files(tmp_path):
         assert user["allowtcpforwarding"] == "local"
         assert user["clientaliveinterval"] == "37"
     assert root["permitrootlogin"] == "forced-commands-only"
+
+
+OLD = "/etc/ssh/x.conf: line 3: Bad configuration option: PerSourcePenaltyExemptList\n"
+OLD_END = "/etc/ssh/x.conf: terminating, 1 bad configuration options\n"
+
+
+def test_the_older_sshd_skip_needs_the_exact_directive_and_no_other_error():
+    with pytest.raises(pytest.skip.Exception):
+        skip_if_older_sshd(OLD + OLD_END)
+    # A longer name, another error line, or another rejected directive is a failure.
+    for stderr in (
+        OLD.replace("ExemptList", "ExemptLists") + OLD_END,
+        OLD + "/etc/ssh/x.conf: line 4: Bad yes/no argument: maybe\n" + OLD_END,
+        OLD + "/etc/ssh/x.conf: line 5: Bad configuration option: Typo\n" + OLD_END,
+    ):
+        skip_if_older_sshd(stderr)
