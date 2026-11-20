@@ -30,6 +30,17 @@ pytestmark = pytest.mark.skipif(
 OWNER, OTHER = "10.200.1.10:22", "10.200.2.10:22"
 
 
+# Directives newer than some supported sshd. Any other rejected directive is a
+# typo in production config and must fail, not skip.
+NEWER_DIRECTIVES = ("PerSourcePenaltyExemptList",)
+
+
+def skip_if_older_sshd(stderr):
+    errors = [x for x in stderr.splitlines() if "Bad configuration option" in x or "Unsupported option" in x]
+    if errors and all(any(d in x for d in NEWER_DIRECTIVES) for x in errors):
+        pytest.skip("this sshd is older than the production one: " + stderr.strip()[:200])
+
+
 def load(name):
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), ROOT / "scripts" / name)
     module = importlib.util.module_from_spec(spec)
@@ -101,8 +112,7 @@ def jump(tmp_path_factory):
         "UsePAM no\nStrictModes no\n"
     )
     check = subprocess.run([SSHD, "-t", "-f", config], capture_output=True, text=True, check=False)
-    if "Bad configuration option" in check.stderr or "Unsupported option" in check.stderr:
-        pytest.skip("this sshd is older than the production one: " + check.stderr.strip()[:200])
+    skip_if_older_sshd(check.stderr)
     assert check.returncode == 0, check.stderr
     server = subprocess.Popen([SSHD, "-D", "-e", "-f", config], stderr=subprocess.PIPE, text=True)
     try:
@@ -192,8 +202,7 @@ def test_the_match_block_does_not_leak_into_later_files(tmp_path):
             text=True,
             check=False,
         )
-        if "Bad configuration option" in run.stderr or "Unsupported option" in run.stderr:
-            pytest.skip("this sshd is older than the production one: " + run.stderr.strip()[:200])
+        skip_if_older_sshd(run.stderr)
         assert run.returncode == 0, run.stderr
         return dict(line.split(" ", 1) for line in run.stdout.splitlines())
 
