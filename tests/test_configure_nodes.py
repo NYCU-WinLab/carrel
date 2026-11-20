@@ -230,8 +230,14 @@ def test_infra_mtu_skips_other_bridges_and_stopped_cts(monkeypatch):
 
 
 def apply_jump_certs(
-    tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True, rm_fails=False, mv_fails=False,
-    sshd_results=None, unit_state=False,
+    tmp_path,
+    text="new\n",
+    sshd_ok=True,
+    systemctl_ok=True,
+    rm_fails=False,
+    mv_fails=False,
+    sshd_results=None,
+    unit_state=False,
 ):
     # Stub sshd and systemctl: a log of calls, and each fails on demand.
     # sshd_results: the exit status of the nth `sshd -t` (the last one repeats).
@@ -246,14 +252,13 @@ def apply_jump_certs(
     case = "".join(f"{i}) exit {r};; " for i, r in enumerate(results[:-1])) + f"*) exit {results[-1]};;"
     sshd = bin_dir / "sshd"
     sshd.write_text(
-        f'#!/bin/sh\necho "sshd $*" >> {log}\nn=$(grep -c "^sshd " {log})\n'
-        f'case $((n - 1)) in {case} esac\n'
+        f'#!/bin/sh\necho "sshd $*" >> {log}\nn=$(grep -c "^sshd " {log})\ncase $((n - 1)) in {case} esac\n'
     )
     systemctl = bin_dir / "systemctl"
     if unit_state:
         body = (
             f'case "$1" in try-restart) echo stopped > {state}; exit 1;; '
-            f'restart) echo running > {state}; exit 0;; esac\nexit 0\n'
+            f"restart) echo running > {state}; exit 0;; esac\nexit 0\n"
         )
     else:
         body = f"exit {0 if systemctl_ok else 1}\n"
