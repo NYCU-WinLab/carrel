@@ -384,3 +384,38 @@ def test_a_failed_check_with_a_failed_restore_of_an_existing_drop_in_reports(tmp
     assert code == 1
     assert calls == ["sshd -t"]
     assert "rollback failed" in result.stderr and "unknown state" in result.stderr
+
+
+def test_ksmtuned_is_disabled_masked_and_ksm_stopped_on_every_node(monkeypatch):
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
+    for n in nodes:
+        module.ksm_off(n, n is nodes[0])
+    assert calls[0] == ("sh", "-c", module.KSM_OFF)
+    assert [c[-2] for c in calls[1:]] == [f"root@{n['address']}" for n in nodes[1:]]
+    assert all(c[-1] == module.KSM_OFF for c in calls[1:])
+    assert "systemctl disable --now ksmtuned.service || true" in module.KSM_OFF
+    assert "systemctl mask ksmtuned.service" in module.KSM_OFF
+    assert "echo 0 > /sys/kernel/mm/ksm/run" in module.KSM_OFF
+
+
+def test_the_ksm_command_succeeds_on_a_second_run_and_when_the_unit_is_absent(tmp_path):
+    module = load("configure-nodes.py")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "systemctl").write_text('#!/bin/sh\n[ "$1" = disable ] && exit 5\nexit 0\n')
+    (bin_dir / "systemctl").chmod(0o755)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+    run_file = tmp_path / "run"
+    run_file.write_text("1\n")
+    command = module.KSM_OFF.replace("/sys/kernel/mm/ksm/run", str(run_file))
+    for _ in range(2):
+        done = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, check=False)
+        assert done.returncode == 0, done.stderr
+        assert run_file.read_text() == "0\n"
+    # No KSM in the kernel: nothing to write, still fine.
+    run_file.unlink()
+    done = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr

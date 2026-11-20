@@ -190,6 +190,22 @@ def node_sshd(n, local):
         run("ssh", *peer(n), "root@" + n["address"], NODE_SSHD_APPLY, input=NODE_SSHD)
 
 
+# No cross-tenant page merging (issue #397): ksmtuned stays off and masked, KSM stays at 0.
+# disable of an absent unit fails and is ignored; mask works on absent and masked units alike.
+KSM_OFF = (
+    "{ systemctl disable --now ksmtuned.service || true; }"
+    " && systemctl mask ksmtuned.service"
+    " && { ! test -e /sys/kernel/mm/ksm/run || echo 0 > /sys/kernel/mm/ksm/run; }"
+)
+
+
+def ksm_off(n, local):
+    if local:
+        run("sh", "-c", KSM_OFF)
+    else:
+        run("ssh", *peer(n), "root@" + n["address"], KSM_OFF)
+
+
 def ssh_config(existing, nodes):
     block = [BEGIN]
     for n in nodes:
@@ -283,7 +299,10 @@ def main():
         status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", JUMP["target"], input='{"op":"status"}'))
         if not status.get("ok"):
             raise SystemExit("the jump host did not answer through carrel-jump")
-    # 6. Keys only on every node, last: everything above already answered by
+    # 6. ksmtuned off on every node; a second run changes nothing.
+    for n in nodes:
+        ksm_off(n, n is me)
+    # 7. Keys only on every node, last: everything above already answered by
     # key. The site turns it on once nobody logs in to a node by password.
     if site.get("ssh_keys_only"):
         for n in nodes:
