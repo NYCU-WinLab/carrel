@@ -189,7 +189,9 @@ def test_the_match_block_does_not_leak_into_later_files(tmp_path):
     def effective(user):
         out = subprocess.run(
             [SSHD, "-T", "-f", config, "-C", f"user={user},host=h,addr=10.0.0.1"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         return dict(line.split(" ", 1) for line in out.splitlines())
 
