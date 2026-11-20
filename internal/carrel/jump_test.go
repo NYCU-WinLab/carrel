@@ -408,6 +408,70 @@ func TestAJumpAskAfterCloseStartsNoWorker(t *testing.T) {
 	}
 }
 
+func TestAJumpAskWhileCloseWaitsOnABlockedSendStartsNoWorker(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	seedMachine(p, "web", 10100)
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	// A failed assertion must not leave the send blocked under Close.
+	t.Cleanup(unblock)
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" && r["op"] == "sync" {
+			started <- struct{}{}
+			<-release
+		}
+		return D{}, nil
+	}
+	e := p.execution(context.Background())
+	e.syncJumpNow()
+	waitFor(t, started, "the first jump send did not start")
+	closed := make(chan struct{})
+	go func() {
+		p.Close()
+		close(closed)
+	}()
+	// Close must shut the queue before it waits, so jumpClosed turns true
+	// while the blocked send still holds Wait.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.jumpQueueMu.Lock()
+		shut := p.jumpClosed
+		p.jumpQueueMu.Unlock()
+		if shut {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Close did not close the jump queue before waiting")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a jump send was blocked")
+	default:
+	}
+	e.syncJumpNow()
+	p.jumpQueueMu.Lock()
+	pending := p.jumpPending
+	p.jumpQueueMu.Unlock()
+	if pending {
+		t.Fatal("an ask during Close was queued")
+	}
+	unblock()
+	waitFor(t, closed, "Close did not return after the send was released")
+	if n := b.count("sync"); n != 1 {
+		t.Fatalf("expected the one blocked send, got %d", n)
+	}
+	select {
+	case <-started:
+		t.Fatal("a second jump send started")
+	default:
+	}
+}
+
 func TestReconcileWithDeferredJumpDoesNotPushJump(t *testing.T) {
 	p, b := fixture(t)
 	p.Config.SSHJump = true
