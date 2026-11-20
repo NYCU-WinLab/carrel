@@ -1179,3 +1179,24 @@ func TestTheClockFallbackIgnoresASendAtTheTop(t *testing.T) {
 		t.Fatal(gen)
 	}
 }
+
+// A send just below the top must not push the fallback to 2^53-1 and then out
+// of range, where no later pass could be sent.
+func TestTheClockFallbackStaysInRangeAfterASendJustBelowTheTop(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	if r := e.SyncJump("", nil, maxJumpGen-2); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	for i := 0; i < 3; i++ {
+		p.jumpGen = maxJumpGen - 1
+		_, _, gen := e.lockJumpState()
+		r := e.SyncJump("", nil, gen)
+		p.jumpMu.Unlock()
+		if gen >= maxJumpGen-1 || r != "synced" {
+			t.Fatal(i, gen, r)
+		}
+	}
+}
