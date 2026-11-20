@@ -616,3 +616,67 @@ func TestCloseEndsTheStartPushRetryWhileItBacksOff(t *testing.T) {
 	waitFor(t, done, "Close was held up by the jump retry")
 	waitJumpIdle(t, p)
 }
+
+func TestSSHKeyRemoveQueuesAJumpSyncWithoutTheKey(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	app := NewApp(p, nil)
+	alice := groupMember("alice")
+	const body = "AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlic"
+	r := app.Call(context.Background(), "ssh_key_add", D{"tenant": "shared", "key": "ssh-ed25519 " + body}, alice)
+	assertOK(t, r)
+	waitJumpIdle(t, p)
+	m := seedMachine(p, "box", 10100)
+	p.Store.Put("machines", 10100, integer(p.Store.Tenant("winlab-projects/shared")["n"]), m)
+	b.mu.Lock()
+	b.calls = nil
+	b.mu.Unlock()
+	assertOK(t, app.Call(context.Background(), "ssh_key_remove", D{"tenant": "shared", "id": r["id"]}, alice))
+	waitJumpIdle(t, p)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	syncs := 0
+	for _, c := range b.calls {
+		if c["op"] == "sync" {
+			syncs++
+			if strings.Contains(str(c["authorized"]), body) {
+				t.Fatalf("the sync still carries the removed key: %q", c["authorized"])
+			}
+		}
+	}
+	if syncs == 0 {
+		t.Fatal("ssh_key_remove queued no jump sync")
+	}
+}
+
+func TestMachineAccessRevokeQueuesAJumpCertificateSync(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	ca := "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY="
+	p.Config.SSHUserCA = ca
+	m := seedMachine(p, "box", 10100)
+	m["ssh_user_ca"], m["ca_sync"], m["ca_principals"] = ca, "pull", []any{"alice"}
+	m["ca_grants"] = []D{{"username": "bob", "by": "alice", "at": 1.0}}
+	p.Store.Put("machines", 10100, 1, m)
+	b.mu.Lock()
+	b.calls = nil
+	b.mu.Unlock()
+	app := NewApp(p, nil)
+	assertOK(t, app.Call(context.Background(), "machine_access", D{"machine": "box", "revoke": []any{"bob"}}, person("alice", false)))
+	waitJumpIdle(t, p)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	certs := 0
+	for _, c := range b.calls {
+		if c["op"] != "certs" {
+			continue
+		}
+		certs++
+		if _, ok := obj(obj(c["certs"])["principals"])["bob"]; ok {
+			t.Fatalf("the sync still maps the revoked principal: %v", c)
+		}
+	}
+	if certs == 0 {
+		t.Fatal("machine_access queued no jump sync")
+	}
+}
