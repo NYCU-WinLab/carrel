@@ -298,17 +298,25 @@ func (p *Platform) Start() {
 		defer p.wg.Done()
 		for {
 			p.writer.Lock()
+			// The jump push goes after the writer is released: it can wait on
+			// jumpMu behind a send to a jump host that is down.
+			pushJump := false
 			err := attempt(func() {
 				e := p.execution(p.ctx)
 				if len(e.S.Tenants()) > 0 {
 					e.ExpireGrants()
 					e.ExpireVPNClients()
+					e.deferJump = true
+					pushJump = true
 					e.Reconcile()
 				}
 				e.S.PurgeOAuth()
 				e.S.PruneOperations()
 			})
 			p.writer.Unlock()
+			if pushJump {
+				p.execution(p.ctx).syncJumpNow()
+			}
 			if err != nil {
 				slog.Error("reconcile_failed", "type", "maintenance")
 			}
