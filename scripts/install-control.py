@@ -29,6 +29,9 @@ CT = "100"
 LIB = Path("/usr/local/lib/carrel")
 # On the node.
 NODE_JSON = Path("/etc/carrel/node.json")
+SITE = Path("/etc/carrel/site.json")
+# jump-sync.py's generation records in CT 102 (issue #388).
+JUMP_GENS = ["/var/lib/carrel-jump/keys.gen", "/var/lib/carrel-jump/certs.gen"]
 TEMPLATES = Path("/etc/carrel/templates.json")
 HELPERS = {"guest-report.py": "644", "gateway-sync.py": "644", "jump-sync.py": "644", "jump-cert.py": "644"}
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
@@ -228,6 +231,14 @@ def origin_host():
     return capture("pct", "exec", CT, "--", "python3", "-c", code).strip()
 
 
+def jump_site():
+    try:
+        return bool(json.loads(SITE.read_text()).get("ssh_jump"))
+    except (OSError, ValueError):
+        # Unknown: clearing records that may not exist costs nothing.
+        return True
+
+
 def healthy(version, host_name):
     for _ in range(30):
         try:
@@ -310,6 +321,10 @@ def host(stage, version):
             saved = stage / ("before-" + name)
             if saved.exists():
                 shutil.copy2(saved, path)
+        # The restored binary may send no "gen", which jump-sync.py refuses once a
+        # generation is recorded; carrel is stopped, so no write races this.
+        if (configured or activated) and jump_site():
+            subprocess.run(["pct", "exec", "102", "--", "rm", "-f", *JUMP_GENS], check=False)
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
         raise
