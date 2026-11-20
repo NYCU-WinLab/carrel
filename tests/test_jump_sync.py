@@ -40,7 +40,7 @@ def test_a_higher_gen_writes_and_a_lower_one_is_refused(monkeypatch, module):
     assert sync(monkeypatch, module, "", gen=5)["changed"] is True
     assert sync(monkeypatch, module, KEY, gen=6)["changed"] is True
     assert module.KEYS.read_text() == KEY
-    assert sync(monkeypatch, module, "", gen=5) == {"changed": False, "stale": True}
+    assert sync(monkeypatch, module, "", gen=5) == {"changed": False, "stale": True, "held": 6}
     assert module.KEYS.read_text() == KEY
     assert sync(monkeypatch, module, "", gen=6)["changed"] is True
 
@@ -58,10 +58,12 @@ def test_certs_keep_their_own_generation(monkeypatch, module):
     assert run(monkeypatch, module, {"op": "certs", "certs": other, "gen": 2}) == {
         "changed": False,
         "stale": True,
+        "held": 3,
     }
     assert run(monkeypatch, module, {"op": "certs", "certs": None, "gen": 1}) == {
         "changed": False,
         "stale": True,
+        "held": 3,
     }
     assert module.CERTS.read_text() == before
     assert sync(monkeypatch, module, KEY, gen=1)["changed"] is True
@@ -72,3 +74,14 @@ def test_a_bad_gen_is_refused(monkeypatch, module):
     for bad in ("1", -1, True, 1.5):
         with pytest.raises(ValueError):
             sync(monkeypatch, module, "", gen=bad)
+
+
+def test_a_refusal_says_which_generation_is_held(monkeypatch, module):
+    sync(monkeypatch, module, KEY, gen=120)
+    assert sync(monkeypatch, module, "", gen=110) == {"changed": False, "stale": True, "held": 120}
+    run(monkeypatch, module, {"op": "certs", "certs": CERTS, "gen": 50})
+    assert run(monkeypatch, module, {"op": "certs", "certs": None, "gen": 40}) == {
+        "changed": False,
+        "stale": True,
+        "held": 50,
+    }

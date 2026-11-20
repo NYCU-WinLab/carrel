@@ -774,3 +774,28 @@ func TestTheStartPushArrivesWhileTheFirstNodeReconcileIsBlocked(t *testing.T) {
 	}
 	unblock()
 }
+
+func TestAJumpHostHoldingAHigherGenIsRecoveredFrom(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	e.lockJumpState()
+	p.jumpMu.Unlock()
+	held := float64(p.jumpGen + 1_000_000)
+	b.call = func(r D, _ string) (any, error) {
+		if g, _ := r["gen"].(float64); g < held {
+			return D{"changed": false, "stale": true, "held": held}, nil
+		}
+		return D{"changed": true}, nil
+	}
+	if r := e.SyncJump("", nil, 1); r != "stale" {
+		t.Fatal(r)
+	}
+	if p.jumpGen != int64(held) {
+		t.Fatal(p.jumpGen)
+	}
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if float64(gen) <= held {
+		t.Fatal(gen, held)
+	}
+}
