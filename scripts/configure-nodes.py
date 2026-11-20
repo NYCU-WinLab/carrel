@@ -36,10 +36,13 @@ JUMP_CERT = "/usr/local/lib/carrel/jump-cert.py"
 # Lab certificates on the jump host, for the user ca: jump-cert.py turns a certificate's
 # principals into one line naming the machines they open (certs.json, which
 # jump-sync.py keeps). The script and its folder belong to root, as sshd
-# requires of an AuthorizedKeysCommand.
+# requires of an AuthorizedKeysCommand. The Match block keeps the command off `jump@`,
+# which would otherwise start python3 for every key before authentication; a Match
+# ends with its drop-in file, so nothing read after it is scoped to ca.
 JUMP_CERT_SSHD = f"""# Managed by carrel configure-nodes.py: lab certificates.
-AuthorizedKeysCommand {JUMP_CERT} %u %t %k
-AuthorizedKeysCommandUser nobody
+Match User ca
+    AuthorizedKeysCommand {JUMP_CERT} %u %t %k
+    AuthorizedKeysCommandUser nobody
 """
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'

@@ -78,19 +78,25 @@ def jump(tmp_path_factory):
         (jump_sshd, "/etc/carrel-jump/%u"),
         (cert_sshd, load("configure-nodes.py").JUMP_CERT),
         (cert_sshd, "AuthorizedKeysCommandUser nobody"),
+        (cert_sshd, "Match User ca"),
     ):
         assert old in text
     jump_sshd = jump_sshd.replace("/etc/carrel-jump/%u", str(keys))
-    cert_sshd = cert_sshd.replace(load("configure-nodes.py").JUMP_CERT, command).replace(
-        "AuthorizedKeysCommandUser nobody", f"AuthorizedKeysCommandUser {getpass.getuser()}"
+    cert_sshd = (
+        cert_sshd.replace(load("configure-nodes.py").JUMP_CERT, command)
+        .replace("AuthorizedKeysCommandUser nobody", f"AuthorizedKeysCommandUser {getpass.getuser()}")
+        .replace("Match User ca", f"Match User {getpass.getuser()}")
     )
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    # sshd keeps the first value it reads, as in /etc/ssh/sshd_config.d: the drop-ins come first.
+    # sshd keeps the first value it reads, as in /etc/ssh/sshd_config.d: the drop-ins come first,
+    # through Include as in production, so a Match block ends with its file.
+    (tmp / "jump.conf").write_text(jump_sshd)
+    (tmp / "certs.conf").write_text(cert_sshd)
     config = tmp / "sshd_config"
     config.write_text(
-        f"{jump_sshd}\n{cert_sshd}\n"
+        f"Include {tmp / 'certs.conf'}\nInclude {tmp / 'jump.conf'}\n"
         f"Port {port}\nListenAddress 127.0.0.1\nHostKey {tmp / 'host'}\nPidFile {tmp / 'sshd.pid'}\n"
         "UsePAM no\nStrictModes no\n"
     )
@@ -164,3 +170,35 @@ def test_a_key_the_jump_host_does_not_know_is_refused(jump):
     tmp, _ = jump
     keygen(tmp / "stranger")
     assert forward(jump, "stranger", OWNER)[1] is False
+
+
+def test_the_match_block_does_not_leak_into_later_files(tmp_path):
+    # Production reads the drop-in first; a setting read after it must stay global.
+    cert_sshd = load("configure-nodes.py").JUMP_CERT_SSHD
+    assert "Match User ca" in cert_sshd
+    keys = load("bootstrap-platform.py").JUMP_SSHD
+    keygen(tmp_path / "host")
+    (tmp_path / "certs.conf").write_text(cert_sshd)
+    (tmp_path / "jump.conf").write_text(keys)
+    config = tmp_path / "sshd_config"
+    config.write_text(
+        f"Include {tmp_path / 'certs.conf'}\nInclude {tmp_path / 'jump.conf'}\n"
+        f"HostKey {tmp_path / 'host'}\nPermitEmptyPasswords no\n"
+    )
+
+    def effective(user):
+        out = subprocess.run(
+            [SSHD, "-T", "-f", config, "-C", f"user={user},host=h,addr=10.0.0.1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        return dict(line.split(" ", 1) for line in out.splitlines())
+
+    ca, jump_user = effective("ca"), effective("jump")
+    assert ca["authorizedkeyscommand"].startswith(load("configure-nodes.py").JUMP_CERT)
+    assert jump_user["authorizedkeyscommand"] == "none"
+    for user in (ca, jump_user):
+        assert user["authorizedkeysfile"] == ".ssh/authorized_keys /etc/carrel-jump/%u"
+        assert user["allowtcpforwarding"] == "local"
+        assert user["permitemptypasswords"] == "no"
