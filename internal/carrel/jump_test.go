@@ -138,7 +138,7 @@ func TestSyncJumpAlwaysSendsTheCertificateMapAndKeepsKeysWhenItFails(t *testing.
 	p, b := fixture(t)
 	e := p.execution(context.Background())
 	// No CA: the map still goes, as null, so the jump host drops an old one.
-	if r := e.SyncJump("", nil); r != "synced" || b.count("certs") != 1 {
+	if r := e.SyncJump("", nil, 1); r != "synced" || b.count("certs") != 1 {
 		t.Fatal(r, b.calls)
 	}
 	if last := b.calls[len(b.calls)-1]; last["certs"] != nil {
@@ -151,7 +151,7 @@ func TestSyncJumpAlwaysSendsTheCertificateMapAndKeepsKeysWhenItFails(t *testing.
 		}
 		return D{}, nil
 	}
-	if r := e.SyncJump("", D{"ca": "x", "principals": D{}}); r != "keys_only" || b.count("sync") != 2 {
+	if r := e.SyncJump("", D{"ca": "x", "principals": D{}}, 1); r != "keys_only" || b.count("sync") != 2 {
 		t.Fatal(r)
 	}
 }
@@ -433,5 +433,50 @@ func TestReconcileWithDeferredJumpDoesNotPushJump(t *testing.T) {
 	waitJumpIdle(t, p)
 	if count() == 0 {
 		t.Fatal("the deferred jump push never ran")
+	}
+}
+
+func TestEachJumpSyncSendsAHigherGenOnBothOps(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	for i := 0; i < 2; i++ {
+		keys, certs, gen := e.lockJumpState()
+		e.SyncJump(keys, certs, gen)
+		p.jumpMu.Unlock()
+	}
+	last := map[any]float64{}
+	n := 0
+	for _, c := range b.calls {
+		if c["op"] != "sync" && c["op"] != "certs" {
+			continue
+		}
+		gen, ok := c["gen"].(float64)
+		if !ok || gen <= last[c["op"]] {
+			t.Fatalf("%v gen %v after %v", c["op"], c["gen"], last[c["op"]])
+		}
+		last[c["op"]] = gen
+		n++
+	}
+	if n != 4 {
+		t.Fatal(n, b.calls)
+	}
+}
+
+func TestARefusedJumpWriteIsNotReportedAsSynced(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	for op, want := range map[string]string{"sync": "stale", "certs": "keys_only"} {
+		b.call = func(r D, _ string) (any, error) {
+			if r["op"] == op {
+				return D{"changed": false, "stale": true}, nil
+			}
+			return D{"changed": true}, nil
+		}
+		if r := e.SyncJump("", nil, 1); r != want {
+			t.Fatal(op, r)
+		}
+	}
+	if b.count("certs") != 1 {
+		t.Fatal("certs went after a refused keys write", b.calls)
 	}
 }
