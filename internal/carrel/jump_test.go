@@ -497,6 +497,25 @@ func TestAFailedJumpSyncIsRecordedForLaterReads(t *testing.T) {
 	}
 }
 
+func TestAKeyRemovalDuringShutdownReportsJumpPending(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config.SSHJump = true
+	app := NewApp(p, nil)
+	alice := groupMember("alice")
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlic"
+	r := app.Call(context.Background(), "ssh_key_add", D{"tenant": "shared", "key": key}, alice)
+	assertOK(t, r)
+	waitJumpIdle(t, p)
+	p.Close()
+	// Close drops the queued sync, so the old key stays on the jump host
+	// until the next Start: the result must not read as confirmed.
+	r = app.Call(context.Background(), "ssh_key_remove", D{"tenant": "shared", "id": r["id"]}, alice)
+	assertOK(t, r)
+	if got := r["jump"]; got != "pending" {
+		t.Fatalf("jump = %v: %s", got, encoded(r))
+	}
+}
+
 func TestEachJumpSyncSendsAHigherGenOnBothOps(t *testing.T) {
 	p, b := fixture(t)
 	e := p.execution(context.Background())

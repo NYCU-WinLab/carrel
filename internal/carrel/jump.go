@@ -174,9 +174,10 @@ func (e *Execution) syncJumpNow() {
 }
 
 // jumpStatus is the jump field of a key or access result: "pending" while a
-// queued sync has not confirmed, the last failed outcome ("unavailable",
-// "stale" or "keys_only") after it, and "" when jump is disabled or the host took the
-// change.
+// queued sync has not confirmed or the platform is closing (the push at the
+// next Start carries the change), the last failed outcome ("unavailable",
+// "stale" or "keys_only") after it, and "" when jump is disabled or the host
+// took the change.
 func (e *Execution) jumpStatus() string {
 	if !e.jumpEnabled() {
 		return ""
@@ -184,7 +185,7 @@ func (e *Execution) jumpStatus() string {
 	p := e.P
 	p.jumpQueueMu.Lock()
 	defer p.jumpQueueMu.Unlock()
-	if p.jumpPending || p.jumpRunning {
+	if p.jumpPending || p.jumpRunning || p.jumpClosed {
 		return "pending"
 	}
 	if p.jumpLast == "synced" {
