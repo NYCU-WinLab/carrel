@@ -80,10 +80,12 @@ type Platform struct {
 	// jumpGen is the last generation number sent; read and set under jumpMu.
 	jumpGen int64
 	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
-	jumpQueueMu        sync.Mutex
-	jumpPending        bool
-	jumpRunning        bool
-	jumpClosed         bool
+	jumpQueueMu sync.Mutex
+	jumpPending bool
+	jumpRunning bool
+	jumpClosed  bool
+	// jumpLast is the outcome of the last background SyncJump ("" before any).
+	jumpLast           string
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64

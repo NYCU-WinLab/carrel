@@ -436,6 +436,86 @@ func TestReconcileWithDeferredJumpDoesNotPushJump(t *testing.T) {
 	}
 }
 
+func TestKeyToolsReportAPendingJumpSyncWithoutWaiting(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	release := make(chan struct{})
+	var once sync.Once
+	open := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(open)
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" && r["op"] == "sync" {
+			<-release
+		}
+		return D{}, nil
+	}
+	app := NewApp(p, nil)
+	alice := groupMember("alice")
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlic"
+	done := make(chan D, 1)
+	go func() {
+		done <- app.Call(context.Background(), "ssh_key_add", D{"tenant": "shared", "key": key}, alice)
+	}()
+	var r D
+	select {
+	case r = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ssh_key_add waited for the jump host")
+	}
+	assertOK(t, r)
+	if got := r["jump"]; got != "pending" {
+		t.Fatalf("jump = %v: %s", got, encoded(r))
+	}
+	open()
+	waitJumpIdle(t, p)
+	// Once the host took the change, the field is gone.
+	r = app.Call(context.Background(), "ssh_key_remove", D{"tenant": "shared", "id": r["id"]}, alice)
+	assertOK(t, r)
+	waitJumpIdle(t, p)
+	p.jumpQueueMu.Lock()
+	last := p.jumpLast
+	p.jumpQueueMu.Unlock()
+	if last != "synced" || (&Execution{P: p}).jumpStatus() != "" {
+		t.Fatalf("last = %q", last)
+	}
+}
+
+func TestAFailedJumpSyncIsRecordedForLaterReads(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" {
+			return nil, fmt.Errorf("jump host down")
+		}
+		return D{}, nil
+	}
+	e := p.execution(context.Background())
+	e.syncJumpNow()
+	waitJumpIdle(t, p)
+	if got := e.jumpStatus(); got != "unavailable" {
+		t.Fatalf("jumpStatus = %q", got)
+	}
+}
+
+func TestAKeyRemovalDuringShutdownReportsJumpPending(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config.SSHJump = true
+	app := NewApp(p, nil)
+	alice := groupMember("alice")
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlic"
+	r := app.Call(context.Background(), "ssh_key_add", D{"tenant": "shared", "key": key}, alice)
+	assertOK(t, r)
+	waitJumpIdle(t, p)
+	p.Close()
+	// Close drops the queued sync, so the old key stays on the jump host
+	// until the next Start: the result must not read as confirmed.
+	r = app.Call(context.Background(), "ssh_key_remove", D{"tenant": "shared", "id": r["id"]}, alice)
+	assertOK(t, r)
+	if got := r["jump"]; got != "pending" {
+		t.Fatalf("jump = %v: %s", got, encoded(r))
+	}
+}
+
 func TestEachJumpSyncSendsAHigherGenOnBothOps(t *testing.T) {
 	p, b := fixture(t)
 	e := p.execution(context.Background())
