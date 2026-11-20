@@ -258,7 +258,9 @@ def test_watchdog_failure_keeps_key_and_port(agent, monkeypatch, tmp_path):
         raise agent.CommandFailure("ip -6 failed: busy")
 
     monkeypatch.setattr(agent, "v6_watchdog", broken)
-    out = agent.ipv6_apply({"prefix": SITE6["prefix"], "tenants": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
+    out = agent.ipv6_apply(
+        {"prefix": SITE6["prefix"], "tenants": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, []
+    )
     assert out["public_key"] == "PUBKEY" and out["port"] == agent.V6_PORT
     assert out["watchdog_error"].startswith("CommandFailure")
 
@@ -362,7 +364,9 @@ def test_a_larger_site_block_keeps_tenants_in_its_first_48(agent):
 
 
 def test_tenant_pool_can_be_named_and_sized(agent):
-    agent.SITE.write_text(json.dumps({"exit_nodes": ["carrel01"], "ipv6": dict(SITE44, tenants="2a14:7581:880::/44")}))
+    agent.SITE.write_text(
+        json.dumps({"exit_nodes": ["carrel01"], "ipv6": dict(SITE44, tenants="2a14:7581:880::/44")})
+    )
     v6 = agent.site_ipv6()
     assert str(agent.v6_tenant(v6["tenants"], 17)) == "2a14:7581:880:1700::/56"
     assert str(agent.v6_net(v6["tenants"], 254)) == "2a14:7581:882:5400::/64"
@@ -373,8 +377,30 @@ def test_unreachable_route_follows_the_block(agent, monkeypatch):
     shown = "unreachable 2a14:7581:880::/48 dev lo proto 96 metric 1024 pref medium\n"
     monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or (shown if "show" in a else ""))
     agent.v6_unreachable("2a14:7581:880::/44")
-    assert ("ip", "-6", "route", "del", "vrf", "vrf_tenants", "unreachable", "2a14:7581:880::/48", "proto", "96") in calls
-    assert calls[-1] == ("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "unreachable", "2a14:7581:880::/44", "proto", "96")
+    assert (
+        "ip",
+        "-6",
+        "route",
+        "del",
+        "vrf",
+        "vrf_tenants",
+        "unreachable",
+        "2a14:7581:880::/48",
+        "proto",
+        "96",
+    ) in calls
+    assert calls[-1] == (
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "vrf",
+        "vrf_tenants",
+        "unreachable",
+        "2a14:7581:880::/44",
+        "proto",
+        "96",
+    )
     calls.clear()
     agent.v6_unreachable()
     assert [c for c in calls if "replace" in c] == [] and any("del" in c for c in calls)
