@@ -780,22 +780,103 @@ func TestAJumpHostHoldingAHigherGenIsRecoveredFrom(t *testing.T) {
 	e := p.execution(context.Background())
 	e.lockJumpState()
 	p.jumpMu.Unlock()
-	held := float64(p.jumpGen + 1_000_000)
+	held := p.jumpGen + 1_000_000
 	b.call = func(r D, _ string) (any, error) {
-		if g, _ := r["gen"].(float64); g < held {
-			return D{"changed": false, "stale": true, "held": held}, nil
+		if r["gen"].(int64) < held {
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
 		}
 		return D{"changed": true}, nil
 	}
 	if r := e.SyncJump("", nil, 1); r != "stale" {
 		t.Fatal(r)
 	}
-	if p.jumpGen != int64(held) {
+	if p.jumpGen != held {
 		t.Fatal(p.jumpGen)
 	}
 	_, _, gen := e.lockJumpState()
 	p.jumpMu.Unlock()
-	if float64(gen) <= held {
+	if gen <= held {
 		t.Fatal(gen, held)
+	}
+}
+
+// jumpGens lists the op and gen of each jump request, in order. Only jump
+// requests carry gen (the gateway also has a sync op).
+func jumpGens(b *fakeBackend) (ops []any, gens []float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, c := range b.calls {
+		if _, ok := c["gen"]; ok {
+			ops = append(ops, c["op"])
+			gens = append(gens, c["gen"].(float64))
+		}
+	}
+	return ops, gens
+}
+
+func TestTheJumpWorkerResendsAboveTheHeldGen(t *testing.T) {
+	for _, tc := range []struct {
+		name, refuse, last string
+		legacy             bool
+		ops                []any
+	}{
+		{"sync", "sync", "synced", false, []any{"sync", "sync", "certs"}},
+		{"certs", "certs", "synced", false, []any{"sync", "certs", "sync", "certs"}},
+		{"legacy", "sync", "stale", true, []any{"sync"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, b := fixture(t)
+			p.Config.SSHJump = true
+			held := time.Now().UnixMicro() + 1_000_000_000
+			b.call = func(r D, target string) (any, error) {
+				if target == jumpTarget && r["op"] == tc.refuse && r["gen"].(int64) < held {
+					if tc.legacy {
+						return D{"changed": false, "stale": true}, nil
+					}
+					return D{"changed": false, "stale": true, "held": float64(held)}, nil
+				}
+				return D{"changed": true}, nil
+			}
+			p.execution(context.Background()).syncJumpNow()
+			waitJumpIdle(t, p)
+			p.jumpQueueMu.Lock()
+			last := p.jumpLast
+			p.jumpQueueMu.Unlock()
+			if last != tc.last {
+				t.Fatalf("last = %q", last)
+			}
+			ops, gens := jumpGens(b)
+			if fmt.Sprint(ops) != fmt.Sprint(tc.ops) {
+				t.Fatal(ops, gens)
+			}
+			if tc.legacy {
+				return
+			}
+			// The resend is the last sync and certs pair, both above held.
+			n := len(gens)
+			if gens[n-2] != float64(held+1) || gens[n-1] != gens[n-2] {
+				t.Fatal(gens, held)
+			}
+		})
+	}
+}
+
+func TestAReconcileSendsOneGenAboveAnAheadCounter(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	b.call = func(r D, target string) (any, error) {
+		if target == jumpTarget {
+			return D{"changed": true}, nil
+		}
+		return nil, nil
+	}
+	// The counter is ahead of the clock, so the next gen is last + 1.
+	ahead := time.Now().UnixMicro() + 1_000_000_000
+	p.jumpGen = ahead
+	e := p.execution(context.Background())
+	attempt(func() { e.Reconcile() })
+	ops, gens := jumpGens(b)
+	if fmt.Sprint(ops) != "[sync certs]" || gens[0] != float64(ahead+1) || gens[1] != gens[0] {
+		t.Fatal(ops, gens, ahead)
 	}
 }
