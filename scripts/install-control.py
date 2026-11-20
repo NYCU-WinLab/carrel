@@ -324,7 +324,11 @@ def host(stage, version):
         # The restored binary may send no "gen", which jump-sync.py refuses once a
         # generation is recorded; carrel is stopped, so no write races this.
         if (configured or activated) and jump_site():
-            subprocess.run(["pct", "exec", "102", "--", "rm", "-f", *JUMP_GENS], check=False)
+            cleared = subprocess.run(["pct", "exec", "102", "--", "rm", "-f", *JUMP_GENS], check=False)
+            if cleared.returncode:
+                print("WARNING: could not remove the jump generations; until they are removed, jump sync and "
+                      "certs writes (including revokes) are refused if the restored carrel predates gen. "
+                      "Run in CT 102: rm -f " + " ".join(JUMP_GENS), file=sys.stderr)
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
         raise
