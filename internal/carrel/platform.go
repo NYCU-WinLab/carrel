@@ -77,6 +77,8 @@ type Platform struct {
 	reportMu      sync.Mutex
 	// jumpMu makes a jump sync read the store and send under one lock.
 	jumpMu sync.Mutex
+	// jumpGen is the last generation number sent; read and set under jumpMu.
+	jumpGen int64
 	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
 	jumpQueueMu        sync.Mutex
 	jumpPending        bool
