@@ -1013,46 +1013,88 @@ func TestNoGenAtOrAbove2To53IsSent(t *testing.T) {
 	}
 }
 
-func TestLockJumpStateStaysBelow2To53(t *testing.T) {
-	p, b := fixture(t)
+func TestLockJumpStateFallsBackToTheClockAtTheTop(t *testing.T) {
+	p, _ := fixture(t)
 	e := p.execution(context.Background())
 	p.jumpGen = maxJumpGen - 1
+	last := int64(0)
 	for i := 0; i < 2; i++ {
 		_, _, gen := e.lockJumpState()
-		if gen >= maxJumpGen || p.jumpGen >= maxJumpGen {
-			t.Fatal(gen, p.jumpGen)
+		if gen >= maxJumpGen-1 || gen <= last || p.jumpGen != gen {
+			t.Fatal(i, gen, last, p.jumpGen)
 		}
-		if r := e.SyncJump("", nil, gen); r == "unavailable" {
+		if r := e.SyncJump("", nil, gen); r != "synced" {
 			t.Fatal(r)
 		}
 		p.jumpMu.Unlock()
+		last = gen
+		// A refusal at the top raises jumpGen back there; the fallback still rises.
+		p.jumpGen = maxJumpGen - 1
 	}
-	_ = b
 }
 
 func TestARepairedJumpHostSyncsAfterTheTopRefusal(t *testing.T) {
 	p, b := fixture(t)
 	e := p.execution(context.Background())
-	p.jumpGen = maxJumpGen - 2
-	refuse := true
+	p.jumpGen = maxJumpGen - 1
+	held := int64(maxJumpGen - 1)
 	b.call = func(r D, _ string) (any, error) {
-		if refuse {
-			return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
+		gen := r["gen"].(int64)
+		if gen < held {
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
 		}
+		held = gen
 		return D{"changed": true}, nil
 	}
 	keys, certs, gen := e.lockJumpState()
+	if gen >= maxJumpGen-1 {
+		t.Fatal(gen)
+	}
 	if r := e.syncJumpResending(keys, certs, gen); r != "stale" {
 		t.Fatal(r)
 	}
 	p.jumpMu.Unlock()
-	refuse = false
-	keys, certs, gen = e.lockJumpState()
-	defer p.jumpMu.Unlock()
-	if gen >= maxJumpGen {
-		t.Fatal(gen)
+	held = 0 // an operator repairs the jump host's state
+	keys, certs, first := e.lockJumpState()
+	if first >= maxJumpGen-1 || first <= gen {
+		t.Fatal(first, gen)
 	}
-	if r := e.syncJumpResending(keys, certs, gen); r != "synced" {
+	if r := e.syncJumpResending(keys, certs, first); r != "synced" {
 		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	keys, certs, next := e.lockJumpState()
+	defer p.jumpMu.Unlock()
+	if next <= first || next >= maxJumpGen-1 {
+		t.Fatal(next, first)
+	}
+	if r := e.syncJumpResending(keys, certs, next); r != "synced" {
+		t.Fatal(r)
+	}
+}
+
+// ctxBlockingBackend never answers: a call returns only when its context ends.
+type ctxBlockingBackend struct{ fakeBackend }
+
+func (b *ctxBlockingBackend) Call(ctx context.Context, r D, target string) (any, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestTheResendBudgetCutsACallThatIsStillRunning(t *testing.T) {
+	p, _ := fixture(t)
+	p.Backend = &ctxBlockingBackend{}
+	old := jumpResendBudget
+	jumpResendBudget = 50 * time.Millisecond
+	defer func() { jumpResendBudget = old }()
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	defer p.jumpMu.Unlock()
+	start := time.Now()
+	if r := e.syncJumpResending("", nil, 1); r != "unavailable" {
+		t.Fatal(r)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatal("returned after", d)
 	}
 }

@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
@@ -128,12 +129,14 @@ func jumpCertificates(s *Store, ca string) D {
 // lockJumpState takes jumpMu and reads the jump keys and certificate map, with
 // the generation number that goes on both requests. The number is the clock in
 // microseconds (exact in a JSON double), or one more than the last when the
-// clock has not moved, so it rises across syncs and survives a restart. It never
-// passes maxJumpGen-1, the last valid generation: at the top the same number
-// goes again instead of an out-of-range one, so once an operator repairs the
-// jump host's state the next pass is in range and no restart is needed. The
-// caller unlocks after the send. A read that panics unlocks first, so a failed
-// reconcile cannot block every later jump sync.
+// clock has not moved, so it rises across syncs and survives a restart. When
+// one more than the last would leave [0, 2^53) (a jump host reported a held
+// generation at the top), it falls back to the clock, or one more than the
+// last fallback when the clock has not moved: a damaged jump host refuses those
+// as stale, and once an operator repairs its state the next pass is in range
+// and generations rise strictly again, with no restart and no repeated number.
+// The caller unlocks after the send. A read that panics unlocks first, so a
+// failed reconcile cannot block every later jump sync.
 func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 	e.P.jumpMu.Lock()
 	ok := false
@@ -143,11 +146,15 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 		}
 	}()
 	keys, certs = jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
-	if gen = time.Now().UnixMicro(); gen <= e.P.jumpGen {
+	now := time.Now().UnixMicro()
+	if gen = now; gen <= e.P.jumpGen {
 		gen = e.P.jumpGen + 1
 	}
-	if gen > maxJumpGen-1 {
-		gen = maxJumpGen - 1
+	if gen >= maxJumpGen {
+		if gen = now; gen <= e.P.jumpClockGen {
+			gen = e.P.jumpClockGen + 1
+		}
+		e.P.jumpClockGen = gen
 	}
 	e.P.jumpGen = gen
 	ok = true
@@ -319,18 +326,25 @@ const maxJumpResends = 3
 const maxJumpGen = 1 << 53
 
 // jumpResendBudget bounds the whole resend sequence in time: no resend starts
-// after it, so a slow jump host cannot hold jumpMu for maxJumpResends rounds
-// of two full timeouts. A var so a test can shrink it.
+// after it, and a call still running when it ends is cut, so a slow jump host
+// cannot hold jumpMu for maxJumpResends rounds of two full timeouts. A var so
+// a test can shrink it.
 var jumpResendBudget = 90 * time.Second
 
 // syncJumpResending is SyncJump plus resends: a refusal that moved jumpGen
 // past the generation sent means the jump host holds a newer floor, so the
 // same state goes again above it. It stops when both requests pass, when no
 // new floor was learned, after maxJumpResends, when jumpResendBudget has run
-// out, or when the next generation would leave [0, 2^53). The caller holds
-// jumpMu.
+// out, or when the next generation would leave [0, 2^53). Every call of the
+// sequence runs under one deadline at start+jumpResendBudget; a call it cuts
+// reports like a failed one. The caller holds jumpMu.
 func (e *Execution) syncJumpResending(keys string, certs D, gen int64) string {
 	start := time.Now()
+	ctx, cancel := context.WithDeadline(e.Ctx, start.Add(jumpResendBudget))
+	defer cancel()
+	bounded := *e
+	bounded.Ctx = ctx
+	e = &bounded
 	outcome := e.SyncJump(keys, certs, gen)
 	for i := 0; i < maxJumpResends && (outcome == "stale" || outcome == "keys_only") && e.P.jumpGen > gen &&
 		e.P.jumpGen < maxJumpGen-1 && time.Since(start) < jumpResendBudget; i++ {
