@@ -129,9 +129,14 @@ func jumpCertificates(s *Store, ca string) D {
 // lockJumpState takes jumpMu and reads the jump keys and certificate map, with
 // the generation number that goes on both requests. The number is the clock in
 // microseconds (exact in a JSON double), or one more than the last when the
-// clock has not moved, so it rises across syncs and survives a restart. The
-// caller unlocks after the send. A read that panics unlocks first, so a failed
-// reconcile cannot block every later jump sync.
+// clock has not moved, so it rises across syncs and survives a restart. When
+// one more than the last would leave [0, 2^53) (a jump host reported a held
+// generation at the top), it falls back to the clock, or one more than the
+// last fallback when the clock has not moved: a damaged jump host refuses those
+// as stale, and once an operator repairs its state the next pass is in range
+// and generations rise strictly again, with no restart and no repeated number.
+// The caller unlocks after the send. A read that panics unlocks first, so a
+// failed reconcile cannot block every later jump sync.
 func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 	e.P.jumpMu.Lock()
 	ok := false
@@ -141,8 +146,15 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 		}
 	}()
 	keys, certs = jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
-	if gen = time.Now().UnixMicro(); gen <= e.P.jumpGen {
+	now := time.Now().UnixMicro()
+	if gen = now; gen <= e.P.jumpGen {
 		gen = e.P.jumpGen + 1
+	}
+	if gen >= maxJumpGen {
+		if gen = now; gen <= e.P.jumpClockGen {
+			gen = e.P.jumpClockGen + 1
+		}
+		e.P.jumpClockGen = gen
 	}
 	e.P.jumpGen = gen
 	ok = true
