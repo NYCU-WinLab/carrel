@@ -430,13 +430,16 @@ func (e *Execution) Reconcile() D {
 		gatewayFailure = attempt(func() { held = e.SyncGateway(state) })
 	}()
 	var jump any
-	if e.jumpEnabled() {
+	if e.jumpEnabled() && !e.deferJump {
 		// Store reads stay on this goroutine; only the request runs beside.
-		keys := jumpAuthorizedKeys(e.S)
+		// jumpMu is taken before the read and released after the send, so an
+		// older map cannot follow a newer one (syncJumpNow).
+		keys, certs, gen := e.lockJumpState()
 		gatewayDone.Add(1)
 		go func() {
 			defer gatewayDone.Done()
-			jump = e.SyncJump(keys)
+			defer e.P.jumpMu.Unlock()
+			jump = e.SyncJump(keys, certs, gen)
 		}()
 	}
 	if len(nodes) > 1 {

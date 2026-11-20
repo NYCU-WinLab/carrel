@@ -292,18 +292,20 @@ def guest_firewall(m, state, config):
     if address6:
         # Rules without an address apply to IPv6 too; these are the IPv6 twins
         # of the tenant and private-range rules (PLAN 6.13).
-        own = v6_net(v6["prefix"], n)
+        own = v6_net(v6["tenants"], n)
         rules += [f"OUT DROP -dest {own.network_address + 1}", f"OUT ACCEPT -dest {own}"]
         if m.get("network_access", "tenant") == "tenant":
             rules.append(f"IN ACCEPT -source {own}")
         rules += [f"OUT DROP -dest {block}" for block in (v6["prefix"], "fc00::/7", "fe80::/10", "ff00::/8", "::1/128")]
-        # The rest of the site's /48 is other tenants: nothing from there,
+        # The rest of the site block is other tenants: nothing from there,
         # whatever the port rules below open (they have no address, so they
         # apply to IPv6 too and open the machine's granted ports to the internet).
         rules.append(f"IN DROP -source {v6['prefix']}")
         if m.get("public_ssh") is not False:
             # From the internet: SSH, like a public address's default (issue #91).
             rules.append("IN ACCEPT -source ::/0 -p tcp -dport 22")
+        # Ping from the internet, as RFC 4890 4.3.1 recommends.
+        rules.append("IN ACCEPT -source ::/0 -p ipv6-icmp -icmp-type echo-request")
     # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
     for entry in config.get("public_entries", []):
@@ -826,14 +828,23 @@ def vpn_apply(tenants):
     return out
 
 
-# IPv6 (issue #142, PLAN 6.13): one site /48 routed over a WireGuard tunnel from
-# the first exit node into the tenant VRF, no NAT. Tenant N gets <prefix>:N::/64,
-# with N written in decimal digits so 10.200.17.11 is <prefix>:17::11; the
-# gateway is ::1. A machine opts in (m["ipv6"]). No ipv6 block, nothing changes.
+# IPv6 (issue #142, PLAN 6.13): one routed site block (a /32 to a /48) over a
+# WireGuard tunnel from the first exit node into the tenant VRF, no NAT. The
+# tenant pool inside it (its first /48 unless "tenants" names one) gives tenant
+# N a block 12 bits longer, N written in decimal digits, and its network the
+# first /64 of that: with a /48 pool, 10.200.17.11 is <pool>:170::11 in
+# <pool>:170::/60, and the gateway is ::1. A machine opts in (m["ipv6"]).
+# No ipv6 block, nothing changes.
 V6_DEV = "wg-v6"
 # 31000 itself is no tenant's VPN port (31000 + N, N >= 1); grantable() keeps it.
 V6_PORT = VPN_PORT_BASE
 V6_FWMARK = "0x60"
+# Marks the unreachable route for the site block, so removal finds it without
+# the block: unused addresses fail here instead of going back into the tunnel.
+V6_PROTO = 96
+# ifupdown2 owns what its files declare: every SDN apply runs ifreload -a, which
+# strips an address or a VRF route it was not told about (issue #336).
+V6_IFACE = Path("/etc/network/interfaces.d/carrel-v6")
 V6_OWNED = STATE / "ipv6-prefixes.json"  # install-network.py's PUBLIC_MARK: the tunnel leaves by the public uplink.
 
 
@@ -844,9 +855,7 @@ def site_ipv6():
     block = site().get("ipv6")
     if block is None:
         return None
-    prefix = ipaddress.IPv6Network(block["prefix"])
-    if prefix.prefixlen != 48 or not prefix.is_global:
-        raise ValueError("ipv6.prefix must be a global /48")
+    prefix, tenants = v6_prefixes(block)
     host, _, port = str(block["peer"]["endpoint"]).rpartition(":")
     ipaddress.IPv4Address(host)
     if not port.isdigit():
@@ -854,23 +863,60 @@ def site_ipv6():
     integer(int(port), 1, 65535)
     if not WG_KEY.fullmatch(str(block["peer"]["public_key"])):
         raise ValueError("invalid ipv6 peer public key")
-    return {"prefix": str(prefix), "endpoint": f"{host}:{int(port)}", "public_key": block["peer"]["public_key"],
-            "mtu": integer(block.get("mtu", VPN_MTU), 1280, VPN_MTU)}
+    return {"prefix": str(prefix), "tenants": str(tenants), "endpoint": f"{host}:{int(port)}",
+            "public_key": block["peer"]["public_key"], "mtu": integer(block.get("mtu", VPN_MTU), 1280, VPN_MTU)}
 
 
-def v6_net(prefix, n):
-    """Tenant N's /64: the fourth group spells N in decimal digits."""
-    base = ipaddress.IPv6Network(prefix)
-    return ipaddress.IPv6Network((int(base.network_address) | int(str(integer(n, 1, 254)), 16) << 64, 64))
+def v6_prefixes(block):
+    """The routed site block and the tenant pool inside it. The pool leaves 12
+    bits for the tenant number and the rest, up to a /64, for its networks."""
+    prefix = ipaddress.IPv6Network(block["prefix"])
+    if not 32 <= prefix.prefixlen <= 48 or not prefix.is_global:
+        raise ValueError("ipv6.prefix must be a global /32 to /48")
+    tenants = ipaddress.IPv6Network(block["tenants"]) if block.get("tenants") else next(prefix.subnets(new_prefix=48))
+    if not tenants.subnet_of(prefix) or tenants.prefixlen > 52:
+        raise ValueError("ipv6.tenants must be a /52 or shorter inside ipv6.prefix")
+    return prefix, tenants
 
 
-def v6_address(prefix, m):
+def v6_tenant(tenants, n):
+    """Tenant N's block: 12 bits after the pool spell N in decimal digits."""
+    pool = ipaddress.IPv6Network(tenants)
+    length = pool.prefixlen + 12
+    return ipaddress.IPv6Network((int(pool.network_address) | int(str(integer(n, 1, 254)), 16) << (128 - length), length))
+
+
+def v6_net(tenants, n):
+    """Tenant N's network: the first /64 of its block."""
+    return ipaddress.IPv6Network((v6_tenant(tenants, n).network_address, 64))
+
+
+def v6_renumbered(subnets, v6, n):
+    """Tenant N's IPv6 subnets left by an earlier numbering: a /64 in the site
+    block, outside the tenant's own block. Anything inside its block stays
+    (room for more networks), and so does anything outside the site block."""
+    if not v6:
+        return []
+    site6 = ipaddress.IPv6Network(v6["prefix"])
+    own = v6_tenant(v6["tenants"], n)
+    out = []
+    for x in subnets:
+        cidr = str(x.get("cidr", ""))
+        if ":" not in cidr:
+            continue
+        net = ipaddress.IPv6Network(cidr)
+        if net.prefixlen == 64 and net.subnet_of(site6) and not net.subnet_of(own):
+            out.append(x)
+    return out
+
+
+def v6_address(tenants, m):
     """A machine's address: its IPv4 host number, in decimal digits, in its tenant's /64."""
     n = m["tenant_n"]
     address = ipaddress.IPv4Address(m["ip"])
     if address not in ipaddress.IPv4Network(f"10.200.{n}.0/24") or not 2 <= int(address) % 256 <= 254:
         raise ValueError("machine address outside its tenant network")
-    return v6_net(prefix, n).network_address + int(str(int(address) % 256), 16)
+    return v6_net(tenants, n).network_address + int(str(int(address) % 256), 16)
 
 
 def link_local(mac):
@@ -905,6 +951,56 @@ table bridge carrel_nd {{
 """
 
 
+def v6_iface(v6):
+    """The tunnel as ifupdown2 sees it, so an ifreload keeps its VRF, address and route.
+    The key and peer stay with wg syncconf: a reload never deletes the link."""
+    gateway = ipaddress.IPv6Network(v6["prefix"]).network_address + 1
+    return f"""# Written by the Carrel node agent: the site IPv6 tunnel (issue #142).
+auto {V6_DEV}
+iface {V6_DEV}
+    pre-up ip link add {V6_DEV} type wireguard 2>/dev/null || true
+    vrf vrf_tenants
+    mtu {v6["mtu"]}
+    address {gateway}/128
+    post-up ip -6 route replace vrf vrf_tenants default dev {V6_DEV}
+    post-up ip -6 route replace vrf vrf_tenants unreachable {v6["prefix"]} proto {V6_PROTO}
+"""
+
+
+IPV6_CONF = Path("/proc/sys/net/ipv6/conf")
+
+
+def untracked_na(value):
+    """RFC 9131 on the tenant bridges. Every node answers as the gateway with
+    the same MAC, so a guest's reply to the exit node's solicitation lands on
+    the guest's own node. With 2 that node learns the address from it, and
+    EVPN gives the exit node a host route. Without it a guest that moved, or
+    never spoke from its global address, is unreachable from the tunnel (#336).
+    2 takes only addresses in the bridge's own subnets; carrel_nd keeps each
+    guest to its own address."""
+    for f in sorted(IPV6_CONF.glob("t[0-9][0-9][0-9]/accept_untracked_na")):
+        if f.read_text().strip() != str(value):
+            f.write_text(str(value))
+
+
+ND_RULES = Path("/etc/carrel/nd.nft")
+ND_UNIT_FILE = Path("/etc/systemd/system/carrel-nd.service")
+
+
+def nd_remove():
+    """No guest has IPv6 any more: the filter and its boot unit go. The rules
+    file goes last, so a failed run is retried by the next reconcile."""
+    # Gone already after a reboot (the unit was disabled); any other failure stops here.
+    if subprocess.run(["nft", "list", "table", "bridge", "carrel_nd"], capture_output=True, check=False).returncode == 0:
+        run("nft", "delete", "table", "bridge", "carrel_nd")
+    if ND_UNIT_FILE.exists():
+        run("systemctl", "disable", "--now", "carrel-nd")
+        ND_UNIT_FILE.unlink()
+        run("systemctl", "daemon-reload")
+    untracked_na(0)
+    ND_RULES.unlink(missing_ok=True)
+
+
 ND_UNIT = """[Unit]
 Description=Carrel neighbour advertisement filter
 After=network.target
@@ -914,6 +1010,7 @@ ConditionPathExists=/etc/carrel/nd.nft
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/carrel/nd.nft
+ExecStart=/bin/sh -c 'for f in /proc/sys/net/ipv6/conf/t[0-9][0-9][0-9]/accept_untracked_na; do [ -e "$$f" ] || continue; echo 2 > "$$f"; done'
 [Install]
 WantedBy=multi-user.target
 """
@@ -923,7 +1020,7 @@ def machine_ipv6(m, v6):
     """The machine's IPv6 address when the site has IPv6 and the machine opted in, else None."""
     if not v6 or m.get("ipv6") is not True:
         return None
-    return str(v6_address(v6["prefix"], m))
+    return str(v6_address(v6["tenants"], m))
 
 
 def v6_nft(v6, addresses):
@@ -968,6 +1065,7 @@ def ipv6_apply(v6, addresses):
     run("ip", "link", "set", V6_DEV, "master", "vrf_tenants", "mtu", str(v6["mtu"]))
     # A source for the tunnel's own ICMPv6 (Packet Too Big) inside the site's prefix.
     run("ip", "-6", "address", "replace", str(ipaddress.IPv6Network(v6["prefix"]).network_address + 1) + "/128", "dev", V6_DEV)
+    write(V6_IFACE, v6_iface(v6), 0o644)
     conf = (f"[Interface]\nListenPort = {V6_PORT}\nPrivateKey = {private}\nFwMark = {V6_FWMARK}\n"
             f"\n[Peer]\nPublicKey = {v6['public_key']}\nEndpoint = {v6['endpoint']}\nAllowedIPs = ::/0\n"
             # Carrel calls out and keeps the path open: the public input chain
@@ -981,6 +1079,7 @@ def ipv6_apply(v6, addresses):
     # instead of failing fast.
     run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", *V6_UNREACHABLE)
     run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "default", "dev", V6_DEV)
+    v6_unreachable(v6["prefix"])
     out = {"public_key": run("wg", "pubkey", input=private), "port": V6_PORT}
     # The route above is only kept while the tunnel is alive.
     # The vip-probe loop runs it too, without the lock: a failure here is
@@ -1036,11 +1135,25 @@ def v6_watchdog(run=run, now=time.time):
     return {"handshake": age, "route": present}
 
 
+def v6_unreachable(prefix=None):
+    """The site block's unreachable route in the tenant VRF: exactly this one, or none."""
+    for line in run("ip", "-6", "route", "show", "vrf", "vrf_tenants", "proto", str(V6_PROTO)).splitlines():
+        old = line.split()[1] if line.startswith("unreachable ") else None
+        if old and old != prefix:
+            run("ip", "-6", "route", "del", "vrf", "vrf_tenants", "unreachable", old, "proto", str(V6_PROTO))
+    if prefix:
+        run("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "unreachable", prefix, "proto", str(V6_PROTO))
+
+
 def ipv6_remove():
     """Take the tunnel and its filter away: the site has no ipv6 block, or this
     node is no longer the first exit node. Nothing to do on a node that never had them."""
+    # The file first: an ifreload in between must not bring the link back.
+    V6_IFACE.unlink(missing_ok=True)
     if Path(f"/sys/class/net/{V6_DEV}").exists():
         run("ip", "link", "del", V6_DEV)
+    if Path("/sys/class/net/vrf_tenants").exists():
+        v6_unreachable()
     if Path("/etc/carrel/v6.nft").exists():
         # Nothing loads it at boot: after a restart the table is already gone.
         subprocess.run(["nft", "delete", "table", "inet", "carrel_v6"], capture_output=True, check=False)
@@ -1223,13 +1336,15 @@ def reconcile(state, first=True):
                 snat=1,
             )
             changed.append(f"subnet-{n}")
-        if v6:
-            net6 = v6_net(v6["prefix"], n)
-            if not any(x.get("cidr") == str(net6) for x in subnets):
-                # Routed, never translated: the addresses are the machines' own.
-                api("create", f"/cluster/sdn/vnets/{vnet}/subnets", subnet=str(net6), type="subnet",
-                    gateway=str(net6.network_address + 1), snat=0)
-                changed.append(f"subnet6-{n}")
+        net6 = v6_net(v6["tenants"], n) if v6 else None
+        for x in v6_renumbered(subnets, v6, n):
+            api("delete", f"/cluster/sdn/vnets/{vnet}/subnets/{x['subnet']}")
+            changed.append(f"removed-{x['subnet']}")
+        if net6 and not any(x.get("cidr") == str(net6) for x in subnets):
+            # Routed, never translated: the addresses are the machines' own.
+            api("create", f"/cluster/sdn/vnets/{vnet}/subnets", subnet=str(net6), type="subnet",
+                gateway=str(net6.network_address + 1), snat=0)
+            changed.append(f"subnet6-{n}")
     # The prefixes this node has made subnets in (V6_OWNED). Only subnets
     # inside one of them, and outside the current prefix, are taken away: a
     # site that never had an ipv6 block deletes nothing.
@@ -1241,7 +1356,10 @@ def reconcile(state, first=True):
     for vnet, subnets in subnets_by_vnet.items():
         for x in subnets:
             cidr = str(x.get("cidr", ""))
-            if ":" in cidr and any(ipaddress.IPv6Network(cidr).subnet_of(p) for p in stale):
+            # A new block can contain an old one (a /48 grown to its /44): what
+            # is inside the current block stays, and the loop above renumbers it.
+            current = v6 and ipaddress.IPv6Network(cidr).subnet_of(ipaddress.IPv6Network(v6["prefix"])) if ":" in cidr else False
+            if ":" in cidr and not current and any(ipaddress.IPv6Network(cidr).subnet_of(p) for p in stale):
                 api("delete", f"/cluster/sdn/vnets/{vnet}/subnets/{x['subnet']}")
                 changed.append(f"removed-{x['subnet']}")
     if state.get("fetch"):
@@ -1358,10 +1476,15 @@ table inet carrel_conntrack {{
     run("systemctl", "start", "carrel-conntrack")
     # Every node, as the guests' taps are local: on before any guest has ndp: 1.
     with_v6 = [(m, a) for m, a in ((m, machine_ipv6(m, v6)) for m in state["machines"]) if a]
-    if with_v6 or Path("/etc/carrel/nd.nft").exists():
+    if not with_v6:
+        if ND_RULES.exists():
+            nd_remove()
+    else:
         write("/etc/carrel/nd.nft", nd_nft(with_v6))
         run("nft", "-c", "-f", "/etc/carrel/nd.nft")
         run("nft", "-f", "/etc/carrel/nd.nft")
+        # After the filter: the bridges then learn only what it lets through.
+        untracked_na(2)
         # And at boot, before the guests start: their firewall keeps ndp: 1.
         if write("/etc/systemd/system/carrel-nd.service", ND_UNIT):
             run("systemctl", "daemon-reload")
@@ -1614,13 +1737,36 @@ def cloud_init(m, *, prepared=False, environment="development"):
     return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
 
 
+def guest_mtu(m):
+    """net0's MTU: the tenant network's 1450, or the IPv6 tunnel's for an
+    opted-in machine, so no send needs a Packet Too Big from the exit node:
+    its PTB comes from a link-local address other nodes never route back (#336)."""
+    v6 = site_ipv6()
+    return v6["mtu"] if machine_ipv6(m, v6) else 1450
+
+
+def ct_mtu_command(mtu):
+    """net0's mtu= sizes the veth at start, but the guest's own network setup
+    then resets eth0 to 1500 without an mtu line of its own (#336). PVE keeps
+    the line when it rewrites the stanza at the next start."""
+    mtu = integer(mtu, 1280, 1500)
+    return (
+        "set -e; f=/etc/network/interfaces; "
+        f"if grep -q '^iface eth0 inet static' $f 2>/dev/null && ! grep -q '^[[:space:]]*mtu ' $f; then "
+        f"sed -i '/^iface eth0 inet static/a\\\tmtu {mtu}' $f; fi; "
+        "if [ -e /etc/systemd/network/eth0.network ]; then mkdir -p /etc/systemd/network/eth0.network.d; "
+        f"printf '[Link]\\nMTUBytes={mtu}\\n' > /etc/systemd/network/eth0.network.d/carrel-mtu.conf; fi; "
+        f"ip link set eth0 mtu {mtu}"
+    )
+
+
 def ct_ipv6(m):
     """The net0 options that give an opted-in container its IPv6 address, or nothing."""
     v6 = site_ipv6()
     address6 = machine_ipv6(m, v6)
     if not address6:
         return ""
-    return f",ip6={address6}/64,gw6={v6_net(v6['prefix'], m['tenant_n']).network_address + 1}"
+    return f",ip6={address6}/64,gw6={v6_net(v6['tenants'], m['tenant_n']).network_address + 1}"
 
 
 def network_file(m):
@@ -1628,7 +1774,7 @@ def network_file(m):
     primary = {
         "match": {"macaddress": m["mac"]}, "addresses": [m["ip"] + "/24"],
         "routes": [{"to": "0.0.0.0/0", "via": f"10.200.{m['tenant_n']}.1"}],
-        "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": 1450,
+        "nameservers": {"addresses": ["10.200.0.2"]}, "mtu": guest_mtu(m),
     }
     v6 = site_ipv6()
     address6 = machine_ipv6(m, v6)
@@ -1636,7 +1782,7 @@ def network_file(m):
         # Static, like IPv4: the gateway sends no router advertisements (radv: 0).
         primary["addresses"].append(address6 + "/64")
         primary["accept-ra"] = False
-        primary["routes"].append({"to": "::/0", "via": str(v6_net(v6["prefix"], m["tenant_n"]).network_address + 1)})
+        primary["routes"].append({"to": "::/0", "via": str(v6_net(v6["tenants"], m["tenant_n"]).network_address + 1)})
     network = {"version": 2, "ethernets": {"primary": primary}}
     write("/var/lib/vz/snippets/" + network_name, json.dumps(network), 0o600)
     return network_name
@@ -2251,7 +2397,7 @@ def create(m):
     keyfile = STATE / f"{vmid}.pub"
     if not m.get("service_ports"):
         write(keyfile, keys(m["ssh_keys"]), 0o600)
-    net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu=1450"
+    net = f"bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu={guest_mtu(m)}"
     if m["kind"] == "vm" and m.get("import_volume") and not exists:
         # A tenant's cloud image (PLAN 7.8): checked against its checksum,
         # then imported as the boot disk; the rest is an ordinary VM.
@@ -2348,6 +2494,7 @@ def create(m):
         run("pct", "exec", vmid, "--", "systemctl", "daemon-reload")
         run("pct", "exec", vmid, "--", "systemctl", "reset-failed", "systemd-journald")
         run("pct", "exec", vmid, "--", "systemctl", "restart", "systemd-journald")
+        run("pct", "exec", vmid, "--", "sh", "-c", ct_mtu_command(guest_mtu(m)))
         if command := mirror_command(m["image"]):
             run("pct", "exec", vmid, "--", "sh", "-c", command)
         if files := ca_files(m, "root"):

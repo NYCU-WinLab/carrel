@@ -409,7 +409,7 @@ snapshot space (200 GiB) retain their existing defaults. A machine created with
 | Memory admission | All allocated Carrel machines, including stopped ones, reserve RAM; unmanaged running infrastructure also counts |
 | Memory measurement | VMs keep the balloon device (2026-11-17): the guest reports what it needs, and returns freed pages to the node. Nothing shrinks a machine, and admission still reserves all assigned RAM. Each node's sum of assigned and needed memory is recorded (section 9.1); a memory ratio is set only from that record. Machines created earlier get the device at their next cold boot or reboot through `machine_power`, and a machine thawed from an older backup gets it at the restore |
 | Disk admission | Allocated disk at most 1.5 times the pool: volumes at their declared size, snapshots at the bytes they hold (2026-11-17; a node that does not measure them counts each at the size of its disk). A snapshot whose disk would not fit in the node's physical headroom is refused |
-| Snapshot quota | `snapshot_gb` is the space only the tenant's snapshots hold (ZFS `usedbysnapshots` of its volumes, sampled every 300 seconds and after each snapshot operation). A new snapshot holds nothing, so it is refused only while the tenant is already over the limit; `snapshots` bounds how many there are. The limit is a line where growth stops, not a cap: snapshots keep growing as the disk changes, up to the size of the disk each. Being over it refuses new snapshots and nothing else, unlike the other dimensions, where a request that adds nothing is refused too. Without a sample from the last 15 minutes each snapshot counts at the size of its disk, as it did before. The control plane's clock dates a sample, so a node whose clock is wrong cannot keep an old one in use |
+| Snapshot quota | `snapshot_gb` is the space only the tenant's snapshots hold (ZFS `usedbysnapshots` of its volumes, sampled every 300 seconds and after each snapshot operation). A new snapshot holds nothing, so it is refused only while the tenant is already over the limit; `snapshots` bounds how many there are. The limit is a line where growth stops, not a cap: snapshots keep growing as the disk changes, up to the size of the disk each. Being over it refuses new snapshots and nothing else. In every dimension only growth is refused; a request that adds nothing passes. Without a sample from the last 15 minutes each snapshot counts at the size of its disk, as it did before. The control plane's clock dates a sample, so a node whose clock is wrong cannot keep an old one in use |
 | Disk watermark | Real use of a node's pool: `warning` above 70 percent, `blocked` above 80 (nothing on the node grows), `critical` above 85. `capacity_get` and `node_list` report it; alerts are in section 9.3. Snapshots and thin disks grow after admission, so the watermark, not admission, is what guards a pool |
 | Addresses, ports, domains | Fixed allocations, never oversubscribed |
 
@@ -899,37 +899,44 @@ failover of #89: the address moves with the active node.
 
 ### 6.13 Site IPv6 (issue #142)
 
-The lab and the campus have no IPv6. A lab member (N0Ball, AS214821) offered a /48 from his
+The lab and the campus have no IPv6. A lab member (N0Ball, AS214821) routes a /44 from his
 own allocation; carrel routes it in over one WireGuard tunnel and gives each machine that asks a
-public IPv6 address. This is site IPv6, not per-member "bring your own prefix": one /48 for the
-site, one peer, no customer gateway objects.
+public IPv6 address. This is site IPv6, not per-member "bring your own prefix": one site block,
+one peer, no customer gateway objects. The block is configuration, so the site can be renumbered.
 
 **Off by default, byte for byte.** A site file without an `ipv6` block produces exactly the files it
 did before (tests/test_ipv6_off_golden.py): guest firewalls, host nft, sysctl, cloud-init. A site
 with the block changes nothing for a machine that did not opt in.
 
 ```json
-"ipv6": {"prefix": "2a14:7581:880::/48",
-         "peer": {"endpoint": "<IPv4>:<port>", "public_key": "<WireGuard key>"}, "mtu": 1420}
+"ipv6": {"prefix": "2a14:7581:880::/44", "tenants": "2a14:7581:880::/48",
+         "peer": {"endpoint": "<IPv4>:<port>", "public_key": "<WireGuard key>"}, "mtu": 1370}
 ```
 
-The control plane's `/etc/carrel/config.json` gets the same prefix as `ipv6_prefix`; with it,
+`prefix` is the routed site block, a /32 to a /48. `tenants` is the tenant pool inside it, a /52 or
+shorter, by default the block's first /48; the rest of the block (for the b09 /44: `881::/48`
+infrastructure, `882::/48` VPN clients) is reserved. The control plane's `/etc/carrel/config.json`
+gets the tenant pool as `ipv6_prefix`; with it,
 `catalog_get` reports `capabilities.ipv6: true` and `machine_create` accepts `ipv6: true`.
 
-**Addresses.** Tenant N has `<prefix>:N::/64` with N written in decimal digits, so a machine's
-address mirrors its IPv4 one: `10.200.17.11` is `<prefix>:17::11`, gateway `<prefix>:17::1` (the
-EVPN anycast gateway, as for IPv4). Static, from cloud-init (`accept-ra: false`) or `pct`
+**Addresses.** Tenant N has the block 12 bits longer than the pool whose 12 bits spell N in
+decimal digits (a /60 from a /48 pool), and its network is the first /64 of that block; the rest
+is room for more networks. A machine's address mirrors its IPv4 one: with a /48 pool,
+`10.200.17.11` is `<pool>:170::11`, gateway `<pool>:170::1` (the EVPN anycast gateway, as for
+IPv4). Static, from cloud-init (`accept-ra: false`) or `pct`
 (`ip6`, `gw6`); the gateway sends no router advertisements. Each tenant VNet gets a second PVE
 subnet with `snat 0`: the addresses are routed, never translated.
 
 **Path.** The first exit node holds `wg-v6`, enslaved to `vrf_tenants`, with `AllowedIPs ::/0`
-and the VRF's IPv6 default route through it. Its UDP leaves from the public address (fwmark
+and the VRF's IPv6 default route through it. The whole site block is `unreachable` in the VRF
+(route protocol 96), so traffic to unused addresses stops there instead of going back into the
+tunnel. The VRF keeps the tunnel to tenant traffic: the hosts' own IPv6 never uses it. Its UDP leaves from the public address (fwmark
 `0x60`, table 160) on port 31000, which no tenant VPN uses, and keeps the path open with a 25 s
-keepalive, so `carrel_public` needs no new input rule. The tunnel's MTU is 1420; `carrel_tenant_host`
-clamps IPv6 TCP MSS to 1360, and the base guest chains let ICMPv6 Packet Too Big through.
+keepalive, so `carrel_public` needs no new input rule. The tunnel's MTU is 1420 at most (1370 for b09); `carrel_tenant_host`
+clamps IPv6 TCP MSS to the tunnel MTU minus 60, and the base guest chains let ICMPv6 Packet Too Big through.
 
 **Filters.**
-- `inet carrel_v6` on the exit node: from the tunnel, sources inside the /48 are dropped (spoofing)
+- `inet carrel_v6` on the exit node: from the tunnel, sources inside the site block are dropped (spoofing)
   and only opted-in machine addresses are reachable; into the tunnel, only those addresses leave.
 - `inet carrel_tenant_host` on every node: IPv6 forwarding is global in Linux, so forwarded IPv6
   that enters or leaves anything but the tenant VRF and its links is dropped (management,
@@ -938,8 +945,8 @@ clamps IPv6 TCP MSS to 1360, and the base guest chains let ICMPv6 Packet Too Big
 - Guest firewall of an opted-in machine: `ndp: 1` (`radv: 0` stays), the machine's /128,
   `fe80::/64` and `::` in its ipfilter set (the nftables firewall adds no link-local to an explicit
   set), the two `::/0` drops removed, and IPv6 twins of the tenant rules: its own /64 out (not the
-  gateway), its tenant's /64 in when `network_access` is `tenant`, the rest of the /48, ULA,
-  link-local, multicast and loopback dropped out, and nothing in from the rest of the /48. Rules
+  gateway), its tenant's /64 in when `network_access` is `tenant`, the rest of the site block, ULA,
+  link-local, multicast and loopback dropped out, and nothing in from the rest of the site block. Rules
   without an address already apply to both families (SMTP drop, port grants), so from the
   internet a machine takes SSH (unless `public_ssh` is false) and its open ports.
 - `bridge carrel_nd` on every node: a guest's neighbour advertisements may name only its own

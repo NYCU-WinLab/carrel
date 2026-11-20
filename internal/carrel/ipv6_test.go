@@ -12,10 +12,10 @@ func TestIPv6MachineAddressMatchesNodeAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr, gw, ok := v6Machine(p, 17, "10.200.17.11")
-	if !ok || addr != netip.MustParseAddr("2a14:7581:880:17::11") || gw != netip.MustParseAddr("2a14:7581:880:17::1") {
+	if !ok || addr != netip.MustParseAddr("2a14:7581:880:170::11") || gw != netip.MustParseAddr("2a14:7581:880:170::1") {
 		t.Fatalf("got %v %v %v", addr, gw, ok)
 	}
-	if a, _, _ := v6Machine(p, 254, "10.200.254.250"); a != netip.MustParseAddr("2a14:7581:880:254::250") {
+	if a, _, _ := v6Machine(p, 254, "10.200.254.250"); a != netip.MustParseAddr("2a14:7581:880:2540::250") {
 		t.Fatalf("got %v", a)
 	}
 	for _, ip := range []string{"10.200.18.11", "10.200.17.1", "10.200.17.255", "nope"} {
@@ -23,7 +23,17 @@ func TestIPv6MachineAddressMatchesNodeAgent(t *testing.T) {
 			t.Fatalf("%s accepted", ip)
 		}
 	}
-	for _, bad := range []string{"2a14:7581:880::/56", "fd00:1::/48", "10.0.0.0/8", "2a14:7581:880:1::/48", "2001:db8:880::/48", ""} {
+	p44, err := ipv6Prefix("2a14:7581:880::/44")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, gw, _ := v6Machine(p44, 17, "10.200.17.11"); a != netip.MustParseAddr("2a14:7581:880:1700::11") || gw != netip.MustParseAddr("2a14:7581:880:1700::1") {
+		t.Fatalf("/44 pool: %v %v", a, gw)
+	}
+	if n := v6Net(p44, 254); n != netip.MustParsePrefix("2a14:7581:882:5400::/64") {
+		t.Fatalf("/44 pool: %v", n)
+	}
+	for _, bad := range []string{"2a14:7581:880::/56", "2a14:7581:880::/53", "2a14::/16", "fd00:1::/48", "10.0.0.0/8", "2a14:7581:880:1::/48", "2001:db8:880::/48", ""} {
 		if _, err := ipv6Prefix(bad); err == nil {
 			t.Fatalf("%q accepted", bad)
 		}

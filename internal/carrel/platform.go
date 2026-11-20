@@ -52,6 +52,7 @@ type Platform struct {
 	Telemetry    *Telemetry
 	HTTP         *http.Client
 	writer       sync.Mutex
+	snapshotting sync.Mutex
 	originRetry  backoff
 	certificates sync.Mutex
 	registration sync.Mutex
@@ -62,18 +63,27 @@ type Platform struct {
 	// proxyProbe replaces the check through Cloudflare in tests.
 	proxyProbe func(name, token string) string
 	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
-	tenantAsk          func(address string, port int, name string) bool
-	netboxKick         chan struct{}
-	inventoryMu        sync.Mutex
-	inventories        map[string]*ObservationCache
-	Operations         *Operations
-	ctx                context.Context
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup
-	platformMu         sync.Mutex
-	platformCodes      map[string]D
-	fnLogs             functionLogs
-	reportMu           sync.Mutex
+	tenantAsk     func(address string, port int, name string) bool
+	netboxKick    chan struct{}
+	inventoryMu   sync.Mutex
+	inventories   map[string]*ObservationCache
+	Operations    *Operations
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	platformMu    sync.Mutex
+	platformCodes map[string]D
+	fnLogs        functionLogs
+	reportMu      sync.Mutex
+	// jumpMu makes a jump sync read the store and send under one lock.
+	jumpMu sync.Mutex
+	// jumpGen is the last generation number sent; read and set under jumpMu.
+	jumpGen int64
+	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
+	jumpQueueMu        sync.Mutex
+	jumpPending        bool
+	jumpRunning        bool
+	jumpClosed         bool
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
@@ -91,6 +101,9 @@ type Execution struct {
 	Op                  D
 	publicationPrepared bool
 	placement           nodeRef
+	// deferJump leaves the jump push out of Reconcile; the caller sends it
+	// with syncJumpNow after it releases the writer.
+	deferJump bool
 }
 
 func NewPlatform(s *Store, b Backend, c Config) *Platform {
@@ -301,10 +314,9 @@ func (e *Execution) Quota(t D, delta ...D) D {
 		remaining[k] = num(limit[k]) - num(v)
 		if num(v) > num(limit[k]) {
 			over = append(over, k)
-			// A request that adds nothing is refused while any dimension is over.
-			// Not for snapshot_gb: snapshots grow as the disk under them changes,
-			// so being over it is an ordinary state that stops only new snapshots.
-			if len(delta) > 0 && delta[0] != nil && (len(d) == 0 && k != "snapshot_gb" || num(d[k]) > 0) {
+			// Only growth in an exceeded dimension is refused. A request that adds
+			// nothing (a redeploy, a replayed request) passes while over.
+			if len(delta) > 0 && delta[0] != nil && num(d[k]) > 0 {
 				violations = append(violations, D{"dimension": k, "used": v, "limit": limit[k]})
 			}
 		}
@@ -593,6 +605,11 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 			safe["ssh_short"] = "ssh " + alias
 			safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName %s\n  User %s\n  ProxyJump jump@carrel.winlab.tw\n", alias, alias, str(m["ip"]), user)
 			safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
+		}
+		// With a lab certificate (step ssh login) and no saved key: the
+		// jump host's certificate user forwards to machines that trust it.
+		if str(m["ssh_user_ca"]) != "" && len(servicePortsOf(m)) == 0 {
+			safe["ssh_jump_certificate"] = fmt.Sprintf("ssh -J ca@carrel.winlab.tw %s@%s", user, str(m["ip"]))
 		}
 	}
 	return safe

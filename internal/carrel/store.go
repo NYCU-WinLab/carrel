@@ -53,12 +53,20 @@ func (s *Store) Exec(q string, args ...any) {
 	_, e := s.q.ExecContext(context.Background(), q, args...)
 	must(e)
 }
+
+// readFailed turns a store read error into an expected infrastructure Failure
+// instead of a bug panic; the raw error stays out of the result (#319).
+func readFailed(err error) {
+	if err != nil {
+		fail("backend_unavailable", "The store could not be read", D{"component": "store", "backend_code": "store_unreadable", "recovery": "retry_infrastructure"})
+	}
+}
 func (s *Store) Rows(q string, args ...any) []D {
 	rows, e := s.q.QueryContext(context.Background(), q, args...)
-	must(e)
+	readFailed(e)
 	defer rows.Close()
 	cols, e := rows.Columns()
-	must(e)
+	readFailed(e)
 	result := []D{}
 	for rows.Next() {
 		vals := make([]any, len(cols))
@@ -66,7 +74,7 @@ func (s *Store) Rows(q string, args ...any) []D {
 		for i := range vals {
 			ptr[i] = &vals[i]
 		}
-		must(rows.Scan(ptr...))
+		readFailed(rows.Scan(ptr...))
 		d := D{}
 		for i, k := range cols {
 			if b, ok := vals[i].([]byte); ok {
@@ -76,7 +84,7 @@ func (s *Store) Rows(q string, args ...any) []D {
 		}
 		result = append(result, d)
 	}
-	must(rows.Err())
+	readFailed(rows.Err())
 	return result
 }
 func (s *Store) Transaction(f func(*Store)) {

@@ -1,5 +1,6 @@
 """Site IPv6 (issue #142, PLAN 6.13): addresses, guest rules, tunnel filter and host rules."""
 
+import contextlib
 import importlib.util
 import json
 from pathlib import Path
@@ -31,9 +32,9 @@ def agent(tmp_path):
 
 
 def test_tenant_number_reads_as_decimal_digits(agent):
-    assert str(agent.v6_net(SITE6["prefix"], 17)) == "2a14:7581:880:17::/64"
-    assert str(agent.v6_net(SITE6["prefix"], 254)) == "2a14:7581:880:254::/64"
-    assert str(agent.v6_address(SITE6["prefix"], machine())) == "2a14:7581:880:17::11"
+    assert str(agent.v6_net(SITE6["prefix"], 17)) == "2a14:7581:880:170::/64"
+    assert str(agent.v6_net(SITE6["prefix"], 254)) == "2a14:7581:880:2540::/64"
+    assert str(agent.v6_address(SITE6["prefix"], machine())) == "2a14:7581:880:170::11"
     with pytest.raises(ValueError):
         agent.v6_address(SITE6["prefix"], machine(ip="10.200.18.11"))
 
@@ -42,7 +43,10 @@ def test_tenant_number_reads_as_decimal_digits(agent):
     "bad",
     [
         {"prefix": "2a14:7581:880::/56"},
+        {"prefix": "2a14::/16"},
         {"prefix": "fd00:1::/48"},
+        {"prefix": "2a14:7581:880::/44", "tenants": "2a14:7581:890::/48"},
+        {"prefix": "2a14:7581:880::/44", "tenants": "2a14:7581:880::/56"},
         {"peer": {"endpoint": "example.org:51820", "public_key": KEY}},
         {"peer": {"endpoint": "198.51.100.7:51820", "public_key": "nope"}},
         {"mtu": 1500},
@@ -64,22 +68,24 @@ def test_opted_in_machine_rules(agent):
     rules = agent.guest_firewall(machine(ipv6=True), STATE, CONFIG).splitlines()
     assert "ndp: 1" in rules and "radv: 0" in rules
     ipset = rules[rules.index("[IPSET ipfilter-net0]") + 1 : rules.index("[RULES]")]
-    assert {"10.200.17.11", "2a14:7581:880:17::11", "fe80::/64", "::"} <= set(ipset)
+    assert {"10.200.17.11", "2a14:7581:880:170::11", "fe80::/64", "::"} <= set(ipset)
     assert "OUT DROP -dest ::/0" not in rules and "IN DROP -source ::/0" not in rules
     own, site = (
-        rules.index("OUT ACCEPT -dest 2a14:7581:880:17::/64"),
+        rules.index("OUT ACCEPT -dest 2a14:7581:880:170::/64"),
         rules.index("OUT DROP -dest 2a14:7581:880::/48"),
     )
-    assert rules.index("OUT DROP -dest 2a14:7581:880:17::1") < own < site
-    assert "IN ACCEPT -source 2a14:7581:880:17::/64" in rules
+    assert rules.index("OUT DROP -dest 2a14:7581:880:170::1") < own < site
+    assert "IN ACCEPT -source 2a14:7581:880:170::/64" in rules
     for block in ("fc00::/7", "fe80::/10", "ff00::/8"):
         assert f"OUT DROP -dest {block}" in rules
     assert "IN ACCEPT -source ::/0 -p tcp -dport 22" in rules
+    ping = rules.index("IN ACCEPT -source ::/0 -p ipv6-icmp -icmp-type echo-request")
+    assert rules.index("IN DROP -source 2a14:7581:880::/48") < ping
     # Restricted: no tenant-wide IPv6 inbound either.
     restricted = agent.guest_firewall(
         machine(ipv6=True, network_access="restricted"), STATE, CONFIG
     ).splitlines()
-    assert "IN ACCEPT -source 2a14:7581:880:17::/64" not in restricted
+    assert "IN ACCEPT -source 2a14:7581:880:170::/64" not in restricted
 
 
 def test_network_file_and_container_options(agent):
@@ -87,28 +93,34 @@ def test_network_file_and_container_options(agent):
     agent.write = lambda path, data, mode=0o640: files.update({path: data})
     name = agent.network_file(machine(ipv6=True))
     primary = json.loads(files["/var/lib/vz/snippets/" + name])["ethernets"]["primary"]
-    assert primary["addresses"] == ["10.200.17.11/24", "2a14:7581:880:17::11/64"]
-    assert {"to": "::/0", "via": "2a14:7581:880:17::1"} in primary["routes"]
+    assert primary["addresses"] == ["10.200.17.11/24", "2a14:7581:880:170::11/64"]
+    assert {"to": "::/0", "via": "2a14:7581:880:170::1"} in primary["routes"]
     assert primary["accept-ra"] is False
-    assert agent.ct_ipv6(machine(ipv6=True)) == ",ip6=2a14:7581:880:17::11/64,gw6=2a14:7581:880:17::1"
+    # The tunnel's MTU: no send needs a Packet Too Big from the exit node (#336).
+    assert primary["mtu"] == 1420
+    assert agent.ct_ipv6(machine(ipv6=True)) == ",ip6=2a14:7581:880:170::11/64,gw6=2a14:7581:880:170::1"
+    assert agent.guest_mtu(machine(ipv6=True)) == 1420 and agent.guest_mtu(machine()) == 1450
+    agent.network_file(machine())
+    assert json.loads(files["/var/lib/vz/snippets/" + name])["ethernets"]["primary"]["mtu"] == 1450
     assert agent.ct_ipv6(machine()) == ""
 
 
 def test_tunnel_filter(agent):
     empty = agent.v6_nft(agent.site_ipv6(), [])
     assert "{  }" not in empty and 'iifname "wg-v6" counter drop' in empty
-    rules = agent.v6_nft(agent.site_ipv6(), ["2a14:7581:880:17::11"])
+    rules = agent.v6_nft(agent.site_ipv6(), ["2a14:7581:880:170::11"])
     lines = [x.strip() for x in rules.splitlines()]
     assert lines.index('iifname "wg-v6" ip6 saddr 2a14:7581:880::/48 counter drop') < lines.index(
-        'iifname "wg-v6" ip6 daddr { 2a14:7581:880:17::11 } accept'
+        'iifname "wg-v6" ip6 daddr { 2a14:7581:880:170::11 } accept'
     )
-    assert 'oifname "wg-v6" ip6 saddr { 2a14:7581:880:17::11 } accept' in lines
+    assert 'oifname "wg-v6" ip6 saddr { 2a14:7581:880:170::11 } accept' in lines
 
 
 def test_tunnel_removed_off_the_exit_node(agent, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
     monkeypatch.setattr(agent, "public_ingress", lambda: None)
+    monkeypatch.setattr(agent, "V6_IFACE", tmp_path / "carrel-v6")
     assert agent.ipv6({"machines": []}, agent.site_ipv6()) == {}
     assert not any(c[:2] == ("ip", "link") and "add" in c for c in calls)
 
@@ -139,7 +151,7 @@ def test_site_check_in_installer():
 def test_other_tenants_and_public_ssh(agent):
     rules = agent.guest_firewall(machine(ipv6=True), STATE, CONFIG).splitlines()
     own, rest = (
-        rules.index("IN ACCEPT -source 2a14:7581:880:17::/64"),
+        rules.index("IN ACCEPT -source 2a14:7581:880:170::/64"),
         rules.index("IN DROP -source 2a14:7581:880::/48"),
     )
     grant = rules.index("IN ACCEPT -p tcp -dport 22")
@@ -152,13 +164,13 @@ def test_neighbour_advertisements_name_only_own_addresses(agent):
     assert agent.link_local("02:ca:11:00:00:0b") == "fe80::ca:11ff:fe00:b"
     nft = agent.nd_nft(
         [
-            (machine(ipv6=True), "2a14:7581:880:17::11"),
-            (machine(kind="ct", vmid=11711), "2a14:7581:880:17::12"),
+            (machine(ipv6=True), "2a14:7581:880:170::11"),
+            (machine(kind="ct", vmid=11711), "2a14:7581:880:170::12"),
         ]
     )
     lines = [x.strip() for x in nft.splitlines()]
     assert (
-        'iifname "tap11710i0" icmpv6 type nd-neighbor-advert icmpv6 taddr { 2a14:7581:880:17::11, fe80::ca:11ff:fe00:b } accept'
+        'iifname "tap11710i0" icmpv6 type nd-neighbor-advert icmpv6 taddr { 2a14:7581:880:170::11, fe80::ca:11ff:fe00:b } accept'
         in lines
     )
     assert lines.index('iifname "tap11710i0" icmpv6 type nd-neighbor-advert counter drop') > 0
@@ -246,7 +258,9 @@ def test_watchdog_failure_keeps_key_and_port(agent, monkeypatch, tmp_path):
         raise agent.CommandFailure("ip -6 failed: busy")
 
     monkeypatch.setattr(agent, "v6_watchdog", broken)
-    out = agent.ipv6_apply({"prefix": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
+    out = agent.ipv6_apply(
+        {"prefix": SITE6["prefix"], "tenants": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, []
+    )
     assert out["public_key"] == "PUBKEY" and out["port"] == agent.V6_PORT
     assert out["watchdog_error"].startswith("CommandFailure")
 
@@ -277,5 +291,180 @@ def test_apply_installs_unreachable_default(agent, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
     agent.ipv6_apply({"prefix": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
-    want = ("ip", "-6", "route", "replace", "vrf", "vrf_tenants", "unreachable", "default", "metric", "4278198272")
+    want = (
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "vrf",
+        "vrf_tenants",
+        "unreachable",
+        "default",
+        "metric",
+        "4278198272",
+    )
     assert want in calls
+
+
+def test_tunnel_declared_to_ifupdown(agent):
+    # ifreload -a, run by every SDN apply, keeps only what its files declare (#336).
+    text = agent.v6_iface(agent.site_ipv6())
+    assert "auto wg-v6\niface wg-v6\n" in text
+    for line in (
+        "vrf vrf_tenants",
+        "mtu 1420",
+        "address 2a14:7581:880::1/128",
+        "post-up ip -6 route replace vrf vrf_tenants default dev wg-v6",
+        "post-up ip -6 route replace vrf vrf_tenants unreachable 2a14:7581:880::/48 proto 96",
+    ):
+        assert "    " + line + "\n" in text
+
+
+def test_tunnel_removal_drops_the_ifupdown_file(agent, monkeypatch, tmp_path):
+    iface = tmp_path / "carrel-v6"
+    iface.write_text("auto wg-v6\n")
+    monkeypatch.setattr(agent, "V6_IFACE", iface)
+    monkeypatch.setattr(agent, "VPN_KEYS", tmp_path)
+    monkeypatch.setattr(agent, "run", lambda *a, **k: "")
+    agent.ipv6_remove()
+    assert not iface.exists()
+
+
+def test_neighbour_filter_removed_with_the_last_ipv6_guest(agent, monkeypatch, tmp_path):
+    rules, unit = tmp_path / "nd.nft", tmp_path / "carrel-nd.service"
+    rules.write_text("table bridge carrel_nd {}\n")
+    unit.write_text(agent.ND_UNIT)
+    monkeypatch.setattr(agent, "ND_RULES", rules)
+    monkeypatch.setattr(agent, "ND_UNIT_FILE", unit)
+    monkeypatch.setattr(agent, "IPV6_CONF", tmp_path / "conf")
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
+    monkeypatch.setattr(agent.subprocess, "run", lambda a, **k: agent.subprocess.CompletedProcess(a, 0))
+    agent.nd_remove()
+    assert ("nft", "delete", "table", "bridge", "carrel_nd") in calls
+    assert ("systemctl", "disable", "--now", "carrel-nd") in calls
+    assert not rules.exists() and not unit.exists()
+
+
+def test_container_net0_has_one_mtu(agent, monkeypatch, tmp_path):
+    # pct rejects a duplicate key in net0 (#348 review).
+    monkeypatch.setattr(agent, "STATE", tmp_path)
+    monkeypatch.setattr(agent, "PVE_NODES", tmp_path / "nodes")
+    monkeypatch.setattr(agent, "ct_template", lambda image: "local:vztmpl/t")
+    monkeypatch.setattr(agent, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(agent, "first_firewall", lambda m: None)
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "status: running")
+    for m, mtu in ((machine(kind="ct", ipv6=True), "mtu=1420"), (machine(kind="ct"), "mtu=1450")):
+        calls.clear()
+        # Only the pct create call matters here.
+        with contextlib.suppress(Exception):
+            agent.create(m)
+        net0 = next(c[c.index("--net0") + 1] for c in calls if c[:2] == ("pct", "create"))
+        assert net0.count("mtu=") == 1 and mtu in net0.split(","), net0
+
+
+def test_container_keeps_its_mtu_inside(agent):
+    # net0's mtu= sizes the veth, but ifupdown2 in the guest resets eth0 to 1500 (#336).
+    command = agent.ct_mtu_command(1420)
+    assert "/^iface eth0 inet static/a\\\tmtu 1420" in command
+    assert "MTUBytes=1420" in command and command.endswith("ip link set eth0 mtu 1420")
+    with pytest.raises(ValueError):
+        agent.ct_mtu_command("1420; reboot")
+
+
+def test_tenant_bridges_learn_untracked_advertisements(agent, monkeypatch, tmp_path):
+    # RFC 9131: a guest's NA reaches its own node, not the exit node (#336).
+    for dev in ("t003", "t017", "vmbr0"):
+        (tmp_path / dev).mkdir()
+        (tmp_path / dev / "accept_untracked_na").write_text("0\n")
+    monkeypatch.setattr(agent, "IPV6_CONF", tmp_path)
+    agent.untracked_na(2)
+    assert [
+        (tmp_path / d / "accept_untracked_na").read_text().strip() for d in ("t003", "t017", "vmbr0")
+    ] == ["2", "2", "0"]
+    agent.untracked_na(0)
+    assert (tmp_path / "t003" / "accept_untracked_na").read_text().strip() == "0"
+    assert 'echo 2 > "$$f"' in agent.ND_UNIT
+
+
+SITE44 = dict(SITE6, prefix="2a14:7581:880::/44")
+
+
+def test_a_larger_site_block_keeps_tenants_in_its_first_48(agent):
+    # N0Ball routes a /44: tenants in 880::/48, the rest for infra and VPN clients.
+    agent.SITE.write_text(json.dumps({"exit_nodes": ["carrel01"], "ipv6": SITE44}))
+    v6 = agent.site_ipv6()
+    assert (v6["prefix"], v6["tenants"]) == ("2a14:7581:880::/44", "2a14:7581:880::/48")
+    assert str(agent.v6_tenant(v6["tenants"], 17)) == "2a14:7581:880:170::/60"
+    assert agent.machine_ipv6(machine(ipv6=True), v6) == "2a14:7581:880:170::11"
+    assert "unreachable 2a14:7581:880::/44 proto 96" in agent.v6_iface(v6)
+    # Other tenants and the infra and VPN blocks are the rest of the site block.
+    rules = agent.guest_firewall(machine(ipv6=True), STATE, CONFIG).splitlines()
+    assert "OUT DROP -dest 2a14:7581:880::/44" in rules and "IN DROP -source 2a14:7581:880::/44" in rules
+
+
+def test_tenant_pool_can_be_named_and_sized(agent):
+    agent.SITE.write_text(
+        json.dumps({"exit_nodes": ["carrel01"], "ipv6": dict(SITE44, tenants="2a14:7581:880::/44")})
+    )
+    v6 = agent.site_ipv6()
+    assert str(agent.v6_tenant(v6["tenants"], 17)) == "2a14:7581:880:1700::/56"
+    assert str(agent.v6_net(v6["tenants"], 254)) == "2a14:7581:882:5400::/64"
+
+
+def test_unreachable_route_follows_the_block(agent, monkeypatch):
+    calls = []
+    shown = "unreachable 2a14:7581:880::/48 dev lo proto 96 metric 1024 pref medium\n"
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or (shown if "show" in a else ""))
+    agent.v6_unreachable("2a14:7581:880::/44")
+    assert (
+        "ip",
+        "-6",
+        "route",
+        "del",
+        "vrf",
+        "vrf_tenants",
+        "unreachable",
+        "2a14:7581:880::/48",
+        "proto",
+        "96",
+    ) in calls
+    assert calls[-1] == (
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "vrf",
+        "vrf_tenants",
+        "unreachable",
+        "2a14:7581:880::/44",
+        "proto",
+        "96",
+    )
+    calls.clear()
+    agent.v6_unreachable()
+    assert [c for c in calls if "replace" in c] == [] and any("del" in c for c in calls)
+
+
+def test_mss_clamp_follows_the_tunnel_mtu():
+    n = load("install-network.py")
+    nft = n.tenant_host_nft(n.underlay_rules("vmbr0", "192.168.19.101", []), ipv6=True, mtu6=1370)
+    assert "maxseg size > 1310 tcp option maxseg size set 1310" in nft
+
+
+def test_renumbering_replaces_only_the_old_primary_subnet(agent):
+    # The /48 grown to its /44: tenant 17's 880:17::/64 is from the old numbering.
+    v6 = {"prefix": "2a14:7581:880::/44", "tenants": "2a14:7581:880::/48"}
+    subnets = [
+        {"subnet": "tenants-10.200.17.0-24", "cidr": "10.200.17.0/24"},
+        {"subnet": "tenants-2a14:7581:880:17::-64", "cidr": "2a14:7581:880:17::/64"},
+        {"subnet": "tenants-2a14:7581:880:170::-64", "cidr": "2a14:7581:880:170::/64"},
+        # Another network in the tenant's own /60, and a subnet outside the site block.
+        {"subnet": "tenants-2a14:7581:880:171::-64", "cidr": "2a14:7581:880:171::/64"},
+        {"subnet": "tenants-2001:db8::-64", "cidr": "2001:db8::/64"},
+    ]
+    assert [x["cidr"] for x in agent.v6_renumbered(subnets, v6, 17)] == ["2a14:7581:880:17::/64"]
+    # Steady state: nothing to do.
+    assert agent.v6_renumbered([x for x in subnets if x["cidr"] != "2a14:7581:880:17::/64"], v6, 17) == []
+    assert agent.v6_renumbered(subnets, None, 17) == []
