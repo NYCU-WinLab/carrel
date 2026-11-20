@@ -19,9 +19,9 @@ from pathlib import Path
 # 1450 (tenant and infra MTU) minus 40 bytes of IPv4 and TCP headers.
 TENANT_MSS = 1410
 TENANT_IFACES = ", ".join([f'"t{d}*"' for d in range(10)] + ['"tap*"'])
-# IPv6 (issue #142, PLAN 6.13) rides a WireGuard tunnel at 1420: 1420 minus 60
-# bytes of IPv6 and TCP headers.
-TENANT_MSS_V6 = 1360
+# IPv6 (issue #142, PLAN 6.13) rides a WireGuard tunnel at its MTU (1420 at
+# most): the clamp is that MTU minus 60 bytes of IPv6 and TCP headers.
+V6_HEADERS = 60
 # Where forwarded IPv6 may enter or leave: the tenant VRF and its links only.
 # Nothing else on a node (management, tailscale0, other bridges) is routed.
 TENANT_V6_IFACES = ", ".join(
@@ -33,15 +33,20 @@ TENANT_V6_IFACES = ", ".join(
 def site_ipv6(site):
     """The site's IPv6 block (issue #142), checked, or None when the site has none.
 
-    {"prefix": "2a14:7581:880::/48", "peer": {"endpoint": "198.51.100.7:51820",
-    "public_key": "..."}, "mtu": 1420}. One /48 for the site; tenant N gets a /64.
+    {"prefix": "2a14:7581:880::/44", "tenants": "2a14:7581:880::/48", "peer":
+    {"endpoint": "198.51.100.7:51820", "public_key": "..."}, "mtu": 1420}. The
+    routed site block is a /32 to a /48; the tenant pool ("tenants", by default
+    the block's first /48) gives each tenant a block 12 bits longer.
     """
     block = site.get("ipv6")
     if block is None:
         return None
     prefix = ipaddress.IPv6Network(block["prefix"])
-    if prefix.prefixlen != 48 or not prefix.is_global:
-        raise SystemExit("ipv6.prefix must be a global /48")
+    if not 32 <= prefix.prefixlen <= 48 or not prefix.is_global:
+        raise SystemExit("ipv6.prefix must be a global /32 to /48")
+    tenants = ipaddress.IPv6Network(block["tenants"]) if block.get("tenants") else next(prefix.subnets(new_prefix=48))
+    if not tenants.subnet_of(prefix) or tenants.prefixlen > 52:
+        raise SystemExit("ipv6.tenants must be a /52 or shorter inside ipv6.prefix")
     host, _, port = str(block["peer"]["endpoint"]).rpartition(":")
     ipaddress.IPv4Address(host)
     if not port.isdigit() or not 1 <= int(port) <= 65535:
@@ -51,7 +56,7 @@ def site_ipv6(site):
     mtu = block.get("mtu", 1420)
     if type(mtu) is not int or not 1280 <= mtu <= 1420:
         raise SystemExit("ipv6.mtu must be 1280 to 1420")
-    return {"prefix": str(prefix), "endpoint": f"{host}:{port}", "public_key": block["peer"]["public_key"], "mtu": mtu}
+    return {"prefix": str(prefix), "tenants": str(tenants), "endpoint": f"{host}:{port}", "public_key": block["peer"]["public_key"], "mtu": mtu}
 
 def underlay_rules(interface, address, peers):
     # PLAN 6.3: VXLAN and BGP only on the underlay interface, to this node's own
@@ -64,7 +69,7 @@ def underlay_rules(interface, address, peers):
     return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
 
 
-def tenant_host_nft(underlay, ipv6=False):
+def tenant_host_nft(underlay, ipv6=False, mtu6=1420):
     rules = "\n".join("  " + rule for rule in underlay)
     # Neighbour discovery between a guest and its anycast gateway: the drops
     # below would take it, and IPv6 has no ARP to fall back on.
@@ -73,7 +78,7 @@ def tenant_host_nft(underlay, ipv6=False):
         if ipv6 else ""
     )
     forward6 = (
-        f"  tcp flags syn / syn,rst meta nfproto ipv6 tcp option maxseg size > {TENANT_MSS_V6} tcp option maxseg size set {TENANT_MSS_V6}\n"
+        f"  tcp flags syn / syn,rst meta nfproto ipv6 tcp option maxseg size > {mtu6 - V6_HEADERS} tcp option maxseg size set {mtu6 - V6_HEADERS}\n"
         f"  meta nfproto ipv6 iifname != {{ {TENANT_V6_IFACES} }} counter drop\n"
         f"  meta nfproto ipv6 oifname != {{ {TENANT_V6_IFACES} }} counter drop\n"
         if ipv6 else ""
@@ -318,7 +323,8 @@ def main():
     node_config.write_text(json.dumps(config))
     # A separate owned table, never a flush of Proxmox/staging/edge rules.
     Path("/etc/carrel/tenant-host.nft").write_text(
-        tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"]), ipv6=bool(layout["ipv6"]))
+        tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"]), ipv6=bool(layout["ipv6"]),
+                        mtu6=layout["ipv6"]["mtu"] if layout["ipv6"] else 1420)
     )
     public = layout.get("public")
     if public:

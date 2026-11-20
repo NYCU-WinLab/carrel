@@ -197,7 +197,7 @@ func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
 	e := p.execution(context.Background())
 	reconciled := make(chan struct{})
 	go func() { e.Reconcile(); close(reconciled) }()
-	<-started
+	waitFor(t, started, "the reconcile sync did not reach the jump host")
 	// The revoke removes the key and the grant, then syncs.
 	revoked := make(chan struct{})
 	go func() {
@@ -207,15 +207,20 @@ func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
 		e.syncJumpNow()
 		close(revoked)
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The worker has taken its ask and is on its way to jumpMu, which the
+	// reconcile sync still holds. Without the lock it would finish here.
+	waitJumpWorkerClaimed(t, p)
+	waitFor(t, revoked, "the revoke did not return")
 	close(release)
-	<-reconciled
-	<-revoked
+	waitFor(t, reconciled, "the reconcile did not finish")
 	waitJumpIdle(t, p)
 	mu.Lock()
 	defer mu.Unlock()
 	if strings.Contains(lastKeys, key) {
 		t.Fatalf("removed key came back: %q", lastKeys)
+	}
+	if lastCerts == nil {
+		t.Fatal("no certificate map was sent")
 	}
 	principals := obj(obj(lastCerts)["principals"])
 	if _, ok := principals["bob"]; ok {
@@ -243,6 +248,34 @@ func TestAFailedJumpReadDoesNotBlockLaterJumpSyncs(t *testing.T) {
 }
 
 // waitJumpIdle waits until the background jump sync has drained.
+func waitFor(t *testing.T, ch <-chan struct{}, msg string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal(msg)
+	}
+}
+
+// waitJumpWorkerClaimed waits until the background worker runs and has taken
+// its pending ask, so it is past the queue and heading for jumpMu.
+func waitJumpWorkerClaimed(t *testing.T, p *Platform) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.jumpQueueMu.Lock()
+		claimed := p.jumpRunning && !p.jumpPending
+		p.jumpQueueMu.Unlock()
+		if claimed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background jump worker did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func waitJumpIdle(t *testing.T, p *Platform) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
