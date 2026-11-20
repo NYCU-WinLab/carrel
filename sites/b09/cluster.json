@@ -21,5 +21,11 @@
     "vlan": 60
   },
   "protected_addresses": ["140.113.60.189/32", "140.113.194.229/32"],
-  "public_entries": [{"address": "140.113.194.229/32", "port": 443}]
+  "public_entries": [{"address": "140.113.194.229/32", "port": 443}],
+  "ipv6": {
+    "prefix": "2a14:7581:880::/44",
+    "tenants": "2a14:7581:880::/48",
+    "peer": {"endpoint": "140.113.194.230:51831", "public_key": "2PQ1iS+ks9988PJLrFQte7hCWwoP+yVhoBBHNvGWXio="},
+    "mtu": 1370
+  }
 }
