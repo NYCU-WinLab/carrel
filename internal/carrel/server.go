@@ -292,7 +292,7 @@ func (p *Platform) Start() {
 	p.startTelemetry()
 	// Push the jump state once at start, so a revoke committed around the last
 	// shutdown does not wait for a node to answer the first reconcile.
-	p.execution(p.ctx).syncJumpNow()
+	p.execution(p.ctx).syncJumpUntilSynced()
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()

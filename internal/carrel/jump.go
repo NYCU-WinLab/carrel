@@ -166,11 +166,56 @@ func (e *Execution) syncJumpNow() {
 	}
 	p.jumpPending = true
 	if p.jumpRunning {
+		if p.jumpWake != nil {
+			// The worker is backing off: send the new state now.
+			close(p.jumpWake)
+			p.jumpWake = nil
+		}
 		return
 	}
 	p.jumpRunning = true
 	p.wg.Add(1)
 	go p.jumpWorker()
+}
+
+// syncJumpUntilSynced is syncJumpNow for Start: the worker also resends with
+// capped exponential backoff until one sync reports "synced", so a jump host
+// that is briefly down does not leave a revoke waiting for Reconcile. The
+// retry rides the same queue and jumpMu path, so every resend carries the
+// latest state, and it ends when p.ctx is cancelled.
+func (e *Execution) syncJumpUntilSynced() {
+	if !e.jumpEnabled() {
+		return
+	}
+	e.P.jumpQueueMu.Lock()
+	e.P.jumpRetry = true
+	e.P.jumpQueueMu.Unlock()
+	e.syncJumpNow()
+}
+
+// jumpWait sleeps the retry delay, ending early when a new ask arrives or the
+// platform closes.
+func (p *Platform) jumpWait(d time.Duration) {
+	p.jumpQueueMu.Lock()
+	if p.jumpPending {
+		p.jumpQueueMu.Unlock()
+		return
+	}
+	wake := make(chan struct{})
+	p.jumpWake = wake
+	p.jumpQueueMu.Unlock()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-wake:
+	case <-p.ctx.Done():
+	}
+	p.jumpQueueMu.Lock()
+	if p.jumpWake == wake {
+		p.jumpWake = nil
+	}
+	p.jumpQueueMu.Unlock()
 }
 
 // jumpStatus is the jump field of a key or access result: "pending" while a
@@ -205,6 +250,15 @@ func (e *Execution) withJump(r D) D {
 func (p *Platform) jumpWorker() {
 	defer p.wg.Done()
 	e := p.execution(p.ctx)
+	backoff := p.jumpBackoff
+	if backoff <= 0 {
+		backoff = time.Second
+	}
+	maxBackoff := p.jumpBackoffMax
+	if maxBackoff <= 0 {
+		maxBackoff = time.Minute
+	}
+	delay := backoff
 	for {
 		p.jumpQueueMu.Lock()
 		if !p.jumpPending || p.ctx.Err() != nil {
@@ -225,7 +279,26 @@ func (p *Platform) jumpWorker() {
 		}
 		p.jumpQueueMu.Lock()
 		p.jumpLast, _ = outcome.(string)
+		retry := false
+		if p.jumpRetry {
+			if p.jumpLast == "synced" {
+				p.jumpRetry = false
+			} else {
+				retry = true
+			}
+		}
 		p.jumpQueueMu.Unlock()
+		if retry {
+			p.jumpWait(delay)
+			p.jumpQueueMu.Lock()
+			p.jumpPending = true
+			p.jumpQueueMu.Unlock()
+			if delay *= 2; delay > maxBackoff {
+				delay = maxBackoff
+			}
+		} else {
+			delay = backoff
+		}
 	}
 }
 
