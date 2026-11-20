@@ -242,7 +242,9 @@ def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True, rm
     if rm_fails:
         # Fails only for the rollback's `rm -f <drop-in>`, not for the .next and .prev cleanups.
         rm = bin_dir / "rm"
-        rm.write_text('#!/bin/sh\nfor last; do :; done\ncase "$last" in *.next|*.prev) exec /bin/rm "$@";; esac\nexit 1\n')
+        rm.write_text(
+            '#!/bin/sh\nfor last; do :; done\ncase "$last" in *.next|*.prev) exec /bin/rm "$@";; esac\nexit 1\n'
+        )
         rm.chmod(0o755)
     script = load("configure-nodes.py").jump_cert_apply(f)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
