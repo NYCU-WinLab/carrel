@@ -229,14 +229,41 @@ def test_infra_mtu_skips_other_bridges_and_stopped_cts(monkeypatch):
     assert calls == [("pct", "status", "103")]
 
 
-def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True, rm_fails=False):
+def apply_jump_certs(
+    tmp_path,
+    text="new\n",
+    sshd_ok=True,
+    systemctl_ok=True,
+    rm_fails=False,
+    mv_fails=False,
+    sshd_results=None,
+    unit_state=False,
+):
     # Stub sshd and systemctl: a log of calls, and each fails on demand.
+    # sshd_results: the exit status of the nth `sshd -t` (the last one repeats).
+    # unit_state: systemctl tracks the unit; try-restart fails and leaves it
+    # stopped, only `restart` starts it again.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "calls"
-    for name, status in (("sshd", 0 if sshd_ok else 1), ("systemctl", 0 if systemctl_ok else 1)):
-        stub = bin_dir / name
-        stub.write_text(f'#!/bin/sh\necho "{name} $*" >> {log}\nexit {status}\n')
+    state = tmp_path / "unit"
+    state.write_text("running\n")
+    results = sshd_results or [0 if sshd_ok else 1]
+    case = "".join(f"{i}) exit {r};; " for i, r in enumerate(results[:-1])) + f"*) exit {results[-1]};;"
+    sshd = bin_dir / "sshd"
+    sshd.write_text(
+        f'#!/bin/sh\necho "sshd $*" >> {log}\nn=$(grep -c "^sshd " {log})\ncase $((n - 1)) in {case} esac\n'
+    )
+    systemctl = bin_dir / "systemctl"
+    if unit_state:
+        body = (
+            f'case "$1" in try-restart) echo stopped > {state}; exit 1;; '
+            f"restart) echo running > {state}; exit 0;; esac\nexit 0\n"
+        )
+    else:
+        body = f"exit {0 if systemctl_ok else 1}\n"
+    systemctl.write_text(f'#!/bin/sh\necho "systemctl $*" >> {log}\n{body}')
+    for stub in (sshd, systemctl):
         stub.chmod(0o755)
     f = tmp_path / "carrel-jump-certs.conf"
     if rm_fails:
@@ -246,29 +273,34 @@ def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True, rm
             '#!/bin/sh\nfor last; do :; done\ncase "$last" in *.next|*.prev) exec /bin/rm "$@";; esac\nexit 1\n'
         )
         rm.chmod(0o755)
+    if mv_fails:
+        # Fails only for the rollback's `mv <drop-in>.prev <drop-in>`, not the staging `mv .next`.
+        mv = bin_dir / "mv"
+        mv.write_text('#!/bin/sh\ncase "$1" in *.prev) exit 1;; esac\nexec /bin/mv "$@"\n')
+        mv.chmod(0o755)
     script = load("configure-nodes.py").jump_cert_apply(f)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
     result = subprocess.run(
         ["sh", "-c", script], input=text, text=True, env=env, capture_output=True, check=False
     )
     calls = log.read_text().splitlines() if log.exists() else []
-    return result.returncode, f, calls
+    return result.returncode, f, calls, result
 
 
 def test_jump_certs_replace_the_drop_in_and_restart_ssh(tmp_path):
     (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
-    code, f, calls = apply_jump_certs(tmp_path)
+    code, f, calls, _ = apply_jump_certs(tmp_path)
     assert code == 0
     assert f.read_text() == "new\n"
     assert calls == ["sshd -t", "systemctl try-restart ssh.service"]
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["bin", "calls", f.name]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["bin", "calls", f.name, "unit"]
 
 
 def test_a_failed_staging_step_leaves_the_live_jump_drop_in_alone(tmp_path):
     (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
     (tmp_path / "carrel-jump-certs.conf.prev").write_text("stale\n")
     (tmp_path / "carrel-jump-certs.conf.next").mkdir()  # cat > .next fails
-    code, f, calls = apply_jump_certs(tmp_path)
+    code, f, calls, _ = apply_jump_certs(tmp_path)
     assert code == 1
     assert f.read_text() == "old\n"
     assert calls == []
@@ -278,7 +310,7 @@ def test_a_failed_staging_step_leaves_the_live_jump_drop_in_alone(tmp_path):
 def test_a_failed_check_restores_this_runs_jump_drop_in_not_a_stale_one(tmp_path):
     (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
     (tmp_path / "carrel-jump-certs.conf.prev").write_text("stale\n")
-    code, f, calls = apply_jump_certs(tmp_path, sshd_ok=False)
+    code, f, calls, _ = apply_jump_certs(tmp_path, sshd_ok=False)
     assert code == 1
     assert f.read_text() == "old\n"
     assert calls == ["sshd -t"]  # the running sshd is left alone
@@ -286,7 +318,7 @@ def test_a_failed_check_restores_this_runs_jump_drop_in_not_a_stale_one(tmp_path
 
 
 def test_a_failed_check_without_a_previous_jump_drop_in_removes_the_new_one(tmp_path):
-    code, f, calls = apply_jump_certs(tmp_path, sshd_ok=False)
+    code, f, calls, _ = apply_jump_certs(tmp_path, sshd_ok=False)
     assert code == 1
     assert not f.exists()
     assert calls == ["sshd -t"]
@@ -294,7 +326,7 @@ def test_a_failed_check_without_a_previous_jump_drop_in_removes_the_new_one(tmp_
 
 def test_a_failed_restart_restores_the_jump_drop_in_and_checks_before_restarting(tmp_path):
     (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
-    code, f, calls = apply_jump_certs(tmp_path, systemctl_ok=False)
+    code, f, calls, _ = apply_jump_certs(tmp_path, systemctl_ok=False)
     assert code == 1
     assert f.read_text() == "old\n"
     assert calls == [
@@ -307,13 +339,48 @@ def test_a_failed_restart_restores_the_jump_drop_in_and_checks_before_restarting
     assert not (tmp_path / "carrel-jump-certs.conf.prev").exists()
 
 
+def test_a_failed_restart_brings_sshd_back_when_the_unit_is_left_stopped(tmp_path):
+    (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
+    code, f, _, _ = apply_jump_certs(tmp_path, unit_state=True)
+    assert code == 1
+    assert f.read_text() == "old\n"
+    assert (tmp_path / "unit").read_text() == "running\n"
+
+
+def test_a_restored_file_that_fails_the_check_gets_no_restart(tmp_path):
+    (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
+    # The new file passes sshd -t, the restart fails, the restored file fails sshd -t.
+    code, f, calls, _ = apply_jump_certs(tmp_path, systemctl_ok=False, sshd_results=[0, 1])
+    assert code == 1
+    assert f.read_text() == "old\n"
+    assert calls == ["sshd -t", "systemctl try-restart ssh.service", "sshd -t"]
+
+
 def test_a_failed_rollback_step_stops_without_calling_systemd(tmp_path):
-    code, _, calls = apply_jump_certs(tmp_path, systemctl_ok=False, rm_fails=True)
+    code, _, calls, result = apply_jump_certs(tmp_path, systemctl_ok=False, rm_fails=True)
     assert code == 1
     assert calls == ["sshd -t", "systemctl try-restart ssh.service"]  # no second check, no restart
+    assert "rollback failed" in result.stderr and "unknown state" in result.stderr
+
+
+def test_a_failed_restore_of_an_existing_drop_in_stops_without_calling_systemd(tmp_path):
+    (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
+    code, _, calls, result = apply_jump_certs(tmp_path, systemctl_ok=False, mv_fails=True)
+    assert code == 1
+    assert calls == ["sshd -t", "systemctl try-restart ssh.service"]
+    assert "rollback failed" in result.stderr and "unknown state" in result.stderr
 
 
 def test_a_failed_check_with_a_failed_rollback_reports_and_leaves_sshd_alone(tmp_path):
-    code, _, calls = apply_jump_certs(tmp_path, sshd_ok=False, rm_fails=True)
+    code, _, calls, result = apply_jump_certs(tmp_path, sshd_ok=False, rm_fails=True)
     assert code == 1
     assert calls == ["sshd -t"]
+    assert "rollback failed" in result.stderr and "unknown state" in result.stderr
+
+
+def test_a_failed_check_with_a_failed_restore_of_an_existing_drop_in_reports(tmp_path):
+    (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
+    code, _, calls, result = apply_jump_certs(tmp_path, sshd_ok=False, mv_fails=True)
+    assert code == 1
+    assert calls == ["sshd -t"]
+    assert "rollback failed" in result.stderr and "unknown state" in result.stderr
