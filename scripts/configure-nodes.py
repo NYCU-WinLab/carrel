@@ -129,13 +129,17 @@ def jump_cert_apply(f):
     # A failed staging step leaves the live drop-in alone. Once the new file is
     # in place, a failed check or restart brings back the .prev made in this
     # run (any older one goes first), so `ca` keeps its lab certificates.
+    # A failed check leaves the running sshd alone; only a failed restart
+    # restarts again, and only after sshd -t passes on the restored file.
     # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
+    restore = f"if [ -e {f}.prev ]; then mv {f}.prev {f}; else rm -f {f}; fi"
     return (
         f"umask 022 && rm -f {f}.prev && cat > {f}.next && {{ ! [ -e {f} ] || cp -p {f} {f}.prev; }}"
         f" && mv {f}.next {f} || {{ rm -f {f}.next {f}.prev; exit 1; }}\n"
-        f"if sshd -t && systemctl try-restart ssh.service; then rm -f {f}.prev; exit 0; fi\n"
-        f"if [ -e {f}.prev ]; then mv {f}.prev {f}; else rm -f {f}; fi\n"
-        "systemctl try-restart ssh.service; exit 1\n"
+        f"if ! sshd -t; then {restore}; exit 1; fi\n"
+        f"if systemctl try-restart ssh.service; then rm -f {f}.prev; exit 0; fi\n"
+        f"{restore}\n"
+        "sshd -t && systemctl try-restart ssh.service; exit 1\n"
     )
 
 

@@ -229,19 +229,21 @@ def test_infra_mtu_skips_other_bridges_and_stopped_cts(monkeypatch):
     assert calls == [("pct", "status", "103")]
 
 
-def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True):
-    # Stub sshd and systemctl: a log of calls, and an sshd -t that fails on demand.
+def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True):
+    # Stub sshd and systemctl: a log of calls, and each fails on demand.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "calls"
-    for name, status in (("sshd", 0 if sshd_ok else 1), ("systemctl", 0)):
+    for name, status in (("sshd", 0 if sshd_ok else 1), ("systemctl", 0 if systemctl_ok else 1)):
         stub = bin_dir / name
         stub.write_text(f'#!/bin/sh\necho "{name} $*" >> {log}\nexit {status}\n')
         stub.chmod(0o755)
     f = tmp_path / "carrel-jump-certs.conf"
     script = load("configure-nodes.py").jump_cert_apply(f)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
-    result = subprocess.run(["sh", "-c", script], input=text, text=True, env=env, capture_output=True, check=False)
+    result = subprocess.run(
+        ["sh", "-c", script], input=text, text=True, env=env, capture_output=True, check=False
+    )
     calls = log.read_text().splitlines() if log.exists() else []
     return result.returncode, f, calls
 
@@ -272,7 +274,7 @@ def test_a_failed_check_restores_this_runs_jump_drop_in_not_a_stale_one(tmp_path
     code, f, calls = apply_jump_certs(tmp_path, sshd_ok=False)
     assert code == 1
     assert f.read_text() == "old\n"
-    assert calls == ["sshd -t", "systemctl try-restart ssh.service"]
+    assert calls == ["sshd -t"]  # the running sshd is left alone
     assert not (tmp_path / "carrel-jump-certs.conf.prev").exists()
 
 
@@ -280,4 +282,18 @@ def test_a_failed_check_without_a_previous_jump_drop_in_removes_the_new_one(tmp_
     code, f, calls = apply_jump_certs(tmp_path, sshd_ok=False)
     assert code == 1
     assert not f.exists()
-    assert calls == ["sshd -t", "systemctl try-restart ssh.service"]
+    assert calls == ["sshd -t"]
+
+
+def test_a_failed_restart_restores_the_jump_drop_in_and_checks_before_restarting(tmp_path):
+    (tmp_path / "carrel-jump-certs.conf").write_text("old\n")
+    code, f, calls = apply_jump_certs(tmp_path, systemctl_ok=False)
+    assert code == 1
+    assert f.read_text() == "old\n"
+    assert calls == [
+        "sshd -t",
+        "systemctl try-restart ssh.service",
+        "sshd -t",
+        "systemctl try-restart ssh.service",
+    ]
+    assert not (tmp_path / "carrel-jump-certs.conf.prev").exists()
