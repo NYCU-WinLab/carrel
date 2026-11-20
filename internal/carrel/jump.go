@@ -136,9 +136,10 @@ func jumpCertificates(s *Store, ca string) D {
 // top (jumpSentGen). A write this process sent earlier, above a large held
 // value or before the clock stepped back, may still land on the jump host after
 // its ssh client timed out; the fallback stays above it, so that older state
-// cannot be accepted over a newer one. Only when that would reach the top
-// (a send just below it) does the fallback take the clock alone, so it never
-// leaves the range. A damaged jump host refuses the
+// cannot be accepted over a newer one. A jumpSentGen more than maxJumpGenAhead
+// above the clock only comes from a resend above a damaged held value, so it
+// does not raise the fallback: a repaired jump host then returns to clock
+// scale instead of climbing back to the top. A damaged jump host refuses the
 // fallbacks as stale, and once an operator repairs its state the next pass is
 // in range and generations rise strictly again, with no restart and no
 // repeated number.
@@ -161,12 +162,12 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 		if gen = now; gen <= e.P.jumpClockGen {
 			gen = e.P.jumpClockGen + 1
 		}
-		if gen <= e.P.jumpSentGen {
+		if gen <= e.P.jumpSentGen && e.P.jumpSentGen <= now+maxJumpGenAhead {
 			gen = e.P.jumpSentGen + 1
 		}
 		if gen >= maxJumpGen-1 {
-			// Only a send or fallback just below the top (a damaged held
-			// value) gets here: the clock alone keeps later passes in range.
+			// A guard: the bound above keeps the fallback near the clock, so
+			// the clock alone keeps later passes in range.
 			gen = now
 		}
 		e.P.jumpClockGen = gen
@@ -339,6 +340,11 @@ const maxJumpResends = 3
 // generations in [0, 2^53), the range a JSON double holds exactly, and
 // scripts/jump-sync.py refuses anything from here up.
 const maxJumpGen = 1 << 53
+
+// maxJumpGenAhead is how far above the clock, in microseconds, a generation
+// can be before it counts as damage (24 hours): a held value or a send further
+// ahead only comes from a damaged jump sidecar, not from clock skew.
+const maxJumpGenAhead = int64(24 * time.Hour / time.Microsecond)
 
 // jumpResendBudget bounds the whole resend sequence in time: no resend starts
 // after it, and a call still running when it ends is cut, so a slow jump host

@@ -1200,3 +1200,40 @@ func TestTheClockFallbackStaysInRangeAfterASendJustBelowTheTop(t *testing.T) {
 		}
 	}
 }
+
+// A send far above the clock (a resend above a damaged held value) must not
+// keep the fallback at the top: once an operator repairs the jump host, syncs
+// pass again and return to clock scale.
+func TestTheClockFallbackReturnsToTheClockAfterARepair(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	b.call = func(r D, _ string) (any, error) {
+		return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
+	}
+	p.jumpMu.Lock()
+	if r := e.SyncJump("", nil, maxJumpGen-3); r != "stale" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	if p.jumpGen != maxJumpGen-1 {
+		t.Fatal(p.jumpGen)
+	}
+	// The operator resets the jump host to 0.
+	held := map[any]int64{}
+	b.call = func(r D, _ string) (any, error) {
+		gen := r["gen"].(int64)
+		if gen <= held[r["op"]] {
+			return D{"changed": false, "stale": true, "held": float64(held[r["op"]])}, nil
+		}
+		held[r["op"]] = gen
+		return D{"changed": true}, nil
+	}
+	for i := 0; i < 4; i++ {
+		keys, certs, gen := e.lockJumpState()
+		r := e.syncJumpResending(keys, certs, gen)
+		p.jumpMu.Unlock()
+		if r != "synced" || gen >= time.Now().UnixMicro()+maxJumpGenAhead {
+			t.Fatal(i, gen, r)
+		}
+	}
+}
