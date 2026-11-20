@@ -274,6 +274,14 @@ func (p *Platform) jumpWorker() {
 			keys, certs, gen := e.lockJumpState()
 			defer p.jumpMu.Unlock()
 			outcome = e.SyncJump(keys, certs, gen)
+			if outcome == "stale" || outcome == "keys_only" {
+				// A refusal moved jumpGen past the generation the jump host
+				// holds, so one resend with the same state goes through.
+				if e.P.jumpGen > gen {
+					e.P.jumpGen++
+					outcome = e.SyncJump(keys, certs, e.P.jumpGen)
+				}
+			}
 		}); f != nil {
 			slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		}
@@ -317,8 +325,11 @@ func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
 		return "unavailable"
 	}
 	// jumpMu orders this process's writes, so a refusal means the jump host
-	// holds a generation ahead of ours: the old keys stay, which is an error.
+	// holds a generation ahead of ours (a clock stepped back, or a lost
+	// state): the old keys stay, which is an error. The worker resends
+	// above the held one.
 	if obj(res)["stale"] == true {
+		e.raiseJumpGen(res)
 		slog.Error("jump_sync_stale", "event", "jump_sync_stale", "gen", gen)
 		return "stale"
 	}
@@ -327,8 +338,17 @@ func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
 		return "keys_only"
 	}
 	if obj(res)["stale"] == true {
+		e.raiseJumpGen(res)
 		slog.Error("jump_certs_stale", "event", "jump_certs_stale", "gen", gen)
 		return "keys_only"
 	}
 	return "synced"
+}
+
+// raiseJumpGen lifts jumpGen to the generation a refusal says the jump host
+// holds, so the next number sent is above it. The caller holds jumpMu.
+func (e *Execution) raiseJumpGen(res any) {
+	if held, ok := obj(res)["held"].(float64); ok && int64(held) > e.P.jumpGen {
+		e.P.jumpGen = int64(held)
+	}
 }

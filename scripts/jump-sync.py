@@ -74,7 +74,7 @@ def write(path, content):
 
 
 def stale(name, gen):
-    """True when a write older than the last accepted one; else records gen. Call under the lock."""
+    """The held generation when gen is older than the last accepted one, else None (and records gen). Call under the lock."""
     path = STATE / name
     try:
         held = int(path.read_text())
@@ -88,12 +88,12 @@ def stale(name, gen):
     if gen is None:
         if held is not None:
             raise ValueError("expected a generation")
-        return False
+        return None
     if held is not None and gen < held:
-        return True
+        return held
     if held != gen:
         write(path, str(gen) + "\n")
-    return False
+    return None
 
 
 def main():
@@ -115,8 +115,9 @@ def main():
         text = None if request["certs"] is None else check_certs(request["certs"])
         with open(STATE / "lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if stale("certs.gen", gen):
-                return {"changed": False, "stale": True}
+            held = stale("certs.gen", gen)
+            if held is not None:
+                return {"changed": False, "stale": True, "held": held}
             if text is None:
                 changed = CERTS.exists()
                 CERTS.unlink(missing_ok=True)
@@ -134,8 +135,9 @@ def main():
     text = check(request["authorized"])
     with open(STATE / "lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if stale("keys.gen", gen):
-            return {"changed": False, "stale": True}
+        held = stale("keys.gen", gen)
+        if held is not None:
+            return {"changed": False, "stale": True, "held": held}
         KEYS.parent.mkdir(mode=0o755, exist_ok=True)
         changed = not KEYS.exists() or KEYS.read_text() != text
         if changed:
