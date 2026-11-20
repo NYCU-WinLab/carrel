@@ -3,6 +3,7 @@ package carrel
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -273,15 +274,7 @@ func (p *Platform) jumpWorker() {
 		if f := attempt(func() {
 			keys, certs, gen := e.lockJumpState()
 			defer p.jumpMu.Unlock()
-			outcome = e.SyncJump(keys, certs, gen)
-			if outcome == "stale" || outcome == "keys_only" {
-				// A refusal moved jumpGen past the generation the jump host
-				// holds, so one resend with the same state goes through.
-				if e.P.jumpGen > gen {
-					e.P.jumpGen++
-					outcome = e.SyncJump(keys, certs, e.P.jumpGen)
-				}
-			}
+			outcome = e.syncJumpResending(keys, certs, gen)
 		}); f != nil {
 			slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		}
@@ -308,6 +301,24 @@ func (p *Platform) jumpWorker() {
 			delay = backoff
 		}
 	}
+}
+
+// maxJumpResends bounds the resends after refusals, so a jump host that keeps
+// reporting a higher generation cannot hold jumpMu forever.
+const maxJumpResends = 3
+
+// syncJumpResending is SyncJump plus resends: a refusal that moved jumpGen
+// past the generation sent means the jump host holds a newer floor, so the
+// same state goes again above it. It stops when both requests pass, when no
+// new floor was learned, or after maxJumpResends. The caller holds jumpMu.
+func (e *Execution) syncJumpResending(keys string, certs D, gen int64) string {
+	outcome := e.SyncJump(keys, certs, gen)
+	for i := 0; i < maxJumpResends && (outcome == "stale" || outcome == "keys_only") && e.P.jumpGen > gen; i++ {
+		e.P.jumpGen++
+		gen = e.P.jumpGen
+		outcome = e.SyncJump(keys, certs, gen)
+	}
+	return outcome
 }
 
 // SyncJump sends the jump host its keys, then the certificate map in a
@@ -357,7 +368,13 @@ func (e *Execution) SyncJump(keys string, certs D, gen int64) string {
 // raiseJumpGen lifts jumpGen to the generation a refusal says the jump host
 // holds, so the next number sent is above it. The caller holds jumpMu.
 func (e *Execution) raiseJumpGen(res any) {
-	if held, ok := obj(res)["held"].(float64); ok && int64(held) > e.P.jumpGen {
+	// held comes from the jump host: only an exact integer in [0, 2^53) is
+	// a generation, anything else is ignored.
+	held, ok := obj(res)["held"].(float64)
+	if !ok || held < 0 || held >= 1<<53 || held != math.Trunc(held) {
+		return
+	}
+	if int64(held) > e.P.jumpGen {
 		e.P.jumpGen = int64(held)
 	}
 }

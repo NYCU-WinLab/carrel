@@ -439,7 +439,7 @@ func (e *Execution) Reconcile() D {
 		go func() {
 			defer gatewayDone.Done()
 			defer e.P.jumpMu.Unlock()
-			jump = e.SyncJump(keys, certs, gen)
+			jump = e.syncJumpResending(keys, certs, gen)
 		}()
 	}
 	if len(nodes) > 1 {
