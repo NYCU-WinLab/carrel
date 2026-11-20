@@ -63,18 +63,20 @@ type Platform struct {
 	// proxyProbe replaces the check through Cloudflare in tests.
 	proxyProbe func(name, token string) string
 	// tenantAsk replaces the HTTP question to a tenant's ask_url in tests.
-	tenantAsk          func(address string, port int, name string) bool
-	netboxKick         chan struct{}
-	inventoryMu        sync.Mutex
-	inventories        map[string]*ObservationCache
-	Operations         *Operations
-	ctx                context.Context
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup
-	platformMu         sync.Mutex
-	platformCodes      map[string]D
-	fnLogs             functionLogs
-	reportMu           sync.Mutex
+	tenantAsk     func(address string, port int, name string) bool
+	netboxKick    chan struct{}
+	inventoryMu   sync.Mutex
+	inventories   map[string]*ObservationCache
+	Operations    *Operations
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	platformMu    sync.Mutex
+	platformCodes map[string]D
+	fnLogs        functionLogs
+	reportMu      sync.Mutex
+	// jumpMu makes a jump sync read the store and send under one lock.
+	jumpMu             sync.Mutex
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64

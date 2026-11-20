@@ -124,9 +124,12 @@ func jumpCertificates(s *Store, ca string) D {
 }
 
 // syncJumpNow sends a key or access change to the jump host at once instead
-// of with the next reconcile.
+// of with the next reconcile. Like the reconcile path, it reads the store
+// and sends under jumpMu, so the last request sent carries the latest state.
 func (e *Execution) syncJumpNow() {
 	if e.jumpEnabled() {
+		e.P.jumpMu.Lock()
+		defer e.P.jumpMu.Unlock()
 		e.SyncJump(jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA))
 	}
 }
