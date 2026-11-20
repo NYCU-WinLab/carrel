@@ -76,7 +76,11 @@ type Platform struct {
 	fnLogs        functionLogs
 	reportMu      sync.Mutex
 	// jumpMu makes a jump sync read the store and send under one lock.
-	jumpMu             sync.Mutex
+	jumpMu sync.Mutex
+	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
+	jumpQueueMu        sync.Mutex
+	jumpPending        bool
+	jumpRunning        bool
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64

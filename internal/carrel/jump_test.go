@@ -211,6 +211,7 @@ func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
 	close(release)
 	<-reconciled
 	<-revoked
+	waitJumpIdle(t, p)
 	mu.Lock()
 	defer mu.Unlock()
 	if strings.Contains(lastKeys, key) {
@@ -234,11 +235,70 @@ func TestAFailedJumpReadDoesNotBlockLaterJumpSyncs(t *testing.T) {
 		t.Fatal("the broken keys row did not fail the reconcile")
 	}
 	p.Store.Remove("keys", "1-bad")
-	done := make(chan struct{})
-	go func() { e.syncJumpNow(); close(done) }()
+	e.syncJumpNow()
+	waitJumpIdle(t, p)
+	if b.count("sync") == 0 {
+		t.Fatal("the jump sync never ran after a failed reconcile")
+	}
+}
+
+// waitJumpIdle waits until the background jump sync has drained.
+func waitJumpIdle(t *testing.T, p *Platform) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.jumpQueueMu.Lock()
+		idle := !p.jumpRunning
+		p.jumpQueueMu.Unlock()
+		if idle {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background jump sync did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestAJumpSyncDoesNotHoldUpTheRequest(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	seedMachine(p, "web", 10100)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	syncs := 0
+	b.call = func(r D, target string) (any, error) {
+		if target == "carrel-jump" && r["op"] == "sync" {
+			<-release
+			mu.Lock()
+			syncs++
+			mu.Unlock()
+		}
+		return D{}, nil
+	}
+	e := p.execution(context.Background())
+	returned := make(chan struct{})
+	go func() {
+		e.syncJumpNow()
+		e.syncJumpNow()
+		close(returned)
+	}()
 	select {
-	case <-done:
+	case <-returned:
 	case <-time.After(2 * time.Second):
-		t.Fatal("syncJumpNow is still blocked on jumpMu after a failed reconcile")
+		t.Fatal("syncJumpNow waited for the jump host")
+	}
+	mu.Lock()
+	if syncs != 0 {
+		t.Fatal("the backend answered before it was released")
+	}
+	mu.Unlock()
+	close(release)
+	waitJumpIdle(t, p)
+	mu.Lock()
+	defer mu.Unlock()
+	// The two asks coalesce: at most one running pass and one follow-up.
+	if syncs < 1 || syncs > 2 {
+		t.Fatalf("expected the sync to arrive once or twice, got %d", syncs)
 	}
 }
