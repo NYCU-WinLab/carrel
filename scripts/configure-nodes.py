@@ -121,6 +121,31 @@ def gateway(key):
     return " ".join(run("pct", "exec", "101", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
 
 
+JUMP_CERT_SSHD_PATH = "/etc/ssh/sshd_config.d/carrel-jump-certs.conf"
+
+
+def jump_cert_apply(f):
+    # sshd -t before the restart, so a bad file never takes the jump host down.
+    # A failed staging step leaves the live drop-in alone. Once the new file is
+    # in place, a failed check or restart brings back the .prev made in this
+    # run (any older one goes first), so `ca` keeps its lab certificates.
+    # A failed check leaves the running sshd alone; only a failed restart
+    # restarts again, and only after the restore worked and sshd -t passes on
+    # the restored file. That restart is a real restart: the failed one may have
+    # stopped the unit, and try-restart does nothing to a stopped unit.
+    # A failed restore stops here and reports, without calling systemd.
+    # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
+    restore = f"{{ if [ -e {f}.prev ]; then mv {f}.prev {f}; else rm -f {f}; fi; }}"
+    return (
+        f"umask 022 && rm -f {f}.prev && cat > {f}.next && {{ ! [ -e {f} ] || cp -p {f} {f}.prev; }}"
+        f" && mv {f}.next {f} || {{ rm -f {f}.next {f}.prev; exit 1; }}\n"
+        f"if ! sshd -t; then {restore} || echo 'rollback failed: {f} is in an unknown state' >&2; exit 1; fi\n"
+        f"if systemctl try-restart ssh.service; then rm -f {f}.prev; exit 0; fi\n"
+        f"{restore} || {{ echo 'rollback failed: {f} is in an unknown state' >&2; exit 1; }}\n"
+        "sshd -t && { systemctl reset-failed ssh.service; systemctl restart ssh.service; }; exit 1\n"
+    )
+
+
 def jump(key):
     """Install jump-sync.py in CT 102 as the forced command for CT 100's key (issue #98)."""
     run("pct", "exec", "102", "--", "install", "-d", "-m", "755", "/usr/local/lib/carrel")
@@ -130,14 +155,7 @@ def jump(key):
     # The certificate user: no keys file, so it takes only lab certificates.
     run("pct", "exec", "102", "--", "sh", "-c",
         "id ca >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent ca")
-    # sshd -t before the restart, so a bad file never takes the jump host down.
-    # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
-    run("pct", "exec", "102", "--", "sh", "-c",
-        "umask 022 && cat > /etc/ssh/sshd_config.d/carrel-jump-certs.conf.next"
-        " && mv /etc/ssh/sshd_config.d/carrel-jump-certs.conf.next /etc/ssh/sshd_config.d/carrel-jump-certs.conf"
-        " && if sshd -t; then systemctl try-restart ssh.service;"
-        " else rm -f /etc/ssh/sshd_config.d/carrel-jump-certs.conf; exit 1; fi",
-        input=JUMP_CERT_SSHD)
+    run("pct", "exec", "102", "--", "sh", "-c", jump_cert_apply(JUMP_CERT_SSHD_PATH), input=JUMP_CERT_SSHD)
     current = run("pct", "exec", "102", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
     kept = [x for x in current.splitlines() if JUMP_SYNC not in x]
     line = f'from="10.200.0.3",restrict,command="{JUMP_SYNC}" {key}'

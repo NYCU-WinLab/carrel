@@ -30,6 +30,17 @@ pytestmark = pytest.mark.skipif(
 OWNER, OTHER = "10.200.1.10:22", "10.200.2.10:22"
 
 
+# Directives newer than some supported sshd. Any other rejected directive is a
+# typo in production config and must fail, not skip.
+NEWER_DIRECTIVES = ("PerSourcePenaltyExemptList",)
+
+
+def skip_if_older_sshd(stderr):
+    errors = [x for x in stderr.splitlines() if "Bad configuration option" in x or "Unsupported option" in x]
+    if errors and all(any(d in x for d in NEWER_DIRECTIVES) for x in errors):
+        pytest.skip("this sshd is older than the production one: " + stderr.strip()[:200])
+
+
 def load(name):
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), ROOT / "scripts" / name)
     module = importlib.util.module_from_spec(spec)
@@ -101,8 +112,7 @@ def jump(tmp_path_factory):
         "UsePAM no\nStrictModes no\n"
     )
     check = subprocess.run([SSHD, "-t", "-f", config], capture_output=True, text=True, check=False)
-    if "Bad configuration option" in check.stderr or "Unsupported option" in check.stderr:
-        pytest.skip("this sshd is older than the production one: " + check.stderr.strip()[:200])
+    skip_if_older_sshd(check.stderr)
     assert check.returncode == 0, check.stderr
     server = subprocess.Popen([SSHD, "-D", "-e", "-f", config], stderr=subprocess.PIPE, text=True)
     try:
@@ -173,32 +183,35 @@ def test_a_key_the_jump_host_does_not_know_is_refused(jump):
 
 
 def test_the_match_block_does_not_leak_into_later_files(tmp_path):
-    # Production reads the drop-in first; a setting read after it must stay global.
+    # Production reads the drop-ins first, through one glob as Debian does; a setting
+    # read after them must stay global, so it uses a value that is not the default.
     cert_sshd = load("configure-nodes.py").JUMP_CERT_SSHD
     assert "Match User ca" in cert_sshd
-    keys = load("bootstrap-platform.py").JUMP_SSHD
     keygen(tmp_path / "host")
-    (tmp_path / "certs.conf").write_text(cert_sshd)
-    (tmp_path / "jump.conf").write_text(keys)
+    dropins = tmp_path / "sshd_config.d"
+    dropins.mkdir()
+    (dropins / "carrel-jump-certs.conf").write_text(cert_sshd)
+    (dropins / "carrel-jump.conf").write_text(load("bootstrap-platform.py").JUMP_SSHD)
     config = tmp_path / "sshd_config"
-    config.write_text(
-        f"Include {tmp_path / 'certs.conf'}\nInclude {tmp_path / 'jump.conf'}\n"
-        f"HostKey {tmp_path / 'host'}\nPermitEmptyPasswords no\n"
-    )
+    config.write_text(f"Include {dropins}/*.conf\nHostKey {tmp_path / 'host'}\nClientAliveInterval 37\n")
 
     def effective(user):
-        out = subprocess.run(
-            [SSHD, "-T", "-f", config, "-C", f"user={user},host=h,addr=10.0.0.1"],
+        run = subprocess.run(
+            [SSHD, "-T", "-f", config, "-C", f"user={user},host=h,addr=10.200.0.3"],
             capture_output=True,
             text=True,
-            check=True,
-        ).stdout
-        return dict(line.split(" ", 1) for line in out.splitlines())
+            check=False,
+        )
+        skip_if_older_sshd(run.stderr)
+        assert run.returncode == 0, run.stderr
+        return dict(line.split(" ", 1) for line in run.stdout.splitlines())
 
-    ca, jump_user = effective("ca"), effective("jump")
+    ca, jump_user, root = effective("ca"), effective("jump"), effective("root")
     assert ca["authorizedkeyscommand"].startswith(load("configure-nodes.py").JUMP_CERT)
     assert jump_user["authorizedkeyscommand"] == "none"
-    for user in (ca, jump_user):
+    assert root["authorizedkeyscommand"] == "none"
+    for user in (ca, jump_user, root):
         assert user["authorizedkeysfile"] == ".ssh/authorized_keys /etc/carrel-jump/%u"
         assert user["allowtcpforwarding"] == "local"
-        assert user["permitemptypasswords"] == "no"
+        assert user["clientaliveinterval"] == "37"
+    assert root["permitrootlogin"] == "forced-commands-only"

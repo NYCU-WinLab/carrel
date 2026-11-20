@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // The SSH jump host (issue #98) lets a member reach machines that have no
@@ -123,10 +124,13 @@ func jumpCertificates(s *Store, ca string) D {
 	return D{"ca": ca, "principals": principals}
 }
 
-// lockJumpState takes jumpMu and reads the jump keys and certificate map.
-// The caller unlocks after the send. A read that panics unlocks first, so a
-// failed reconcile cannot block every later jump sync.
-func (e *Execution) lockJumpState() (keys string, certs D) {
+// lockJumpState takes jumpMu and reads the jump keys and certificate map, with
+// the generation number that goes on both requests. The number is the clock in
+// microseconds (exact in a JSON double), or one more than the last when the
+// clock has not moved, so it rises across syncs and survives a restart. The
+// caller unlocks after the send. A read that panics unlocks first, so a failed
+// reconcile cannot block every later jump sync.
+func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 	e.P.jumpMu.Lock()
 	ok := false
 	defer func() {
@@ -135,8 +139,12 @@ func (e *Execution) lockJumpState() (keys string, certs D) {
 		}
 	}()
 	keys, certs = jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
+	if gen = time.Now().UnixMicro(); gen <= e.P.jumpGen {
+		gen = e.P.jumpGen + 1
+	}
+	e.P.jumpGen = gen
 	ok = true
-	return keys, certs
+	return keys, certs, gen
 }
 
 // syncJumpNow asks for a jump sync after a key or access change and returns
@@ -166,8 +174,8 @@ func (e *Execution) syncJumpNow() {
 }
 
 // jumpStatus is the jump field of a key or access result: "pending" while a
-// queued sync has not confirmed, the last failed outcome ("unavailable" or
-// "keys_only") after it, and "" when jump is disabled or the host took the
+// queued sync has not confirmed, the last failed outcome ("unavailable",
+// "stale" or "keys_only") after it, and "" when jump is disabled or the host took the
 // change.
 func (e *Execution) jumpStatus() string {
 	if !e.jumpEnabled() {
@@ -208,9 +216,9 @@ func (p *Platform) jumpWorker() {
 		p.jumpQueueMu.Unlock()
 		var outcome any = "unavailable"
 		if f := attempt(func() {
-			keys, certs := e.lockJumpState()
+			keys, certs, gen := e.lockJumpState()
 			defer p.jumpMu.Unlock()
-			outcome = e.SyncJump(keys, certs)
+			outcome = e.SyncJump(keys, certs, gen)
 		}); f != nil {
 			slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		}
@@ -224,15 +232,28 @@ func (p *Platform) jumpWorker() {
 // separate request, so a jump host that predates certificates still takes
 // keys. The map goes every time, nil included: the jump host drops it when
 // the site has no CA, and stops using it when no control plane has sent one
-// for a while (jump-cert.py). A jump host that cannot be reached costs
+// for a while (jump-cert.py). Both requests carry gen, so jump-sync.py can
+// refuse a write older than the one it holds; a refused keys write reports
+// "stale" and a refused certs write "keys_only". A jump host that cannot be reached costs
 // members only that path, so it does not fail the reconcile.
-func (e *Execution) SyncJump(keys string, certs D) any {
-	if f := attempt(func() { e.Call(D{"op": "sync", "authorized": keys}, jumpTarget) }); f != nil {
+func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
+	var res any
+	if f := attempt(func() { res = e.Call(D{"op": "sync", "authorized": keys, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		return "unavailable"
 	}
-	if f := attempt(func() { e.Call(D{"op": "certs", "certs": certs}, jumpTarget) }); f != nil {
+	// jumpMu orders this process's writes, so a refusal means the jump host
+	// holds a generation ahead of ours: the old keys stay, which is an error.
+	if obj(res)["stale"] == true {
+		slog.Error("jump_sync_stale", "event", "jump_sync_stale", "gen", gen)
+		return "stale"
+	}
+	if f := attempt(func() { res = e.Call(D{"op": "certs", "certs": certs, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_certs_failed", "event", "jump_certs_failed")
+		return "keys_only"
+	}
+	if obj(res)["stale"] == true {
+		slog.Error("jump_certs_stale", "event", "jump_certs_stale", "gen", gen)
 		return "keys_only"
 	}
 	return "synced"

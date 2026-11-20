@@ -6,7 +6,9 @@ JSON request on stdin: {"op": "sync", "authorized": text}, {"op": "certs",
 "certs": {"ca": key, "principals": {name: [address:22, ...]}} or null} or
 {"op": "status"}. Every line must forward only to tenant machines: port 22
 (issue #98), or a port a machine without SSH declares (issue #94), which its
-firewall admits. The certificate map lets jump-cert.py forward a lab
+firewall admits.
+Both requests take an optional integer "gen"; a write older than the last one accepted
+for that file is refused with {"changed": false, "stale": true}. The certificate map lets jump-cert.py forward a lab
 certificate to port 22 of the machines whose principals file names one of
 its principals.
 """
@@ -69,12 +71,31 @@ def write(path, content):
     pending.replace(path)
 
 
+def stale(name, gen):
+    """True when a write older than the last accepted one; else records gen. Call under the lock."""
+    if gen is None:
+        return False
+    path = STATE / name
+    try:
+        held = int(path.read_text())
+    except (FileNotFoundError, ValueError):
+        held = None
+    if held is not None and gen < held:
+        return True
+    if held != gen:
+        write(path, str(gen) + "\n")
+    return False
+
+
 def main():
     raw = sys.stdin.buffer.read(16_000_101)
     if len(raw) > 16_000_100:
         raise ValueError("request too large")
     request = json.loads(raw)
     op = request.pop("op", None) if isinstance(request, dict) else None
+    gen = request.pop("gen", None) if isinstance(request, dict) else None
+    if gen is not None and (type(gen) is not int or gen < 0):
+        raise ValueError("expected an integer generation")
     STATE.mkdir(parents=True, exist_ok=True)
     if op == "status" and not request:
         return {"sha256": hashlib.sha256(KEYS.read_bytes()).hexdigest() if KEYS.exists() else None}
@@ -83,6 +104,8 @@ def main():
         text = None if request["certs"] is None else check_certs(request["certs"])
         with open(STATE / "lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
+            if stale("certs.gen", gen):
+                return {"changed": False, "stale": True}
             if text is None:
                 changed = CERTS.exists()
                 CERTS.unlink(missing_ok=True)
@@ -100,6 +123,8 @@ def main():
     text = check(request["authorized"])
     with open(STATE / "lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if stale("keys.gen", gen):
+            return {"changed": False, "stale": True}
         KEYS.parent.mkdir(mode=0o755, exist_ok=True)
         changed = not KEYS.exists() or KEYS.read_text() != text
         if changed:

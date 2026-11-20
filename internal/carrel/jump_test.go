@@ -138,7 +138,7 @@ func TestSyncJumpAlwaysSendsTheCertificateMapAndKeepsKeysWhenItFails(t *testing.
 	p, b := fixture(t)
 	e := p.execution(context.Background())
 	// No CA: the map still goes, as null, so the jump host drops an old one.
-	if r := e.SyncJump("", nil); r != "synced" || b.count("certs") != 1 {
+	if r := e.SyncJump("", nil, 1); r != "synced" || b.count("certs") != 1 {
 		t.Fatal(r, b.calls)
 	}
 	if last := b.calls[len(b.calls)-1]; last["certs"] != nil {
@@ -151,7 +151,7 @@ func TestSyncJumpAlwaysSendsTheCertificateMapAndKeepsKeysWhenItFails(t *testing.
 		}
 		return D{}, nil
 	}
-	if r := e.SyncJump("", D{"ca": "x", "principals": D{}}); r != "keys_only" || b.count("sync") != 2 {
+	if r := e.SyncJump("", D{"ca": "x", "principals": D{}}, 1); r != "keys_only" || b.count("sync") != 2 {
 		t.Fatal(r)
 	}
 }
@@ -197,7 +197,7 @@ func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
 	e := p.execution(context.Background())
 	reconciled := make(chan struct{})
 	go func() { e.Reconcile(); close(reconciled) }()
-	<-started
+	waitFor(t, started, "the reconcile sync did not reach the jump host")
 	// The revoke removes the key and the grant, then syncs.
 	revoked := make(chan struct{})
 	go func() {
@@ -207,15 +207,20 @@ func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
 		e.syncJumpNow()
 		close(revoked)
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// The worker has taken its ask and is on its way to jumpMu, which the
+	// reconcile sync still holds. Without the lock it would finish here.
+	waitJumpWorkerClaimed(t, p)
+	waitFor(t, revoked, "the revoke did not return")
 	close(release)
-	<-reconciled
-	<-revoked
+	waitFor(t, reconciled, "the reconcile did not finish")
 	waitJumpIdle(t, p)
 	mu.Lock()
 	defer mu.Unlock()
 	if strings.Contains(lastKeys, key) {
 		t.Fatalf("removed key came back: %q", lastKeys)
+	}
+	if lastCerts == nil {
+		t.Fatal("no certificate map was sent")
 	}
 	principals := obj(obj(lastCerts)["principals"])
 	if _, ok := principals["bob"]; ok {
@@ -243,6 +248,34 @@ func TestAFailedJumpReadDoesNotBlockLaterJumpSyncs(t *testing.T) {
 }
 
 // waitJumpIdle waits until the background jump sync has drained.
+func waitFor(t *testing.T, ch <-chan struct{}, msg string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal(msg)
+	}
+}
+
+// waitJumpWorkerClaimed waits until the background worker runs and has taken
+// its pending ask, so it is past the queue and heading for jumpMu.
+func waitJumpWorkerClaimed(t *testing.T, p *Platform) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.jumpQueueMu.Lock()
+		claimed := p.jumpRunning && !p.jumpPending
+		p.jumpQueueMu.Unlock()
+		if claimed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background jump worker did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func waitJumpIdle(t *testing.T, p *Platform) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -461,5 +494,50 @@ func TestAFailedJumpSyncIsRecordedForLaterReads(t *testing.T) {
 	waitJumpIdle(t, p)
 	if got := e.jumpStatus(); got != "unavailable" {
 		t.Fatalf("jumpStatus = %q", got)
+	}
+}
+
+func TestEachJumpSyncSendsAHigherGenOnBothOps(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	for i := 0; i < 2; i++ {
+		keys, certs, gen := e.lockJumpState()
+		e.SyncJump(keys, certs, gen)
+		p.jumpMu.Unlock()
+	}
+	last := map[any]float64{}
+	n := 0
+	for _, c := range b.calls {
+		if c["op"] != "sync" && c["op"] != "certs" {
+			continue
+		}
+		gen, ok := c["gen"].(float64)
+		if !ok || gen <= last[c["op"]] {
+			t.Fatalf("%v gen %v after %v", c["op"], c["gen"], last[c["op"]])
+		}
+		last[c["op"]] = gen
+		n++
+	}
+	if n != 4 {
+		t.Fatal(n, b.calls)
+	}
+}
+
+func TestARefusedJumpWriteIsNotReportedAsSynced(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	for op, want := range map[string]string{"sync": "stale", "certs": "keys_only"} {
+		b.call = func(r D, _ string) (any, error) {
+			if r["op"] == op {
+				return D{"changed": false, "stale": true}, nil
+			}
+			return D{"changed": true}, nil
+		}
+		if r := e.SyncJump("", nil, 1); r != want {
+			t.Fatal(op, r)
+		}
+	}
+	if b.count("certs") != 1 {
+		t.Fatal("certs went after a refused keys write", b.calls)
 	}
 }

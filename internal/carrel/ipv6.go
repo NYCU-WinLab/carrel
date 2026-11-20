@@ -6,19 +6,21 @@ import (
 	"strconv"
 )
 
-// IPv6 per machine (issue #142, PLAN 6.13). The site routes one /48 over a
-// WireGuard tunnel from the first exit node; tenant N has <prefix>:N::/64,
-// with N written in decimal digits, so 10.200.17.11 is <prefix>:17::11 and
-// the gateway is <prefix>:17::1. node-agent derives the same addresses
-// (v6_net, v6_address); a machine opts in at creation.
+// IPv6 per machine (issue #142, PLAN 6.13). The site routes a block over a
+// WireGuard tunnel from the first exit node. ipv6_prefix is the tenant pool
+// in it (the site block's "tenants"): tenant N has the block 12 bits longer
+// whose 12 bits spell N in decimal digits, and its network is the first /64
+// of that. With a /48 pool, 10.200.17.11 is <pool>:170::11 and the gateway
+// is <pool>:170::1. node-agent derives the same addresses (v6_net,
+// v6_address); a machine opts in at creation.
 
 // documentation is 2001:db8::/32 (RFC 3849), which node-agent refuses too.
 var documentation = netip.MustParsePrefix("2001:db8::/32")
 
 func ipv6Prefix(s string) (netip.Prefix, error) {
 	p, err := netip.ParsePrefix(s)
-	if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() || p.Bits() != 48 || p.Masked() != p || !p.Addr().IsGlobalUnicast() || p.Addr().IsPrivate() || documentation.Overlaps(p) {
-		return netip.Prefix{}, errors.New("ipv6_prefix must be a global IPv6 /48")
+	if err != nil || !p.Addr().Is6() || p.Addr().Is4In6() || p.Bits() < 32 || p.Bits() > 52 || p.Masked() != p || !p.Addr().IsGlobalUnicast() || p.Addr().IsPrivate() || documentation.Overlaps(p) {
+		return netip.Prefix{}, errors.New("ipv6_prefix must be a global IPv6 /32 to /52")
 	}
 	return p, nil
 }
@@ -29,10 +31,20 @@ func decimalDigits(n int) uint16 {
 	return uint16(v)
 }
 
+// v6Net is tenant N's network: the first /64 of the pool's block for N.
 func v6Net(prefix netip.Prefix, n int) netip.Prefix {
 	a := prefix.Addr().As16()
-	h := decimalDigits(n)
-	a[6], a[7] = byte(h>>8), byte(h)
+	h := uint64(decimalDigits(n))
+	// The 12 bits after the pool, written into the first 64 bits.
+	hi := uint64(0)
+	for i := 0; i < 8; i++ {
+		hi = hi<<8 | uint64(a[i])
+	}
+	hi |= h << (64 - prefix.Bits() - 12)
+	for i := 7; i >= 0; i-- {
+		a[i] = byte(hi)
+		hi >>= 8
+	}
 	return netip.PrefixFrom(netip.AddrFrom16(a), 64)
 }
 
