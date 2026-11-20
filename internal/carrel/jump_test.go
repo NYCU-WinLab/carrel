@@ -1098,3 +1098,84 @@ func TestTheResendBudgetCutsACallThatIsStillRunning(t *testing.T) {
 		t.Fatal("returned after", d)
 	}
 }
+
+// A write this process sent above a large held value can still land on the jump
+// host (the ssh client timed out, the remote write did not), so once a refusal
+// raises jumpGen to the top the clock fallback must not go below it.
+func TestTheClockFallbackStaysAboveTheResendsSent(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	held := time.Now().UnixMicro() + 1_000_000_000
+	b.call = func(r D, _ string) (any, error) {
+		if r["gen"].(int64) < held {
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
+		}
+		return D{"changed": true}, nil
+	}
+	keys, certs, gen := e.lockJumpState()
+	if r := e.syncJumpResending(keys, certs, gen); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	_, gens := jumpGens(b)
+	sent := int64(gens[len(gens)-1])
+	if sent != held+1 {
+		t.Fatal(gens, held)
+	}
+	// A later refusal reports a damaged floor at the top.
+	b.call = func(r D, _ string) (any, error) {
+		return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
+	}
+	keys, certs, gen = e.lockJumpState()
+	e.syncJumpResending(keys, certs, gen)
+	p.jumpMu.Unlock()
+	if p.jumpGen != maxJumpGen-1 {
+		t.Fatal(p.jumpGen)
+	}
+	for i := 0; i < 2; i++ {
+		_, _, next := e.lockJumpState()
+		p.jumpMu.Unlock()
+		if next <= sent || next >= maxJumpGen-1 {
+			t.Fatal(i, next, sent)
+		}
+		sent = next
+		p.jumpGen = maxJumpGen - 1
+	}
+}
+
+// A clock that stepped back after a send must not make the fallback repeat or
+// undercut a generation already sent from the clock path.
+func TestTheClockFallbackStaysAboveASendBeforeAClockStepBack(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	// The clock was an hour ahead when this generation went out.
+	ahead := time.Now().UnixMicro() + 3_600_000_000
+	p.jumpMu.Lock()
+	if r := e.SyncJump("", nil, ahead); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if gen <= ahead || gen >= maxJumpGen-1 {
+		t.Fatal(gen, ahead)
+	}
+}
+
+// A generation at the top is not tracked: the fallback stays in range.
+func TestTheClockFallbackIgnoresASendAtTheTop(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	if r := e.SyncJump("", nil, maxJumpGen-1); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if gen >= maxJumpGen-1 {
+		t.Fatal(gen)
+	}
+}

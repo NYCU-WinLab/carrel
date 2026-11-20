@@ -131,10 +131,15 @@ func jumpCertificates(s *Store, ca string) D {
 // microseconds (exact in a JSON double), or one more than the last when the
 // clock has not moved, so it rises across syncs and survives a restart. When
 // one more than the last would leave [0, 2^53) (a jump host reported a held
-// generation at the top), it falls back to the clock, or one more than the
-// last fallback when the clock has not moved: a damaged jump host refuses those
-// as stale, and once an operator repairs its state the next pass is in range
-// and generations rise strictly again, with no restart and no repeated number.
+// generation at the top), it falls back to the clock, raised to one more than
+// the last fallback and one more than the highest generation sent below the
+// top (jumpSentGen). A write this process sent earlier, above a large held
+// value or before the clock stepped back, may still land on the jump host after
+// its ssh client timed out; the fallback stays above it, so that older state
+// cannot be accepted over a newer one. A damaged jump host refuses the
+// fallbacks as stale, and once an operator repairs its state the next pass is
+// in range and generations rise strictly again, with no restart and no
+// repeated number.
 // The caller unlocks after the send. A read that panics unlocks first, so a
 // failed reconcile cannot block every later jump sync.
 func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
@@ -153,6 +158,10 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 	if gen >= maxJumpGen {
 		if gen = now; gen <= e.P.jumpClockGen {
 			gen = e.P.jumpClockGen + 1
+		}
+		// jumpSentGen < maxJumpGen-1, so one more stays in range.
+		if gen <= e.P.jumpSentGen {
+			gen = e.P.jumpSentGen + 1
 		}
 		e.P.jumpClockGen = gen
 	}
@@ -362,12 +371,17 @@ func (e *Execution) syncJumpResending(keys string, certs D, gen int64) string {
 // for a while (jump-cert.py). Both requests carry gen, so jump-sync.py can
 // refuse a write older than the one it holds; a refused keys write reports
 // "stale" and a refused certs write "keys_only". A jump host that cannot be reached costs
-// members only that path, so it does not fail the reconcile.
+// members only that path, so it does not fail the reconcile. The caller holds
+// jumpMu, which also guards jumpSentGen.
 func (e *Execution) SyncJump(keys string, certs D, gen int64) string {
 	if gen < 0 || gen >= maxJumpGen {
 		// The jump host refuses it, and a floor that high could not be passed.
 		slog.Error("jump_sync_gen_range", "event", "jump_sync_gen_range")
 		return "unavailable"
+	}
+	if gen < maxJumpGen-1 && gen > e.P.jumpSentGen {
+		// Counted before the call: a call that fails here may still write there.
+		e.P.jumpSentGen = gen
 	}
 	var res any
 	if f := attempt(func() { res = e.Call(D{"op": "sync", "authorized": keys, "gen": gen}, jumpTarget) }); f != nil {
