@@ -73,7 +73,7 @@ def test_deploy_needs_an_explicit_host(tmp_path, monkeypatch):
 class Node:
     """Records what install-control's host part runs, and can fail one step."""
 
-    def __init__(self, module, monkeypatch, tmp_path, fail_on=None):
+    def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False):
         self.calls, self.fail_on = [], fail_on
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
@@ -89,6 +89,8 @@ class Node:
         monkeypatch.setattr(module, "healthy", lambda version, host: {"version": version})
         (tmp_path / "node.json").write_text('{"storage": "local-zfs"}')
         monkeypatch.setattr(module, "NODE_JSON", tmp_path / "node.json")
+        (tmp_path / "site.json").write_text(json.dumps({"ssh_jump": jump}))
+        monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
         monkeypatch.setattr(module, "TEMPLATES", tmp_path / "templates.json")
 
     def run(self, *args, **kwargs):
@@ -168,6 +170,29 @@ def test_a_failed_upgrade_puts_the_previous_release_back(tmp_path, monkeypatch, 
     assert (set(module.ACTIVATED) <= set(names)) is (restored == "ACTIVATED")
     assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
     assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
+
+
+@pytest.mark.parametrize("jump", [True, False])
+def test_a_rollback_clears_the_jump_generations(tmp_path, monkeypatch, jump):
+    """The restored binary may predate "gen"; jump-sync.py must accept its writes (issue #388)."""
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path, fail_on=lambda args: args[-1] == "activate", jump=jump)
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    clear = ("pct", "exec", "102", "--", "rm", "-f", *module.JUMP_GENS)
+    assert (clear in node.calls) is jump
+    if jump:
+        stopped = ("pct", "exec", "100", "--", "systemctl", "stop", "carrel")
+        stop = max(i for i, c in enumerate(node.calls) if c == stopped)
+        start = node.calls.index(("pct", "exec", "100", "--", "systemctl", "start", "carrel"))
+        assert stop < node.calls.index(clear) < start
+
+
+def test_a_successful_upgrade_keeps_the_jump_generations(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path, jump=True)
+    module.host(staged(tmp_path), "1.0.0")
+    assert not any(c[:3] == ("pct", "exec", "102") for c in node.calls)
 
 
 def test_activation_writes_the_units_and_records_the_templates(tmp_path, monkeypatch):
