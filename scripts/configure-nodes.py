@@ -130,16 +130,19 @@ def jump_cert_apply(f):
     # in place, a failed check or restart brings back the .prev made in this
     # run (any older one goes first), so `ca` keeps its lab certificates.
     # A failed check leaves the running sshd alone; only a failed restart
-    # restarts again, and only after sshd -t passes on the restored file.
+    # restarts again, and only after the restore worked and sshd -t passes on
+    # the restored file. That restart is a real restart: the failed one may have
+    # stopped the unit, and try-restart does nothing to a stopped unit.
+    # A failed restore stops here and reports, without calling systemd.
     # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
-    restore = f"if [ -e {f}.prev ]; then mv {f}.prev {f}; else rm -f {f}; fi"
+    restore = f"{{ if [ -e {f}.prev ]; then mv {f}.prev {f}; else rm -f {f}; fi; }}"
     return (
         f"umask 022 && rm -f {f}.prev && cat > {f}.next && {{ ! [ -e {f} ] || cp -p {f} {f}.prev; }}"
         f" && mv {f}.next {f} || {{ rm -f {f}.next {f}.prev; exit 1; }}\n"
-        f"if ! sshd -t; then {restore}; exit 1; fi\n"
+        f"if ! sshd -t; then {restore} || echo 'rollback failed: {f} is in an unknown state' >&2; exit 1; fi\n"
         f"if systemctl try-restart ssh.service; then rm -f {f}.prev; exit 0; fi\n"
-        f"{restore}\n"
-        "sshd -t && systemctl try-restart ssh.service; exit 1\n"
+        f"{restore} || {{ echo 'rollback failed: {f} is in an unknown state' >&2; exit 1; }}\n"
+        "sshd -t && { systemctl reset-failed ssh.service; systemctl restart ssh.service; }; exit 1\n"
     )
 
 

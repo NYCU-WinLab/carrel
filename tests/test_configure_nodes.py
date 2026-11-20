@@ -229,7 +229,7 @@ def test_infra_mtu_skips_other_bridges_and_stopped_cts(monkeypatch):
     assert calls == [("pct", "status", "103")]
 
 
-def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True):
+def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True, rm_fails=False):
     # Stub sshd and systemctl: a log of calls, and each fails on demand.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -239,6 +239,13 @@ def apply_jump_certs(tmp_path, text="new\n", sshd_ok=True, systemctl_ok=True):
         stub.write_text(f'#!/bin/sh\necho "{name} $*" >> {log}\nexit {status}\n')
         stub.chmod(0o755)
     f = tmp_path / "carrel-jump-certs.conf"
+    if rm_fails:
+        # Fails only for the rollback's `rm -f <drop-in>`, not for the .next and .prev cleanups.
+        rm = bin_dir / "rm"
+        rm.write_text(
+            '#!/bin/sh\nfor last; do :; done\ncase "$last" in *.next|*.prev) exec /bin/rm "$@";; esac\nexit 1\n'
+        )
+        rm.chmod(0o755)
     script = load("configure-nodes.py").jump_cert_apply(f)
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin"}
     result = subprocess.run(
@@ -294,6 +301,19 @@ def test_a_failed_restart_restores_the_jump_drop_in_and_checks_before_restarting
         "sshd -t",
         "systemctl try-restart ssh.service",
         "sshd -t",
-        "systemctl try-restart ssh.service",
+        "systemctl reset-failed ssh.service",
+        "systemctl restart ssh.service",
     ]
     assert not (tmp_path / "carrel-jump-certs.conf.prev").exists()
+
+
+def test_a_failed_rollback_step_stops_without_calling_systemd(tmp_path):
+    code, _, calls = apply_jump_certs(tmp_path, systemctl_ok=False, rm_fails=True)
+    assert code == 1
+    assert calls == ["sshd -t", "systemctl try-restart ssh.service"]  # no second check, no restart
+
+
+def test_a_failed_check_with_a_failed_rollback_reports_and_leaves_sshd_alone(tmp_path):
+    code, _, calls = apply_jump_certs(tmp_path, sshd_ok=False, rm_fails=True)
+    assert code == 1
+    assert calls == ["sshd -t"]
