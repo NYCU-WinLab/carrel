@@ -307,13 +307,27 @@ func (p *Platform) jumpWorker() {
 // reporting a higher generation cannot hold jumpMu forever.
 const maxJumpResends = 3
 
+// maxJumpGen is the first number that is not a generation: both sides keep
+// generations in [0, 2^53), the range a JSON double holds exactly, and
+// scripts/jump-sync.py refuses anything from here up.
+const maxJumpGen = 1 << 53
+
+// jumpResendBudget bounds the whole resend sequence in time: no resend starts
+// after it, so a slow jump host cannot hold jumpMu for maxJumpResends rounds
+// of two full timeouts. A var so a test can shrink it.
+var jumpResendBudget = 90 * time.Second
+
 // syncJumpResending is SyncJump plus resends: a refusal that moved jumpGen
 // past the generation sent means the jump host holds a newer floor, so the
 // same state goes again above it. It stops when both requests pass, when no
-// new floor was learned, or after maxJumpResends. The caller holds jumpMu.
+// new floor was learned, after maxJumpResends, when jumpResendBudget has run
+// out, or when the next generation would leave [0, 2^53). The caller holds
+// jumpMu.
 func (e *Execution) syncJumpResending(keys string, certs D, gen int64) string {
+	start := time.Now()
 	outcome := e.SyncJump(keys, certs, gen)
-	for i := 0; i < maxJumpResends && (outcome == "stale" || outcome == "keys_only") && e.P.jumpGen > gen; i++ {
+	for i := 0; i < maxJumpResends && (outcome == "stale" || outcome == "keys_only") && e.P.jumpGen > gen &&
+		e.P.jumpGen < maxJumpGen-1 && time.Since(start) < jumpResendBudget; i++ {
 		e.P.jumpGen++
 		gen = e.P.jumpGen
 		outcome = e.SyncJump(keys, certs, gen)
@@ -330,6 +344,11 @@ func (e *Execution) syncJumpResending(keys string, certs D, gen int64) string {
 // "stale" and a refused certs write "keys_only". A jump host that cannot be reached costs
 // members only that path, so it does not fail the reconcile.
 func (e *Execution) SyncJump(keys string, certs D, gen int64) string {
+	if gen < 0 || gen >= maxJumpGen {
+		// The jump host refuses it, and a floor that high could not be passed.
+		slog.Error("jump_sync_gen_range", "event", "jump_sync_gen_range")
+		return "unavailable"
+	}
 	var res any
 	if f := attempt(func() { res = e.Call(D{"op": "sync", "authorized": keys, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
@@ -371,7 +390,7 @@ func (e *Execution) raiseJumpGen(res any) {
 	// held comes from the jump host: only an exact integer in [0, 2^53) is
 	// a generation, anything else is ignored.
 	held, ok := obj(res)["held"].(float64)
-	if !ok || held < 0 || held >= 1<<53 || held != math.Trunc(held) {
+	if !ok || held < 0 || held >= maxJumpGen || held != math.Trunc(held) {
 		return
 	}
 	if int64(held) > e.P.jumpGen {

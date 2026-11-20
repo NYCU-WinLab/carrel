@@ -113,3 +113,12 @@ def test_a_damaged_generation_file_fails_the_write(monkeypatch, module):
         with pytest.raises(RuntimeError):
             sync(monkeypatch, module, "", gen=gen)
     assert module.KEYS.read_text() == KEY
+
+
+def test_a_gen_from_2_to_the_53_up_is_refused_and_so_is_such_a_sidecar(monkeypatch, module):
+    with pytest.raises(ValueError):
+        sync(monkeypatch, module, "", gen=2**53)
+    assert sync(monkeypatch, module, "", gen=2**53 - 1)["changed"] is True
+    module.STATE.joinpath("keys.gen").write_text(str(2**53) + "\n")
+    with pytest.raises(RuntimeError):
+        sync(monkeypatch, module, KEY, gen=1)
