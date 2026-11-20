@@ -265,6 +265,47 @@ def test_watchdog_failure_keeps_key_and_port(agent, monkeypatch, tmp_path):
     assert out["watchdog_error"].startswith("CommandFailure")
 
 
+def test_watchdog_rereads_handshake_before_deleting(agent, monkeypatch):
+    # A handshake completes between the first sample and the delete.
+    calls, _, _ = watchdog_stubs(agent, monkeypatch, 200)
+    ages = iter([200, 2])
+
+    def run(*a, **k):
+        calls.append(a)
+        if a[0] == "wg":
+            return f"PEER\t{1_000_000 - next(ages)}"
+        return "default dev wg-v6" if a[3] == "show" else ""
+
+    assert agent.v6_watchdog(run=run, now=lambda: 1_000_000) == {"handshake": 2, "route": True}
+    assert not any(c[:4] == ("ip", "-6", "route", "del") for c in calls)
+
+
+def test_apply_installs_unreachable_default(agent, monkeypatch, tmp_path):
+    keys = tmp_path / "wg"
+    keys.mkdir()
+    (keys / "v6.key").write_text("PRIVATE\n")
+    monkeypatch.setattr(agent, "VPN_KEYS", keys)
+    monkeypatch.setattr(agent, "write", lambda *a, **k: True)
+    monkeypatch.setattr(agent.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(agent, "v6_watchdog", lambda: None)
+    calls = []
+    monkeypatch.setattr(agent, "run", lambda *a, **k: calls.append(a) or "")
+    agent.ipv6_apply({"prefix": SITE6["prefix"], "mtu": 1420, **SITE6["peer"]}, [])
+    want = (
+        "ip",
+        "-6",
+        "route",
+        "replace",
+        "vrf",
+        "vrf_tenants",
+        "unreachable",
+        "default",
+        "metric",
+        "4278198272",
+    )
+    assert want in calls
+
+
 def test_tunnel_declared_to_ifupdown(agent):
     # ifreload -a, run by every SDN apply, keeps only what its files declare (#336).
     text = agent.v6_iface(agent.site_ipv6())
