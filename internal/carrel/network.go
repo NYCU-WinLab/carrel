@@ -432,10 +432,13 @@ func (e *Execution) Reconcile() D {
 	var jump any
 	if e.jumpEnabled() {
 		// Store reads stay on this goroutine; only the request runs beside.
-		keys, certs := jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
+		// jumpMu is taken before the read and released after the send, so an
+		// older map cannot follow a newer one (syncJumpNow).
+		keys, certs := e.lockJumpState()
 		gatewayDone.Add(1)
 		go func() {
 			defer gatewayDone.Done()
+			defer e.P.jumpMu.Unlock()
 			jump = e.SyncJump(keys, certs)
 		}()
 	}

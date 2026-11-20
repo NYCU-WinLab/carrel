@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestJumpKeysOpenOnlyTheirTenantsMachines(t *testing.T) {
@@ -151,5 +153,92 @@ func TestSyncJumpAlwaysSendsTheCertificateMapAndKeepsKeysWhenItFails(t *testing.
 	}
 	if r := e.SyncJump("", D{"ca": "x", "principals": D{}}); r != "keys_only" || b.count("sync") != 2 {
 		t.Fatal(r)
+	}
+}
+
+func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
+	p, b := fixture(t)
+	ca := "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY="
+	p.Config.SSHJump, p.Config.SSHUserCA = true, ca
+	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAliceAliceAliceAliceAliceAliceAliceAlice"
+	m := seedMachine(p, "web", 10100)
+	m["ssh_user_ca"], m["ca_principals"] = ca, []any{"alice"}
+	m["ca_grants"] = []D{{"username": "bob", "by": "alice", "at": 1.0}}
+	p.Store.Put("machines", 10100, 1, m)
+	p.Store.Put("keys", "1-k", 1, D{"id": "k", "key": key})
+	// The reconcile sync starts with the old state and waits at the jump host.
+	started, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	first := true
+	var lastKeys string
+	var lastCerts any
+	b.call = func(r D, target string) (any, error) {
+		if target != "carrel-jump" {
+			return D{}, nil
+		}
+		mu.Lock()
+		wait := r["op"] == "sync" && first
+		first = false
+		mu.Unlock()
+		if wait {
+			close(started)
+			<-release
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch r["op"] {
+		case "sync":
+			lastKeys = str(r["authorized"])
+		case "certs":
+			lastCerts = r["certs"]
+		}
+		return D{}, nil
+	}
+	e := p.execution(context.Background())
+	reconciled := make(chan struct{})
+	go func() { e.Reconcile(); close(reconciled) }()
+	<-started
+	// The revoke removes the key and the grant, then syncs.
+	revoked := make(chan struct{})
+	go func() {
+		e.S.Remove("keys", "1-k")
+		m["ca_grants"] = []D{}
+		p.Store.Put("machines", 10100, 1, m)
+		e.syncJumpNow()
+		close(revoked)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	<-reconciled
+	<-revoked
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Contains(lastKeys, key) {
+		t.Fatalf("removed key came back: %q", lastKeys)
+	}
+	principals := obj(obj(lastCerts)["principals"])
+	if _, ok := principals["bob"]; ok {
+		t.Fatalf("revoked grant came back: %#v", lastCerts)
+	}
+}
+
+func TestAFailedJumpReadDoesNotBlockLaterJumpSyncs(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	b.call = func(r D, target string) (any, error) { return D{}, nil }
+	seedMachine(p, "web", 10100)
+	// A broken keys row makes the reconcile's jump read panic.
+	p.Store.Exec("INSERT INTO objects VALUES('keys','1-bad',1,'{not json')")
+	e := p.execution(context.Background())
+	if attempt(func() { e.Reconcile() }) == nil {
+		t.Fatal("the broken keys row did not fail the reconcile")
+	}
+	p.Store.Remove("keys", "1-bad")
+	done := make(chan struct{})
+	go func() { e.syncJumpNow(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("syncJumpNow is still blocked on jumpMu after a failed reconcile")
 	}
 }

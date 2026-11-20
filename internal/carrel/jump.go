@@ -123,10 +123,29 @@ func jumpCertificates(s *Store, ca string) D {
 	return D{"ca": ca, "principals": principals}
 }
 
+// lockJumpState takes jumpMu and reads the jump keys and certificate map.
+// The caller unlocks after the send. A read that panics unlocks first, so a
+// failed reconcile cannot block every later jump sync.
+func (e *Execution) lockJumpState() (keys string, certs D) {
+	e.P.jumpMu.Lock()
+	ok := false
+	defer func() {
+		if !ok {
+			e.P.jumpMu.Unlock()
+		}
+	}()
+	keys, certs = jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
+	ok = true
+	return keys, certs
+}
+
 // syncJumpNow sends a key or access change to the jump host at once instead
-// of with the next reconcile.
+// of with the next reconcile. Like the reconcile path, it reads the store
+// and sends under jumpMu, so the last request sent carries the latest state.
 func (e *Execution) syncJumpNow() {
 	if e.jumpEnabled() {
+		e.P.jumpMu.Lock()
+		defer e.P.jumpMu.Unlock()
 		e.SyncJump(jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA))
 	}
 }
