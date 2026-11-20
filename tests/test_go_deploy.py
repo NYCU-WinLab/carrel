@@ -73,7 +73,7 @@ def test_deploy_needs_an_explicit_host(tmp_path, monkeypatch):
 class Node:
     """Records what install-control's host part runs, and can fail one step."""
 
-    def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False):
+    def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False):
         self.calls, self.fail_on = [], fail_on
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
@@ -84,7 +84,9 @@ class Node:
         monkeypatch.setattr(
             module, "capture", lambda *a: '{"version": "1.0.0"}' if a[-1] == "-version" else "carrel.test\n"
         )
-        monkeypatch.setattr(module.subprocess, "run", lambda args, **kw: self.calls.append(tuple(args)))
+        monkeypatch.setattr(
+            module.subprocess, "run", lambda args, **kw: self.subprocess_run(args, clear_fails)
+        )
         monkeypatch.setattr(module, "templates_for", lambda stage, node, storage: {"debian-13-minimal": {}})
         monkeypatch.setattr(module, "healthy", lambda version, host: {"version": version})
         (tmp_path / "node.json").write_text('{"storage": "local-zfs"}')
@@ -92,6 +94,11 @@ class Node:
         (tmp_path / "site.json").write_text(json.dumps({"ssh_jump": jump}))
         monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
         monkeypatch.setattr(module, "TEMPLATES", tmp_path / "templates.json")
+
+    def subprocess_run(self, args, clear_fails):
+        self.calls.append(tuple(args))
+        failed = clear_fails and tuple(args[:5]) == ("pct", "exec", "102", "--", "rm")
+        return SimpleNamespace(returncode=1 if failed else 0)
 
     def run(self, *args, **kwargs):
         args = tuple(str(a) for a in args)
@@ -186,6 +193,33 @@ def test_a_rollback_clears_the_jump_generations(tmp_path, monkeypatch, jump):
         stop = max(i for i, c in enumerate(node.calls) if c == stopped)
         start = node.calls.index(("pct", "exec", "100", "--", "systemctl", "start", "carrel"))
         assert stop < node.calls.index(clear) < start
+
+
+def test_a_rollback_that_cannot_clear_the_jump_generations_warns_and_starts_carrel(
+    tmp_path, monkeypatch, capsys
+):
+    module = load("install-control.py")
+    node = Node(
+        module,
+        monkeypatch,
+        tmp_path,
+        fail_on=lambda args: args[-1] == "activate",
+        jump=True,
+        clear_fails=True,
+    )
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    err = capsys.readouterr().err
+    assert "rm -f /var/lib/carrel-jump/keys.gen /var/lib/carrel-jump/certs.gen" in err
+    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
+
+
+def test_a_rollback_that_clears_the_jump_generations_does_not_warn(tmp_path, monkeypatch, capsys):
+    module = load("install-control.py")
+    Node(module, monkeypatch, tmp_path, fail_on=lambda args: args[-1] == "activate", jump=True)
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    assert "WARNING" not in capsys.readouterr().err
 
 
 def test_a_successful_upgrade_keeps_the_jump_generations(tmp_path, monkeypatch):
