@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
@@ -313,18 +314,25 @@ const maxJumpResends = 3
 const maxJumpGen = 1 << 53
 
 // jumpResendBudget bounds the whole resend sequence in time: no resend starts
-// after it, so a slow jump host cannot hold jumpMu for maxJumpResends rounds
-// of two full timeouts. A var so a test can shrink it.
+// after it, and a call still running when it ends is cut, so a slow jump host
+// cannot hold jumpMu for maxJumpResends rounds of two full timeouts. A var so
+// a test can shrink it.
 var jumpResendBudget = 90 * time.Second
 
 // syncJumpResending is SyncJump plus resends: a refusal that moved jumpGen
 // past the generation sent means the jump host holds a newer floor, so the
 // same state goes again above it. It stops when both requests pass, when no
 // new floor was learned, after maxJumpResends, when jumpResendBudget has run
-// out, or when the next generation would leave [0, 2^53). The caller holds
-// jumpMu.
+// out, or when the next generation would leave [0, 2^53). Every call of the
+// sequence runs under one deadline at start+jumpResendBudget; a call it cuts
+// reports like a failed one. The caller holds jumpMu.
 func (e *Execution) syncJumpResending(keys string, certs D, gen int64) string {
 	start := time.Now()
+	ctx, cancel := context.WithDeadline(e.Ctx, start.Add(jumpResendBudget))
+	defer cancel()
+	bounded := *e
+	bounded.Ctx = ctx
+	e = &bounded
 	outcome := e.SyncJump(keys, certs, gen)
 	for i := 0; i < maxJumpResends && (outcome == "stale" || outcome == "keys_only") && e.P.jumpGen > gen &&
 		e.P.jumpGen < maxJumpGen-1 && time.Since(start) < jumpResendBudget; i++ {

@@ -1012,3 +1012,29 @@ func TestNoGenAtOrAbove2To53IsSent(t *testing.T) {
 		t.Fatal(gens)
 	}
 }
+
+// ctxBlockingBackend never answers: a call returns only when its context ends.
+type ctxBlockingBackend struct{ fakeBackend }
+
+func (b *ctxBlockingBackend) Call(ctx context.Context, r D, target string) (any, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestTheResendBudgetCutsACallThatIsStillRunning(t *testing.T) {
+	p, _ := fixture(t)
+	p.Backend = &ctxBlockingBackend{}
+	old := jumpResendBudget
+	jumpResendBudget = 50 * time.Millisecond
+	defer func() { jumpResendBudget = old }()
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	defer p.jumpMu.Unlock()
+	start := time.Now()
+	if r := e.syncJumpResending("", nil, 1); r != "unavailable" {
+		t.Fatal(r)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatal("returned after", d)
+	}
+}
