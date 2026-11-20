@@ -35,6 +35,11 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 		target = "carrel-node"
 	}
 	timeout := adapterTimeout(str(request["op"]))
+	if target == jumpTarget {
+		// The jump helper only writes two small files; a hung jump host must
+		// not hold jumpMu for the node-sized timeouts.
+		timeout = jumpTimeout
+	}
 	if request["op"] == "create" && obj(request["machine"])["import_volume"] != nil {
 		// Hashing and importing up to 20 GB over NFS (PLAN 7.8).
 		timeout = 3 * time.Hour
@@ -90,6 +95,11 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.buf.Write(p)
 }
+
+const jumpTarget = "carrel-jump"
+
+// jumpTimeout bounds every request to the jump host. A variable so tests can shorten it.
+var jumpTimeout = 30 * time.Second
 
 // adapterTimeout bounds one adapter request. Reads and the backup's node files
 // are quick; a reconcile can wait for an SDN reload; creation clones disks.
