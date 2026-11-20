@@ -1012,3 +1012,47 @@ func TestNoGenAtOrAbove2To53IsSent(t *testing.T) {
 		t.Fatal(gens)
 	}
 }
+
+func TestLockJumpStateStaysBelow2To53(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	p.jumpGen = maxJumpGen - 1
+	for i := 0; i < 2; i++ {
+		_, _, gen := e.lockJumpState()
+		if gen >= maxJumpGen || p.jumpGen >= maxJumpGen {
+			t.Fatal(gen, p.jumpGen)
+		}
+		if r := e.SyncJump("", nil, gen); r == "unavailable" {
+			t.Fatal(r)
+		}
+		p.jumpMu.Unlock()
+	}
+	_ = b
+}
+
+func TestARepairedJumpHostSyncsAfterTheTopRefusal(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	p.jumpGen = maxJumpGen - 2
+	refuse := true
+	b.call = func(r D, _ string) (any, error) {
+		if refuse {
+			return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
+		}
+		return D{"changed": true}, nil
+	}
+	keys, certs, gen := e.lockJumpState()
+	if r := e.syncJumpResending(keys, certs, gen); r != "stale" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	refuse = false
+	keys, certs, gen = e.lockJumpState()
+	defer p.jumpMu.Unlock()
+	if gen >= maxJumpGen {
+		t.Fatal(gen)
+	}
+	if r := e.syncJumpResending(keys, certs, gen); r != "synced" {
+		t.Fatal(r)
+	}
+}

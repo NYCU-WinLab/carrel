@@ -128,7 +128,10 @@ func jumpCertificates(s *Store, ca string) D {
 // lockJumpState takes jumpMu and reads the jump keys and certificate map, with
 // the generation number that goes on both requests. The number is the clock in
 // microseconds (exact in a JSON double), or one more than the last when the
-// clock has not moved, so it rises across syncs and survives a restart. The
+// clock has not moved, so it rises across syncs and survives a restart. It never
+// passes maxJumpGen-1, the last valid generation: at the top the same number
+// goes again instead of an out-of-range one, so once an operator repairs the
+// jump host's state the next pass is in range and no restart is needed. The
 // caller unlocks after the send. A read that panics unlocks first, so a failed
 // reconcile cannot block every later jump sync.
 func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
@@ -142,6 +145,9 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 	keys, certs = jumpAuthorizedKeys(e.S), jumpCertificates(e.S, e.P.Config.SSHUserCA)
 	if gen = time.Now().UnixMicro(); gen <= e.P.jumpGen {
 		gen = e.P.jumpGen + 1
+	}
+	if gen > maxJumpGen-1 {
+		gen = maxJumpGen - 1
 	}
 	e.P.jumpGen = gen
 	ok = true
