@@ -891,6 +891,25 @@ def v6_net(tenants, n):
     return ipaddress.IPv6Network((v6_tenant(tenants, n).network_address, 64))
 
 
+def v6_renumbered(subnets, v6, n):
+    """Tenant N's IPv6 subnets left by an earlier numbering: a /64 in the site
+    block, outside the tenant's own block. Anything inside its block stays
+    (room for more networks), and so does anything outside the site block."""
+    if not v6:
+        return []
+    site6 = ipaddress.IPv6Network(v6["prefix"])
+    own = v6_tenant(v6["tenants"], n)
+    out = []
+    for x in subnets:
+        cidr = str(x.get("cidr", ""))
+        if ":" not in cidr:
+            continue
+        net = ipaddress.IPv6Network(cidr)
+        if net.prefixlen == 64 and net.subnet_of(site6) and not net.subnet_of(own):
+            out.append(x)
+    return out
+
+
 def v6_address(tenants, m):
     """A machine's address: its IPv4 host number, in decimal digits, in its tenant's /64."""
     n = m["tenant_n"]
@@ -1305,12 +1324,9 @@ def reconcile(state, first=True):
             )
             changed.append(f"subnet-{n}")
         net6 = v6_net(v6["tenants"], n) if v6 else None
-        for x in subnets:
-            # Renumbered: a tenant's IPv6 subnet that is not its current one goes.
-            cidr = str(x.get("cidr", ""))
-            if ":" in cidr and net6 and cidr != str(net6) and ipaddress.IPv6Network(cidr).subnet_of(ipaddress.IPv6Network(v6["prefix"])):
-                api("delete", f"/cluster/sdn/vnets/{vnet}/subnets/{x['subnet']}")
-                changed.append(f"removed-{x['subnet']}")
+        for x in v6_renumbered(subnets, v6, n):
+            api("delete", f"/cluster/sdn/vnets/{vnet}/subnets/{x['subnet']}")
+            changed.append(f"removed-{x['subnet']}")
         if net6 and not any(x.get("cidr") == str(net6) for x in subnets):
             # Routed, never translated: the addresses are the machines' own.
             api("create", f"/cluster/sdn/vnets/{vnet}/subnets", subnet=str(net6), type="subnet",

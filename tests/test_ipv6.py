@@ -384,3 +384,20 @@ def test_mss_clamp_follows_the_tunnel_mtu():
     n = load("install-network.py")
     nft = n.tenant_host_nft(n.underlay_rules("vmbr0", "192.168.19.101", []), ipv6=True, mtu6=1370)
     assert "maxseg size > 1310 tcp option maxseg size set 1310" in nft
+
+
+def test_renumbering_replaces_only_the_old_primary_subnet(agent):
+    # The /48 grown to its /44: tenant 17's 880:17::/64 is from the old numbering.
+    v6 = {"prefix": "2a14:7581:880::/44", "tenants": "2a14:7581:880::/48"}
+    subnets = [
+        {"subnet": "tenants-10.200.17.0-24", "cidr": "10.200.17.0/24"},
+        {"subnet": "tenants-2a14:7581:880:17::-64", "cidr": "2a14:7581:880:17::/64"},
+        {"subnet": "tenants-2a14:7581:880:170::-64", "cidr": "2a14:7581:880:170::/64"},
+        # Another network in the tenant's own /60, and a subnet outside the site block.
+        {"subnet": "tenants-2a14:7581:880:171::-64", "cidr": "2a14:7581:880:171::/64"},
+        {"subnet": "tenants-2001:db8::-64", "cidr": "2001:db8::/64"},
+    ]
+    assert [x["cidr"] for x in agent.v6_renumbered(subnets, v6, 17)] == ["2a14:7581:880:17::/64"]
+    # Steady state: nothing to do.
+    assert agent.v6_renumbered([x for x in subnets if x["cidr"] != "2a14:7581:880:17::/64"], v6, 17) == []
+    assert agent.v6_renumbered(subnets, None, 17) == []
