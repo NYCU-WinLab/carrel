@@ -2106,3 +2106,38 @@ def test_a_ct_takes_principals_only_as_a_clean_list(monkeypatch):
             module.action({"machine": ct, "action": "principals", "principals": bad})
     with pytest.raises(ValueError):
         module.action({"machine": MACHINE, "action": "principals", "principals": ["alice"]})
+
+
+def test_guest_sets_prune_removes_only_sets_of_guests_that_left():
+    module = load("node-agent.py")
+    sets = [
+        "v4-guest-10306/ipfilter-net0",
+        "v6-guest-10306/ipfilter-net0",
+        "v4-guest-10307/ipfilter-net0",
+        "other",
+    ]
+    listing = {
+        "nftables": [
+            {"metainfo": {}},
+            *({"set": {"name": n}} for n in sets),
+            {"chain": {"name": "guest-10307-in"}},
+        ]
+    }
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return json.dumps(listing) if args[1] == "-j" else ""
+
+    pruned = module.guest_sets_prune(run)
+    assert pruned == ["v4-guest-10306/ipfilter-net0", "v6-guest-10306/ipfilter-net0"]
+    assert all(c[:5] == ("nft", "delete", "set", "bridge", "proxmox-firewall-guests") for c in calls[1:])
+
+
+def test_guest_sets_prune_ignores_a_node_without_the_table():
+    module = load("node-agent.py")
+
+    def run(*args, **kwargs):
+        raise module.CommandFailure("no table")
+
+    assert module.guest_sets_prune(run) == []

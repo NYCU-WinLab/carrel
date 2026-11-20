@@ -1547,11 +1547,44 @@ WantedBy=multi-user.target
     run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     out = {"changed": changed}
+    pruned = guest_sets_prune()
+    if pruned:
+        out["pruned_sets"] = pruned
     if tunnels:
         out["vpn"] = tunnels
     if site6:
         out["ipv6"] = site6
     return out
+
+
+GUEST_SET = re.compile(r"v[46]-guest-(\d+)/.+")
+
+
+def guest_sets_prune(run=run):
+    """Delete the nft sets proxmox-firewall leaves behind for a guest that left this node.
+
+    A set belongs to a guest that is here while its guest-<id>-in/out chains exist.
+    nft refuses to delete a set a rule still references, so a wrong guess is harmless.
+    Best effort: a failure here never fails the reconcile.
+    """
+    try:
+        listing = json.loads(run("nft", "-j", "list", "table", "bridge", "proxmox-firewall-guests"))
+    except (CommandFailure, ValueError, OSError):
+        return []
+    items = [x for x in listing.get("nftables", []) if isinstance(x, dict)]
+    chains = {x["chain"]["name"] for x in items if "chain" in x}
+    pruned = []
+    for x in items:
+        name = x.get("set", {}).get("name", "")
+        m = GUEST_SET.fullmatch(name)
+        if not m or f"guest-{m[1]}-in" in chains or f"guest-{m[1]}-out" in chains:
+            continue
+        try:
+            run("nft", "delete", "set", "bridge", "proxmox-firewall-guests", name)
+            pruned.append(name)
+        except CommandFailure:
+            pass
+    return pruned
 
 
 # Virtual addresses across nodes (issue #96). A remote EVPN neighbour entry is
