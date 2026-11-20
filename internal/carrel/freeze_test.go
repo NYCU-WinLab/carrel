@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -209,7 +210,11 @@ func TestDeletingAFrozenMachineRemovesItsBackup(t *testing.T) {
 	if f := failure(member(p, "machine_delete", D{"machine": "box", "confirm": "wrong"})); f["code"] != "invalid" {
 		t.Fatal(encoded(f))
 	}
-	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	deleted := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	assertOK(t, deleted)
+	if _, has := obj(obj(deleted["operation"])["result"])["warnings"]; has {
+		t.Fatalf("a clean delete carries warnings: %s", encoded(deleted))
+	}
 	if frozenOps(*seen, "backup_remove") != 1 || p.Store.Get("frozen", "10100") != nil {
 		t.Fatalf("%v", *seen)
 	}
@@ -545,6 +550,37 @@ func TestDeleteForgetsWhatHangsOffTheMachineWhenReconcileFails(t *testing.T) {
 	}
 }
 
+// The first node reconciles, then the gateway step fails: the delete still
+// succeeds and the record is gone, since the next reconcile pass catches up.
+func TestDeleteRemovesTheRecordWhenOnlyTheGatewayFails(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	var mu sync.Mutex
+	reconciled, gatewayTried := 0, 0
+	intercept(b, func(r D) (any, error, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r["op"] == "reconcile":
+			reconciled++
+		case r["op"] == "sync":
+			gatewayTried++
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "gateway unreachable", "recovery": "retry_infrastructure"}}}, true
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
+	assertOK(t, r)
+	if op := obj(r["operation"]); op["state"] != "succeeded" || op["error"] != nil {
+		t.Fatalf("a tolerated gateway failure failed the delete: %s", encoded(r))
+	}
+	if reconciled == 0 || gatewayTried == 0 {
+		t.Fatalf("setup: the node reconciled %d times and the gateway was tried %d times", reconciled, gatewayTried)
+	}
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("the record stayed after the gateway step failed")
+	}
+}
+
 // A reconcile that panics with something other than a Failure is a bug: the
 // record is still removed, and the panic is not hidden behind a success.
 func TestDeleteSurfacesANonFailureReconcilePanic(t *testing.T) {
@@ -556,8 +592,11 @@ func TestDeleteSurfacesANonFailureReconcilePanic(t *testing.T) {
 		return nil, nil, false
 	})
 	r := member(p, "machine_delete", D{"machine": "box", "confirm": "box"})
-	if failure(r)["code"] == nil {
-		t.Fatalf("the bug was hidden behind a successful delete: %v", r)
+	if failure(r)["code"] != "internal" || !strings.Contains(str(failure(r)["message"]), "machine was deleted") {
+		t.Fatalf("the bug was hidden or described as a retained allocation: %v", r)
+	}
+	if op := obj(r["operation"]); op["state"] != "failed" || op["resource_changes"] != true {
+		t.Fatalf("the operation does not record the delete: %s", encoded(r))
 	}
 	if p.Store.Get("machines", "10100") != nil {
 		t.Fatal("the record stayed after the reconcile panicked")
@@ -891,6 +930,10 @@ func TestDeleteToleratesAnotherTenantsUnreadableCertificate(t *testing.T) {
 			if p.Store.Get("machines", "10100") != nil {
 				t.Fatal("the record stayed after the reconcile failed")
 			}
+			warnings := arr(obj(obj(r["operation"])["result"])["warnings"])
+			if len(warnings) != 1 || obj(warnings[0])["code"] != "reconcile_failed" {
+				t.Fatalf("no reconcile_failed warning: %s", encoded(r))
+			}
 			if p.Store.Get("machines", "10900") == nil || p.Store.Get("domains", "900") == nil {
 				t.Fatal("the other tenant's records were touched")
 			}
@@ -900,5 +943,50 @@ func TestDeleteToleratesAnotherTenantsUnreadableCertificate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A reconcile that fails after a delete leaves nothing behind: the next normal
+// reconcile sends the nodes and the gateway nothing for the old VMID or its
+// address (#312).
+func TestReconcileAfterAFailedDeleteReconcileLeavesNothingForTheOldMachine(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	failing := true
+	intercept(b, func(r D) (any, error, bool) {
+		if failing && r["op"] == "reconcile" {
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "node unreachable", "recovery": "retry_infrastructure"}}}, true
+		}
+		return nil, nil, false
+	})
+	p.Store.Put("domains", "100", 1, D{"id": "100", "vmid": 10100, "tenant_n": 1, "sub": "boxapp", "name": "boxapp.alice.winlab.tw", "target": "10.200.1.10", "target_port": 3000, "state": "ready"})
+	p.Store.Put("ports", "bp", 1, D{"id": "bp", "vmid": 10100, "public_port": 8080, "proto": "tcp", "port": 8080, "ip": "10.200.1.10", "tenant_n": 1})
+	assertOK(t, member(p, "machine_delete", D{"machine": "box", "confirm": "box"}))
+	if p.Store.Get("machines", "10100") != nil {
+		t.Fatal("setup: the record stayed after the reconcile failed")
+	}
+
+	failing = false
+	b.mu.Lock()
+	b.calls = nil
+	b.mu.Unlock()
+	p.execution(context.Background()).Reconcile()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sent := 0
+	for _, r := range b.calls {
+		if r["op"] != "reconcile" && r["op"] != "sync" {
+			continue
+		}
+		sent++
+		text := string(encoded(r))
+		for _, old := range []string{"10100", "10.200.1.10", "boxapp.alice.winlab.tw"} {
+			if strings.Contains(text, old) {
+				t.Fatalf("%s still names %q of the deleted machine: %s", r["op"], old, text)
+			}
+		}
+	}
+	if sent < 2 {
+		t.Fatalf("expected a node and a gateway request, saw %d", sent)
 	}
 }

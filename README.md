@@ -163,6 +163,13 @@ The key is copied at creation. Removing it on the portal later does not remove i
 that already exist, and in a group tenant it reaches the tenant's machines through the jump host,
 as an inline key does.
 
+With the lab SSH CA set (`ssh_user_ca`, below), every new VM and CT also trusts a lab certificate
+that names its creator: run `step ssh login --provisioner winlab` once a day (the `lab-ssh` skill in
+`nycu-winlab/marketplace` automates it) and ssh in with no key on the machine. The keys above still
+work. The machine's `/etc/ssh/principals/<login user>` lists who may log in with a certificate,
+one Keycloak username per line; Carrel writes it at creation and will manage it later, so edit it
+knowing a later Carrel change may rewrite it.
+
 ### Shared machines in a group tenant
 
 A machine trusts only its creator's key at first. To let every member of the tenant in, the owner
@@ -585,6 +592,52 @@ The URL is https, and is a portal SSH service's route (a portal admin makes the 
 the file holds its read key, mode 600. carrel asks for one username at a time, the caller's own,
 when the call arrives, and keeps the key type and key only. Without these two settings nothing
 changes.
+
+### Lab SSH CA
+
+With `ssh_user_ca` in `config.json`, every new VM and CT trusts SSH user certificates from the
+lab CA (`https://ca.winlab.tw`) for its creator:
+
+```json
+"ssh_user_ca": "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2eUS00sJeJA9ebfrquCmA8reWrgdWSL4yGkfm4bKEuRyPmVJoM72JdUwzhH/v3VWkAkfPQ6sxMtzgruck="
+```
+
+The value is one public key with no comment (`public/ssh_user_ca.pub` in `NYCU-WinLab/pki`).
+carrel takes the caller's Keycloak `preferred_username` when the call arrives; a caller cannot
+name another. In a project tenant (`winlab-projects/<name>`) the principal is `project:<name>`
+instead, so every current member of that Keycloak group logs in: the portal puts
+`project:<name>` in a member's certificate for each such group. Someone who leaves the group keeps
+access until their certificate expires (at most 24 hours). A VM gets `/etc/ssh/ssh_user_ca.pub`, `/etc/ssh/sshd_config.d/50-carrel-user-ca.conf`
+(`TrustedUserCAKeys` and `AuthorizedPrincipalsFile /etc/ssh/principals/%u`) and
+`/etc/ssh/principals/user` through cloud-init, before sshd first starts; a CT gets the same files
+for `root` at creation. ISO installs and images that serve their own ports get nothing. Existing
+machines are not changed. Without the setting nothing changes.
+
+`machine_access` lets the tenant name other members who may log in with a certificate: grant and
+revoke take portal usernames, and the machine's principals file becomes its own principal followed
+by the grants. A VM's guest reporter (`scripts/guest-report.py`) sends the file it has and writes the
+list Carrel answers, so a change lands within 15 seconds while the VM runs; a CT's node pushes the
+file with `pct push` when the grants change, so the CT must be running. The machine record keeps
+`ca_sync` (`pull` or `push`); a machine created before it has no puller, and the tool says so instead
+of saving a grant it cannot apply. `machine_get` shows the list and whether the machine has it
+(`lab_ca.applied`). A grant needs no new certificate (the username is in every member's), hand
+edits of the principals file are replaced on the next change, and on a CT a grant logs in as root.
+
+The jump host takes the same certificates on its own user, `ca`, so a member needs no saved key:
+`ssh -J ca@carrel.winlab.tw user@<address>` (`ssh_jump_certificate` in `machine_get`). `jump@` keeps
+taking only keys. A separate user, because the client offers the certificate from `step ssh login`
+before its keys and sshd uses the first line that matches: on `jump@` a certificate line would shut a
+member out of service ports and teammates' machines that their keys open. Carrel sends the jump host
+a map from each principal to port 22 of the machines whose principals file names it (`op: certs` to
+`scripts/jump-sync.py`, kept in `/etc/carrel-jump/certs.json`), with every reconcile and right after
+`machine_access`, so `ca@` reaches exactly the machines that let the certificate log in. sshd runs
+`scripts/jump-cert.py` as its `AuthorizedKeysCommand`: for a user certificate offered to `ca` it
+prints one line that forwards to every machine any of the certificate's principals opens. One line,
+because sshd uses only the first line that matches. sshd still checks the signature, the validity
+period and the principal itself. `configure-nodes.py` installs the script, the user and the sshd
+file; a jump host without them keeps taking keys, and the reconcile reports `keys_only`. Without a CA
+the map goes as null and the jump host drops it; a map no control plane has refreshed for 30 minutes
+(Carrel rolled back or stopped) admits no certificate.
 
 ### Telemetry
 

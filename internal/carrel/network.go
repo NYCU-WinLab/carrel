@@ -418,6 +418,7 @@ func (e *Execution) Reconcile() D {
 	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants", "delegated_names")}
 	nodes := e.P.Nodes()
 	result := D{"node": e.Call(request, nodes[0].Target)}
+	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.
 	var held map[string]any
@@ -429,13 +430,16 @@ func (e *Execution) Reconcile() D {
 		gatewayFailure = attempt(func() { held = e.SyncGateway(state) })
 	}()
 	var jump any
-	if e.jumpEnabled() {
+	if e.jumpEnabled() && !e.deferJump {
 		// Store reads stay on this goroutine; only the request runs beside.
-		keys := jumpAuthorizedKeys(e.S)
+		// jumpMu is taken before the read and released after the send, so an
+		// older map cannot follow a newer one (syncJumpNow).
+		keys, certs := e.lockJumpState()
 		gatewayDone.Add(1)
 		go func() {
 			defer gatewayDone.Done()
-			jump = e.SyncJump(keys)
+			defer e.P.jumpMu.Unlock()
+			jump = e.SyncJump(keys, certs)
 		}()
 	}
 	if len(nodes) > 1 {

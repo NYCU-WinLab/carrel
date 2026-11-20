@@ -41,12 +41,22 @@ type Config struct {
 	PortalKeysURL       string `json:"portal_keys_url,omitempty"`
 	PortalKeysTokenFile string `json:"portal_keys_token_file,omitempty"`
 
+	// SSHUserCA is the lab SSH user CA public key, one authorized_keys line
+	// (ca.winlab.tw). Set: every new VM and CT also trusts certificates it
+	// signs for the creator's Keycloak username. Empty: keys only.
+	SSHUserCA string `json:"ssh_user_ca,omitempty"`
+
 	// TelemetryURL is an OTLP/HTTP collector, e.g. https://sensorium.zyx.tw:
 	// WARN and ERROR log records and each node's capacity go to its
 	// /v1/logs and /v1/metrics. TelemetryTokenFile holds the bearer token.
 	// Empty: nothing leaves the control plane.
 	TelemetryURL       string `json:"telemetry_url,omitempty"`
 	TelemetryTokenFile string `json:"telemetry_token_file,omitempty"`
+
+	// IPv6Prefix is the site's tenant pool (issue #142, sites/<site>/cluster.json
+	// ipv6.tenants, by default the first /48 of ipv6.prefix). Empty: machines
+	// have IPv4 only and machine_create refuses ipv6.
+	IPv6Prefix string `json:"ipv6_prefix,omitempty"`
 
 	HostedRedirects []string `json:"hosted_redirects,omitempty"`
 	SSHJump         bool     `json:"ssh_jump,omitempty"`
@@ -162,6 +172,11 @@ func (c Config) Validate() error {
 	if c.OriginHost() == "" {
 		return errors.New("origin is required")
 	}
+	if c.IPv6Prefix != "" {
+		if _, err := ipv6Prefix(c.IPv6Prefix); err != nil {
+			return err
+		}
+	}
 	if c.Database == "" {
 		return errors.New("database is required")
 	}
@@ -177,6 +192,9 @@ func (c Config) Validate() error {
 		if c.PortalKeysTokenFile == "" {
 			return errors.New("portal_keys_url needs portal_keys_token_file")
 		}
+	}
+	if c.SSHUserCA != "" && !sshUserCA.MatchString(c.SSHUserCA) {
+		return errors.New("ssh_user_ca must be one SSH public key: type and base64, no comment")
 	}
 	if c.TelemetryURL != "" {
 		// https only: every request carries the write token.

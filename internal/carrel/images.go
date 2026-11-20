@@ -346,6 +346,9 @@ func (e *Execution) ISOMachineSpec(t, a D) D {
 		fail("invalid", "A TPM needs firmware uefi")
 	}
 	spec := merge(obj(obj(Contract["sizes"])[textAt(a, "size", "small")]), pick(a, "cpu", "memory_mb", "disk_gb"))
+	if boolean(a["ipv6"]) {
+		fail("invalid", "A machine installed from an ISO configures its own network; ipv6 applies to images", D{"recovery": "revise_request"})
+	}
 	m := merge(spec, D{"name": a["name"], "kind": "vm", "image": "tenant:iso:" + r.Name, "iso": r.Name, "iso_volume": r.Volume, "firmware": firmware, "tpm": boolean(a["tpm"]), "ssh_keys": []any{}, "nested_virt": boolean(a["nested_virt"]), "swap_mb": 0, "packages": []any{}, "runcmd": []any{}, "health_checks": []any{}, "network_access": textAt(a, "network_access", "tenant"), "guest_management": 0, "nics": []D{}})
 	if a["public_ssh"] == false {
 		if !e.jumpEnabled() {

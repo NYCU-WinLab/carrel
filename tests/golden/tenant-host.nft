@@ -1,0 +1,25 @@
+add table inet carrel_tenant_host
+flush table inet carrel_tenant_host
+table inet carrel_tenant_host {
+ chain input {
+  type filter hook input priority -25; policy accept;
+  iifname "vmbr98" ip saddr { 10.200.0.2, 10.200.0.3 } accept
+  # Answers to the node's own connections, such as its public address
+  # forwarded to a tenant port (issue #48); nothing new from tenants.
+  ip saddr 10.200.0.0/16 ct direction reply ct state established accept
+  ip saddr 10.200.0.0/16 counter drop
+  iifname { "t0*", "t1*", "t2*", "t3*", "t4*", "t5*", "t6*", "t7*", "t8*", "t9*", "tap*" } counter drop
+  iifname "vrf_tenants" counter drop
+  iifname "vmbr0" ip saddr { 192.168.19.102, 192.168.19.103 } ip daddr 192.168.19.101 udp dport 4789 accept
+  iifname "vmbr0" ip saddr { 192.168.19.102, 192.168.19.103 } ip daddr 192.168.19.101 tcp dport 179 accept
+  udp dport 4789 counter drop
+  tcp dport 179 counter drop
+ }
+ chain forward {
+  type filter hook forward priority mangle; policy accept;
+  # Tenant and infra links run at 1450 (VXLAN). A guest NIC that comes up at
+  # 1500 (ifupdown2 in a CT, Docker in a VM) advertises MSS 1460 and its
+  # peers' full segments are dropped: clamp every forwarded SYN, both ways.
+  tcp flags syn / syn,rst tcp option maxseg size > 1410 tcp option maxseg size set 1410
+ }
+}

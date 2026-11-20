@@ -299,3 +299,16 @@ func TestOriginPairReportsAnUnreadableCertificateAsFailure(t *testing.T) {
 		}
 	}
 }
+
+// A store read failure is an infrastructure Failure for every caller of Rows (#319).
+func TestStoreRowsReportsReadFailureAsFailure(t *testing.T) {
+	s, e := OpenStore(":memory:")
+	must(e)
+	f, ok := attempt(func() { s.Rows("SELECT * FROM no_such_table") }).(Failure)
+	if !ok {
+		t.Fatal("a failed read was not a Failure")
+	}
+	if e := obj(f.Result["error"]); e["code"] != "backend_unavailable" || e["recovery"] != "retry_infrastructure" || str(e["message"]) != "The store could not be read" {
+		t.Fatalf("unexpected failure: %v", f.Result)
+	}
+}

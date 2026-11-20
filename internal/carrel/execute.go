@@ -18,6 +18,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 	}()
 	validateBootstrapArguments(tool, a)
 	a = e.withPortalKeys(tool, a, w)
+	a = e.withCAPrincipal(tool, a, w)
 	if named("async_tools", tool) && !boolean(a["dry_run"]) {
 		var t D
 		if named("admin_tools", tool) {
@@ -249,6 +250,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.Media(e.Machine(t, a["machine"]), a, t)
 	case "machine_rename":
 		return e.RenameMachine(a, t)
+	case "machine_access":
+		return e.MachineAccess(a, w, t)
 	case "machine_console_url":
 		return e.ConsoleURL(a, w, t)
 	case "network_create", "network_list", "network_delete", "machine_nic_attach", "machine_nic_detach", "port_open", "port_list", "port_close", "peer_allow", "peer_list", "peer_revoke", "vip_add", "vip_list", "vip_remove":
@@ -353,6 +356,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		}
 		request = merge(request, spec, D{"action": "resize"})
 	}
+	reconcileFailed := false
 	if !dry {
 		if tool == "machine_resize" {
 			m["resize_from"] = fallback(m, "resize_from", pick(m, "cpu", "memory_mb", "disk_gb"))
@@ -385,13 +389,19 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 				if _, ok := problem.(Failure); ok {
 					slog.Warn("delete_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
 					problem = nil
+					reconcileFailed = true
 				} else {
 					slog.Error("delete_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
 				}
 			}
 			e.removeMachineRecord(n, m)
 			if problem != nil {
-				panic(problem)
+				// The VM and record are gone: say so, instead of the generic
+				// "allocation retained" failure.
+				if e.Op != nil {
+					e.Op["resource_changes"] = true
+				}
+				fail("internal", "The machine was deleted, but the follow-up reconcile hit an internal error; the next reconcile pass will catch up", D{"recovery": "contact_administrator"})
 			}
 		case "machine_resize":
 			previous := obj(m["resize_from"])
@@ -409,6 +419,9 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 	if !dry {
 		if tool == "machine_delete" {
 			r["deleted"] = D{"name": m["name"], "state": "deleted"}
+			if reconcileFailed {
+				r["warnings"] = []D{{"code": "reconcile_failed", "message": "the machine is deleted, but the follow-up reconcile failed; the next reconcile pass will catch up"}}
+			}
 		} else if tool == "machine_resize" {
 			r["machine"] = e.PublicMachine(m, e.ports(n))
 			r["configuration"] = "allocated; see machine.resize for guest verification and required owner actions"
@@ -439,5 +452,10 @@ func (e *Execution) capabilities() D {
 	c["machine_freeze"] = e.P.Config.BackupStorage != ""
 	// Public addresses per machine (issue #91): how many the pool has free.
 	c["public_ips"] = D{"offered": len(e.publicPool()) > 0, "free": len(e.freePublicIPs())}
+	// Routed IPv6 per machine (issue #142): machine_create ipv6=true. Shown
+	// only where the site has it, so other sites answer as before.
+	if e.P.Config.IPv6Prefix != "" {
+		c["ipv6"] = true
+	}
 	return c
 }

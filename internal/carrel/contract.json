@@ -136,6 +136,11 @@
           "nested_virt": {
             "type": "boolean"
           },
+          "ipv6": {
+            "type": "boolean",
+            "default": false,
+            "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH (unless public_ssh=false) and the machine's open ports; other tenants cannot reach it. Set at creation."
+          },
           "network_access": {
             "enum": [
               "tenant",
@@ -612,6 +617,56 @@
           "machine",
           "name",
           "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "machine_access",
+      "description": "Who else may log in to one of your machines with a lab certificate (step ssh login on ca.winlab.tw). grant and revoke take portal usernames; with neither, it shows the current list. The machine's own principal (its creator, or the project group in a project tenant) stays. A VM picks up a change within 15 seconds while it runs; a CT must be running and takes it at once. On a CT a grant logs in as root. Existing logins stay open; the next login uses the new list. A grant does not need a new certificate. Machines created before this tool, ISO installs and images with their own ports are not supported: the result says so.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "grant": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "maxItems": 20,
+            "description": "Portal usernames to let in."
+          },
+          "revoke": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "maxItems": 50,
+            "description": "Portal usernames to remove."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded)."
+          }
+        },
+        "required": [
+          "machine"
         ],
         "additionalProperties": false
       },
@@ -4285,6 +4340,11 @@
                 "nested_virt": {
                   "type": "boolean"
                 },
+                "ipv6": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH (unless public_ssh=false) and the machine's open ports; other tenants cannot reach it. Set at creation."
+                },
                 "network_access": {
                   "enum": [
                     "tenant",
@@ -4645,6 +4705,11 @@
                 },
                 "nested_virt": {
                   "type": "boolean"
+                },
+                "ipv6": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Give the machine a public IPv6 address from its tenant's /64, routed without NAT, where the site has IPv6 (catalog_get). Inbound from the internet is SSH (unless public_ssh=false) and the machine's open ports; other tenants cannot reach it. Set at creation."
                 },
                 "network_access": {
                   "enum": [
@@ -5075,6 +5140,7 @@
     "machine_power",
     "machine_resize",
     "machine_rename",
+    "machine_access",
     "machine_media",
     "machine_metrics",
     "machine_console_url",
@@ -5205,6 +5271,7 @@
     "machine_nic_detach",
     "machine_power",
     "machine_rename",
+    "machine_access",
     "machine_resize",
     "machine_thaw",
     "network_create",

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAdapterFailureIsBoundedAndCorrelated(t *testing.T) {
@@ -37,5 +38,24 @@ func TestShutdownCancellationLogsBelowWarn(t *testing.T) {
 	}
 	if levelUnlessStopping(cancelled, slog.LevelError) != slog.LevelInfo || levelUnlessStopping(cancelled, slog.LevelWarn) != slog.LevelInfo {
 		t.Fatal("cancelled context must log at INFO")
+	}
+}
+
+func TestAHungJumpHostCallReturnsAfterTheShortJumpTimeout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	old := jumpTimeout
+	jumpTimeout = 200 * time.Millisecond
+	defer func() { jumpTimeout = old }()
+	started := time.Now()
+	_, err := (&SSHBackend{Config: "/dev/null"}).Call(context.Background(), D{"op": "certs"}, jumpTarget)
+	if err == nil {
+		t.Fatal("a hung jump call must fail")
+	}
+	if time.Since(started) > 5*time.Second {
+		t.Fatalf("jump call took %s", time.Since(started))
 	}
 }

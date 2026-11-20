@@ -32,11 +32,12 @@ var (
 	portalKey = regexp.MustCompile(`^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+) [A-Za-z0-9+/=]+`)
 )
 
-// withoutPortalKeys drops portal_keys from a call's arguments. It is not an
-// argument a caller may send, and it stays out of an operation's fingerprint
-// so a retried submission matches after the member changed their key.
+// withoutPortalKeys drops portal_keys and ca_principal from a call's
+// arguments. Neither is an argument a caller may send, and both stay out of
+// an operation's fingerprint so a retried submission matches after the
+// member changed their key.
 func withoutPortalKeys(a D) D {
-	out := without(a, "portal_keys")
+	out := without(a, "portal_keys", "ca_principal")
 	list, ok := a["machines"].([]any)
 	if !ok {
 		return out
@@ -44,7 +45,7 @@ func withoutPortalKeys(a D) D {
 	machines := make([]any, len(list))
 	for i, m := range list {
 		if d, ok := m.(D); ok {
-			m = without(d, "portal_keys")
+			m = without(d, "portal_keys", "ca_principal")
 		}
 		machines[i] = m
 	}
