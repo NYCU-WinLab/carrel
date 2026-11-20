@@ -81,6 +81,7 @@ type Platform struct {
 	jumpQueueMu        sync.Mutex
 	jumpPending        bool
 	jumpRunning        bool
+	jumpClosed         bool
 	reports            map[int]chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
