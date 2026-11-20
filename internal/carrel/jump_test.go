@@ -943,3 +943,72 @@ func TestAHeldGenOutsideTheExactIntegerRangeIsIgnored(t *testing.T) {
 		t.Fatal(p.jumpGen)
 	}
 }
+
+func TestTheResendStopsAfterMaxJumpResendsAndReleasesJumpMu(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	held := time.Now().UnixMicro() + 1_000_000_000
+	// The jump host keeps holding a floor above whatever was sent.
+	b.call = func(r D, target string) (any, error) {
+		if target == jumpTarget && r["op"] == "certs" {
+			held = r["gen"].(int64) + 1_000
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
+		}
+		return D{"changed": true}, nil
+	}
+	p.execution(context.Background()).syncJumpNow()
+	waitJumpIdle(t, p)
+	p.jumpQueueMu.Lock()
+	last := p.jumpLast
+	p.jumpQueueMu.Unlock()
+	if last != "keys_only" {
+		t.Fatalf("last = %q", last)
+	}
+	ops, gens := jumpGens(b)
+	if want := 2 * (1 + maxJumpResends); len(ops) != want {
+		t.Fatal(len(ops), want, ops, gens)
+	}
+	if !p.jumpMu.TryLock() {
+		t.Fatal("jumpMu is still held")
+	}
+	p.jumpMu.Unlock()
+}
+
+func TestTheResendStopsWhenItsTimeBudgetIsSpent(t *testing.T) {
+	p, b := fixture(t)
+	old := jumpResendBudget
+	jumpResendBudget = 20 * time.Millisecond
+	defer func() { jumpResendBudget = old }()
+	b.call = func(r D, _ string) (any, error) {
+		time.Sleep(30 * time.Millisecond)
+		return D{"changed": false, "stale": true, "held": float64(r["gen"].(int64) + 5)}, nil
+	}
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	defer p.jumpMu.Unlock()
+	if r := e.syncJumpResending("", nil, 1); r != "stale" {
+		t.Fatal(r)
+	}
+	if ops, _ := jumpGens(b); len(ops) != 1 {
+		t.Fatal(ops)
+	}
+}
+
+func TestNoGenAtOrAbove2To53IsSent(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	if r := e.SyncJump("", nil, maxJumpGen); r != "unavailable" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Lock()
+	defer p.jumpMu.Unlock()
+	p.jumpGen = maxJumpGen - 2
+	b.call = func(r D, _ string) (any, error) {
+		return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
+	}
+	// The refusal lifts jumpGen to 2^53-1; one more would be 2^53, so no resend.
+	e.syncJumpResending("", nil, maxJumpGen-3)
+	if _, gens := jumpGens(b); len(gens) != 1 {
+		t.Fatal(gens)
+	}
+}

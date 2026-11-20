@@ -7,7 +7,7 @@ JSON request on stdin: {"op": "sync", "authorized": text}, {"op": "certs",
 {"op": "status"}. Every line must forward only to tenant machines: port 22
 (issue #98), or a port a machine without SSH declares (issue #94), which its
 firewall admits.
-Both writes take a non-negative integer "gen"; a write older than the last one accepted
+Both writes take an integer "gen" in [0, 2^53); a write older than the last one accepted
 for that file is refused with {"changed": false, "stale": true}. Until a file has a
 recorded generation the "gen" may be left out (deploy order, issue #371); after that an
 unversioned write is refused, and so is a write when the recorded generation is unreadable. The certificate map lets jump-cert.py forward a lab
@@ -26,6 +26,8 @@ from pathlib import Path
 KEYS = Path("/etc/carrel-jump/jump")
 CERTS = Path("/etc/carrel-jump/certs.json")
 STATE = Path("/var/lib/carrel-jump")
+# Generations live in [0, 2^53), the range the control plane's JSON doubles hold exactly.
+MAX_GEN = 2**53
 ADDRESS = r"10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d)"
 TARGET = r'permitopen="10\.200\.(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])\.(?:[1-9]\d|10\d):(?:[1-9]\d{0,3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d\d|655[0-2]\d|6553[0-5])"'
 LINE = re.compile(
@@ -78,8 +80,8 @@ def stale(name, gen):
     path = STATE / name
     try:
         held = int(path.read_text())
-        if held < 0:
-            raise ValueError("negative generation")
+        if not 0 <= held < MAX_GEN:
+            raise ValueError("generation out of range")
     except FileNotFoundError:
         held = None
     except ValueError as e:
@@ -105,7 +107,7 @@ def main():
     gen = None
     if op in ("sync", "certs") and "gen" in request:
         gen = request.pop("gen")
-        if type(gen) is not int or gen < 0:
+        if type(gen) is not int or not 0 <= gen < MAX_GEN:
             raise ValueError("expected an integer generation")
     STATE.mkdir(parents=True, exist_ok=True)
     if op == "status" and not request:
