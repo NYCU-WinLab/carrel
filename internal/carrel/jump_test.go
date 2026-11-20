@@ -221,3 +221,24 @@ func TestAnOlderJumpSyncCannotFollowARevoke(t *testing.T) {
 		t.Fatalf("revoked grant came back: %#v", lastCerts)
 	}
 }
+
+func TestAFailedJumpReadDoesNotBlockLaterJumpSyncs(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.SSHJump = true
+	b.call = func(r D, target string) (any, error) { return D{}, nil }
+	seedMachine(p, "web", 10100)
+	// A broken keys row makes the reconcile's jump read panic.
+	p.Store.Exec("INSERT INTO objects VALUES('keys','1-bad',1,'{not json')")
+	e := p.execution(context.Background())
+	if attempt(func() { e.Reconcile() }) == nil {
+		t.Fatal("the broken keys row did not fail the reconcile")
+	}
+	p.Store.Remove("keys", "1-bad")
+	done := make(chan struct{})
+	go func() { e.syncJumpNow(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("syncJumpNow is still blocked on jumpMu after a failed reconcile")
+	}
+}
