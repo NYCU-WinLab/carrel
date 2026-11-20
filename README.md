@@ -639,6 +639,18 @@ file; a jump host without them keeps taking keys, and the reconcile reports `key
 the map goes as null and the jump host drops it; a map no control plane has refreshed for 30 minutes
 (Carrel rolled back or stopped) admits no certificate.
 
+Repairing a damaged jump sidecar: `jump-sync.py` keeps the last accepted generation of each write in
+`/var/lib/carrel-jump/keys.gen` (the `sync` op) and `/var/lib/carrel-jump/certs.gen` (the `certs` op),
+each one decimal integer and a newline. A file that is not an integer in [0, 2^53) makes that write
+fail with `adapter_internal` ("unreadable generation file") on purpose, so a damaged file cannot
+reset the stale-write guard. To repair it, on the jump host as root, write a valid integer into the
+file and never delete it, because a missing file drops the guard. Use the last known good value, or
+the current clock in microseconds, which is never below what Carrel sends and always in range:
+`echo $(( $(date +%s) * 1000000 )) > /var/lib/carrel-jump/keys.gen` (same for `certs.gen`). Do not
+pick a value above the clock, or the jump host refuses Carrel's writes as stale until the clock
+catches up. No control plane restart is needed: the next reconcile sends a generation in range and
+the writes are accepted again. Check with `{"op": "status"}` or the next reconcile result.
+
 ### Telemetry
 
 With `telemetry_url` and `telemetry_token_file` in `config.json`, the control plane sends its WARN
