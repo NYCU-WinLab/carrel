@@ -535,6 +535,10 @@ func TestKeyToolsReportAPendingJumpSyncWithoutWaiting(t *testing.T) {
 	// Once the host took the change, the field is gone.
 	r = app.Call(context.Background(), "ssh_key_remove", D{"tenant": "shared", "id": r["id"]}, alice)
 	assertOK(t, r)
+	// The worker may already have finished: pending or absent, never a failure.
+	if got := r["jump"]; got != nil && got != "pending" {
+		t.Fatalf("jump = %v: %s", got, encoded(r))
+	}
 	waitJumpIdle(t, p)
 	p.jumpQueueMu.Lock()
 	last := p.jumpLast
@@ -878,5 +882,23 @@ func TestAReconcileSendsOneGenAboveAnAheadCounter(t *testing.T) {
 	ops, gens := jumpGens(b)
 	if fmt.Sprint(ops) != "[sync certs]" || gens[0] != float64(ahead+1) || gens[1] != gens[0] {
 		t.Fatal(ops, gens, ahead)
+	}
+}
+
+func TestAnUnusableJumpAcknowledgmentIsNotReportedAsSynced(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	for _, bad := range []any{nil, "ok", []any{}} {
+		for op, want := range map[string]string{"sync": "unavailable", "certs": "keys_only"} {
+			b.call = func(r D, _ string) (any, error) {
+				if r["op"] == op {
+					return bad, nil
+				}
+				return D{"changed": true}, nil
+			}
+			if r := e.SyncJump("", nil, 1); r != want {
+				t.Fatalf("%s %v: %s", op, bad, r)
+			}
+		}
 	}
 }

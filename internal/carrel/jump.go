@@ -269,7 +269,7 @@ func (p *Platform) jumpWorker() {
 		}
 		p.jumpPending = false
 		p.jumpQueueMu.Unlock()
-		var outcome any = "unavailable"
+		outcome := "unavailable"
 		if f := attempt(func() {
 			keys, certs, gen := e.lockJumpState()
 			defer p.jumpMu.Unlock()
@@ -286,7 +286,7 @@ func (p *Platform) jumpWorker() {
 			slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		}
 		p.jumpQueueMu.Lock()
-		p.jumpLast, _ = outcome.(string)
+		p.jumpLast = outcome
 		retry := false
 		if p.jumpRetry {
 			if p.jumpLast == "synced" {
@@ -318,7 +318,7 @@ func (p *Platform) jumpWorker() {
 // refuse a write older than the one it holds; a refused keys write reports
 // "stale" and a refused certs write "keys_only". A jump host that cannot be reached costs
 // members only that path, so it does not fail the reconcile.
-func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
+func (e *Execution) SyncJump(keys string, certs D, gen int64) string {
 	var res any
 	if f := attempt(func() { res = e.Call(D{"op": "sync", "authorized": keys, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
@@ -328,6 +328,11 @@ func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
 	// holds a generation ahead of ours (a clock stepped back, or a lost
 	// state): the old keys stay, which is an error. The worker resends
 	// above the held one.
+	if _, ok := res.(map[string]any); !ok {
+		// No acknowledgment object: the host did not confirm the keys.
+		slog.Error("jump_sync_unusable", "event", "jump_sync_unusable")
+		return "unavailable"
+	}
 	if obj(res)["stale"] == true {
 		e.raiseJumpGen(res)
 		slog.Error("jump_sync_stale", "event", "jump_sync_stale", "gen", gen)
@@ -335,6 +340,10 @@ func (e *Execution) SyncJump(keys string, certs D, gen int64) any {
 	}
 	if f := attempt(func() { res = e.Call(D{"op": "certs", "certs": certs, "gen": gen}, jumpTarget) }); f != nil {
 		slog.Error("jump_certs_failed", "event", "jump_certs_failed")
+		return "keys_only"
+	}
+	if _, ok := res.(map[string]any); !ok {
+		slog.Error("jump_certs_unusable", "event", "jump_certs_unusable")
 		return "keys_only"
 	}
 	if obj(res)["stale"] == true {
