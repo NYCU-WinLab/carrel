@@ -195,11 +195,11 @@ func (p *Platform) jumpWorker() {
 // for a while (jump-cert.py). A jump host that cannot be reached costs
 // members only that path, so it does not fail the reconcile.
 func (e *Execution) SyncJump(keys string, certs D) any {
-	if f := attempt(func() { e.Call(D{"op": "sync", "authorized": keys}, "carrel-jump") }); f != nil {
+	if f := attempt(func() { e.Call(D{"op": "sync", "authorized": keys}, jumpTarget) }); f != nil {
 		slog.Error("jump_sync_failed", "event", "jump_sync_failed")
 		return "unavailable"
 	}
-	if f := attempt(func() { e.Call(D{"op": "certs", "certs": certs}, "carrel-jump") }); f != nil {
+	if f := attempt(func() { e.Call(D{"op": "certs", "certs": certs}, jumpTarget) }); f != nil {
 		slog.Error("jump_certs_failed", "event", "jump_certs_failed")
 		return "keys_only"
 	}
