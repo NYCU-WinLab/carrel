@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -241,5 +242,35 @@ func TestBackfillSkipsABusyMachine(t *testing.T) {
 	assertOK(t, r)
 	if dicts(r["machines"])[0]["result"] != "skipped" || b.count("ca_backfill") != 0 || storedMachine(p, 10200)["ssh_user_ca"] != nil {
 		t.Fatalf("busy: %s", encoded(r))
+	}
+}
+
+func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	ctx, admin := context.Background(), person("root", true)
+	tenant := p.Store.Register("user:alex-sub", "alex-smith")
+	m := seedMachine(p, "old2", 10202)
+	m["tenant_n"] = tenant["n"]
+	p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id='10202'", tenant["n"], string(encoded(m)))
+	run := func(owner string, dry bool) D {
+		r := app.Call(ctx, "machine_ca_backfill", D{"tenant": "alex-smith", "machine": "old2", "owner": owner, "dry_run": dry}, admin)
+		assertOK(t, r)
+		return dicts(r["machines"])[0]
+	}
+	// No record: the slug check alone decides, so both spellings pass.
+	if got := run("alex_smith", true); got["result"] != "would_backfill" {
+		t.Fatalf("slug fallback: %s", encoded(got))
+	}
+	// A key saved by alex.smith is the record.
+	p.Store.Put("keys", "k1", integer(tenant["n"]), D{"id": "k1", "key": userCATestKey, "by": "alex.smith"})
+	if got := run("alex_smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "alex.smith") || b.count("ca_backfill") != 0 {
+		t.Fatalf("mismatch: %s", encoded(got))
+	}
+	got := run("alex.smith", true)
+	if got["result"] != "would_backfill" || !strings.Contains(str(got["message"]), "alex.smith") {
+		t.Fatalf("exact match: %s", encoded(got))
+	}
+	if got := run("alex.smith", false); got["result"] != "backfilled" {
+		t.Fatalf("backfill: %s", encoded(got))
 	}
 }

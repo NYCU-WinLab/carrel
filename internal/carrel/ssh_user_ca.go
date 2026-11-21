@@ -141,9 +141,22 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 	}
 	// The slug of a personal tenant is derived from its owner's username at
 	// registration, so a mismatch is a wrong tenant or a typo: refuse it
-	// rather than let another member in. An aliased tenant cannot pass yet.
-	if principal == owner && (!strings.HasPrefix(str(t["subject"]), "user:") || normalizeSlug(owner) != str(t["slug"])) {
-		return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"])
+	// rather than let another member in. Usernames that differ only in . _ -
+	// share a slug, so a lossless record, when the tenant has one, decides.
+	// An aliased tenant cannot pass yet.
+	checked := ""
+	if principal == owner {
+		if !strings.HasPrefix(str(t["subject"]), "user:") || normalizeSlug(owner) != str(t["slug"]) {
+			return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"])
+		}
+		if recorded := e.recordedUsernames(t); len(recorded) > 0 {
+			if !contains(recorded, owner) {
+				return "skipped", "owner " + owner + " does not match the usernames recorded for personal tenant " + str(t["slug"]) + " (" + strings.Join(recorded, ", ") + ")"
+			}
+			checked = "; owner checked against recorded usernames " + strings.Join(recorded, ", ")
+		} else {
+			checked = "; owner checked against the tenant slug only, no username record"
+		}
 	}
 	var status string
 	if err := attempt(func() { status = powerState(obj(e.Call(D{"op": "status", "machine": m}))) }); err != nil {
@@ -153,7 +166,7 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 		return "skipped", "The VM is " + status + "; stop it first"
 	}
 	if dry {
-		return "would_backfill", "Would trust principal " + principal
+		return "would_backfill", "Would trust principal " + principal + checked
 	}
 	planned := merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull"})
 	if err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) }); err != nil {
@@ -166,10 +179,36 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 			message = "The record changed meanwhile; nothing saved"
 			return
 		}
-		tx.S.Put("machines", vmid, n, merge(cur, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull"}))
+		tx.S.Put("machines", vmid, n, merge(cur, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull", "ca_backfilled": true}))
 	})
 	if message != "" {
 		return "failed", message
 	}
-	return "backfilled", "Trusts principal " + principal
+	return "backfilled", "Trusts principal " + principal + checked
+}
+
+// recordedUsernames are the lossless portal usernames a tenant recorded: the
+// by of its saved keys and the ca_principals of its VMs created with the CA.
+// A backfilled VM is left out, its principal came from a caller's say-so.
+func (e *Execution) recordedUsernames(t D) []string {
+	n, seen, out := integer(t["n"]), map[string]bool{}, []string{}
+	add := func(name string) {
+		if portalUsername.MatchString(name) && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	for _, k := range rowsOf[sshKey](e.S, "keys", n) {
+		add(k.By)
+	}
+	for _, m := range e.S.Objects("machines", n) {
+		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) {
+			continue
+		}
+		for _, p := range arr(m["ca_principals"]) {
+			add(str(p))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
