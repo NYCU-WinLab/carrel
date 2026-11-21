@@ -292,3 +292,36 @@ func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
 		t.Fatalf("backfill: %s", encoded(got))
 	}
 }
+
+func TestBackfillAliasConfirmed(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	ctx, admin := context.Background(), person("root", true)
+	tenant := p.Store.Register("user:chen-sub", "ta-chen")
+	m := seedMachine(p, "old3", 10203)
+	m["tenant_n"] = tenant["n"]
+	p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id='10203'", tenant["n"], string(encoded(m)))
+	run := func(owner string, alias bool) D {
+		a := D{"tenant": "ta-chen", "machine": "old3", "owner": owner}
+		if alias {
+			a["alias_confirmed"] = true
+		}
+		r := app.Call(ctx, "machine_ca_backfill", a, admin)
+		assertOK(t, r)
+		return dicts(r["machines"])[0]
+	}
+	if got := run("chen", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "alias_confirmed") || b.count("ca_backfill") != 0 {
+		t.Fatalf("without the flag: %s", encoded(got))
+	}
+	// A record that contradicts owner refuses, flag or not.
+	p.Store.Put("keys", "k2", integer(tenant["n"]), D{"id": "k2", "key": userCATestKey, "by": "tachen"})
+	if got := run("chen", true); got["result"] != "skipped" || b.count("ca_backfill") != 0 {
+		t.Fatalf("contradicting record: %s", encoded(got))
+	}
+	p.Store.Remove("keys", "k2")
+	if got := run("chen", true); got["result"] != "backfilled" || !equal(storedMachine(p, 10203)["ca_principals"], []any{"chen"}) {
+		t.Fatalf("with the flag: %s", encoded(got))
+	}
+	// The flag needs tenant and owner.
+	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
+	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
+}
