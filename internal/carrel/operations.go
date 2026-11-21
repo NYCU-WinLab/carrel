@@ -292,12 +292,7 @@ func (o *Operations) apply(id string) {
 					e.WaitReady(m, previous)
 				}
 			}
-			e.PreparePublication()
-			e.PerformMigration()
-			e.PerformImport()
-			e.PerformFreeze()
-			e.PerformThaw()
-			e.PerformPlatformPower()
+			e.runPhases()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
