@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDefaultSelectionAcrossCreateAndDeployment(t *testing.T) {
@@ -82,4 +83,12 @@ func TestEightMachinesFitButTotalsAndPortsStillApply(t *testing.T) {
 		e.NetworkAction("port_open", D{"machine": "tiny-0", "port": port, "proto": "tcp"}, tenant)
 	}
 	assertCode(t, app.Call(ctx, "port_open", D{"machine": "tiny-0", "port": 8002, "proto": "tcp", "dry_run": true}, who), "quota_exceeded")
+}
+
+// Claude Code cuts server instructions at 4,079 characters and appends "[truncated]".
+func TestInstructionsFitClientLimit(t *testing.T) {
+	const limit = 4000
+	if n := utf8.RuneCountInString(str(Contract["instructions"])); n >= limit {
+		t.Fatalf("instructions are %d characters; keep them under %d so clients do not truncate them", n, limit)
+	}
 }

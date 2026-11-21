@@ -46,7 +46,11 @@ func (e *Execution) QuotaRequest(a, w, t D) D {
 		r = without(r, "id", "tenant_n", "actor", "created_at")
 		r["status"] = "planned"
 	}
-	return D{"request": without(r, "fingerprint", "idempotency_key"), "dry_run": dry, "quota_after": e.Quota(t)}
+	out := D{"request": without(r, "fingerprint", "idempotency_key"), "dry_run": dry, "quota_after": e.Quota(t)}
+	if dry {
+		out["current_limit"] = obj(t["quota"])[str(a["dimension"])]
+	}
+	return out
 }
 
 func publicRequests(requests []D) []D {
