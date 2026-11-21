@@ -83,7 +83,10 @@ func (e *Execution) CABackfill(a, w D) D {
 	if ca == "" {
 		fail("invalid", "No SSH user CA is configured", D{"recovery": "resolve_prerequisite"})
 	}
-	owner := str(a["owner"])
+	owner, alias := str(a["owner"]), boolean(a["alias_confirmed"])
+	if alias && (a["tenant"] == nil || owner == "") {
+		fail("invalid", "alias_confirmed needs tenant and owner", D{"recovery": "revise_request"})
+	}
 	if owner != "" && (!portalUsername.MatchString(owner) || contains(caReserved, owner)) {
 		fail("invalid", "owner is a lab member's portal username", D{"recovery": "revise_request"})
 	}
@@ -105,7 +108,7 @@ func (e *Execution) CABackfill(a, w D) D {
 		}
 		sort.SliceStable(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
 		for _, m := range machines {
-			result, message := e.backfillOne(t, m, owner, ca, dry)
+			result, message := e.backfillOne(t, m, owner, ca, dry, alias)
 			results = append(results, D{"tenant": t["slug"], "machine": m["name"], "result": result, "message": message})
 		}
 	}
@@ -113,13 +116,13 @@ func (e *Execution) CABackfill(a, w D) D {
 	for _, r := range results {
 		counts[str(r["result"])] = integer(counts[str(r["result"])]) + 1
 	}
-	e.S.Log(str(w["sub"]), nil, "machine_ca_backfill", D{"counts": counts, "dry_run": dry}, "ok")
+	e.S.Log(str(w["sub"]), nil, "machine_ca_backfill", D{"counts": counts, "dry_run": dry, "alias_confirmed": alias}, "ok")
 	return D{"dry_run": dry, "counts": counts, "machines": results}
 }
 
 // backfillOne returns "backfilled" (or "would_backfill" on a dry run),
 // "skipped" or "failed", with the reason.
-func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, string) {
+func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (string, string) {
 	n, vmid := integer(t["n"]), m["vmid"]
 	switch {
 	case m["kind"] != "vm":
@@ -148,17 +151,24 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 	// registration, so a mismatch is a wrong tenant or a typo: refuse it
 	// rather than let another member in. Usernames that differ only in . _ -
 	// share a slug, so a lossless record, when the tenant has one, decides.
-	// An aliased tenant cannot pass yet.
+	// A tenant whose slug an administrator assigned fails the slug check;
+	// alias_confirmed lets the admin vouch for owner instead, and a recorded
+	// username that contradicts it still refuses.
 	checked := ""
 	if principal == owner {
-		if !strings.HasPrefix(str(t["subject"]), "user:") || normalizeSlug(owner) != str(t["slug"]) {
+		if !strings.HasPrefix(str(t["subject"]), "user:") {
 			return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"])
+		}
+		if normalizeSlug(owner) != str(t["slug"]) && !alias {
+			return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"]) + "; if an administrator assigned the slug, confirm with alias_confirmed"
 		}
 		if recorded := e.recordedUsernames(t); len(recorded) > 0 {
 			if !contains(recorded, owner) {
 				return "skipped", "owner " + owner + " does not match the usernames recorded for personal tenant " + str(t["slug"]) + " (" + strings.Join(recorded, ", ") + ")"
 			}
 			checked = "; owner checked against recorded usernames " + strings.Join(recorded, ", ")
+		} else if alias && normalizeSlug(owner) != str(t["slug"]) {
+			checked = "; owner confirmed by the administrator (alias_confirmed), no username record"
 		} else {
 			checked = "; owner checked against the tenant slug only, no username record"
 		}
@@ -193,8 +203,8 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 }
 
 // recordedUsernames are the lossless portal usernames a tenant recorded: the
-// by of its saved keys and the ca_principals of its VMs created with the CA.
-// A backfilled VM is left out, its principal came from a caller's say-so.
+// by of its saved keys and the ca_principals of its VMs created with the CA,
+// live or frozen. A backfilled VM is left out, its principal came from a caller's say-so.
 func (e *Execution) recordedUsernames(t D) []string {
 	n, seen, out := integer(t["n"]), map[string]bool{}, []string{}
 	add := func(name string) {
@@ -206,7 +216,7 @@ func (e *Execution) recordedUsernames(t D) []string {
 	for _, k := range rowsOf[sshKey](e.S, "keys", n) {
 		add(k.By)
 	}
-	for _, m := range e.S.Objects("machines", n) {
+	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
 		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) {
 			continue
 		}
