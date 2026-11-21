@@ -657,3 +657,26 @@ func TestCABackfillSchemaRequiresTenantAndOwnerWithAlias(t *testing.T) {
 		}
 	}
 }
+
+func TestBackfillSkipsMachinesDeletedDuringTheRun(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	seedMachine(p, "gone", 10202)
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" {
+			p.Store.Remove("machines", "10202")
+		}
+		return inner(r, target)
+	}
+	r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "owner": "alice"}, person("root", true))
+	assertOK(t, r)
+	var gone D
+	for _, m := range dicts(r["machines"]) {
+		if m["machine"] == "gone" {
+			gone = m
+		}
+	}
+	if gone == nil || gone["result"] != "skipped" || b.count("ca_backfill") != 1 {
+		t.Fatalf("deleted meanwhile: %s", encoded(r))
+	}
+}

@@ -127,8 +127,12 @@ func (e *Execution) CABackfill(a, w D) D {
 		sort.SliceStable(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
 		for _, m := range machines {
 			// The writer is released during node I/O, so the record may have
-			// changed since the list was read.
-			if m = e.S.Get("machines", str(m["vmid"])); m == nil {
+			// changed since the list was read. A run only touches what it
+			// listed: a deleted machine, or a replacement in its slot, is
+			// reported and skipped.
+			listed := m
+			if m = e.S.Get("machines", str(listed["vmid"])); m == nil || !equal(machineIdentity(m), machineIdentity(listed)) {
+				results = append(results, D{"tenant": t["slug"], "machine": listed["name"], "result": "skipped", "message": "Deleted or replaced meanwhile"})
 				continue
 			}
 			result, message := e.backfillOne(t, m, owner, ca, dry, alias, lookup)
