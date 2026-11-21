@@ -204,10 +204,11 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 
 // recordedUsernames are the lossless portal usernames a tenant recorded: the
 // by of its saved keys and the ca_principals of its VMs created with the CA,
-// live or frozen. Only a machine carrying the ca_created marker counts: a
-// backfilled VM, or one backfilled before the ca_backfilled flag existed, has
-// a principal that came from a caller's say-so, and without the marker the two
-// cannot be told apart from a CA-created one.
+// live or frozen. A backfilled VM has a principal that came from a caller's
+// say-so, and one backfilled before the ca_backfilled flag existed cannot be
+// told apart from a CA-created one by its CA fields, so a machine with ca_sync
+// counts only with the ca_created marker. Every backfill wrote ca_sync, so a
+// VM created with the CA before ca_sync existed still counts without it.
 func (e *Execution) recordedUsernames(t D) []string {
 	n, seen, out := integer(t["n"]), map[string]bool{}, []string{}
 	add := func(name string) {
@@ -220,7 +221,7 @@ func (e *Execution) recordedUsernames(t D) []string {
 		add(k.By)
 	}
 	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
-		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) || !boolean(m["ca_created"]) {
+		if str(m["ssh_user_ca"]) == "" || boolean(m["ca_backfilled"]) || (str(m["ca_sync"]) != "" && !boolean(m["ca_created"])) {
 			continue
 		}
 		for _, p := range arr(m["ca_principals"]) {
