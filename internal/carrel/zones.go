@@ -249,7 +249,7 @@ func (e *Execution) zoneLookup(token, name string) D {
 }
 
 // zoneProbe proves the token may write, then stores the zone and its token.
-func (e *Execution) zoneProbe(z zoneRecord, access zoneAccess, old D, fromFile bool) {
+func (e *Execution) zoneProbe(z *zoneRecord, access zoneAccess, old D, fromFile bool) {
 	name, token := z.Name, access.Token
 	// A probe record proves the token may write; it goes at once. One
 	// that a failed run left behind goes first.
@@ -270,7 +270,7 @@ func (e *Execution) zoneProbe(z zoneRecord, access zoneAccess, old D, fromFile b
 	if old != nil {
 		z.AddedAt, z.AddedBy = int64(num(old["added_at"])), str(old["added_by"])
 	}
-	e.S.SitePut("zone", name, decode(string(encoded(z))))
+	e.S.SitePut("zone", name, decode(string(encoded(*z))))
 }
 
 // zoneAdd adds a new zone, or a new token and tenant list for one.
@@ -312,7 +312,7 @@ func (e *Execution) zoneAdd(a, w D) D {
 	access := zoneAccess{Name: name, ID: z.ID, Token: token}
 	e.cfIn(access, "GET", "?per_page=1", nil)
 	if !dry {
-		e.zoneProbe(z, access, old, fromFile)
+		e.zoneProbe(&z, access, old, fromFile)
 	}
 	return D{"zone": e.publicZone(z), "dry_run": dry}
 }

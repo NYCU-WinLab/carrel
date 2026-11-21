@@ -101,3 +101,36 @@ func TestZoneApexExact(t *testing.T) {
 		t.Errorf("wildcard of an added zone was accepted: %v", r)
 	}
 }
+
+// TestZoneAddKeepsAddedAt adds one zone twice: the second answer keeps the
+// first added_at and added_by, as the stored record and zone_list do.
+func TestZoneAddKeepsAddedAt(t *testing.T) {
+	p, b, _ := originFixture(t)
+	dns := &statefulDNS{records: map[string][]D{}, list: true, zones: []D{{"id": "0123456789abcdef0123456789abcdef", "name": "lab.example", "token": "zone-token-0123456789abcdef"}}}
+	p.Config.CloudflareAPI = dns.serve(t).URL
+	p.Config.CloudflareToken = "test"
+	p.Config.ZoneDir = t.TempDir()
+	rec := &recorder{fakeBackend: b, p: p}
+	p.Backend = rec
+	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
+	root, other := person("root", true), person("ops", true)
+	add := D{"name": "lab.example", "token": "zone-token-0123456789abcdef"}
+	if r := g.call("z", "zone_add", add, root); r["ok"] != true {
+		t.Fatalf("first zone_add: %v", r)
+	}
+	// Move the first add into the past so a second in the same second differs.
+	z := p.Store.SiteGet("zone", "lab.example")
+	z["added_at"] = 1000
+	p.Store.SitePut("zone", "lab.example", z)
+	r := g.call("z", "zone_add", add, other)
+	if r["ok"] != true {
+		t.Fatalf("second zone_add: %v", r)
+	}
+	if got := num(obj(r["zone"])["added_at"]); got != 1000 {
+		t.Errorf("second zone_add added_at = %v, want 1000", got)
+	}
+	stored := p.Store.SiteGet("zone", "lab.example")
+	if num(stored["added_at"]) != 1000 || str(stored["added_by"]) != str(z["added_by"]) {
+		t.Errorf("stored zone = %v, want the first added_at and added_by", stored)
+	}
+}
