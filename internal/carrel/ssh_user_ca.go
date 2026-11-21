@@ -135,6 +135,11 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 	case e.machineBusy(n, m):
 		return "skipped", "An operation on this machine is queued or running; backfill once it has finished"
 	}
+	for _, s := range e.snapshots(n) {
+		if s.VMID == integer(vmid) {
+			return "skipped", "Has snapshots: delete them first, a rollback would undo the backfill"
+		}
+	}
 	principal := tenantPrincipal(t, owner)
 	if principal == "" {
 		return "skipped", "Personal tenant: name the owner's portal username in owner"
