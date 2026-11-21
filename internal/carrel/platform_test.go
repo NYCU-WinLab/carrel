@@ -503,6 +503,36 @@ func TestReadOnlyEndpointRefusesWrites(t *testing.T) {
 	if w := requestApp(app, "POST", "/mcp?toolsets=nope", body, headers); w.Code != 400 {
 		t.Fatal(w.Code)
 	}
+	for _, target := range []string{"/mcp?toolsets=core&toolsets=bogus", "/mcp?toolsets=core;x=1", "/mcp?toolsets=%zz"} {
+		if w := requestApp(app, "POST", target, body, headers); w.Code != 400 {
+			t.Fatal(target, w.Code)
+		}
+	}
+	bad := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "X-Carrel-Toolsets": "bogus"}
+	if w := requestApp(app, "POST", "/mcp?toolsets=core", body, bad); w.Code != 400 {
+		t.Fatal("header toolsets skipped when the query has one", w.Code)
+	}
+}
+
+func TestReadOnlyInstructionsAndNoOnboarding(t *testing.T) {
+	p, _ := fixture(t)
+	if got := instructionsFor(selection{readOnly: true}); got == str(Contract["instructions"]) || !strings.Contains(got, "/mcp") || strings.Contains(got, "machine_create") {
+		t.Fatal(got)
+	}
+	dns := &statefulDNS{records: map[string][]D{}, list: true}
+	p.Config.CloudflareAPI = dns.serve(t).URL
+	p.Config.CloudflareToken, p.Config.CloudflareZone = "test", "test"
+	app := NewApp(p, testVerifier{who: person("newbie", false)})
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "machine_list", "arguments": D{}}}))
+	requestApp(app, "POST", "/mcp/read-only", body, headers)
+	if p.Store.Tenant("user:newbie") != nil {
+		t.Fatal("a read-only call registered a tenant")
+	}
+	requestApp(app, "POST", "/mcp", body, headers)
+	if p.Store.Tenant("user:newbie") == nil {
+		t.Fatal("a call on /mcp no longer registers a tenant")
+	}
 }
 
 // The annotation rule of PLAN 4.1, over every tool in the contract.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,7 +160,11 @@ func (a *App) mcpRoutes(mux *http.ServeMux, origin string) {
 				}
 				return
 			}
-			sel, err := parseSelection(readOnly, boolean(who["admin"]), r.URL.Query().Get("toolsets"), r.Header.Get("X-Carrel-Toolsets"))
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			var sel selection
+			if err == nil {
+				sel, err = parseSelection(readOnly, boolean(who["admin"]), append(query["toolsets"], r.Header.Values("X-Carrel-Toolsets")...)...)
+			}
 			if err != nil {
 				jsonResponse(w, 400, D{"error": "invalid_toolsets", "message": err.Error()})
 				return
@@ -502,12 +507,23 @@ func (s selection) lists(definition D) bool {
 	return false
 }
 
+// readOnlyInstructions replaces the full instructions on the read-only
+// endpoint, where the write tools the routing lines name are not registered.
+const readOnlyInstructions = "WinLab machines through MCP, read-only. Only tools that read state are available here (list, get, quota and catalog tools). Omit tenant for personal resources. Creating, changing or deleting anything needs the /mcp endpoint."
+
+func instructionsFor(sel selection) string {
+	if sel.readOnly {
+		return readOnlyInstructions
+	}
+	return str(Contract["instructions"])
+}
+
 // mcpServer registers every tool the caller may call: admin tools only for an
 // admin, and only readOnlyHint tools on the read-only endpoint. A tool outside
 // the selected toolsets stays callable by name but is left out of tools/list,
 // so configured clients keep working while the per-turn list stays small.
 func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: str(Contract["instructions"])})
+	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: instructionsFor(sel)})
 	listed := map[string]bool{}
 	for _, definition := range dicts(Contract["tools"]) {
 		name := str(definition["name"])

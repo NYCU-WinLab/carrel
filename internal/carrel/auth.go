@@ -337,7 +337,7 @@ func (o *OAuth) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := q.Get("resource")
-	if q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || !matches(`^[A-Za-z0-9_-]{43}$`, q.Get("code_challenge")) || (res != "" && res != resource && res != resource+"/read-only") || len(q.Get("state")) > 4096 {
+	if len(q["resource"]) > 1 || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || !matches(`^[A-Za-z0-9_-]{43}$`, q.Get("code_challenge")) || (res != "" && res != resource && res != resource+"/read-only") || len(q.Get("state")) > 4096 {
 		oauthError(w, "invalid_request", 400)
 		return
 	}

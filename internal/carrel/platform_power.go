@@ -482,3 +482,7 @@ func (e *Execution) platformCheck(repair bool) []D {
 	wg.Wait()
 	return out
 }
+
+func init() {
+	registerPhases(Phases{Perform: (*Execution).PerformPlatformPower}, "platform_power")
+}
