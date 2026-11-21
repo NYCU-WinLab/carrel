@@ -635,13 +635,19 @@ the snapshots, then run it again); after the node op succeeds it saves
 `ssh_user_ca`, `ca_principals` and `ca_sync: pull`, so a failure leaves the record old and a second run
 retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`,
 and a VM is skipped unless that username's slug is the tenant's slug. For a tenant whose slug an
-administrator assigned, `alias_confirmed: true` vouches for `owner` instead; it needs `tenant` and
-`owner`, applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
+administrator assigned, `alias_confirmed: true` waives only that slug gate; it needs `tenant` and
+`owner`, is only for a personal tenant (a project tenant is refused as `invalid`), applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
 audit log. A lossless recorded username (a saved key's `by`, or `ca_principals` of a live or frozen VM
-created with the CA) that contradicts `owner` still refuses, flag or not, and so does a tenant that records more than one distinct username (an administrator must resolve its records first); a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
+created with the CA) that contradicts `owner` still refuses, flag or not, and so does a tenant that records more
+than one distinct username (an administrator must resolve its records first). A personal tenant with no recorded
+username is skipped unless the Keycloak lookup succeeds and `user:<sub>` equals the tenant subject, flag or
+not; the lookup runs at most once per call and a failure is remembered for that call; a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
 its VMs, or neither for every tenant; `dry_run` lists what would change.
 
-Maintenance window runbook for the backfill (#443): stop the VM, run `machine_ca_backfill` for it
+Maintenance window runbook for the backfill (#443). Prerequisite: `keycloak_url`, `keycloak_realm`,
+`keycloak_client_id` and `keycloak_client_secret_file` must be configured, and `keycloak_url` + `/realms/` +
+`keycloak_realm` must equal `issuer`. Without them every VM of a personal tenant with no username record is
+skipped (`sites/b09/config.example.json` has no such fields, add them). Read the `dry_run` messages before you stop any VM. Stop the VM, run `machine_ca_backfill` for it
 (use `dry_run` first; a VM with snapshots is skipped until an admin deletes them), start the VM, then check. Per VM, after start:
 
 1. `ssh_user_ca`, `ca_principals` and `ca_sync` are set on the machine record (`machine_get`).
