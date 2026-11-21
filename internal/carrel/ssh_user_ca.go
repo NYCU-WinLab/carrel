@@ -126,6 +126,11 @@ func (e *Execution) CABackfill(a, w D) D {
 		}
 		sort.SliceStable(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
 		for _, m := range machines {
+			// The writer is released during node I/O, so the record may have
+			// changed since the list was read.
+			if m = e.S.Get("machines", str(m["vmid"])); m == nil {
+				continue
+			}
 			result, message := e.backfillOne(t, m, owner, ca, dry, alias, lookup)
 			results = append(results, D{"tenant": t["slug"], "machine": m["name"], "result": result, "message": message})
 		}
@@ -213,13 +218,24 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, looku
 		return "would_backfill", "Would trust principal " + principal + checked
 	}
 	planned := merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull"})
-	if err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) }); err != nil {
+	// Release the writer while the node mounts and writes the disk, so other
+	// mutations are not blocked. The VM is marked in flight meanwhile: jobs
+	// on it wait (CheckBusy) and machineBusy refuses it, so a second backfill,
+	// a power start or a snapshot cannot interleave with the write.
+	e.P.markBackfill(integer(vmid), true)
+	e.P.writer.Unlock()
+	err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) })
+	e.P.writer.Lock()
+	e.P.markBackfill(integer(vmid), false)
+	if err != nil {
 		return "failed", "The node did not write the CA; the record is unchanged: " + describe(err)
 	}
+	// The disk now trusts the CA: record it whenever the same allocation
+	// still has none, so the record never disagrees with the disk.
 	var message string
 	e.Transaction(func(tx *Execution) {
 		cur := tx.S.Get("machines", str(vmid))
-		if cur == nil || str(cur["ssh_user_ca"]) != "" {
+		if cur == nil || !equal(machineIdentity(cur), machineIdentity(m)) || str(cur["ssh_user_ca"]) != "" {
 			message = "The record changed meanwhile; nothing saved"
 			return
 		}
@@ -259,4 +275,33 @@ func (e *Execution) recordedUsernames(t D) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// markBackfill adds or removes a VMID from the in-flight backfill set.
+func (p *Platform) markBackfill(vmid int, on bool) {
+	p.backfillMu.Lock()
+	defer p.backfillMu.Unlock()
+	if on {
+		p.backfilling[vmid] = true
+	} else {
+		delete(p.backfilling, vmid)
+	}
+}
+
+// isBackfilling reports whether machine_ca_backfill is writing the VM's disk.
+func (p *Platform) isBackfilling(vmid int) bool {
+	p.backfillMu.Lock()
+	defer p.backfillMu.Unlock()
+	return p.backfilling[vmid]
+}
+
+// backfillVMIDs returns a copy of the in-flight backfill set.
+func (p *Platform) backfillVMIDs() []int {
+	p.backfillMu.Lock()
+	defer p.backfillMu.Unlock()
+	ids := make([]int, 0, len(p.backfilling))
+	for vmid := range p.backfilling {
+		ids = append(ids, vmid)
+	}
+	return ids
 }
