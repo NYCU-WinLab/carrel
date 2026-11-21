@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const userCATestKey = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2eUS00sJeJA9ebfrquCmA8reWrgdWSL4yGkfm4bKEuRyPmVJoM72JdUwzhH/v3VWkAkfPQ6sxMtzgruck="
@@ -304,7 +306,7 @@ func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
 	}
 	// A second recorded username refuses although owner equals one of them.
 	p.Store.Put("keys", "k1b", integer(tenant["n"]), D{"id": "k1b", "key": userCATestKey, "by": "alex_smith"})
-	if got := run("alex.smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || b.count("ca_backfill") != 0 {
+	if got := run("alex.smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || !strings.Contains(str(got["message"]), "alex_smith") || b.count("ca_backfill") != 0 {
 		t.Fatalf("two recorded usernames: %s", encoded(got))
 	}
 	p.Store.Remove("keys", "k1b")
@@ -464,6 +466,112 @@ func TestBackfillLooksTheOwnerUpOncePerCall(t *testing.T) {
 	}
 }
 
+func TestBackfillReleasesTheWriterDuringNodeIO(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	ctx, admin := context.Background(), person("root", true)
+	inNode, release := make(chan struct{}), make(chan struct{})
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" {
+			close(inNode)
+			<-release
+		}
+		return inner(r, target)
+	}
+	done := make(chan D)
+	go func() {
+		done <- app.Call(ctx, "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, admin)
+	}()
+	<-inNode
+	locked := make(chan struct{})
+	go func() {
+		p.writer.Lock()
+		p.writer.Unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer is still held during the node call")
+	}
+	close(release)
+	r := <-done
+	assertOK(t, r)
+	if got := dicts(r["machines"])[0]["result"]; got != "backfilled" || storedMachine(p, 10200)["ssh_user_ca"] != userCATestKey {
+		t.Fatalf("after the node call: %s", encoded(r))
+	}
+}
+
+// blockBackfill makes the node stop inside ca_backfill until release is
+// closed, and starts a backfill of alice's old VM as owner.
+func blockBackfill(t *testing.T, b *fakeBackend, app *App, owner string) (chan struct{}, chan D) {
+	t.Helper()
+	inNode, release := make(chan struct{}), make(chan struct{})
+	inner := b.call
+	var once bool
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" && !once {
+			once = true
+			close(inNode)
+			<-release
+		}
+		return inner(r, target)
+	}
+	done := make(chan D)
+	go func() {
+		done <- app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": owner}, person("root", true))
+	}()
+	<-inNode
+	return release, done
+}
+
+func TestBackfillRefusesASecondRunOnTheSameVM(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	release, done := blockBackfill(t, b, app, "alice")
+	// A second run while the first writes the disk must not write another
+	// principal into it.
+	r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice", "alias_confirmed": true}, person("root", true))
+	assertOK(t, r)
+	if got := dicts(r["machines"])[0]["result"]; got != "skipped" || b.count("ca_backfill") != 1 {
+		t.Fatalf("second run during the write: %s", encoded(r))
+	}
+	close(release)
+	r = <-done
+	if got := dicts(r["machines"])[0]["result"]; got != "backfilled" || !equal(storedMachine(p, 10200)["ca_principals"], []any{"alice"}) || len(p.backfillVMIDs()) != 0 {
+		t.Fatalf("first run: %s", encoded(r))
+	}
+}
+
+func TestBackfillHoldsASnapshotUntilTheRecordIsSaved(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	release, done := blockBackfill(t, b, app, "alice")
+	inner := b.call
+	var trusted []any
+	b.call = func(r D, target string) (any, error) {
+		switch {
+		case r["op"] == "inventory":
+			return baseInventory(), nil
+		case r["op"] == "action" && r["action"] == "snapshot":
+			trusted = append(trusted, storedMachine(p, 10200)["ssh_user_ca"])
+		}
+		return inner(r, target)
+	}
+	runQueue(p)
+	r := p.Execute(context.Background(), "snapshot_create", D{"machine": "old", "name": "s1", "wait_seconds": 0}, person("alice", false))
+	assertOK(t, r)
+	id := str(obj(r["operation"])["id"])
+	awaitState(t, p, id, "waiting_for_machine_operation")
+	if len(trusted) != 0 {
+		t.Fatal("the snapshot ran while the disk was being written")
+	}
+	close(release)
+	assertOK(t, <-done)
+	awaitStateWithin(t, p, id, "succeeded", 10*time.Second)
+	if len(trusted) != 1 || trusted[0] != userCATestKey {
+		t.Fatalf("the snapshot did not follow the saved record: %v", trusted)
+	}
+}
+
 func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
 	p, _, _ := backfillFixture(t)
 	tenant := p.Store.Register("user:li-sub", "li")
@@ -484,6 +592,48 @@ func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
 	p.Store.Put("machines", 10312, n, ca(10312, "made", "made-user", D{"ca_created": true}))
 	if got := recorded(); !equal(got, []string{"made-user"}) {
 		t.Fatalf("CA-created VM: %v", got)
+	}
+}
+
+// Dry runs read the in-flight set without the writer: a member's dry-run
+// rename or an admin's dry-run backfill during a backfill must not race the
+// insert and delete (run with -race).
+func TestBackfillDryRunsDoNotRaceTheInFlightSet(t *testing.T) {
+	p, _, app := backfillFixture(t)
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for _, call := range []func(){
+		func() {
+			p.Execute(context.Background(), "machine_rename", D{"machine": "old", "name": "crate", "confirm": "old", "dry_run": true}, person("alice", false))
+		},
+		func() {
+			p.Execute(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice", "dry_run": true}, person("root", true))
+		},
+	} {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					call()
+				}
+			}
+		}()
+	}
+	for range 20 {
+		seedMachine(p, "old", 10200)
+		r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, person("root", true))
+		if got := dicts(r["machines"])[0]["result"]; got != "backfilled" {
+			t.Errorf("backfill: %s", encoded(r))
+		}
+	}
+	close(stop)
+	readers.Wait()
+	if len(p.backfillVMIDs()) != 0 {
+		t.Fatal("the in-flight set is not empty")
 	}
 }
 
