@@ -2199,6 +2199,8 @@ def backfill_setup(
         if a[0] == "umount":
             Path(a[1]).unlink()
             Path(a[1]).mkdir(0o700)
+        if a[0] == "pvs":
+            return "  guestvg\n  guestvg\n"
         return "/dev/zvol/rpool/vm-10100-disk-0" if a[0] == "pvesm" else ""
 
     monkeypatch.setattr(module, "run", run)
@@ -2350,3 +2352,32 @@ def test_ca_backfill_takes_the_node_lock_so_a_start_waits_for_it(monkeypatch, tm
     monkeypatch.setattr(module.sys, "stdin", type("In", (), {"buffer": __import__("io").BytesIO(request)})())
     module.main()
     assert locks == ["node.lock"]
+
+
+def test_ca_backfill_deactivates_a_guest_vg_on_the_nbd_device_before_disconnect(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    names = [c[0] if c[0] != "qemu-nbd" else c[1].split("=")[0] for c in calls]
+    assert names.index("--connect") < names.index("udevadm") < names.index("pvs")
+    assert names.index("umount") < names.index("pvs") < names.index("vgchange") < names.index("--disconnect")
+    pvs = next(c for c in calls if c[0] == "pvs")
+    vgchange = [c for c in calls if c[0] == "vgchange"]
+    assert [c[-1] for c in vgchange] == ["guestvg"]
+    for c in (pvs, *vgchange):
+        config = c[c.index("--config") + 1]
+        assert "global_filter" in config and "/dev/nbd0" in config and "r|.*|" in config
+
+
+def test_ca_backfill_disconnects_even_when_the_vg_deactivation_fails(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    run = module.run
+
+    def failing(*a, **k):
+        if a[0] == "vgchange":
+            raise module.CommandFailure("vgchange failed")
+        return run(*a, **k)
+
+    monkeypatch.setattr(module, "run", failing)
+    with pytest.raises(module.CommandFailure):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
