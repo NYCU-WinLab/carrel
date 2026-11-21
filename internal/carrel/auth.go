@@ -313,7 +313,7 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res := q.Get("resource")
-		if q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || !matches(`^[A-Za-z0-9_-]{43}$`, q.Get("code_challenge")) || (res != "" && res != resource) || len(q.Get("state")) > 4096 {
+		if q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || !matches(`^[A-Za-z0-9_-]{43}$`, q.Get("code_challenge")) || (res != "" && res != resource && res != resource+"/read-only") || len(q.Get("state")) > 4096 {
 			oauthError(w, "invalid_request", 400)
 			return
 		}
@@ -408,7 +408,7 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (o *OAuth) exchange(w http.ResponseWriter, r *http.Request, client D, resource, callback string) {
 	q := r.PostForm
 	cid := q.Get("client_id")
-	if res, ok := q["resource"]; ok && (len(res) != 1 || res[0] != resource) {
+	if res, ok := q["resource"]; ok && (len(res) != 1 || res[0] != resource && res[0] != resource+"/read-only") {
 		oauthError(w, "invalid_client", 400)
 		return
 	}

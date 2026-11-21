@@ -134,7 +134,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 				}
 				return
 			}
-			sel, err := parseSelection(readOnly, r.URL.Query().Get("toolsets"), r.Header.Get("X-Carrel-Toolsets"))
+			sel, err := parseSelection(readOnly, boolean(who["admin"]), r.URL.Query().Get("toolsets"), r.Header.Get("X-Carrel-Toolsets"))
 			if err != nil {
 				jsonResponse(w, 400, D{"error": "invalid_toolsets", "message": err.Error()})
 				return
@@ -399,8 +399,9 @@ func (e *Execution) MaintainDomains() {
 type selectionKey struct{}
 
 // selection is the part of the tool surface a caller asked for: the toolsets
-// named in the URL or header (core by default) and whether only read-only
-// tools are wanted. The admin filter in mcpServer applies on top of it.
+// named in the URL or header (core by default, core and admin for an admin)
+// and whether only read-only tools are wanted. Toolsets only shape tools/list;
+// the admin and read-only filters in mcpServer decide what is callable.
 type selection struct {
 	readOnly bool
 	sets     []string
@@ -410,7 +411,7 @@ func (s selection) key(admin bool) string {
 	return strconv.FormatBool(admin) + "|" + strconv.FormatBool(s.readOnly) + "|" + strings.Join(s.sets, ",")
 }
 
-func parseSelection(readOnly bool, values ...string) (selection, error) {
+func parseSelection(readOnly, admin bool, values ...string) (selection, error) {
 	known := obj(Contract["toolsets"])
 	want := map[string]bool{}
 	for _, value := range values {
@@ -429,21 +430,21 @@ func parseSelection(readOnly bool, values ...string) (selection, error) {
 	}
 	if len(want) == 0 && !readOnly {
 		want["core"] = true
+		want["admin"] = admin
 	}
 	sel := selection{readOnly: readOnly}
-	for k := range want {
-		sel.sets = append(sel.sets, k)
+	for k, ok := range want {
+		if ok {
+			sel.sets = append(sel.sets, k)
+		}
 	}
 	sort.Strings(sel.sets)
 	return sel, nil
 }
 
-// allows reports whether a tool is in the selection. The read-only endpoint
+// lists reports whether tools/list shows a tool. The read-only endpoint
 // without toolsets lists every readOnlyHint tool.
-func (s selection) allows(definition D) bool {
-	if s.readOnly && !boolean(obj(definition["annotations"])["readOnlyHint"]) {
-		return false
-	}
+func (s selection) lists(definition D) bool {
 	if len(s.sets) == 0 {
 		return true
 	}
@@ -455,13 +456,19 @@ func (s selection) allows(definition D) bool {
 	return false
 }
 
+// mcpServer registers every tool the caller may call: admin tools only for an
+// admin, and only readOnlyHint tools on the read-only endpoint. A tool outside
+// the selected toolsets stays callable by name but is left out of tools/list,
+// so configured clients keep working while the per-turn list stays small.
 func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: str(Contract["instructions"])})
+	listed := map[string]bool{}
 	for _, definition := range dicts(Contract["tools"]) {
 		name := str(definition["name"])
-		if !admin && named("admin_tools", name) || !sel.allows(definition) {
+		if !admin && named("admin_tools", name) || sel.readOnly && !boolean(obj(definition["annotations"])["readOnlyHint"]) {
 			continue
 		}
+		listed[name] = sel.lists(definition)
 		var tool mcp.Tool
 		must(json.Unmarshal(encoded(definition), &tool))
 		server.AddTool(&tool, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -478,5 +485,20 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}, nil
 		})
 	}
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			result, err := next(ctx, method, request)
+			if list, ok := result.(*mcp.ListToolsResult); ok && err == nil {
+				tools := []*mcp.Tool{}
+				for _, tool := range list.Tools {
+					if listed[tool.Name] {
+						tools = append(tools, tool)
+					}
+				}
+				list.Tools = tools
+			}
+			return result, err
+		}
+	})
 	return server
 }

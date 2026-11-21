@@ -455,6 +455,41 @@ func TestToolListAuthorizationOnEveryEndpoint(t *testing.T) {
 	}
 }
 
+// Toolsets only shape tools/list: a tool outside the list stays callable by
+// name, and an admin on plain /mcp lists the admin tools.
+func TestUnlistedToolsStayCallable(t *testing.T) {
+	p, _ := fixture(t)
+	member := NewApp(p, testVerifier{who: person("alice", false)})
+	tools, _ := listedTools(t, member, "/mcp", nil)
+	for _, tool := range tools {
+		if str(tool["name"]) == "port_list" {
+			t.Fatal("port_list is listed in the core set")
+		}
+	}
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	call := func(app *App, target, name string) D {
+		var result D
+		body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": name, "arguments": D{}}}))
+		must(json.Unmarshal(requestApp(app, "POST", target, body, headers).Body.Bytes(), &result))
+		return result
+	}
+	if result := call(member, "/mcp", "port_list"); result["error"] != nil || obj(result["result"])["isError"] == true {
+		t.Fatalf("unlisted port_list not callable on /mcp: %v", result)
+	}
+	if result := call(member, "/mcp", "node_list"); result["error"] == nil {
+		t.Fatalf("member called admin tool node_list: %v", result)
+	}
+	admin := NewApp(p, testVerifier{who: person("root", true)})
+	tools, _ = listedTools(t, admin, "/mcp", nil)
+	sawAdmin := false
+	for _, tool := range tools {
+		sawAdmin = sawAdmin || str(tool["name"]) == "node_list"
+	}
+	if !sawAdmin {
+		t.Fatal("admin on plain /mcp does not list node_list")
+	}
+}
+
 func TestReadOnlyEndpointRefusesWrites(t *testing.T) {
 	p, _ := fixture(t)
 	app := NewApp(p, testVerifier{who: person("alice", false)})
