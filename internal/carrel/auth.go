@@ -255,155 +255,184 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 	o.Store.PurgeOAuth()
 	path, method := r.URL.Path, r.Method
-	resource := o.Origin + "/mcp"
-	callback := o.Origin + "/oauth/callback"
 	if strings.HasPrefix(path, "/.well-known/oauth-protected-resource") && method == "GET" {
-		if path == "/.well-known/oauth-protected-resource/mcp/read-only" {
-			resource += "/read-only"
-		}
-		jsonResponse(w, 200, D{"resource": resource, "authorization_servers": []string{o.Origin}, "scopes_supported": scopes, "bearer_methods_supported": []string{"header"}})
+		o.protectedResource(w, path)
 		return
 	}
 	if (path == "/.well-known/oauth-authorization-server" || path == "/.well-known/openid-configuration") && method == "GET" {
-		jsonResponse(w, 200, D{"issuer": o.Origin, "authorization_endpoint": o.Origin + "/oauth/authorize", "token_endpoint": o.Origin + "/oauth/token", "registration_endpoint": o.Origin + "/oauth/register", "revocation_endpoint": o.Origin + "/oauth/revoke", "revocation_endpoint_auth_methods_supported": []string{"none"}, "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"}, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": true, "scopes_supported": scopes})
+		o.serverMetadata(w)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	switch {
 	case path == "/oauth/register" && method == "POST":
-		o.locks[0].Lock()
-		defer o.locks[0].Unlock()
-		if integer(o.Store.Rows("SELECT count(*) AS n FROM oauth WHERE kind='client'")[0]["n"]) >= maxClients {
-			oauthError(w, "temporarily_unavailable", 503)
-			return
-		}
-		var data D
-		if json.NewDecoder(r.Body).Decode(&data) != nil {
-			oauthError(w, "invalid_request", 400)
-			return
-		}
-		redirects, ok := data["redirect_uris"].([]any)
-		if !ok || len(redirects) < 1 || len(redirects) > 5 {
-			oauthError(w, "invalid_redirect_uri", 400)
-			return
-		}
-		for _, u := range redirects {
-			value, ok := u.(string)
-			if !ok || !o.allowedRedirect(value) {
-				oauthError(w, "invalid_redirect_uri", 400)
-				return
-			}
-		}
-		if textAt(data, "token_endpoint_auth_method", "none") != "none" {
-			oauthError(w, "invalid_client_metadata", 400)
-			return
-		}
-		name := []rune(textAt(data, "client_name", "MCP client"))
-		if len(name) > 100 {
-			name = name[:100]
-		}
-		c := D{"client_id": "carrel-" + random(24), "redirect_uris": redirects, "client_name": string(name), "token_endpoint_auth_method": "none", "grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"}}
-		o.Store.OAuthPut("client", str(c["client_id"]), c, registrationTTL)
-		jsonResponse(w, 201, c)
+		o.register(w, r)
 	case path == "/oauth/authorize" && method == "GET":
-		q := r.URL.Query()
-		c := o.Store.OAuthGet("client", q.Get("client_id"))
-		if c == nil || !contains(c["redirect_uris"], q.Get("redirect_uri")) {
-			oauthError(w, "invalid_client", 400)
-			return
-		}
-		res := q.Get("resource")
-		if len(q["resource"]) > 1 || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || !matches(`^[A-Za-z0-9_-]{43}$`, q.Get("code_challenge")) || (res != "" && res != resource && res != resource+"/read-only") || len(q.Get("state")) > 4096 {
-			oauthError(w, "invalid_request", 400)
-			return
-		}
-		state, cookie := random(32), random(32)
-		txn := D{"client": c["client_id"], "name": c["client_name"], "redirect": q.Get("redirect_uri"), "state": q.Get("state"), "challenge": q.Get("code_challenge"), "cookie": digest(cookie)}
-		o.Store.OAuthPut("state", state, txn, 600)
-		params := url.Values{"client_id": {o.ClientID}, "redirect_uri": {callback}, "response_type": {"code"}, "scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge": {str(txn["challenge"])}, "code_challenge_method": {"S256"}}
-		http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/"})
-		http.Redirect(w, r, o.Issuer+"/protocol/openid-connect/auth?"+params.Encode(), 302)
+		o.authorize(w, r)
 	case path == "/oauth/callback" && method == "GET":
-		q := r.URL.Query()
-		txn := o.Store.OAuthPop("state", q.Get("state"))
-		cookie, _ := r.Cookie(oauthCookie)
-		value := ""
-		if cookie != nil {
-			value = cookie.Value
-		}
-		if txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) || q.Get("iss") != o.Issuer || q.Get("code") == "" || q.Get("error") != "" {
-			oauthError(w, "access_denied", 400)
-			return
-		}
-		if txn["console"] != nil && o.Console != nil {
-			o.Console(w, r, txn, q.Get("code"))
-			return
-		}
-		consent := random(32)
-		txn["code"] = q.Get("code")
-		o.Store.OAuthPut("consent", consent, txn, 300)
-		consentPage(w, str(txn["name"]), str(txn["redirect"]), consent)
+		o.callback(w, r)
 	case path == "/oauth/consent" && method == "POST":
-		if r.ParseForm() != nil {
-			oauthError(w, "invalid_request", 400)
-			return
-		}
-		txn := o.Store.OAuthPop("consent", r.PostForm.Get("consent"))
-		cookie, _ := r.Cookie(oauthCookie)
-		value := ""
-		if cookie != nil {
-			value = cookie.Value
-		}
-		if r.Header.Get("Origin") != o.Origin || txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) {
-			oauthError(w, "access_denied", 400)
-			return
-		}
-		out := url.Values{"state": {str(txn["state"])}, "iss": {o.Origin}}
-		if r.PostForm.Get("allow") == "yes" {
-			o.Store.OAuthPut("code", digest(str(txn["code"])), txn, 120)
-			out.Set("code", str(txn["code"]))
-		} else {
-			out.Set("error", "access_denied")
-		}
-		separator := "?"
-		if strings.Contains(str(txn["redirect"]), "?") {
-			separator = "&"
-		}
-		http.Redirect(w, r, str(txn["redirect"])+separator+out.Encode(), 302)
-	case (path == "/oauth/token" || path == "/oauth/revoke") && method == "POST":
-		if r.ParseForm() != nil {
-			oauthError(w, "invalid_request", 400)
-			return
-		}
-		q := r.PostForm
-		cid := q.Get("client_id")
-		hash := sha256.Sum256([]byte(cid))
-		o.locks[int(hash[0])%len(o.locks)].Lock()
-		defer o.locks[int(hash[0])%len(o.locks)].Unlock()
-		client := o.Store.OAuthGet("client", cid)
-		if client == nil {
-			oauthError(w, "invalid_client", 400)
-			return
-		}
-		if path == "/oauth/revoke" {
-			token := q.Get("token")
-			txn := o.Store.OAuthGet("refresh", digest(token))
-			if txn != nil && txn["client"] == cid {
-				_, status, err := o.upstream(r.Context(), "revoke", url.Values{"client_id": {o.ClientID}, "token": {token}, "token_type_hint": {"refresh_token"}})
-				if err != nil || status != 200 {
-					oauthError(w, "temporarily_unavailable", 503)
-					return
-				}
-				o.Store.OAuthPop("refresh", digest(token))
-			}
-			o.forget(token)
-			jsonResponse(w, 200, D{})
-			return
-		}
-		o.exchange(w, r, client, resource, callback)
+		o.consent(w, r)
+	case path == "/oauth/token" && method == "POST":
+		o.withClient(w, r, func(client D) { o.exchange(w, r, client, o.Origin+"/mcp", o.Origin+"/oauth/callback") })
+	case path == "/oauth/revoke" && method == "POST":
+		o.withClient(w, r, func(client D) { o.revoke(w, r, client) })
 	default:
 		oauthError(w, "invalid_request", 404)
 	}
+}
+func (o *OAuth) protectedResource(w http.ResponseWriter, path string) {
+	resource := o.Origin + "/mcp"
+	if path == "/.well-known/oauth-protected-resource/mcp/read-only" {
+		resource += "/read-only"
+	}
+	jsonResponse(w, 200, D{"resource": resource, "authorization_servers": []string{o.Origin}, "scopes_supported": scopes, "bearer_methods_supported": []string{"header"}})
+}
+func (o *OAuth) serverMetadata(w http.ResponseWriter) {
+	jsonResponse(w, 200, D{"issuer": o.Origin, "authorization_endpoint": o.Origin + "/oauth/authorize", "token_endpoint": o.Origin + "/oauth/token", "registration_endpoint": o.Origin + "/oauth/register", "revocation_endpoint": o.Origin + "/oauth/revoke", "revocation_endpoint_auth_methods_supported": []string{"none"}, "response_types_supported": []string{"code"}, "grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"}, "token_endpoint_auth_methods_supported": []string{"none"}, "authorization_response_iss_parameter_supported": true, "scopes_supported": scopes})
+}
+func (o *OAuth) register(w http.ResponseWriter, r *http.Request) {
+	o.locks[0].Lock()
+	defer o.locks[0].Unlock()
+	if integer(o.Store.Rows("SELECT count(*) AS n FROM oauth WHERE kind='client'")[0]["n"]) >= maxClients {
+		oauthError(w, "temporarily_unavailable", 503)
+		return
+	}
+	var data D
+	if json.NewDecoder(r.Body).Decode(&data) != nil {
+		oauthError(w, "invalid_request", 400)
+		return
+	}
+	redirects, ok := data["redirect_uris"].([]any)
+	if !ok || len(redirects) < 1 || len(redirects) > 5 {
+		oauthError(w, "invalid_redirect_uri", 400)
+		return
+	}
+	for _, u := range redirects {
+		value, ok := u.(string)
+		if !ok || !o.allowedRedirect(value) {
+			oauthError(w, "invalid_redirect_uri", 400)
+			return
+		}
+	}
+	if textAt(data, "token_endpoint_auth_method", "none") != "none" {
+		oauthError(w, "invalid_client_metadata", 400)
+		return
+	}
+	name := []rune(textAt(data, "client_name", "MCP client"))
+	if len(name) > 100 {
+		name = name[:100]
+	}
+	c := D{"client_id": "carrel-" + random(24), "redirect_uris": redirects, "client_name": string(name), "token_endpoint_auth_method": "none", "grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"}}
+	o.Store.OAuthPut("client", str(c["client_id"]), c, registrationTTL)
+	jsonResponse(w, 201, c)
+}
+func (o *OAuth) authorize(w http.ResponseWriter, r *http.Request) {
+	resource := o.Origin + "/mcp"
+	callback := o.Origin + "/oauth/callback"
+	q := r.URL.Query()
+	c := o.Store.OAuthGet("client", q.Get("client_id"))
+	if c == nil || !contains(c["redirect_uris"], q.Get("redirect_uri")) {
+		oauthError(w, "invalid_client", 400)
+		return
+	}
+	res := q.Get("resource")
+	if len(q["resource"]) > 1 || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" || !matches(`^[A-Za-z0-9_-]{43}$`, q.Get("code_challenge")) || (res != "" && res != resource && res != resource+"/read-only") || len(q.Get("state")) > 4096 {
+		oauthError(w, "invalid_request", 400)
+		return
+	}
+	state, cookie := random(32), random(32)
+	txn := D{"client": c["client_id"], "name": c["client_name"], "redirect": q.Get("redirect_uri"), "state": q.Get("state"), "challenge": q.Get("code_challenge"), "cookie": digest(cookie)}
+	o.Store.OAuthPut("state", state, txn, 600)
+	params := url.Values{"client_id": {o.ClientID}, "redirect_uri": {callback}, "response_type": {"code"}, "scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge": {str(txn["challenge"])}, "code_challenge_method": {"S256"}}
+	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/"})
+	http.Redirect(w, r, o.Issuer+"/protocol/openid-connect/auth?"+params.Encode(), 302)
+}
+func (o *OAuth) callback(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	txn := o.Store.OAuthPop("state", q.Get("state"))
+	cookie, _ := r.Cookie(oauthCookie)
+	value := ""
+	if cookie != nil {
+		value = cookie.Value
+	}
+	if txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) || q.Get("iss") != o.Issuer || q.Get("code") == "" || q.Get("error") != "" {
+		oauthError(w, "access_denied", 400)
+		return
+	}
+	if txn["console"] != nil && o.Console != nil {
+		o.Console(w, r, txn, q.Get("code"))
+		return
+	}
+	consent := random(32)
+	txn["code"] = q.Get("code")
+	o.Store.OAuthPut("consent", consent, txn, 300)
+	consentPage(w, str(txn["name"]), str(txn["redirect"]), consent)
+}
+func (o *OAuth) consent(w http.ResponseWriter, r *http.Request) {
+	if r.ParseForm() != nil {
+		oauthError(w, "invalid_request", 400)
+		return
+	}
+	txn := o.Store.OAuthPop("consent", r.PostForm.Get("consent"))
+	cookie, _ := r.Cookie(oauthCookie)
+	value := ""
+	if cookie != nil {
+		value = cookie.Value
+	}
+	if r.Header.Get("Origin") != o.Origin || txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) {
+		oauthError(w, "access_denied", 400)
+		return
+	}
+	out := url.Values{"state": {str(txn["state"])}, "iss": {o.Origin}}
+	if r.PostForm.Get("allow") == "yes" {
+		o.Store.OAuthPut("code", digest(str(txn["code"])), txn, 120)
+		out.Set("code", str(txn["code"]))
+	} else {
+		out.Set("error", "access_denied")
+	}
+	separator := "?"
+	if strings.Contains(str(txn["redirect"]), "?") {
+		separator = "&"
+	}
+	http.Redirect(w, r, str(txn["redirect"])+separator+out.Encode(), 302)
+}
+
+// withClient parses the form, serialises on the client's lock and runs next
+// for a registered client.
+func (o *OAuth) withClient(w http.ResponseWriter, r *http.Request, next func(client D)) {
+	if r.ParseForm() != nil {
+		oauthError(w, "invalid_request", 400)
+		return
+	}
+	q := r.PostForm
+	cid := q.Get("client_id")
+	hash := sha256.Sum256([]byte(cid))
+	o.locks[int(hash[0])%len(o.locks)].Lock()
+	defer o.locks[int(hash[0])%len(o.locks)].Unlock()
+	client := o.Store.OAuthGet("client", cid)
+	if client == nil {
+		oauthError(w, "invalid_client", 400)
+		return
+	}
+	next(client)
+}
+func (o *OAuth) revoke(w http.ResponseWriter, r *http.Request, client D) {
+	q := r.PostForm
+	cid := q.Get("client_id")
+	token := q.Get("token")
+	txn := o.Store.OAuthGet("refresh", digest(token))
+	if txn != nil && txn["client"] == cid {
+		_, status, err := o.upstream(r.Context(), "revoke", url.Values{"client_id": {o.ClientID}, "token": {token}, "token_type_hint": {"refresh_token"}})
+		if err != nil || status != 200 {
+			oauthError(w, "temporarily_unavailable", 503)
+			return
+		}
+		o.Store.OAuthPop("refresh", digest(token))
+	}
+	o.forget(token)
+	jsonResponse(w, 200, D{})
+	return
 }
 func (o *OAuth) exchange(w http.ResponseWriter, r *http.Request, client D, resource, callback string) {
 	q := r.PostForm
