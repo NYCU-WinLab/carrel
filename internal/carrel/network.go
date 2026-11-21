@@ -8,7 +8,7 @@ import (
 
 func (e *Execution) sameOperation(o D) bool { return e.Op != nil && o["operation_id"] == e.Op["id"] }
 func (e *Execution) NetworkAction(tool string, a, t D) D {
-	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	n := integer(t["n"])
 	switch tool {
 	case "network_list":
 		return D{"networks": e.S.Objects("networks", n)}
@@ -24,254 +24,301 @@ func (e *Execution) NetworkAction(tool string, a, t D) D {
 		return D{"vips": e.PublicGrants("vips", n)}
 	case "vip_add", "vip_remove":
 		return e.VIPAction(tool, a, t)
-	case "network_create", "network_delete":
-		nets := e.S.Objects("networks", n)
-		var network, delta D
-		if tool == "network_create" {
-			old := find(nets, func(v D) bool { return v["name"] == a["name"] })
-			if old != nil && !e.sameOperation(old) {
-				fail("conflict", "Network name already exists", D{"recovery": "revise_request"})
-			}
-			delta = D{}
-			if old == nil {
-				delta["networks"] = 1
-			}
-			e.Quota(t, delta)
-			network = old
-			if network == nil {
-				network = e.NetworkSpec(t, a, nil)
-			}
-			if !dry {
-				e.Put("networks", network["id"], n, network)
-				e.Reconcile()
-			} else {
-				network = without(network, "id", "serial", "tenant_n")
-				network["state"] = "planned"
-			}
-		} else {
-			network = find(nets, func(v D) bool { return v["name"] == a["network"] || v["id"] == a["network"] })
-			if network == nil {
-				fail("not_found", "Network not found")
-			}
-			delta = D{"networks": -1}
-			if a["confirm"] != network["name"] {
-				fail("invalid", "confirm must equal the network name")
-			}
-			for _, m := range e.S.Objects("machines", n) {
-				for _, nic := range dicts(m["nics"]) {
-					if nic["network"] == network["id"] {
-						fail("conflict", "Network still has attached NICs", D{"recovery": "resolve_prerequisite"})
-					}
-				}
-			}
-			if !dry {
-				network["state"] = "deleting"
-				e.Put("networks", network["id"], n, network)
-				e.Reconcile()
-				e.S.Remove("networks", network["id"])
-				network["state"] = "deleted"
-			}
-		}
-		q := e.Quota(t)
-		if dry {
-			q = e.Quota(t, delta)
-		}
-		return D{"network": network, "dry_run": dry, "quota_after": q}
-	case "machine_nic_attach", "machine_nic_detach":
-		m := e.Machine(t, a["machine"])
-		var request, nic D
-		nics := dicts(m["nics"])
-		if tool == "machine_nic_attach" {
-			network := find(e.S.Objects("networks", n), func(v D) bool { return v["id"] == a["network"] || v["name"] == a["network"] })
-			if network == nil {
-				fail("not_found", "Network not found in this tenant")
-			}
-			existing := find(nics, func(v D) bool { return v["network"] == network["id"] })
-			if existing != nil && !e.sameOperation(existing) {
-				fail("conflict", "Machine already attached to this network", D{"recovery": "revise_request"})
-			}
-			i := 0
-			if existing != nil {
-				i = integer(existing["index"])
-			} else {
-				i = nextNIC(nics)
-			}
-			if i == 0 {
-				fail("quota_exceeded", "Machine already has 8 NICs")
-			}
-			nic = existing
-			if nic == nil {
-				nic = e.NICSpec(m, network, i)
-				nics = append(nics, nic)
-			}
-			request = D{"action": "nic_attach", "index": i, "serial": network["serial"], "nic": nic}
-		} else {
-			i := integer(a["nic"])
-			if !dry && m["kind"] == "vm" && powerState(obj(e.Call(D{"op": "status", "machine": m}))) == "paused" {
-				fail("conflict", "Resume or shut down the VM before detaching a NIC; a paused guest cannot acknowledge hot unplug", D{"recovery": "resolve_prerequisite"})
-			}
-			if i == 0 || find(nics, func(n D) bool { return integer(n["index"]) == i }) == nil {
-				if e.Op != nil && i != 0 {
-					e.Reconcile()
-					return D{"nics": nics, "quota_after": e.Quota(t)}
-				}
-				fail("invalid", "Only attached private NICs can be detached")
-			}
-			request = D{"action": "nic_detach", "index": i}
-			nics = filter(nics, func(n D) bool { return integer(n["index"]) != i })
-		}
-		if !dry {
-			if tool == "machine_nic_attach" {
-				m["nics"] = nics
-				e.Put("machines", m["vmid"], n, m)
-				e.Reconcile()
-			}
-			e.Call(merge(D{"op": "action", "machine": m}, request))
-			m["nics"] = nics
-			if tool == "machine_nic_detach" && len(nics) == 0 {
-				delete(m, "network_verification")
-			}
-			if tool == "machine_nic_attach" {
-				e.NICReadiness(m, nic)
-			}
-			e.Put("machines", m["vmid"], n, m)
-			if tool == "machine_nic_detach" {
-				e.Reconcile()
-			}
-		}
-		r := D{"nics": nics, "dry_run": dry, "quota_after": e.Quota(t)}
-		if !dry {
-			r["machine"] = e.PublicMachine(m, e.ports(n))
-		}
-		return r
-	case "port_open", "port_close":
-		var grant, delta D
-		if tool == "port_open" {
-			vmid, ip, vip := e.publishTarget(t, a)
-			// public_port asks for a special port the tenant was granted.
-			special := a["public_port"] != nil
-			var reserved specialPort
-			if special {
-				reserved = e.specialPortFor(n, integer(a["public_port"]), str(a["proto"]))
-			}
-			for _, p := range e.ports(n) {
-				if special && p.PublicPort == reserved.PublicPort && p.Proto == reserved.Proto && (p.VMID != vmid || p.VIP != vip.ID || float64(p.Port) != num(a["port"])) {
-					fail("conflict", "This special port already forwards to another target; close it with port_close first", D{"recovery": "resolve_prerequisite"})
-				}
-				if p.VMID == vmid && p.VIP == vip.ID && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] && p.Special == special && (!special || p.PublicPort == reserved.PublicPort) {
-					if p.State == "deleting" {
-						fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
-					}
-					if !dry {
-						e.Reconcile()
-					}
-					return D{"port": e.PublicGrant("ports", p.D(), n), "quota_after": e.Quota(t)}
-				}
-			}
-			requireHolder(vip)
-			delta = D{"public_ports": 1}
-			e.Quota(t, delta)
-			public := reserved.PublicPort
-			if !special {
-				public = e.AllocatePort(t)
-			}
-			opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: vmid, VIP: vip.ID, IP: ip, PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"]), Special: special}
-			grant = opened.D()
-			if !dry {
-				e.Put("ports", opened.ID, n, opened)
-				e.Reconcile()
-			} else {
-				grant = D{"port": a["port"], "proto": a["proto"], "state": "planned"}
-				if vip.ID != "" {
-					grant["vip"] = vip.ID
-				} else {
-					grant["machine"] = e.Machine(t, a["machine"])["name"]
-				}
-			}
-		} else {
-			var closing portGrant
-			ok := false
-			for _, p := range e.ports(n) {
-				if p.ID == a["id"] {
-					closing, ok = p, true
-					break
-				}
-			}
-			if !ok {
-				fail("not_found", "Port grant not found")
-			}
-			delta = D{"public_ports": -1}
-			if !dry {
-				closing.State = "deleting"
-				e.Put("ports", closing.ID, n, closing)
-				e.Reconcile()
-				e.S.Remove("ports", closing.ID)
-				closing.State = "deleted"
-			}
-			grant = closing.D()
-		}
-		q := e.Quota(t)
-		if dry {
-			q = e.Quota(t, delta)
-		}
-		return D{"port": e.PublicGrant("ports", grant, n), "dry_run": dry, "quota_after": q}
-	case "peer_allow", "peer_revoke":
-		var grant D
-		var peer peerGrant
-		if tool == "peer_allow" {
-			m := e.Machine(t, a["machine"])
-			source := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["from_tenant"] })
-			if source == nil || source["status"] != "active" {
-				fail("not_found", "Source tenant not found")
-			}
-			src := fmt.Sprintf("10.200.%d.0/24", integer(source["n"]))
-			if a["from_machine"] != nil {
-				src = str(e.Machine(source, a["from_machine"])["ip"]) + "/32"
-			}
-			found := false
-			for _, p := range e.peers(n) {
-				if p.Source == src && p.Target == m["ip"] && float64(p.Port) == num(a["port"]) && p.protocol() == "tcp" {
-					peer, found = p, true
-					break
-				}
-			}
-			if !found {
-				peer = peerGrant{ID: randomID()[:16], TenantN: n, Source: src, Target: str(m["ip"]), Port: integer(a["port"]), Proto: "tcp"}
-			}
-			if peer.State == "deleting" {
-				fail("conflict", "Finish removing this peer grant before reusing it", D{"recovery": "finish_cleanup"})
-			}
-			grant = peer.D()
-			if !dry {
-				e.Put("peers", peer.ID, n, peer)
-				e.Reconcile()
-			} else {
-				grant = without(grant, "id", "tenant_n")
-			}
-		} else {
-			found := false
-			for _, p := range e.peers(n) {
-				if p.ID == a["id"] {
-					peer, found = p, true
-					break
-				}
-			}
-			if !found {
-				fail("not_found", "Peer grant not found")
-			}
-			if !dry {
-				peer.State = "deleting"
-				e.Put("peers", peer.ID, n, peer)
-				e.Reconcile()
-				e.S.Remove("peers", peer.ID)
-				peer.State = "deleted"
-			}
-			grant = peer.D()
-		}
-		return D{"peer": e.PublicGrant("peers", grant, n), "dry_run": dry, "quota_after": e.Quota(t)}
+	case "network_create":
+		return e.networkCreate(a, t)
+	case "network_delete":
+		return e.networkDelete(a, t)
+	case "machine_nic_attach":
+		return e.nicAttach(a, t)
+	case "machine_nic_detach":
+		return e.nicDetach(a, t)
+	case "port_open":
+		return e.portOpen(a, t)
+	case "port_close":
+		return e.portClose(a, t)
+	case "peer_allow":
+		return e.peerAllow(a, t)
+	case "peer_revoke":
+		return e.peerRevoke(a, t)
 	}
 	fail("invalid", "Unknown network tool")
 	return nil
+}
+
+func (e *Execution) networkCreate(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	nets := e.S.Objects("networks", n)
+	old := find(nets, func(v D) bool { return v["name"] == a["name"] })
+	if old != nil && !e.sameOperation(old) {
+		fail("conflict", "Network name already exists", D{"recovery": "revise_request"})
+	}
+	delta := D{}
+	if old == nil {
+		delta["networks"] = 1
+	}
+	e.Quota(t, delta)
+	network := old
+	if network == nil {
+		network = e.NetworkSpec(t, a, nil)
+	}
+	if !dry {
+		e.Put("networks", network["id"], n, network)
+		e.Reconcile()
+	} else {
+		network = without(network, "id", "serial", "tenant_n")
+		network["state"] = "planned"
+	}
+	q := e.Quota(t)
+	if dry {
+		q = e.Quota(t, delta)
+	}
+	return D{"network": network, "dry_run": dry, "quota_after": q}
+}
+
+func (e *Execution) networkDelete(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	nets := e.S.Objects("networks", n)
+	network := find(nets, func(v D) bool { return v["name"] == a["network"] || v["id"] == a["network"] })
+	if network == nil {
+		fail("not_found", "Network not found")
+	}
+	delta := D{"networks": -1}
+	if a["confirm"] != network["name"] {
+		fail("invalid", "confirm must equal the network name")
+	}
+	for _, m := range e.S.Objects("machines", n) {
+		for _, nic := range dicts(m["nics"]) {
+			if nic["network"] == network["id"] {
+				fail("conflict", "Network still has attached NICs", D{"recovery": "resolve_prerequisite"})
+			}
+		}
+	}
+	if !dry {
+		network["state"] = "deleting"
+		e.Put("networks", network["id"], n, network)
+		e.Reconcile()
+		e.S.Remove("networks", network["id"])
+		network["state"] = "deleted"
+	}
+	q := e.Quota(t)
+	if dry {
+		q = e.Quota(t, delta)
+	}
+	return D{"network": network, "dry_run": dry, "quota_after": q}
+}
+
+func (e *Execution) nicAttach(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	m := e.Machine(t, a["machine"])
+	nics := dicts(m["nics"])
+	network := find(e.S.Objects("networks", n), func(v D) bool { return v["id"] == a["network"] || v["name"] == a["network"] })
+	if network == nil {
+		fail("not_found", "Network not found in this tenant")
+	}
+	existing := find(nics, func(v D) bool { return v["network"] == network["id"] })
+	if existing != nil && !e.sameOperation(existing) {
+		fail("conflict", "Machine already attached to this network", D{"recovery": "revise_request"})
+	}
+	i := 0
+	if existing != nil {
+		i = integer(existing["index"])
+	} else {
+		i = nextNIC(nics)
+	}
+	if i == 0 {
+		fail("quota_exceeded", "Machine already has 8 NICs")
+	}
+	nic := existing
+	if nic == nil {
+		nic = e.NICSpec(m, network, i)
+		nics = append(nics, nic)
+	}
+	request := D{"action": "nic_attach", "index": i, "serial": network["serial"], "nic": nic}
+	if !dry {
+		m["nics"] = nics
+		e.Put("machines", m["vmid"], n, m)
+		e.Reconcile()
+		e.Call(merge(D{"op": "action", "machine": m}, request))
+		m["nics"] = nics
+		e.NICReadiness(m, nic)
+		e.Put("machines", m["vmid"], n, m)
+	}
+	return e.nicResult(m, nics, dry, t)
+}
+
+func (e *Execution) nicDetach(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	m := e.Machine(t, a["machine"])
+	nics := dicts(m["nics"])
+	i := integer(a["nic"])
+	if !dry && m["kind"] == "vm" && powerState(obj(e.Call(D{"op": "status", "machine": m}))) == "paused" {
+		fail("conflict", "Resume or shut down the VM before detaching a NIC; a paused guest cannot acknowledge hot unplug", D{"recovery": "resolve_prerequisite"})
+	}
+	if i == 0 || find(nics, func(n D) bool { return integer(n["index"]) == i }) == nil {
+		if e.Op != nil && i != 0 {
+			e.Reconcile()
+			return D{"nics": nics, "quota_after": e.Quota(t)}
+		}
+		fail("invalid", "Only attached private NICs can be detached")
+	}
+	request := D{"action": "nic_detach", "index": i}
+	nics = filter(nics, func(n D) bool { return integer(n["index"]) != i })
+	if !dry {
+		e.Call(merge(D{"op": "action", "machine": m}, request))
+		m["nics"] = nics
+		if len(nics) == 0 {
+			delete(m, "network_verification")
+		}
+		e.Put("machines", m["vmid"], n, m)
+		e.Reconcile()
+	}
+	return e.nicResult(m, nics, dry, t)
+}
+
+// nicResult is the reply both machine_nic tools share.
+func (e *Execution) nicResult(m D, nics []D, dry bool, t D) D {
+	r := D{"nics": nics, "dry_run": dry, "quota_after": e.Quota(t)}
+	if !dry {
+		r["machine"] = e.PublicMachine(m, e.ports(integer(t["n"])))
+	}
+	return r
+}
+
+func (e *Execution) portOpen(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	vmid, ip, vip := e.publishTarget(t, a)
+	// public_port asks for a special port the tenant was granted.
+	special := a["public_port"] != nil
+	var reserved specialPort
+	if special {
+		reserved = e.specialPortFor(n, integer(a["public_port"]), str(a["proto"]))
+	}
+	for _, p := range e.ports(n) {
+		if special && p.PublicPort == reserved.PublicPort && p.Proto == reserved.Proto && (p.VMID != vmid || p.VIP != vip.ID || float64(p.Port) != num(a["port"])) {
+			fail("conflict", "This special port already forwards to another target; close it with port_close first", D{"recovery": "resolve_prerequisite"})
+		}
+		if p.VMID == vmid && p.VIP == vip.ID && float64(p.Port) == num(a["port"]) && p.Proto == a["proto"] && p.Special == special && (!special || p.PublicPort == reserved.PublicPort) {
+			if p.State == "deleting" {
+				fail("conflict", "Finish removing this port before reopening it", D{"recovery": "finish_cleanup"})
+			}
+			if !dry {
+				e.Reconcile()
+			}
+			return D{"port": e.PublicGrant("ports", p.D(), n), "quota_after": e.Quota(t)}
+		}
+	}
+	requireHolder(vip)
+	delta := D{"public_ports": 1}
+	e.Quota(t, delta)
+	public := reserved.PublicPort
+	if !special {
+		public = e.AllocatePort(t)
+	}
+	opened := portGrant{ID: fmt.Sprintf("%d-%d-%s", n, public, str(a["proto"])), TenantN: n, VMID: vmid, VIP: vip.ID, IP: ip, PublicPort: public, Port: integer(a["port"]), Proto: str(a["proto"]), Special: special}
+	grant := opened.D()
+	if !dry {
+		e.Put("ports", opened.ID, n, opened)
+		e.Reconcile()
+	} else {
+		grant = D{"port": a["port"], "proto": a["proto"], "state": "planned"}
+		if vip.ID != "" {
+			grant["vip"] = vip.ID
+		} else {
+			grant["machine"] = e.Machine(t, a["machine"])["name"]
+		}
+	}
+	q := e.Quota(t)
+	if dry {
+		q = e.Quota(t, delta)
+	}
+	return D{"port": e.PublicGrant("ports", grant, n), "dry_run": dry, "quota_after": q}
+}
+
+func (e *Execution) portClose(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	var closing portGrant
+	ok := false
+	for _, p := range e.ports(n) {
+		if p.ID == a["id"] {
+			closing, ok = p, true
+			break
+		}
+	}
+	if !ok {
+		fail("not_found", "Port grant not found")
+	}
+	delta := D{"public_ports": -1}
+	if !dry {
+		closing.State = "deleting"
+		e.Put("ports", closing.ID, n, closing)
+		e.Reconcile()
+		e.S.Remove("ports", closing.ID)
+		closing.State = "deleted"
+	}
+	grant := closing.D()
+	q := e.Quota(t)
+	if dry {
+		q = e.Quota(t, delta)
+	}
+	return D{"port": e.PublicGrant("ports", grant, n), "dry_run": dry, "quota_after": q}
+}
+
+func (e *Execution) peerAllow(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	var peer peerGrant
+	m := e.Machine(t, a["machine"])
+	source := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["from_tenant"] })
+	if source == nil || source["status"] != "active" {
+		fail("not_found", "Source tenant not found")
+	}
+	src := fmt.Sprintf("10.200.%d.0/24", integer(source["n"]))
+	if a["from_machine"] != nil {
+		src = str(e.Machine(source, a["from_machine"])["ip"]) + "/32"
+	}
+	found := false
+	for _, p := range e.peers(n) {
+		if p.Source == src && p.Target == m["ip"] && float64(p.Port) == num(a["port"]) && p.protocol() == "tcp" {
+			peer, found = p, true
+			break
+		}
+	}
+	if !found {
+		peer = peerGrant{ID: randomID()[:16], TenantN: n, Source: src, Target: str(m["ip"]), Port: integer(a["port"]), Proto: "tcp"}
+	}
+	if peer.State == "deleting" {
+		fail("conflict", "Finish removing this peer grant before reusing it", D{"recovery": "finish_cleanup"})
+	}
+	grant := peer.D()
+	if !dry {
+		e.Put("peers", peer.ID, n, peer)
+		e.Reconcile()
+	} else {
+		grant = without(grant, "id", "tenant_n")
+	}
+	return D{"peer": e.PublicGrant("peers", grant, n), "dry_run": dry, "quota_after": e.Quota(t)}
+}
+
+func (e *Execution) peerRevoke(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	var peer peerGrant
+	found := false
+	for _, p := range e.peers(n) {
+		if p.ID == a["id"] {
+			peer, found = p, true
+			break
+		}
+	}
+	if !found {
+		fail("not_found", "Peer grant not found")
+	}
+	if !dry {
+		peer.State = "deleting"
+		e.Put("peers", peer.ID, n, peer)
+		e.Reconcile()
+		e.S.Remove("peers", peer.ID)
+		peer.State = "deleted"
+	}
+	return D{"peer": e.PublicGrant("peers", peer.D(), n), "dry_run": dry, "quota_after": e.Quota(t)}
 }
 
 // VIPAction keeps a tenant's virtual addresses (issue #96). carrel only lets
