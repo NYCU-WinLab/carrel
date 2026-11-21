@@ -3027,7 +3027,7 @@
     },
     {
       "name": "machine_ca_backfill",
-      "description": "Admin: make stopped VMs created before the lab SSH user CA trust it. Per VM, the node writes the CA files into the disk, and only then the record gets ssh_user_ca, ca_principals and ca_sync pull; a failure leaves the record unchanged, so running it again retries. VMs that already trust the CA, CTs, running VMs, VMs with a queued or running operation, ISO installs, VMs with service_ports and VMs with snapshots (a rollback would undo the backfill; delete them and run again) are skipped with a message. Give tenant and machine for one VM, tenant alone for all its VMs, or neither for every tenant. A personal tenant needs owner, the owner's portal username, and its VMs are skipped unless owner matches the tenant slug or alias_confirmed is true; a project tenant uses project:<name>. dry_run lists what would change.",
+      "description": "Admin: make stopped VMs created before the lab SSH user CA trust it. Per VM, the node writes the CA files into the disk, and only then the record gets ssh_user_ca, ca_principals and ca_sync pull; a failure leaves the record unchanged, so running it again retries. VMs that already trust the CA, CTs, running VMs, VMs with a queued or running operation, ISO installs, VMs with service_ports and VMs with snapshots (a rollback would undo the backfill; delete them and run again) are skipped with a message. Give tenant and machine for one VM, tenant alone for all its VMs, or neither for every tenant. A personal tenant needs owner, the owner's portal username, and its VMs are skipped unless owner matches the tenant slug (alias_confirmed waives only this slug check). A tenant with no recorded username is skipped unless the Keycloak lookup succeeds and user:<sub> equals the tenant subject; a recorded username that differs from owner also refuses. A project tenant uses project:<name>. dry_run lists what would change.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3048,7 +3048,7 @@
           "alias_confirmed": {
             "type": "boolean",
             "default": false,
-            "description": "The administrator confirms that owner owns this personal tenant although its slug does not match, for a slug assigned by an administrator. Needs tenant and owner; a recorded username that differs from owner still refuses. The audit log records it."
+            "description": "The administrator confirms that owner owns this personal tenant although its slug does not match, for a slug assigned by an administrator. It waives only the slug check: a recorded username that differs from owner still refuses, and with no record the Keycloak sub must still match the tenant subject. Needs tenant and owner. The audit log records it."
           },
           "idempotency_key": {
             "type": "string",

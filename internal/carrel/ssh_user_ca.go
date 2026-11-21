@@ -100,6 +100,21 @@ func (e *Execution) CABackfill(a, w D) D {
 	} else if a["machine"] != nil || owner != "" {
 		fail("invalid", "machine and owner need a tenant", D{"recovery": "revise_request"})
 	}
+	// The owner is one name per call, so the Keycloak lookup runs at most once,
+	// and a failure is remembered too: each lookup can wait out its timeout
+	// while this execution holds the write lock.
+	var (
+		looked   bool
+		lookedID string
+		lookErr  error
+	)
+	lookup := func() (string, error) {
+		if !looked {
+			looked = true
+			lookedID, lookErr = e.keycloakSub(owner)
+		}
+		return lookedID, lookErr
+	}
 	results := []D{}
 	for _, t := range tenants {
 		machines := e.S.Objects("machines", integer(t["n"]))
@@ -108,7 +123,7 @@ func (e *Execution) CABackfill(a, w D) D {
 		}
 		sort.SliceStable(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
 		for _, m := range machines {
-			result, message := e.backfillOne(t, m, owner, ca, dry, alias)
+			result, message := e.backfillOne(t, m, owner, ca, dry, alias, lookup)
 			results = append(results, D{"tenant": t["slug"], "machine": m["name"], "result": result, "message": message})
 		}
 	}
@@ -122,7 +137,7 @@ func (e *Execution) CABackfill(a, w D) D {
 
 // backfillOne returns "backfilled" (or "would_backfill" on a dry run),
 // "skipped" or "failed", with the reason.
-func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (string, string) {
+func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, lookup func() (string, error)) (string, string) {
 	n, vmid := integer(t["n"]), m["vmid"]
 	switch {
 	case m["kind"] != "vm":
@@ -170,7 +185,7 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 		} else {
 			// No record: the slug is lossy, the Keycloak sub is not. Fail
 			// closed when the lookup is unavailable or disagrees.
-			sub, err := e.keycloakSub(owner)
+			sub, err := lookup()
 			if err != nil {
 				return "skipped", "No username record and the owner's Keycloak sub could not be looked up (" + describe(err) + "); not backfilled"
 			}

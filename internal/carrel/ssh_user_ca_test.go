@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -363,6 +364,75 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	// The flag needs tenant and owner.
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
+}
+
+// alias_confirmed waives only the slug gate: with no record, a Keycloak id
+// that is not the tenant's subject still refuses, and a match passes.
+func TestBackfillAliasDoesNotBypassTheSubCheck(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	ctx, admin := context.Background(), person("root", true)
+	tenant := p.Store.Register("user:chen-sub", "ta-chen")
+	m := seedMachine(p, "old4", 10204)
+	m["tenant_n"] = tenant["n"]
+	p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id='10204'", tenant["n"], string(encoded(m)))
+	run := func() D {
+		r := app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "machine": "old4", "owner": "chen", "alias_confirmed": true}, admin)
+		assertOK(t, r)
+		return dicts(r["machines"])[0]
+	}
+	keycloakFor(t, p, "chen", `[{"id":"other-sub","username":"chen"}]`, 200)
+	if got := run(); got["result"] != "skipped" || b.count("ca_backfill") != 0 || storedMachine(p, 10204)["ssh_user_ca"] != nil || storedMachine(p, 10204)["ca_principals"] != nil || storedMachine(p, 10204)["ca_sync"] != nil {
+		t.Fatalf("mismatched sub: %s", encoded(got))
+	}
+	keycloakFor(t, p, "chen", `[{"id":"chen-sub","username":"chen"}]`, 200)
+	if got := run(); got["result"] != "backfilled" || b.count("ca_backfill") != 1 || storedMachine(p, 10204)["ssh_user_ca"] != userCATestKey {
+		t.Fatalf("matching sub: %s", encoded(got))
+	}
+}
+
+type countingTransport struct {
+	inner http.RoundTripper
+	n     int
+}
+
+func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.n++
+	return c.inner.RoundTrip(r)
+}
+
+// One call resolves the owner once, for every VM, and a failure counts too.
+func TestBackfillLooksTheOwnerUpOncePerCall(t *testing.T) {
+	for _, status := range []int{200, 500} {
+		p, _, app := backfillFixture(t)
+		tenant := p.Store.Register("user:chen-sub", "chen")
+		for i, name := range []string{"a", "b", "c"} {
+			vmid := 10210 + i
+			m := seedMachine(p, name, vmid)
+			m["tenant_n"] = tenant["n"]
+			p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id=?", tenant["n"], string(encoded(m)), str(vmid))
+		}
+		keycloakFor(t, p, "chen", `[{"id":"chen-sub","username":"chen"}]`, status)
+		ct := &countingTransport{inner: p.HTTP.Transport}
+		p.HTTP.Transport = ct
+		r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "chen", "owner": "chen", "dry_run": true}, person("root", true))
+		assertOK(t, r)
+		want := "would_backfill"
+		if status != 200 {
+			want = "skipped"
+		}
+		for _, got := range dicts(r["machines"]) {
+			if got["result"] != want {
+				t.Fatalf("status %d: %s", status, encoded(r))
+			}
+		}
+		if len(dicts(r["machines"])) != 3 {
+			t.Fatalf("status %d: %s", status, encoded(r))
+		}
+		// One token request and one user request, however many VMs.
+		if ct.n != 2 {
+			t.Fatalf("status %d: %d keycloak requests, want 2", status, ct.n)
+		}
+	}
 }
 
 func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
