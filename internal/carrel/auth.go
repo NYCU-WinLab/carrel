@@ -249,6 +249,7 @@ func (o *OAuth) upstream(ctx context.Context, path string, values url.Values) (D
 func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if p := recover(); p != nil {
+			logPanic("oauth", p, "path", r.URL.Path)
 			oauthError(w, "temporarily_unavailable", 503)
 		}
 	}()

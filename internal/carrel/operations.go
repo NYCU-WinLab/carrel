@@ -119,7 +119,7 @@ func (o *Operations) Loop() {
 		case <-o.p.ctx.Done():
 			return
 		case id := <-o.queue:
-			o.apply(id)
+			attemptLogged("operations_loop", func() { o.apply(id) })
 		}
 	}
 }
@@ -205,7 +205,7 @@ func (o *Operations) apply(id string) {
 	e.Op = op
 	var result D
 	complete := false
-	err := attempt(func() {
+	err := attemptLogged("operation", func() {
 		if op["tool"] != "tenant_suspend" && find(e.S.ActiveOperations(), func(v D) bool { return v["tool"] == "tenant_suspend" }) != nil {
 			panic(Waiting{"waiting_for_priority_operation", now() + 0.05})
 		}
@@ -260,7 +260,7 @@ func (o *Operations) apply(id string) {
 	o.p.wg.Add(1)
 	go func() {
 		defer o.p.wg.Done()
-		problem := attempt(func() {
+		problem := attemptLogged("operation_ready", func() {
 			t := e.S.TenantN(integer(op["tenant_n"]))
 			machines := filter(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["operation_id"] == id })
 			// Existing machines with attached NICs and snapshot restores also need readiness.
@@ -305,7 +305,7 @@ func (o *Operations) apply(id string) {
 			return
 		}
 		if problem == nil {
-			problem = attempt(func() {
+			problem = attemptLogged("operation_finish", func() {
 				t := e.S.TenantN(integer(op["tenant_n"]))
 				if op["tool"] == "domain_add" {
 					result = merge(result, e.DomainAction("domain_add", obj(op["args"]), t))
