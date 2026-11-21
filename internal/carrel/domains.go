@@ -157,148 +157,194 @@ func (e *Execution) RenewCertificate(t D) {
 		e.EnsureCertificate(t)
 	}
 }
+
+// DomainAction runs domain_list, domain_add and domain_remove.
 func (e *Execution) DomainAction(tool string, a, t D) D {
-	dry, n := boolean(a["dry_run"]), integer(t["n"])
-	domains := e.domains(n)
-	if tool == "domain_list" {
-		r := D{"domains": e.PublicGrants("domains", n)}
-		if grants := e.publicGrants(n); len(grants) > 0 {
-			r["special_domains"] = grants
-		}
-		return r
+	switch tool {
+	case "domain_list":
+		return e.domainList(t)
+	case "domain_add":
+		return e.domainAdd(a, t)
 	}
-	var domain, delta D
-	if tool == "domain_add" {
-		var vmid int
-		var vip vipRecord
-		function := ""
-		if a["function"] != nil {
-			// A function has no machine and no port: the gateway sends the
-			// request to its host's router (PLAN 7.11).
-			if a["machine"] != nil || a["vip"] != nil || a["target_port"] != nil {
-				fail("invalid", "Give function alone, without machine, vip or target_port", D{"recovery": "revise_request"})
-			}
-			function = str(e.Function(t, a["function"])["id"])
-		} else {
-			if a["target_port"] == nil {
-				fail("invalid", "target_port is required with machine or vip", D{"recovery": "revise_request"})
-			}
-			vmid, _, vip = e.publishTarget(t, a)
-		}
-		if (a["sub"] == nil) == (a["name"] == nil) {
-			fail("invalid", "Give exactly one of sub and name", D{"recovery": "revise_request"})
-		}
-		// sub names a domain in the tenant's subtree; name a special domain
-		// under one of its grants (PLAN 6.10).
-		name, grant := str(a["sub"])+"."+str(t["slug"])+".winlab.tw", ""
-		if a["name"] != nil {
-			name = strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
-			g := e.grantCovering(n, name)
-			grant = g.ID
-			if g.Kind == "delegated" && function != "" {
-				fail("invalid", "A delegated name asks its target before a certificate; publish a function under sub or an exact or wildcard grant", D{"recovery": "revise_request"})
-			}
-			if g.Kind == "srv" && function != "" {
-				fail("invalid", "An SRV name points at a public port; a function has none", D{"recovery": "revise_request"})
-			}
-			// An SRV record names the public port that forwards to the target.
-			if _, open := e.openPortFor(n, vmid, vip.ID, integer(a["target_port"]), srvProto(name)); g.Kind == "srv" && !open {
-				fail("invalid", "Open a public port to this target with port_open first; the SRV record names it", D{"recovery": "resolve_prerequisite"})
-			}
-		}
-		record, found := domainNamed(domains, name)
-		if found && record.State == "deleting" {
-			fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
-		}
-		if found && (record.VMID != vmid || record.VIP != vip.ID || record.Function != function || float64(record.TargetPort) != num(a["target_port"])) {
-			fail("conflict", "Domain already targets a different service; remove it explicitly first", D{"recovery": "revise_request"})
-		}
-		delta = D{"domains": 0}
-		if !found {
-			requireHolder(vip)
-			delta["domains"] = 1
-			e.Quota(t, delta)
-			record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Function: function, Sub: str(a["sub"]), Grant: grant, Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
-		}
-		if dry {
-			domain = D{"name": name, "target_port": a["target_port"], "state": "planned"}
-			if function != "" {
-				domain = D{"name": name, "function": a["function"], "state": "planned"}
-			} else if vip.ID != "" {
-				domain["vip"] = vip.ID
-			} else {
-				domain["machine"] = e.Machine(t, a["machine"])["name"]
-			}
-		} else {
-			if e.Op != nil && e.Op["tool"] == "domain_add" {
-				owner := e.Op["id"]
-				if found {
-					owner = orNil(record.OperationID)
-				}
-				identity := []any{record.ID, owner}
-				if e.Op["domain_target"] != nil && !equal(e.Op["domain_target"], identity) {
-					fail("conflict", "Domain was replaced; retry refused", D{"recovery": "revise_request"})
-				}
-				e.Op["domain_target"] = identity
-				e.P.Operations.Save(e.Op)
-			}
-			e.Put("domains", record.ID, n, record)
-			if e.Op != nil && !e.publicationPrepared {
-				return D{"domain": e.PublicGrant("domains", record.D(), n), "quota_after": e.Quota(t)}
-			}
-			if record.State != "ready" && record.State != "configuring" {
-				if record.ReadyAt > now() {
-					panic(Waiting{"waiting_for_certificate", record.ReadyAt})
-				}
-				fail("conflict", "Certificate preparation must complete before publishing")
-			}
-			if record.Grant == "" {
-				e.DomainRecord(t, false)
-			}
-			e.Reconcile()
-			record.State = "ready"
-			e.Put("domains", record.ID, n, record)
-			if record.Grant != "" {
-				// The gateway was given the routes, so the record may move;
-				// the grant is in use from now on.
-				g, _ := rowOf[domainGrant](e.S, "domain_grants", record.Grant)
-				if g.UnusedSince != 0 {
-					g.UnusedSince = 0
-					e.S.Put("domain_grants", g.ID, g.TenantN, g.D())
-				}
-				e.GrantRecord(g, false)
-			}
-			domain = record.D()
-		}
-	} else {
-		record, found := domainNamed(domains, str(a["name"]))
-		if !found {
-			fail("not_found", "Domain not found in this tenant")
-		}
-		delta = D{"domains": -1}
-		if !dry {
-			record.State = "deleting"
-			e.Put("domains", record.ID, n, record)
-			e.Reconcile()
-			// The tenant's wildcard record goes with its last own domain;
-			// a grant keeps its record until it is released.
-			last := record.Grant == ""
-			for _, d := range domains {
-				if d.ID != record.ID && d.State != "deleting" && d.Grant == "" {
-					last = false
-				}
-			}
-			if last {
-				e.DomainRecord(t, true)
-			}
-			e.S.Remove("domains", record.ID)
-			record.State = "deleted"
-		}
-		domain = record.D()
+	return e.domainRemove(a, t)
+}
+
+func (e *Execution) domainList(t D) D {
+	n := integer(t["n"])
+	r := D{"domains": e.PublicGrants("domains", n)}
+	if grants := e.publicGrants(n); len(grants) > 0 {
+		r["special_domains"] = grants
 	}
+	return r
+}
+
+// domainResult is the answer of domain_add and domain_remove: the domain and
+// the quota after, or after the planned change on a dry run.
+func (e *Execution) domainResult(t, domain, delta D, dry bool) D {
 	q := e.Quota(t)
 	if dry {
 		q = e.Quota(t, delta)
 	}
-	return D{"domain": e.PublicGrant("domains", domain, n), "dry_run": dry, "quota_after": q}
+	return D{"domain": e.PublicGrant("domains", domain, integer(t["n"])), "dry_run": dry, "quota_after": q}
+}
+
+// domainTarget resolves what a domain points at: a function, or a machine or
+// vip with a port.
+func (e *Execution) domainTarget(a, t D) (vmid int, vip vipRecord, function string) {
+	if a["function"] != nil {
+		// A function has no machine and no port: the gateway sends the
+		// request to its host's router (PLAN 7.11).
+		if a["machine"] != nil || a["vip"] != nil || a["target_port"] != nil {
+			fail("invalid", "Give function alone, without machine, vip or target_port", D{"recovery": "revise_request"})
+		}
+		return 0, vipRecord{}, str(e.Function(t, a["function"])["id"])
+	}
+	if a["target_port"] == nil {
+		fail("invalid", "target_port is required with machine or vip", D{"recovery": "revise_request"})
+	}
+	vmid, _, vip = e.publishTarget(t, a)
+	return vmid, vip, ""
+}
+
+// domainName gives the domain's name and the grant it lives under, if any.
+func (e *Execution) domainName(a, t D, vmid int, vip vipRecord, function string) (name, grant string) {
+	n := integer(t["n"])
+	if (a["sub"] == nil) == (a["name"] == nil) {
+		fail("invalid", "Give exactly one of sub and name", D{"recovery": "revise_request"})
+	}
+	// sub names a domain in the tenant's subtree; name a special domain
+	// under one of its grants (PLAN 6.10).
+	name = str(a["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
+	if a["name"] == nil {
+		return name, ""
+	}
+	name = strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
+	g := e.grantCovering(n, name)
+	if g.Kind == "delegated" && function != "" {
+		fail("invalid", "A delegated name asks its target before a certificate; publish a function under sub or an exact or wildcard grant", D{"recovery": "revise_request"})
+	}
+	if g.Kind == "srv" && function != "" {
+		fail("invalid", "An SRV name points at a public port; a function has none", D{"recovery": "revise_request"})
+	}
+	// An SRV record names the public port that forwards to the target.
+	if _, open := e.openPortFor(n, vmid, vip.ID, integer(a["target_port"]), srvProto(name)); g.Kind == "srv" && !open {
+		fail("invalid", "Open a public port to this target with port_open first; the SRV record names it", D{"recovery": "resolve_prerequisite"})
+	}
+	return name, g.ID
+}
+
+// domainPlanned is the domain as a dry run shows it.
+func (e *Execution) domainPlanned(a, t D, name string, vip vipRecord, function string) D {
+	if function != "" {
+		return D{"name": name, "function": a["function"], "state": "planned"}
+	}
+	domain := D{"name": name, "target_port": a["target_port"], "state": "planned"}
+	if vip.ID != "" {
+		domain["vip"] = vip.ID
+	} else {
+		domain["machine"] = e.Machine(t, a["machine"])["name"]
+	}
+	return domain
+}
+
+// domainClaim ties a queued domain_add to the record it first reached, so a
+// retry after the domain was replaced is refused.
+func (e *Execution) domainClaim(record domainRecord, found bool) {
+	owner := e.Op["id"]
+	if found {
+		owner = orNil(record.OperationID)
+	}
+	identity := []any{record.ID, owner}
+	if e.Op["domain_target"] != nil && !equal(e.Op["domain_target"], identity) {
+		fail("conflict", "Domain was replaced; retry refused", D{"recovery": "revise_request"})
+	}
+	e.Op["domain_target"] = identity
+	e.P.Operations.Save(e.Op)
+}
+
+// domainPublish brings a prepared domain record live and returns it.
+func (e *Execution) domainPublish(t D, record domainRecord) D {
+	n := integer(t["n"])
+	if record.State != "ready" && record.State != "configuring" {
+		if record.ReadyAt > now() {
+			panic(Waiting{"waiting_for_certificate", record.ReadyAt})
+		}
+		fail("conflict", "Certificate preparation must complete before publishing")
+	}
+	if record.Grant == "" {
+		e.DomainRecord(t, false)
+	}
+	e.Reconcile()
+	record.State = "ready"
+	e.Put("domains", record.ID, n, record)
+	if record.Grant != "" {
+		// The gateway was given the routes, so the record may move;
+		// the grant is in use from now on.
+		g, _ := rowOf[domainGrant](e.S, "domain_grants", record.Grant)
+		if g.UnusedSince != 0 {
+			g.UnusedSince = 0
+			e.S.Put("domain_grants", g.ID, g.TenantN, g.D())
+		}
+		e.GrantRecord(g, false)
+	}
+	return record.D()
+}
+
+func (e *Execution) domainAdd(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	vmid, vip, function := e.domainTarget(a, t)
+	name, grant := e.domainName(a, t, vmid, vip, function)
+	record, found := domainNamed(e.domains(n), name)
+	if found && record.State == "deleting" {
+		fail("conflict", "Finish removing this domain before reusing it", D{"recovery": "finish_cleanup"})
+	}
+	if found && (record.VMID != vmid || record.VIP != vip.ID || record.Function != function || float64(record.TargetPort) != num(a["target_port"])) {
+		fail("conflict", "Domain already targets a different service; remove it explicitly first", D{"recovery": "revise_request"})
+	}
+	delta := D{"domains": 0}
+	if !found {
+		requireHolder(vip)
+		delta["domains"] = 1
+		e.Quota(t, delta)
+		record = domainRecord{ID: randomID()[:16], TenantN: n, VMID: vmid, VIP: vip.ID, Function: function, Sub: str(a["sub"]), Grant: grant, Slug: str(t["slug"]), Name: name, TargetPort: integer(a["target_port"]), State: "queued", ReadyAt: float64(time.Now().Unix())}
+	}
+	if dry {
+		return e.domainResult(t, e.domainPlanned(a, t, name, vip, function), delta, dry)
+	}
+	if e.Op != nil && e.Op["tool"] == "domain_add" {
+		e.domainClaim(record, found)
+	}
+	e.Put("domains", record.ID, n, record)
+	if e.Op != nil && !e.publicationPrepared {
+		return D{"domain": e.PublicGrant("domains", record.D(), n), "quota_after": e.Quota(t)}
+	}
+	return e.domainResult(t, e.domainPublish(t, record), delta, dry)
+}
+
+func (e *Execution) domainRemove(a, t D) D {
+	dry, n := boolean(a["dry_run"]), integer(t["n"])
+	domains := e.domains(n)
+	record, found := domainNamed(domains, str(a["name"]))
+	if !found {
+		fail("not_found", "Domain not found in this tenant")
+	}
+	if !dry {
+		record.State = "deleting"
+		e.Put("domains", record.ID, n, record)
+		e.Reconcile()
+		// The tenant's wildcard record goes with its last own domain;
+		// a grant keeps its record until it is released.
+		last := record.Grant == ""
+		for _, d := range domains {
+			if d.ID != record.ID && d.State != "deleting" && d.Grant == "" {
+				last = false
+			}
+		}
+		if last {
+			e.DomainRecord(t, true)
+		}
+		e.S.Remove("domains", record.ID)
+		record.State = "deleted"
+	}
+	return e.domainResult(t, record.D(), D{"domains": -1}, dry)
 }
