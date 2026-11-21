@@ -16,8 +16,8 @@ import os
 import re
 import shutil
 import socket
-import stat
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2651,7 +2651,7 @@ def btrfs_root_subvol(mount):
         listing = run("btrfs", "subvolume", "list", mount)
     except CommandFailure:
         return None
-    paths = {m.group(1) for m in re.finditer(r"\bpath (\S+)$", listing, re.M)}
+    paths = {m.group(1) for m in re.finditer(r"\bpath (\S+)$", listing, re.MULTILINE)}
     return next((name for name in ("@", "root") if name in paths), None)
 
 
