@@ -7,6 +7,7 @@ control plane owns authorization and quotas; this boundary owns host integrity.
 """
 
 import contextlib
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -2583,7 +2584,12 @@ def guest_write(root, path, data, mode):
             os.unlink(tmp, dir_fd=fd)
         out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=fd)
         try:
-            os.write(out, data.encode())
+            view = memoryview(data.encode())
+            while view:
+                written = os.write(out, view)
+                if written <= 0:
+                    raise OSError(errno.ENOSPC, "short write to " + tmp)
+                view = view[written:]
             os.fchmod(out, mode)
             os.fchown(out, 0, 0)
         finally:

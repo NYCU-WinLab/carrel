@@ -2496,3 +2496,34 @@ def test_ca_backfill_does_not_write_the_dropin_when_the_principals_write_fails(m
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert not (guest / "etc/ssh/sshd_config.d/50-carrel-user-ca.conf").exists()
     assert not (guest / "etc/ssh/ssh_user_ca.pub").exists()
+
+
+def test_guest_write_keeps_writing_after_a_short_write(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    real = module.os.write
+    monkeypatch.setattr(module.os, "write", lambda fd, data: real(fd, bytes(data)[:3]))
+    root = tmp_path / "root"
+    root.mkdir()
+    module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
+    assert (root / "etc/file").read_text() == "0123456789"
+
+
+def test_guest_write_does_not_rename_when_the_write_stalls(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    real = module.os.write
+    sent = []
+
+    def stall(fd, data):
+        if sent:
+            return 0
+        sent.append(1)
+        return real(fd, bytes(data)[:3])
+
+    monkeypatch.setattr(module.os, "write", stall)
+    root = tmp_path / "root"
+    root.mkdir()
+    with pytest.raises(OSError):
+        module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
+    assert not (root / "etc/file").exists()
