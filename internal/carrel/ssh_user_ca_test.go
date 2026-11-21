@@ -363,6 +363,13 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	// The flag needs tenant and owner.
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
+	// A project tenant has no owner check to vouch for: refused, nothing changes.
+	p.Store.Register("project:robotics", "robotics")
+	before := b.count("ca_backfill")
+	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "robotics", "owner": "chen", "alias_confirmed": true}, admin), "invalid")
+	if b.count("ca_backfill") != before {
+		t.Fatal("a refused project tenant call changed a machine")
+	}
 }
 
 func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {

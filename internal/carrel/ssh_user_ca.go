@@ -96,6 +96,9 @@ func (e *Execution) CABackfill(a, w D) D {
 		if t == nil {
 			fail("not_found", "Tenant not found")
 		}
+		if alias && !strings.HasPrefix(str(t["subject"]), "user:") {
+			fail("invalid", "alias_confirmed is only for a personal tenant; a project tenant uses project:<name>", D{"recovery": "revise_request"})
+		}
 		tenants = []D{t}
 	} else if a["machine"] != nil || owner != "" {
 		fail("invalid", "machine and owner need a tenant", D{"recovery": "revise_request"})

@@ -636,7 +636,7 @@ the snapshots, then run it again); after the node op succeeds it saves
 retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`,
 and a VM is skipped unless that username's slug is the tenant's slug. For a tenant whose slug an
 administrator assigned, `alias_confirmed: true` vouches for `owner` instead; it needs `tenant` and
-`owner`, applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
+`owner`, is only for a personal tenant (a project tenant is refused as `invalid`), applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
 audit log. A lossless recorded username (a saved key's `by`, or `ca_principals` of a live or frozen VM
 created with the CA) that contradicts `owner` still refuses, flag or not; a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
 its VMs, or neither for every tenant; `dry_run` lists what would change.
