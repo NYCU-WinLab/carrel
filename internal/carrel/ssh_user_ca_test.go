@@ -324,6 +324,19 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 		t.Fatalf("contradicting frozen record: %s", encoded(got))
 	}
 	p.Store.Remove("frozen", 10299)
+	// VMs created with the CA before ca_sync existed still count as a record, live or frozen.
+	p.Store.Put("frozen", 10298, integer(tenant["n"]), D{"vmid": 10298, "name": "cold2", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_principals": []any{"tachen"}})
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("frozen record without ca_sync: %s", encoded(got))
+	}
+	p.Store.Remove("frozen", 10298)
+	live := seedMachine(p, "live-ca", 10297)
+	live["tenant_n"], live["ssh_user_ca"], live["ca_principals"] = tenant["n"], "ssh-ed25519 AAAA", []any{"tachen"}
+	p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id='10297'", tenant["n"], string(encoded(live)))
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("live record without ca_sync: %s", encoded(got))
+	}
+	p.Store.Remove("machines", 10297)
 	if got := run("chen", true); got["result"] != "backfilled" || !equal(storedMachine(p, 10203)["ca_principals"], []any{"chen"}) {
 		t.Fatalf("with the flag: %s", encoded(got))
 	}
