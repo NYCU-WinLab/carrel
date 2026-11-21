@@ -628,6 +628,13 @@ filesystem the tenant controls. The mount is read-write only (needed for the wri
 `nodev,nosuid,noexec`, plus `errors=remount-ro` on ext4. Nodes must run a patched kernel before the
 maintenance-window run (#443).
 
+The admin tool `machine_ca_backfill` calls it per VM: it skips a VM that already has `ssh_user_ca`, a
+CT, a running VM, an ISO install and a VM with `service_ports`; after the node op succeeds it saves
+`ssh_user_ca`, `ca_principals` and `ca_sync: pull`, so a failure leaves the record old and a second run
+retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`;
+a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
+its VMs, or neither for every tenant; `dry_run` lists what would change.
+
 `machine_access` lets the tenant name other members who may log in with a certificate: grant and
 revoke take portal usernames, and the machine's principals file becomes its own principal followed
 by the grants. A VM's guest reporter (`scripts/guest-report.py`) sends the file it has and writes the

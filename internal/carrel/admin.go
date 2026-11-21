@@ -35,6 +35,8 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		return e.PlanMigration(a)
 	case "node_drain", "node_undrain":
 		return e.DrainNode(tool, a, w)
+	case "machine_ca_backfill":
+		return e.CABackfill(a, w)
 	case "platform_power":
 		return e.PlatformPower(a, w)
 	case "reconcile_run":
