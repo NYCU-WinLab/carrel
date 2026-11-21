@@ -137,9 +137,7 @@ func TestGoldenDomainEdges(t *testing.T) {
 	cert := func(a func() D) { mu.Lock(); answers = append(answers, a); mu.Unlock() }
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	go rec.guests(ctx)
+	rec.startGuests(t)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
 	domainEdgeScenario(g, dns, cert)

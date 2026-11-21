@@ -177,6 +177,18 @@ func (r *recorder) guests(ctx context.Context) {
 	}
 }
 
+// startGuests runs guests until the test ends. The cleanup waits for the
+// goroutine, so it never reads the store after the fixture closes it.
+func (r *recorder) startGuests(t *testing.T) {
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.guests(ctx)
+	}()
+	t.Cleanup(func() { stop(); <-done })
+}
+
 func (r *recorder) take() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -295,9 +307,7 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 	p.certificatePrepare = func(D) D { return D{"state": "ready"} }
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	go rec.guests(ctx)
+	rec.startGuests(t)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
 	scenario(g)
