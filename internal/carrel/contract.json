@@ -442,6 +442,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -579,6 +580,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -623,6 +625,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -732,6 +735,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -851,6 +855,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1053,6 +1058,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1173,6 +1179,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1220,6 +1227,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1287,6 +1295,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1364,6 +1373,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1438,6 +1448,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1517,6 +1528,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1591,6 +1603,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1661,6 +1674,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1735,6 +1749,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -1872,6 +1887,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2012,7 +2028,8 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2157,7 +2174,8 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2222,6 +2240,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2427,6 +2446,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2496,6 +2516,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2729,6 +2750,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": true
       }
     },
@@ -2780,6 +2802,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2892,6 +2915,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -2933,7 +2957,7 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
         "openWorldHint": false
       }
     },
@@ -3031,6 +3055,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3064,6 +3089,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3123,6 +3149,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3155,7 +3182,8 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3244,6 +3272,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3338,7 +3367,8 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3694,6 +3724,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -3733,7 +3764,7 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": false,
+        "destructiveHint": true,
         "openWorldHint": false
       }
     },
@@ -3855,7 +3886,8 @@
       },
       "annotations": {
         "readOnlyHint": false,
-        "destructiveHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -4268,6 +4300,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": true,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },
@@ -5125,106 +5158,6 @@
         "openWorldHint": false
       }
     }
-  ],
-  "visible": [
-    "whoami",
-    "quota_get",
-    "catalog_get",
-    "capacity_get",
-    "machine_create",
-    "machine_list",
-    "machine_get",
-    "machine_delete",
-    "machine_freeze",
-    "machine_thaw",
-    "machine_power",
-    "machine_resize",
-    "machine_rename",
-    "machine_access",
-    "machine_media",
-    "machine_metrics",
-    "machine_console_url",
-    "network_create",
-    "network_list",
-    "network_delete",
-    "machine_nic_attach",
-    "machine_nic_detach",
-    "ssh_key_add",
-    "ssh_key_list",
-    "ssh_key_remove",
-    "port_open",
-    "port_list",
-    "port_close",
-    "domain_add",
-    "domain_list",
-    "domain_remove",
-    "peer_allow",
-    "peer_list",
-    "peer_revoke",
-    "vip_add",
-    "vip_list",
-    "vip_remove",
-    "vpn_client_add",
-    "vpn_client_list",
-    "vpn_client_remove",
-    "snapshot_create",
-    "snapshot_list",
-    "snapshot_delete",
-    "snapshot_rollback",
-    "iso_import",
-    "image_import",
-    "image_list",
-    "image_delete",
-    "quota_request",
-    "domain_request",
-    "port_request",
-    "public_ip_request",
-    "public_ip_list",
-    "public_ip_bind",
-    "public_ip_release",
-    "request_list",
-    "audit_log",
-    "tenant_list",
-    "node_list",
-    "usage_report",
-    "reconcile_run",
-    "platform_power",
-    "machine_migrate",
-    "node_drain",
-    "node_undrain",
-    "quota_set",
-    "tenant_suspend",
-    "request_list_all",
-    "request_approve",
-    "request_reject",
-    "zone_add",
-    "zone_list",
-    "zone_remove",
-    "domain_proxy",
-    "domain_transfer",
-    "app_link",
-    "app_list",
-    "app_get",
-    "app_deploy",
-    "app_rollback",
-    "app_unlink",
-    "app_webhook_rotate",
-    "runner_add",
-    "runner_list",
-    "runner_remove",
-    "deployment_plan",
-    "deployment_apply",
-    "operation_get",
-    "operation_retry",
-    "function_deploy",
-    "function_env",
-    "function_registry",
-    "function_link",
-    "function_get",
-    "function_logs",
-    "function_list",
-    "function_rollback",
-    "function_remove"
   ],
   "admin_tools": [
     "domain_proxy",

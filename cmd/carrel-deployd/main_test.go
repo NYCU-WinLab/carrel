@@ -190,3 +190,13 @@ func TestExtractAcceptsLinksThroughLinksInside(t *testing.T) {
 		t.Fatalf("got %q", b)
 	}
 }
+
+// extract unpacks a tar.gz into dir, which must not exist. Tests only.
+func extract(r io.Reader, dir string, uid, gid int) error {
+	parent, err := os.OpenRoot(filepath.Dir(dir))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	return extractAt(r, parent, filepath.Base(dir), uid, gid)
+}

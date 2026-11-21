@@ -68,7 +68,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
 | 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the `owner` is set at creation (section 9.4, issue #141) |
 | 2026-10-24 | The lab website moves onto a tenant: `winlab.tw` and `www.winlab.tw` may be granted as exact special names. `www` stays reserved as a tenant slug, and the zone's wildcard is never granted (section 6.10) |
-| 2026-11-12 | Functions are designed, not built: a container image that sleeps without memory and wakes from a microVM snapshot on a request. The contract is an OCI image that serves HTTP, so the same image runs on AWS Lambda. Pet machines stay the default (section 7.11) |
+| 2026-11-12 | Functions: a container image that sleeps without memory and wakes from a microVM snapshot on a request. The contract is an OCI image that serves HTTP, so the same image runs on AWS Lambda. Pet machines stay the default. Built since: the host agent and the control plane side (section 7.11) |
 
 ### 1.6 Current core and deferred work
 
@@ -80,9 +80,10 @@ implementation details. Advanced L2 tools remain available for network experimen
 
 Reliability, tenant isolation, ownership-safe retries, quota accounting and cleanup are core work.
 The longer catalog below is a roadmap, not a claim that every tool exists or a requirement to ship
-all of it before the core is useful. Custom ISO/image import, legacy workload migration, special
-names/ports, a full skill catalog, issue workflow and alumni scheduling are deferred until there is
-a concrete need. Multiple nodes became core work on 2026-10-19 (section 15.15). This change adds no scheduler, workflow language or separate intent
+all of it before the core is useful. Custom ISO/image import, special names and ports (6.10) and
+the client VPN (6.11) are built. Legacy workload migration, a full skill catalog, issue workflow and
+alumni scheduling are deferred until there is a concrete need. Multiple nodes became core work on
+2026-10-19 (section 15.15). This change adds no scheduler, workflow language or separate intent
 service. Live tool discovery and the acceptance reports are the authority for implemented features.
 
 ## 2. Object model
@@ -156,6 +157,15 @@ username (`claude`) collided with an existing record. No `*.winlab.tw` wildcard 
 Streamable HTTP at `https://carrel.winlab.tw/mcp`, OAuth through Keycloak. Every result is a tool
 result with `ok`; a failure sets `isError` and carries `error.code`, never a protocol error. Tools
 declare no output schema: one identical envelope on every tool cost 24 KB of each tool listing.
+
+Tool annotations follow one rule, and `TestContractAnnotations` checks it over the whole contract.
+`readOnlyHint` is true exactly for the tools that are not in `mutations`, except `whoami`, which
+registers an eligible tenant. `destructiveHint` is true when the call removes something the member
+cannot get back with one call: deleted data (`machine_delete`, `snapshot_delete`, `image_delete`,
+`function_remove`, `app_unlink`), state that is overwritten (`snapshot_rollback`), a resource
+returned to a pool (`vip_remove`, `public_ip_release`) and a secret replaced (`app_webhook_rotate`).
+Removing a grant, key, route or client that one add call restores is not destructive.
+`idempotentHint` is true on a write whose repeat with the same arguments changes nothing more.
 
 OAuth endpoints are limited per client address (the address the gateway saw): 60 requests per
 minute and 20 client registrations per hour. A registration expires after a day unless it reaches
@@ -749,7 +759,7 @@ port the nodes themselves use. A protocol that supports SRV records gets an
 weekly cap. They exist only in single-tenant zones, so they never spend the `winlab.tw` budget of
 section 6.4.
 
-### 6.11 Network model in AWS terms (issue #103, design only)
+### 6.11 Network model in AWS terms (issue #103, client VPN built)
 
 carrel names its network objects after their AWS counterparts where one exists, and each tool
 description says what differs. Members and agents already know the AWS model, so a request such
@@ -769,7 +779,7 @@ vocabulary. carrel stays a lab platform on one cluster: no accounts, IAM, region
 | Transit gateway | planned | see below |
 | Site-to-site VPN, customer gateway | planned | WireGuard first |
 | Direct Connect | planned | a VLAN on a spare node port, admin provisioned |
-| Client VPN | planned | WireGuard, one endpoint per tenant |
+| Client VPN | built (`vpn_client_add`) | WireGuard, one endpoint per tenant |
 
 **Routing domains.** All tenants share one VRF (`vrf_tenants`, table 1001), and isolation comes
 from the guest firewall, not from routes (6.3). Every tenant prefix is unique inside
@@ -791,7 +801,7 @@ refuses an entry whose prefix overlaps a tenant network it does not belong to. T
 attachment still passes the destination machine's guest firewall: a VPN client is one more source
 the machine must accept, never a way around `restricted`.
 
-**Client VPN** (first attachment to build, issue #103). WireGuard on the first exit node, one
+**Client VPN** (built, issue #103; the rest of this section is design only). WireGuard on the first exit node, one
 interface per tenant (`wg-tNNN`) in `vrf_tenants`, listening on UDP `31000 + N` of the public
 address (below the ephemeral range), with client addresses from `10.201.N.0/24`. The member or
 agent generates the key pair and sends only the public key (`vpn_client_add`), so carrel never
@@ -809,7 +819,8 @@ session, writes the private key into the returned `config`, and brings it up: `w
 use root, or a userspace client such as wireproxy (WireGuard as a local SOCKS5 proxy) when it may
 not, which needs no prompt at all. A client expires after `hours` (default 8, at most 168), so a
 session an agent forgot ends by itself; adding the same name again renews it. A tenant keeps at
-most 8 clients. The lab's
+most 8 clients. This is the constant `vpnClientLimit` in `vpn.go`, not a quota dimension; the
+`vpn_clients` dimension below is still planned. The lab's
 NetBird mesh uses `100.64.0.0/10`, which tenants drop as the tailnet range (6.3); it can be added
 later as a routing peer per tenant, mapped to the same attachment.
 
@@ -1342,7 +1353,7 @@ picks the node with the most free memory that is not drained. Moves run one at a
 site, since they share the nodes' one link with corosync; a move that finds another in progress
 waits for its slot. `node_undrain` reopens placement and leaves moved machines where they are.
 
-### 7.11 Functions: wake on request (design only)
+### 7.11 Functions: wake on request
 
 A function is a container image that carrel runs only while it has work. A sleeping function has
 no process and uses no memory. A request wakes it from a snapshot in about 100 ms, and it goes
@@ -1353,8 +1364,8 @@ Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the rout
 build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
 writable overlay, and the jailer around every Firecracker process. They run by hand on one test
 host. A function has a route to the internet behind the egress filter. Images come from a
-registry without credentials, or from a `docker save` tarball, with no Docker daemon. Nothing is
-connected to the control plane, the gateway or MCP. The three
+registry without credentials, or from a `docker save` tarball, with no Docker daemon. The control
+plane and the MCP tools are connected since (below). The three
 limits required before tenant code runs on a function host are built: disk use (issue #225),
 traffic (issue #229) and a guard that keeps the rules loaded (issue #230).
 

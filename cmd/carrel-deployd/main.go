@@ -313,16 +313,6 @@ func (a *agent) releases() (*os.Root, error) {
 	return os.OpenRoot(fmt.Sprintf("/proc/self/fd/%d", fd))
 }
 
-// extract unpacks a tar.gz into dir, which must not exist.
-func extract(r io.Reader, dir string, uid, gid int) error {
-	parent, err := os.OpenRoot(filepath.Dir(dir))
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
-	return extractAt(r, parent, filepath.Base(dir), uid, gid)
-}
-
 // extractAt unpacks a tar.gz into a new directory name under parent. Every
 // write goes through os.Root, so no entry or link can reach outside it, and
 // existing links are never followed. No entry may pass through a link the
