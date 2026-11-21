@@ -337,6 +337,9 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 		t.Fatalf("live record without ca_sync: %s", encoded(got))
 	}
 	p.Store.Remove("machines", 10297)
+	// A pre-ca_sync CA record that matches owner is accepted, and a backfilled row without ca_sync is no record.
+	p.Store.Put("frozen", 10296, integer(tenant["n"]), D{"vmid": 10296, "name": "cold3", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_principals": []any{"chen"}})
+	p.Store.Put("frozen", 10295, integer(tenant["n"]), D{"vmid": 10295, "name": "cold4", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_principals": []any{"tachen"}, "ca_backfilled": true})
 	if got := run("chen", true); got["result"] != "backfilled" || !equal(storedMachine(p, 10203)["ca_principals"], []any{"chen"}) {
 		t.Fatalf("with the flag: %s", encoded(got))
 	}
@@ -357,6 +360,10 @@ func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
 	p.Store.Put("machines", 10311, n, ca(10311, "filled", "filled-user", D{"ca_backfilled": true}))
 	if got := recorded(); len(got) != 0 {
 		t.Fatalf("legacy and backfilled VMs counted: %v", got)
+	}
+	p.Store.Put("machines", 10313, n, D{"vmid": 10313, "name": "flagged", "ssh_user_ca": userCATestKey, "ca_principals": []any{"flagged-user"}, "ca_backfilled": true})
+	if got := recorded(); len(got) != 0 {
+		t.Fatalf("backfilled VM without ca_sync counted: %v", got)
 	}
 	p.Store.Put("machines", 10312, n, ca(10312, "made", "made-user", D{"ca_created": true}))
 	if got := recorded(); !equal(got, []string{"made-user"}) {
