@@ -2697,6 +2697,35 @@ def deactivate_guest_vgs(device):
         run("vgchange", "-an", "--config", config, vg, timeout=60)
 
 
+class StuckMount(CommandFailure):
+    """The guest filesystem is still mounted, so the nbd device must stay connected."""
+
+
+def is_mounted(path):
+    try:
+        run("mountpoint", "-q", path)
+    except CommandFailure:
+        return False
+    return True
+
+
+def release_guest_mount(device, mount):
+    """Unmount the guest root; raise StuckMount while it is still mounted (issue #478).
+
+    Disconnecting under a live mount can corrupt the guest filesystem and
+    strands the device. A mount that timed out may still have landed, so this
+    checks first. The umount is retried once, then lazy; the error names the
+    device and path for an operator.
+    """
+    for args in (("umount", mount), ("umount", mount), ("umount", "-l", mount)):
+        if not is_mounted(mount):
+            return
+        with contextlib.suppress(CommandFailure, subprocess.TimeoutExpired):
+            run(*args)
+    if is_mounted(mount):
+        raise StuckMount(f"umount failed; {device} is left connected and {mount} still mounted, clean up by hand")
+
+
 def ca_backfill(m):
     """Write the lab SSH user CA and the guest reporter into a stopped VM's disk (issue #458).
 
@@ -2749,19 +2778,25 @@ def ca_backfill_locked(m):
     try:
         mount.mkdir(0o700)
         run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
+        keep_connected = False
         try:
-            run("udevadm", "settle", timeout=30)
-            mount_guest_root(device, mount)
             try:
+                run("udevadm", "settle", timeout=30)
+                mount_guest_root(device, mount)
                 for path, content in files:
                     guest_write(mount, path, content, 0o755 if path.endswith(".py") else 0o644)
             finally:
-                run("umount", mount)
+                try:
+                    release_guest_mount(device, mount)
+                except StuckMount:
+                    keep_connected = True
+                    raise
         finally:
-            try:
-                deactivate_guest_vgs(device)
-            finally:
-                run("qemu-nbd", "--disconnect", device)
+            if not keep_connected:
+                try:
+                    deactivate_guest_vgs(device)
+                finally:
+                    run("qemu-nbd", "--disconnect", device)
     finally:
         for path in (mount, parent):
             with contextlib.suppress(OSError):

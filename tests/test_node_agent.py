@@ -2148,7 +2148,7 @@ CA = "ssh-ed25519 " + "B" * 43
 
 
 def backfill_setup(
-    monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False, pve_lock=None, fstype="ext4"
+    monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False, fail_umount=False, pve_lock=None, fstype="ext4"
 ):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
@@ -2198,9 +2198,14 @@ def backfill_setup(
             assert target.parent in parents and target.parent.stat().st_mode & 0o777 == 0o700
             target.rmdir()
             target.symlink_to(guest)
-        if a[0] == "umount":
-            Path(a[1]).unlink()
-            Path(a[1]).mkdir(0o700)
+        if a[0] == "mountpoint":
+            if not Path(a[-1]).is_symlink():
+                raise module.CommandFailure("not a mountpoint")
+        if a[0] == "umount" and fail_umount:
+            raise module.CommandFailure("umount failed: target is busy")
+        if a[0] == "umount" and Path(a[-1]).is_symlink():
+            Path(a[-1]).unlink()
+            Path(a[-1]).mkdir(0o700)
         if a[0] == "pvs":
             return "  guestvg\n  guestvg\n"
         return "/dev/zvol/rpool/vm-10100-disk-0" if a[0] == "pvesm" else ""
@@ -2253,6 +2258,33 @@ def test_ca_backfill_disconnects_the_nbd_device_when_a_step_fails(monkeypatch, t
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
     assert not any(c[0] == "umount" for c in calls)
+
+
+def test_ca_backfill_keeps_the_nbd_device_when_umount_keeps_failing(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fail_umount=True)
+    with pytest.raises(module.CommandFailure, match="/dev/nbd0.*carrel-backfill"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    umounts = [c for c in calls if c[0] == "umount"]
+    assert [c[1] for c in umounts] == [umounts[0][1], umounts[0][1], "-l"]
+    assert not any(c[0] in ("vgchange", "pvs") for c in calls)
+    assert not any(c[:2] == ["qemu-nbd", "--disconnect"] for c in calls)
+
+
+def test_ca_backfill_unmounts_a_timed_out_mount_before_disconnecting(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    run = module.run
+
+    def timing_out(*a, **k):
+        out = run(*a, **k)
+        if a[0] == "mount":
+            raise module.subprocess.TimeoutExpired(a, 180)
+        return out
+
+    monkeypatch.setattr(module, "run", timing_out)
+    with pytest.raises(module.subprocess.TimeoutExpired):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    names = [c[0] for c in calls if c[0] in ("mount", "umount", "qemu-nbd")]
+    assert names == ["qemu-nbd", "mount", "umount", "qemu-nbd"]
 
 
 def test_ca_backfill_does_not_follow_a_guest_symlink_out_of_the_disk(monkeypatch, tmp_path):
