@@ -562,3 +562,7 @@ func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 	delete(m, "readiness_token")
 	return m
 }
+
+func init() {
+	registerPhases(Phases{Perform: (*Execution).PerformImport}, "iso_import", "image_import")
+}

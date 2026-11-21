@@ -521,3 +521,8 @@ func (e *Execution) DeleteFrozen(f D, a, t D) D {
 	}
 	return r
 }
+
+func init() {
+	registerPhases(Phases{Perform: (*Execution).PerformFreeze}, "machine_freeze")
+	registerPhases(Phases{Perform: (*Execution).PerformThaw}, "machine_thaw")
+}
