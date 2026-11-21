@@ -490,7 +490,7 @@ service. The live wire contract is `internal/carrel/contract.json`.
 `/mcp` lists a small core toolset (under 50 tools, under 60 KB; admins also see the admin toolset). Add
 `?toolsets=machines,network,apps,functions` (or `all`, or the `X-Carrel-Toolsets` header) to list more. Toolsets
 only shape the list: every tool the caller may use stays callable by name. `/mcp/read-only` registers and lists
-only `readOnlyHint` tools. The admin filter applies on every endpoint. Toolsets are defined in `contract.json`.
+`readOnlyHint` tools plus `whoami`. The admin filter applies on every endpoint. Toolsets are defined in `contract.json`.
 
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
