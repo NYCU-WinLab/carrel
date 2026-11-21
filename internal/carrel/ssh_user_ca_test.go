@@ -364,10 +364,20 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
 	// A project tenant has no owner check to vouch for: refused, nothing changes.
-	p.Store.Register("project:robotics", "robotics")
+	// The shared project tenant has an eligible stopped VM, and the refusal comes before the machine lookup.
 	before := b.count("ca_backfill")
-	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "robotics", "owner": "chen", "alias_confirmed": true}, admin), "invalid")
-	if b.count("ca_backfill") != before {
+	for _, a := range []D{
+		{"tenant": "shared", "owner": "chen", "alias_confirmed": true},
+		{"tenant": "shared", "machine": "proj", "owner": "chen", "alias_confirmed": true},
+		{"tenant": "shared", "machine": "missing", "owner": "chen", "alias_confirmed": true},
+	} {
+		r := app.Call(ctx, "machine_ca_backfill", a, admin)
+		assertCode(t, r, "invalid")
+		if obj(r["error"])["recovery"] != "revise_request" {
+			t.Fatalf("recovery: %s", encoded(r))
+		}
+	}
+	if b.count("ca_backfill") != before || storedMachine(p, 10201)["ssh_user_ca"] != nil {
 		t.Fatal("a refused project tenant call changed a machine")
 	}
 }
