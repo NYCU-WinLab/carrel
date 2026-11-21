@@ -117,6 +117,7 @@ func TestKeycloakConfigIsAllOrNothing(t *testing.T) {
 		{"realm dot", "https://sso.example", ".", "https://sso.example/realms/."},
 		{"realm dotdot", "https://sso.example", "..", "https://sso.example/realms/.."},
 		{"realm query", "https://sso.example", "lab?x", "https://sso.example/realms/lab?x"},
+		{"realm semicolon", "https://sso.example", "lab;v=1", "https://sso.example/realms/lab;v=1"},
 		{"other realm", "https://sso.example", "other", "https://sso.example/realms/lab"},
 		{"other host", "https://sso.other", "lab", "https://sso.example/realms/lab"},
 	}
