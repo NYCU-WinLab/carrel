@@ -638,7 +638,8 @@ and a VM is skipped unless that username's slug is the tenant's slug. For a tena
 administrator assigned, `alias_confirmed: true` waives only that slug gate; it needs `tenant` and
 `owner`, applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
 audit log. A lossless recorded username (a saved key's `by`, or `ca_principals` of a live or frozen VM
-created with the CA) that contradicts `owner` still refuses, flag or not. A tenant with no recorded
+created with the CA) that contradicts `owner` still refuses, flag or not, and so does a tenant that records more
+than one distinct username (an administrator must resolve its records first). A tenant with no recorded
 username is skipped unless the Keycloak lookup succeeds and `user:<sub>` equals the tenant subject, flag or
 not; the lookup runs once per call and a failure is remembered for that call; a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
 its VMs, or neither for every tenant; `dry_run` lists what would change.

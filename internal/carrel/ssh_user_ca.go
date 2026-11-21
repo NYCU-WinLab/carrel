@@ -167,8 +167,9 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, looku
 	// rather than let another member in. Usernames that differ only in . _ -
 	// share a slug, so a lossless record, when the tenant has one, decides.
 	// A tenant whose slug an administrator assigned fails the slug check;
-	// alias_confirmed lets the admin vouch for owner instead, and a recorded
-	// username that contradicts it still refuses.
+	// alias_confirmed waives only that slug check, and a recorded
+	// username that contradicts it still refuses. More than one distinct
+	// recorded username is ambiguous, so it refuses whatever owner is.
 	checked := ""
 	if principal == owner {
 		if !strings.HasPrefix(str(t["subject"]), "user:") {
@@ -178,6 +179,9 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, looku
 			return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"]) + "; if an administrator assigned the slug, confirm with alias_confirmed"
 		}
 		if recorded := e.recordedUsernames(t); len(recorded) > 0 {
+			if len(recorded) > 1 {
+				return "skipped", "personal tenant " + str(t["slug"]) + " records more than one username (" + strings.Join(recorded, ", ") + "); an administrator must resolve the tenant records first"
+			}
 			if !contains(recorded, owner) {
 				return "skipped", "owner " + owner + " does not match the usernames recorded for personal tenant " + str(t["slug"]) + " (" + strings.Join(recorded, ", ") + ")"
 			}
