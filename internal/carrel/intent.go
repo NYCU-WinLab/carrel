@@ -2,6 +2,9 @@ package carrel
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"sort"
 	"time"
 )
 
@@ -486,4 +489,26 @@ func (e *Execution) CleanupDeployment() []D {
 	}
 	failures = append(failures, e.RestorePolicy()...)
 	return filter(failures, func(f D) bool { return f["id"] == nil || e.S.Get(str(f["kind"]), str(f["id"])) != nil })
+}
+
+// FinishDeployment publishes the applied deployment and builds its result.
+func (e *Execution) FinishDeployment(t D) D {
+	op := e.Op
+	e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))
+	result := merge(e.AccessResult(t, obj(op["args"])))
+	machines := []D{}
+	for _, vmid := range arr(obj(op["deployment"])["machines"]) {
+		machines = append(machines, e.PublicMachine(e.Machine(t, vmid), e.ports(integer(t["n"]))))
+	}
+	result["machines"] = machines
+	updated := []D{}
+	bindings := slices.Collect(maps.Keys(obj(obj(op["deployment"])["bindings"])))
+	sort.Slice(bindings, func(i, j int) bool { return integer(bindings[i]) < integer(bindings[j]) })
+	for _, id := range bindings {
+		if find(machines, func(m D) bool { return integer(m["vmid"]) == integer(id) }) == nil {
+			updated = append(updated, e.PublicMachine(e.Machine(t, id), e.ports(integer(t["n"]))))
+		}
+	}
+	result["updated_machines"] = updated
+	return result
 }

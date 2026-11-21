@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -302,42 +300,7 @@ func (o *Operations) apply(id string) {
 		if problem == nil {
 			problem = attemptLogged("operation_finish", func() {
 				t := e.S.TenantN(integer(op["tenant_n"]))
-				if op["tool"] == "domain_add" {
-					result = merge(result, e.DomainAction("domain_add", obj(op["args"]), t))
-				}
-				if op["tool"] == "machine_migrate" {
-					result = merge(result, e.FinishMigration(t))
-				}
-				if op["tool"] == "machine_freeze" {
-					result = merge(result, e.FinishFreeze(t))
-				}
-				if op["tool"] == "machine_thaw" {
-					result = merge(result, e.FinishThaw(t))
-				}
-				if op["tool"] == "iso_import" || op["tool"] == "image_import" {
-					result = merge(result, e.FinishImport())
-				}
-				if op["tool"] == "platform_power" && op["platform"] != nil {
-					result = merge(result, e.FinishPlatformPower())
-				}
-				if op["tool"] == "deployment_apply" {
-					e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))
-					result = merge(result, e.AccessResult(t, obj(op["args"])))
-					machines := []D{}
-					for _, vmid := range arr(obj(op["deployment"])["machines"]) {
-						machines = append(machines, e.PublicMachine(e.Machine(t, vmid), e.ports(integer(t["n"]))))
-					}
-					result["machines"] = machines
-					updated := []D{}
-					bindings := slices.Collect(maps.Keys(obj(obj(op["deployment"])["bindings"])))
-					sort.Slice(bindings, func(i, j int) bool { return integer(bindings[i]) < integer(bindings[j]) })
-					for _, id := range bindings {
-						if find(machines, func(m D) bool { return integer(m["vmid"]) == integer(id) }) == nil {
-							updated = append(updated, e.PublicMachine(e.Machine(t, id), e.ports(integer(t["n"]))))
-						}
-					}
-					result["updated_machines"] = updated
-				}
+				result = merge(result, e.runFinish(t))
 				if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" && op["tool"] != "machine_thaw" {
 					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.ports(integer(t["n"])))
 				}

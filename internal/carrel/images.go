@@ -564,5 +564,5 @@ func (e *Execution) ImportedMachineSpec(t, a D, m D) D {
 }
 
 func init() {
-	registerPhases(Phases{Perform: (*Execution).PerformImport}, "iso_import", "image_import")
+	registerPhases(Phases{Perform: (*Execution).PerformImport, Finish: func(e *Execution, _ D) D { return e.FinishImport() }}, "iso_import", "image_import")
 }

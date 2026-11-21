@@ -484,5 +484,10 @@ func (e *Execution) platformCheck(repair bool) []D {
 }
 
 func init() {
-	registerPhases(Phases{Perform: (*Execution).PerformPlatformPower}, "platform_power")
+	registerPhases(Phases{Perform: (*Execution).PerformPlatformPower, Finish: func(e *Execution, _ D) D {
+		if e.Op["platform"] == nil {
+			return nil
+		}
+		return e.FinishPlatformPower()
+	}}, "platform_power")
 }

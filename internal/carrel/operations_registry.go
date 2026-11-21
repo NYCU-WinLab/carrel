@@ -5,6 +5,9 @@ package carrel
 type Phases struct {
 	Prepare func(*Execution)
 	Perform func(*Execution)
+	// Finish runs under the infrastructure writer and returns the fields
+	// merged into the operation result.
+	Finish func(*Execution, D) D
 }
 
 var operationPhases = map[string]Phases{}
@@ -26,4 +29,11 @@ func (e *Execution) runPhases() {
 	if p.Perform != nil {
 		p.Perform(e)
 	}
+}
+
+func (e *Execution) runFinish(t D) D {
+	if p, ok := operationPhases[str(e.Op["tool"])]; ok && p.Finish != nil {
+		return p.Finish(e, t)
+	}
+	return nil
 }
