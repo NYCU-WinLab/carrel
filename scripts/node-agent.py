@@ -3259,7 +3259,9 @@ def main():
         console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
-    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove", "ca_backfill")
+    # ca_backfill is not long: it mounts a stopped disk, so a start (node.lock)
+    # must wait for it, and it picks a free nbd device another backfill must not take.
+    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store", "vmids_present"):

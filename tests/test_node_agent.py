@@ -2146,7 +2146,7 @@ def test_guest_sets_prune_ignores_a_node_without_the_table():
 CA = "ssh-ed25519 " + "B" * 43
 
 
-def backfill_setup(monkeypatch, tmp_path, power="stopped", fail_mount=False):
+def backfill_setup(monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False):
     module = load("node-agent.py")
     root = Path(__file__).parents[1]
     guest = tmp_path / "guest"
@@ -2167,11 +2167,15 @@ def backfill_setup(monkeypatch, tmp_path, power="stopped", fail_mount=False):
     monkeypatch.setattr(
         module,
         "Path",
-        lambda p: root / "scripts/guest-report.py" if p == "/usr/local/lib/carrel/guest-report.py" else real_path(p),
+        lambda p: (
+            root / "scripts/guest-report.py" if p == "/usr/local/lib/carrel/guest-report.py" else real_path(p)
+        ),
     )
 
     def run(*a, **k):
         calls.append([str(x) for x in a])
+        if a[0] == "qemu-nbd" and a[1].startswith("--connect") and fail_connect:
+            raise module.CommandFailure("connect failed")
         if a[0] == "mount" and fail_mount:
             raise module.CommandFailure("mount failed")
         return "/dev/zvol/rpool/vm-10100-disk-0" if a[0] == "pvesm" else ""
@@ -2184,16 +2188,29 @@ def test_ca_backfill_writes_the_ca_files_and_reporter_and_is_idempotent(monkeypa
     module, guest, calls = backfill_setup(monkeypatch, tmp_path)
     vm = dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice", "project:lab"])
     module.ca_backfill(vm)
-    first = {p.relative_to(guest): (p.read_text(), p.stat().st_mode & 0o777) for p in guest.rglob("*") if p.is_file()}
+    first = {
+        p.relative_to(guest): (p.read_text(), p.stat().st_mode & 0o777)
+        for p in guest.rglob("*")
+        if p.is_file()
+    }
     assert first[Path("etc/ssh/ssh_user_ca.pub")] == (CA + "\n", 0o644)
     assert first[Path("etc/ssh/sshd_config.d/50-carrel-user-ca.conf")][1] == 0o644
     assert first[Path("etc/ssh/principals/user")] == ("alice\nproject:lab\n", 0o644)
     reporter = Path(__file__).parents[1] / "scripts/guest-report.py"
     assert first[Path("usr/local/lib/carrel/guest-report.py")] == (reporter.read_text(), 0o755)
     assert len(first) == 4
-    assert [c[0] for c in calls if c[0] in ("qemu-nbd", "mount", "umount")] == ["qemu-nbd", "mount", "umount", "qemu-nbd"]
+    assert [c[0] for c in calls if c[0] in ("qemu-nbd", "mount", "umount")] == [
+        "qemu-nbd",
+        "mount",
+        "umount",
+        "qemu-nbd",
+    ]
     module.ca_backfill(vm)
-    second = {p.relative_to(guest): (p.read_text(), p.stat().st_mode & 0o777) for p in guest.rglob("*") if p.is_file()}
+    second = {
+        p.relative_to(guest): (p.read_text(), p.stat().st_mode & 0o777)
+        for p in guest.rglob("*")
+        if p.is_file()
+    }
     assert second == first
 
 
@@ -2220,3 +2237,23 @@ def test_ca_backfill_does_not_follow_a_guest_symlink_out_of_the_disk(monkeypatch
     with pytest.raises(OSError):
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert list(outside.iterdir()) == []
+
+
+def test_ca_backfill_leaves_an_nbd_device_it_did_not_connect_alone(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fail_connect=True)
+    with pytest.raises(module.CommandFailure, match="connect"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] == "qemu-nbd" and c[1] == "--disconnect" for c in calls)
+    assert not any(c[0] in ("mount", "umount") for c in calls)
+
+
+def test_ca_backfill_takes_the_node_lock_so_a_start_waits_for_it(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "ca_backfill", lambda m: {})
+    locks = []
+    monkeypatch.setattr(module.fcntl, "flock", lambda f, how: locks.append(Path(f.name).name))
+    request = json.dumps({"op": "ca_backfill", "machine": MACHINE}).encode() + b"\n"
+    monkeypatch.setattr(module.sys, "stdin", type("In", (), {"buffer": __import__("io").BytesIO(request)})())
+    module.main()
+    assert locks == ["node.lock"]
