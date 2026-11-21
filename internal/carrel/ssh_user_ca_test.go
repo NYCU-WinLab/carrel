@@ -376,6 +376,23 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	// The flag needs tenant and owner.
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
+	// A project tenant has no owner check to vouch for: refused, nothing changes.
+	// The shared project tenant has an eligible stopped VM, and the refusal comes before the machine lookup.
+	before := b.count("ca_backfill")
+	for _, a := range []D{
+		{"tenant": "shared", "owner": "chen", "alias_confirmed": true},
+		{"tenant": "shared", "machine": "proj", "owner": "chen", "alias_confirmed": true},
+		{"tenant": "shared", "machine": "missing", "owner": "chen", "alias_confirmed": true},
+	} {
+		r := app.Call(ctx, "machine_ca_backfill", a, admin)
+		assertCode(t, r, "invalid")
+		if obj(r["error"])["recovery"] != "revise_request" {
+			t.Fatalf("recovery: %s", encoded(r))
+		}
+	}
+	if b.count("ca_backfill") != before || storedMachine(p, 10201)["ssh_user_ca"] != nil {
+		t.Fatal("a refused project tenant call changed a machine")
+	}
 }
 
 // alias_confirmed waives only the slug gate: with no record, a Keycloak id
