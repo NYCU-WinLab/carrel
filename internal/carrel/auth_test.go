@@ -339,6 +339,10 @@ func TestOAuthAcceptsReadOnlyResource(t *testing.T) {
 	if code := authorize("https://carrel.test/mcp/other"); code != 400 {
 		t.Fatal("authorize accepted an unknown resource", code)
 	}
+	repeated := "/oauth/authorize?client_id=desktop&redirect_uri=http%3A%2F%2Flocalhost%3A1234%2Fcb&response_type=code&code_challenge_method=S256&code_challenge=" + challenge(verifier) + "&state=s&resource=" + url.QueryEscape(resource) + "&resource=" + url.QueryEscape(resource)
+	if code := authRequest(o, repeated, nil).Code; code != 400 {
+		t.Fatal("authorize accepted a repeated resource", code)
+	}
 	base := url.Values{"client_id": {"desktop"}, "grant_type": {"authorization_code"}, "code": {"code"}, "code_verifier": {verifier}, "redirect_uri": {"http://localhost:1234/cb"}}
 	if w := authRequest(o, "/oauth/token", withValue(base, "resource", "https://carrel.test/mcp/other")); w.Code != 400 {
 		t.Fatal("token accepted an unknown resource", w.Code)
