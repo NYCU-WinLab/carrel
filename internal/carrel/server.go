@@ -39,6 +39,28 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		verifier = NewVerifier(issuer)
 	}
 	a := &App{Platform: p, verifier: verifier, forges: NewForgeVerifier(p.ciAudience(), p.Config.GitLabIssuers), schemas: map[string]*jsonschema.Schema{}}
+	a.compileSchemas()
+	mux := http.NewServeMux()
+	a.oauthRoutes(mux, origin, issuer)
+	a.guestRoutes(mux)
+	a.appRoutes(mux)
+	a.functionRoutes(mux)
+	a.keysRoutes(mux)
+	a.statusRoute(mux, p)
+	a.askRoute(mux, p)
+	a.mcpRoutes(mux, origin)
+	a.handler = chain(mux, a.networkGate(origin), originCheck(origin), a.oauthRateLimit, limitBody)
+	return a
+}
+
+// chain wraps h so the first middleware runs outermost.
+func chain(h http.Handler, middleware ...func(http.Handler) http.Handler) http.Handler {
+	for i := len(middleware) - 1; i >= 0; i-- {
+		h = middleware[i](h)
+	}
+	return h
+}
+func (a *App) compileSchemas() {
 	compiler := jsonschema.NewCompiler()
 	for _, d := range dicts(Contract["tools"]) {
 		name := str(d["name"])
@@ -47,22 +69,11 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		must(err)
 		a.schemas[name] = schema
 	}
-	var serversMu sync.Mutex
-	servers := map[string]*mcp.Server{}
-	stream := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		admin := boolean(obj(r.Context().Value(identityKey{}))["admin"])
-		sel, _ := r.Context().Value(selectionKey{}).(selection)
-		key := sel.key(admin)
-		serversMu.Lock()
-		defer serversMu.Unlock()
-		if servers[key] == nil {
-			servers[key] = a.mcpServer(admin, sel)
-		}
-		return servers[key]
-	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 262144})
-	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: "carrel-mcp", Hosted: []string{}, Verifier: verifier, HTTP: &http.Client{Timeout: 15 * time.Second}}
+}
+func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string) {
+	p := a.Platform
+	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: "carrel-mcp", Hosted: []string{}, Verifier: a.verifier, HTTP: &http.Client{Timeout: 15 * time.Second}}
 	oauth.Hosted = append(oauth.Hosted, p.Config.HostedRedirects...)
-	mux := http.NewServeMux()
 	console := consoleHandler{p: p, o: oauth}
 	oauth.Console = console.finish
 	mux.Handle("/oauth/", oauth)
@@ -71,6 +82,9 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 200, D{"status": "ok", "service": "carrel", "version": Version})
 	})
+}
+func (a *App) guestRoutes(mux *http.ServeMux) {
+	p := a.Platform
 	mux.HandleFunc("/internal/guest-status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			w.WriteHeader(405)
@@ -109,11 +123,22 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(keys))
 	})
-	a.appRoutes(mux)
-	a.functionRoutes(mux)
-	a.keysRoutes(mux)
-	a.statusRoute(mux, p)
-	a.askRoute(mux, p)
+}
+func (a *App) mcpRoutes(mux *http.ServeMux, origin string) {
+	verifier := a.verifier
+	var serversMu sync.Mutex
+	servers := map[string]*mcp.Server{}
+	stream := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		admin := boolean(obj(r.Context().Value(identityKey{}))["admin"])
+		sel, _ := r.Context().Value(selectionKey{}).(selection)
+		key := sel.key(admin)
+		serversMu.Lock()
+		defer serversMu.Unlock()
+		if servers[key] == nil {
+			servers[key] = a.mcpServer(admin, sel)
+		}
+		return servers[key]
+	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 262144})
 	mcpHandler := func(readOnly bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			authorization := r.Header.Get("Authorization")
@@ -145,24 +170,41 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	}
 	mux.Handle("/mcp", mcpHandler(false))
 	mux.Handle("/mcp/read-only", mcpHandler(true))
-	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		guest := strings.HasPrefix(r.URL.Path, "/internal/")
-		internal := guest || r.URL.Path == "/gateway/ask" || strings.HasPrefix(r.URL.Path, "/functions/v1/agent/")
-		// The gateway (10.200.0.2) forwards internet clients, so it is no
-		// guest even though its address is on the infra network (#262).
-		if internal && !strings.HasPrefix(host, "10.200.") || guest && host == "10.200.0.2" {
-			jsonResponse(w, 403, D{"error": "forbidden"})
-			return
-		}
-		if !internal && r.Host != strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://") {
-			jsonResponse(w, 400, D{"error": "invalid_host"})
-			return
-		}
-		if v := r.Header.Get("Origin"); v != "" && v != origin {
-			jsonResponse(w, 403, D{"error": "invalid_origin"})
-			return
-		}
+}
+func (a *App) networkGate(origin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			guest := strings.HasPrefix(r.URL.Path, "/internal/")
+			internal := guest || r.URL.Path == "/gateway/ask" || strings.HasPrefix(r.URL.Path, "/functions/v1/agent/")
+			// The gateway (10.200.0.2) forwards internet clients, so it is no
+			// guest even though its address is on the infra network (#262).
+			if internal && !strings.HasPrefix(host, "10.200.") || guest && host == "10.200.0.2" {
+				jsonResponse(w, 403, D{"error": "forbidden"})
+				return
+			}
+			if !internal && r.Host != strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://") {
+				jsonResponse(w, 400, D{"error": "invalid_host"})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func originCheck(origin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if v := r.Header.Get("Origin"); v != "" && v != origin {
+				jsonResponse(w, 403, D{"error": "invalid_origin"})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+func (a *App) oauthRateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/oauth/") {
 			// Per client address: one noisy client cannot lock everyone out of login.
 			a.mu.Lock()
@@ -188,6 +230,11 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 				return
 			}
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases"),
 			r.Method == "POST" && r.URL.Path == "/apps/v1/agent/upload":
@@ -200,9 +247,8 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		default:
 			r.Body = http.MaxBytesReader(w, r.Body, 262144)
 		}
-		mux.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
-	return a
 }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.ServeHTTP(w, r) }
 
