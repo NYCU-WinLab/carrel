@@ -170,7 +170,8 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
   `queued` means accepted, not reserved or complete. Poll `operation_get` and follow `next_action`.
 - Failure returns one of a closed set of codes: `quota_exceeded` (with the dimension),
   `capacity_exhausted` (with the member's idle machines), `not_found`, `conflict`, `forbidden`,
-  `invalid`, `pending_approval`.
+  `invalid`, `pending_approval`, `internal`. `internal` is a panic that is not a refusal, a bug;
+  it is logged at error level with its stack and never reads as a member conflict.
 - A certificate-budget wait persists `waiting` with `ready_at`, releases the infrastructure writer
   and resumes automatically. A domain is `ready` only after certificate, DNS and route application.
   `operation_retry` resumes failed work against its original allocations. Deployment rollback removes
