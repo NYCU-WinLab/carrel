@@ -161,7 +161,9 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 	}
 	call := func(step, tool string, a, who D) D { r := g.call(step, tool, a, who); flush(step); return r }
 	// racy submits a job that the queue may or may not have picked up by the
-	// time the response is rendered (issue #115): those fields are masked.
+	// time the response is rendered (issues #115, #532): those fields are
+	// masked. ready_at only appears once the job has been picked up, so it is
+	// dropped, and reserved flips with it.
 	racy := func(step, tool string, a, who D) D {
 		r := g.app.Call(context.Background(), tool, a, who)
 		shown := clone(r)
@@ -171,6 +173,8 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 					op[k] = "<racy>"
 				}
 			}
+			delete(op, "ready_at")
+			op["reserved"] = "<racy>"
 		}
 		g.record(step, tool, shown)
 		flush(step)
