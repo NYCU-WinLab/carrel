@@ -89,40 +89,20 @@ func (e *Execution) publicIPsTaken() []string {
 	return out
 }
 
-// PublicIPRequest files a request for a public address.
-func (e *Execution) PublicIPRequest(a, w, t D) D {
-	dry, n := boolean(a["dry_run"]), integer(t["n"])
-	key := str(a["idempotency_key"])
-	fingerprint := digest(string(encoded(D{"reason": a["reason"]})))
-	if key != "" && !dry {
-		for _, old := range e.S.Objects("requests", n) {
-			if old["idempotency_key"] == key {
-				if old["fingerprint"] != fingerprint {
-					fail("conflict", "Idempotency key was already used for different arguments", D{"recovery": "revise_request"})
-				}
-				return D{"request": without(old, "fingerprint", "idempotency_key"), "reused": true}
-			}
+// publicIPRequestKind is the request flow of a public address.
+var publicIPRequestKind = requestKind{
+	name: "public_ip", noun: "public address",
+	fingerprint: func(a D) D { return D{"reason": a["reason"]} },
+	check: func(e *Execution, a, t D) D {
+		if len(e.publicPool()) == 0 {
+			fail("conflict", "This site offers no public addresses", D{"recovery": "revise_request"})
 		}
-	}
-	if len(e.publicPool()) == 0 {
-		fail("conflict", "This site offers no public addresses", D{"recovery": "revise_request"})
-	}
-	pending := filter(e.S.Objects("requests", n), func(r D) bool { return r["kind"] == "public_ip" && r["status"] == "pending" })
-	if len(pending) >= maxPendingDomainRequests {
-		fail("quota_exceeded", "A tenant has at most 3 pending public address requests; wait for a decision", D{"recovery": "revise_request"})
-	}
-	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "public_ip", "status": "pending", "reason": a["reason"], "actor": w["sub"], "created_at": time.Now().Unix()}
-	if dry {
-		r = without(r, "id", "tenant_n", "actor", "created_at")
-		r["status"] = "planned"
-		return D{"request": r, "dry_run": true}
-	}
-	if key != "" {
-		r["idempotency_key"], r["fingerprint"] = key, fingerprint
-	}
-	e.Put("requests", r["id"], n, r)
-	return D{"request": without(r, "fingerprint", "idempotency_key"), "dry_run": false}
+		return D{}
+	},
 }
+
+// PublicIPRequest files a request for a public address.
+func (e *Execution) PublicIPRequest(a, w, t D) D { return e.FileRequest(publicIPRequestKind, a, w, t) }
 
 // approvePublicIP decides a public address request: an approval takes the
 // first free address of the pool for the tenant.
@@ -141,25 +121,10 @@ func (e *Execution) approvePublicIP(tool string, a, w, r, t D) D {
 		}
 		b = publicIP{ID: randomID()[:16], TenantN: n, Address: free[0], RequestID: str(r["id"]), GrantedAt: time.Now().Unix()}
 	}
-	switch {
-	case dry && tool == "request_approve":
-		r["status"] = "planned_approval"
+	if tool == "request_approve" {
 		r["address"] = b.Address
-	case dry:
-		r["status"] = "planned_rejection"
-	default:
-		e.Transaction(func(tx *Execution) {
-			if tool == "request_approve" {
-				tx.Put("public_ips", b.ID, n, b)
-				r["status"] = "approved"
-				r["address"] = b.Address
-			} else {
-				r["status"] = "rejected"
-			}
-			r["decided_by"] = w["sub"]
-			tx.Put("requests", r["id"], n, r)
-		})
 	}
+	e.decideRequest(tool, dry, w, r, func(tx *Execution) { tx.Put("public_ips", b.ID, n, b) })
 	return D{"request": without(r, "idempotency_key", "fingerprint"), "dry_run": dry}
 }
 
