@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -198,6 +199,24 @@ func TestBackfillSkipsWhatItMust(t *testing.T) {
 	}
 	if storedMachine(p, 10200)["ssh_user_ca"] != nil {
 		t.Fatal("a running VM was changed")
+	}
+}
+
+func TestBackfillSkipsAVMWithSnapshots(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	ctx, admin := context.Background(), person("root", true)
+	p.Store.Put("snapshots", "10200-before", 1, D{"id": "10200-before", "vmid": 10200, "name": "before", "disk_gb": 20, "state": "ready"})
+	for _, dry := range []bool{true, false} {
+		r := app.Call(ctx, "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice", "dry_run": dry}, admin)
+		got := dicts(r["machines"])[0]
+		if got["result"] != "skipped" || !strings.Contains(str(got["message"]), "Has snapshots") || b.count("ca_backfill") != 0 || storedMachine(p, 10200)["ssh_user_ca"] != nil {
+			t.Fatalf("dry=%v: %s", dry, encoded(r))
+		}
+	}
+	p.Store.Remove("snapshots", "10200-before")
+	r := app.Call(ctx, "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, admin)
+	if dicts(r["machines"])[0]["result"] != "backfilled" {
+		t.Fatalf("without snapshots: %s", encoded(r))
 	}
 }
 
