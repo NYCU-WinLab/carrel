@@ -219,8 +219,9 @@ func (c Config) Validate() error {
 			return errors.New("keycloak_realm must be a single path segment")
 		}
 		// Tenant subjects come from tokens of Issuer, so the lookup must
-		// address the same realm or no sub would ever match.
-		if strings.TrimRight(c.KeycloakURL, "/")+"/realms/"+c.KeycloakRealm != c.Issuer {
+		// address the same realm or no sub would ever match. NewApp trims
+		// trailing slashes from Issuer, so compare the same form.
+		if strings.TrimRight(c.KeycloakURL, "/")+"/realms/"+c.KeycloakRealm != strings.TrimRight(c.Issuer, "/") {
 			return errors.New("keycloak_url and keycloak_realm must form the issuer: keycloak_url + /realms/ + keycloak_realm")
 		}
 	}

@@ -127,4 +127,8 @@ func TestKeycloakConfigIsAllOrNothing(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("trailing slash: %v", err)
 	}
+	c.Issuer = "https://sso.example/realms/lab/"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("issuer trailing slash: %v", err)
+	}
 }
