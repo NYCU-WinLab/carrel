@@ -437,7 +437,7 @@ func TestToolListAuthorizationOnEveryEndpoint(t *testing.T) {
 			if named("admin_tools", str(tool["name"])) {
 				t.Fatalf("%s exposes admin tool %s to a member", target, tool["name"])
 			}
-			if strings.Contains(target, "read-only") && !boolean(obj(tool["annotations"])["readOnlyHint"]) {
+			if strings.Contains(target, "read-only") && tool["name"] != "whoami" && !boolean(obj(tool["annotations"])["readOnlyHint"]) {
 				t.Fatalf("%s lists %s, which is not read-only", target, tool["name"])
 			}
 		}
@@ -511,6 +511,29 @@ func TestReadOnlyEndpointRefusesWrites(t *testing.T) {
 	bad := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "X-Carrel-Toolsets": "bogus"}
 	if w := requestApp(app, "POST", "/mcp?toolsets=core", body, bad); w.Code != 400 {
 		t.Fatal("header toolsets skipped when the query has one", w.Code)
+	}
+}
+
+func TestReadOnlyEndpointListsWhoami(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("newbie", false)})
+	tools, _ := listedTools(t, app, "/mcp/read-only", nil)
+	listed := false
+	for _, tool := range tools {
+		listed = listed || tool["name"] == "whoami"
+	}
+	if !listed {
+		t.Fatal("/mcp/read-only does not list whoami")
+	}
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "whoami", "arguments": D{}}}))
+	var result D
+	must(json.Unmarshal(requestApp(app, "POST", "/mcp/read-only", body, headers).Body.Bytes(), &result))
+	if result["error"] != nil || result["result"] == nil {
+		t.Fatalf("whoami not callable on the read-only endpoint: %v", result)
+	}
+	if p.Store.Tenant("user:newbie") != nil {
+		t.Fatal("whoami on the read-only endpoint registered a tenant")
 	}
 }
 
