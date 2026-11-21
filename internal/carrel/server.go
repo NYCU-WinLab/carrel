@@ -69,21 +69,6 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}, nil
 			})
 		}
-		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
-			return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
-				result, err := next(ctx, method, request)
-				if listed, ok := result.(*mcp.ListToolsResult); ok && err == nil {
-					visible := make([]*mcp.Tool, 0, len(listed.Tools))
-					for _, tool := range listed.Tools {
-						if contains(Contract["visible"], tool.Name) {
-							visible = append(visible, tool)
-						}
-					}
-					listed.Tools = visible
-				}
-				return result, err
-			}
-		})
 		servers[admin] = server
 	}
 	stream := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
