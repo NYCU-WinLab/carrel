@@ -17,6 +17,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2599,16 +2600,83 @@ def free_nbd():
     raise CommandFailure("no free nbd device")
 
 
-def root_partition(device):
-    """The largest partition of the disk that holds a Linux filesystem, and its type."""
+def root_partitions(device):
+    """Every partition of the disk that holds a Linux filesystem, largest first, with its type."""
     run("udevadm", "settle", timeout=30)
     tree = json.loads(run("lsblk", "-J", "-b", "-o", "NAME,SIZE,TYPE,FSTYPE", device))
     parts = [c for d in tree["blockdevices"] for c in d.get("children", [])
              if c.get("type") == "part" and c.get("fstype") in ("ext4", "xfs", "btrfs")]
-    if not parts:
-        raise ValueError("no root partition")
-    part = max(parts, key=lambda c: int(c["size"]))
-    return "/dev/" + part["name"], part["fstype"]
+    parts.sort(key=lambda c: int(c["size"]), reverse=True)
+    return [("/dev/" + c["name"], c["fstype"]) for c in parts]
+
+
+def is_guest_root(mount):
+    """True when the mounted filesystem has etc/os-release and etc/ssh/ (issue #476).
+
+    Walks from the mount without following a guest symlink, so a guest cannot
+    point the check at a host path.
+    """
+    try:
+        root = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            etc = os.open("etc", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        finally:
+            os.close(root)
+        try:
+            os.lstat("os-release", dir_fd=etc)
+            return stat.S_ISDIR(os.lstat("ssh", dir_fd=etc).st_mode)
+        finally:
+            os.close(etc)
+    except OSError:
+        return False
+
+
+def mount_guest(partition, fstype, mount, subvol=None):
+    """Mount a guest filesystem with the minimal options; False when the mount fails."""
+    # ext4 takes its error policy from the guest superblock unless the mount
+    # sets one, and a guest can set errors=panic there.
+    options = "nodev,nosuid,noexec" + (",errors=remount-ro" if fstype == "ext4" else "")
+    if subvol:
+        options += ",subvol=" + subvol
+    try:
+        run("mount", "-t", fstype, "-o", options, partition, mount)
+    except CommandFailure:
+        return False
+    return True
+
+
+def btrfs_root_subvol(mount):
+    """The `@` or `root` subvolume of a mounted btrfs top level, or None."""
+    try:
+        listing = run("btrfs", "subvolume", "list", mount)
+    except CommandFailure:
+        return None
+    paths = {m.group(1) for m in re.finditer(r"\bpath (\S+)$", listing, re.MULTILINE)}
+    return next((name for name in ("@", "root") if name in paths), None)
+
+
+def mount_guest_root(device, mount):
+    """Mount the guest's root filesystem on `mount`, leaving it mounted (issue #476).
+
+    Tries the partitions largest first and accepts the first whose mount has
+    etc/os-release and etc/ssh/, so a small root next to a larger data
+    partition is not skipped. A btrfs top level without them falls back to an
+    `@` or `root` subvolume.
+    """
+    checked = []
+    for partition, fstype in root_partitions(device):
+        checked.append(partition)
+        if not mount_guest(partition, fstype, mount):
+            continue
+        if is_guest_root(mount):
+            return
+        subvol = btrfs_root_subvol(mount) if fstype == "btrfs" else None
+        run("umount", mount)
+        if subvol and mount_guest(partition, fstype, mount, subvol):
+            if is_guest_root(mount):
+                return
+            run("umount", mount)
+    raise CommandFailure("no partition holds the guest root (etc/os-release and etc/ssh/); checked " + (", ".join(checked) or "none"))
 
 
 def deactivate_guest_vgs(device):
@@ -2675,11 +2743,7 @@ def ca_backfill_locked(m):
         run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
         try:
             run("udevadm", "settle", timeout=30)
-            partition, fstype = root_partition(device)
-            # ext4 takes its error policy from the guest superblock unless the
-            # mount sets one, and a guest can set errors=panic there.
-            options = "nodev,nosuid,noexec" + (",errors=remount-ro" if fstype == "ext4" else "")
-            run("mount", "-t", fstype, "-o", options, partition, mount)
+            mount_guest_root(device, mount)
             try:
                 for path, content in files:
                     guest_write(mount, path, content, 0o755 if path.endswith(".py") else 0o644)

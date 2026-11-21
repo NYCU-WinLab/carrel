@@ -2156,11 +2156,13 @@ def backfill_setup(
     root = Path(__file__).parents[1]
     guest = tmp_path / "guest"
     guest.mkdir()
+    (guest / "etc/ssh").mkdir(parents=True)
+    (guest / "etc/os-release").write_text("ID=debian\n")
     calls = []
     monkeypatch.setattr(module, "disk_volume", lambda m: {"disk_volume": "local-zfs:vm-10100-disk-0"})
     monkeypatch.setattr(module, "power_status", lambda m: power)
     monkeypatch.setattr(module, "free_nbd", lambda: "/dev/nbd0")
-    monkeypatch.setattr(module, "root_partition", lambda device: (device + "p1", fstype))
+    monkeypatch.setattr(module, "root_partitions", lambda device: [(device + "p1", fstype)])
     real_mkdtemp = module.tempfile.mkdtemp
     parents = []
 
@@ -2222,7 +2224,7 @@ def test_ca_backfill_writes_the_ca_files_and_reporter_and_is_idempotent(monkeypa
     assert first[Path("etc/ssh/principals/user")] == ("alice\nproject:lab\n", 0o644)
     reporter = Path(__file__).parents[1] / "scripts/guest-report.py"
     assert first[Path("usr/local/lib/carrel/guest-report.py")] == (reporter.read_text(), 0o755)
-    assert len(first) == 4
+    assert len(first) == 5  # the four written files and the fixture os-release
     assert [c[0] for c in calls if c[0] in ("qemu-nbd", "mount", "umount")] == [
         "qemu-nbd",
         "mount",
@@ -2257,7 +2259,7 @@ def test_ca_backfill_does_not_follow_a_guest_symlink_out_of_the_disk(monkeypatch
     module, guest, _ = backfill_setup(monkeypatch, tmp_path)
     outside = tmp_path / "host-etc"
     outside.mkdir()
-    (guest / "etc").symlink_to(outside)
+    (guest / "etc/ssh/principals").symlink_to(outside)
     with pytest.raises(OSError):
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert list(outside.iterdir()) == []
@@ -2297,7 +2299,7 @@ def test_ca_backfill_mounts_an_xfs_root_with_its_type_and_no_errors_option(monke
     assert mount[1:5] == ["-t", "xfs", "-o", "nodev,nosuid,noexec"]
 
 
-def test_root_partition_returns_the_largest_linux_partition_and_its_type(monkeypatch):
+def test_root_partitions_lists_the_linux_partitions_largest_first(monkeypatch):
     module = load("node-agent.py")
     tree = {
         "blockdevices": [
@@ -2313,12 +2315,12 @@ def test_root_partition_returns_the_largest_linux_partition_and_its_type(monkeyp
         ]
     }
     monkeypatch.setattr(module, "run", lambda *a, **k: json.dumps(tree) if a[0] == "lsblk" else "")
-    assert module.root_partition("/dev/nbd0") == ("/dev/nbd0p3", "ext4")
+    assert module.root_partitions("/dev/nbd0") == [("/dev/nbd0p3", "ext4"), ("/dev/nbd0p2", "xfs")]
 
 
 def test_ca_backfill_removes_the_mount_dirs_when_a_write_fails(monkeypatch, tmp_path):
     module, guest, calls = backfill_setup(monkeypatch, tmp_path)
-    (guest / "etc").write_text("not a directory")
+    (guest / "etc/ssh/ssh_user_ca.pub").mkdir()
     with pytest.raises(OSError):
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     (parent,) = module.backfill_parents
@@ -2381,3 +2383,93 @@ def test_ca_backfill_disconnects_even_when_the_vg_deactivation_fails(monkeypatch
     with pytest.raises(module.CommandFailure):
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
+
+
+def multi_partition_setup(monkeypatch, tmp_path, partitions, roots, subvols=""):
+    """partitions: [(device, fstype)] largest first; roots: {(device, subvol): guest dir}."""
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, "root_partitions", lambda device: partitions)
+    run = module.run
+    mounted = []
+
+    def multi(*a, **k):
+        if a[0] == "mount":
+            opts = a[4].split(",")
+            subvol = next((o[7:] for o in opts if o.startswith("subvol=")), None)
+            source = roots[(a[5], subvol)]
+            calls.append([str(x) for x in a])
+            target = Path(a[-1])
+            target.rmdir()
+            target.symlink_to(source)
+            mounted.append(target)
+            return ""
+        if a[0] == "btrfs":
+            calls.append([str(x) for x in a])
+            return subvols
+        return run(*a, **k)
+
+    monkeypatch.setattr(module, "run", multi)
+    return module, guest, calls
+
+
+def test_ca_backfill_skips_a_larger_data_partition_for_the_small_root(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    module, guest, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p2", "ext4"), ("/dev/nbd0p1", "ext4")],
+        {("/dev/nbd0p2", None): data, ("/dev/nbd0p1", None): tmp_path / "guest"},
+    )
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+    assert list(data.iterdir()) == []
+    assert [c[-2] for c in calls if c[0] == "mount"] == ["/dev/nbd0p2", "/dev/nbd0p1"]
+    assert [c[0] for c in calls].count("umount") == 2
+
+
+def test_ca_backfill_fails_naming_the_partitions_when_none_is_a_root(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    module, _, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p2", "ext4"), ("/dev/nbd0p1", "xfs")],
+        {("/dev/nbd0p2", None): data, ("/dev/nbd0p1", None): data},
+    )
+    with pytest.raises(module.CommandFailure, match="nbd0p2, /dev/nbd0p1"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert list(data.iterdir()) == []
+    assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
+
+
+def test_ca_backfill_mounts_the_at_subvolume_of_a_btrfs_top_level(monkeypatch, tmp_path):
+    top = tmp_path / "top"
+    top.mkdir()
+    module, guest, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p1", "btrfs")],
+        {("/dev/nbd0p1", None): top, ("/dev/nbd0p1", "@"): tmp_path / "guest"},
+        subvols="ID 256 gen 8 top level 5 path @home\nID 257 gen 8 top level 5 path @\n",
+    )
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    mounts = [c for c in calls if c[0] == "mount"]
+    assert "subvol=@" in mounts[1][4].split(",")
+    assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+    assert list(top.iterdir()) == []
+
+
+def test_ca_backfill_fails_on_btrfs_without_a_root_subvolume(monkeypatch, tmp_path):
+    top = tmp_path / "top"
+    top.mkdir()
+    module, _, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p1", "btrfs")],
+        {("/dev/nbd0p1", None): top},
+        subvols="ID 256 gen 8 top level 5 path data\n",
+    )
+    with pytest.raises(module.CommandFailure, match="nbd0p1"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert len([c for c in calls if c[0] == "mount"]) == 1
