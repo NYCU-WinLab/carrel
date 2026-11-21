@@ -2565,3 +2565,25 @@ def test_guest_write_does_not_rename_when_the_write_stalls(monkeypatch, tmp_path
     with pytest.raises(OSError):
         module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
     assert not (root / "etc/file").exists()
+
+
+def test_guest_write_keeps_old_bytes_when_replacing_and_the_write_stalls(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    real = module.os.write
+    sent = []
+
+    def stall(fd, data):
+        if sent:
+            return 0
+        sent.append(1)
+        return real(fd, bytes(data)[:3])
+
+    monkeypatch.setattr(module.os, "write", stall)
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    target = root / "etc/file"
+    target.write_text("old-content")
+    with pytest.raises(OSError):
+        module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
+    assert target.read_text() == "old-content"
