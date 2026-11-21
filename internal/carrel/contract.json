@@ -3026,6 +3026,55 @@
       }
     },
     {
+      "name": "machine_ca_backfill",
+      "description": "Admin: make stopped VMs created before the lab SSH user CA trust it. Per VM, the node writes the CA files into the disk, and only then the record gets ssh_user_ca, ca_principals and ca_sync pull; a failure leaves the record unchanged, so running it again retries. VMs that already trust the CA, CTs, running VMs, VMs with a queued or running operation, ISO installs and VMs with service_ports are skipped with a message. Give tenant and machine for one VM, tenant alone for all its VMs, or neither for every tenant. A personal tenant needs owner, the owner's portal username, and its VMs are skipped unless owner matches the tenant slug; a project tenant uses project:<name>. dry_run lists what would change.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "owner": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "description": "Portal username of the owner of a personal tenant."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Reuse to retry a lost submission with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: lists each VM and what would happen, writes nothing."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "summary (default) or full."
+          }
+        },
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "node_drain",
       "description": "Admin: stop placing new machines on a node and queue a machine_migrate for each machine on it; the moves run one at a time, each visible with operation_get by its ID. Machines that cannot move (snapshots, suspended tenant, transient state) are listed under staying. Running it again only queues machines without a move in progress. node_undrain reopens the node.",
       "inputSchema": {
@@ -5164,6 +5213,7 @@
   "admin_tools": [
     "domain_proxy",
     "domain_transfer",
+    "machine_ca_backfill",
     "machine_migrate",
     "node_drain",
     "node_list",
@@ -5202,6 +5252,7 @@
     "machine_freeze",
     "machine_media",
     "machine_migrate",
+    "machine_ca_backfill",
     "machine_nic_attach",
     "machine_nic_detach",
     "machine_power",
@@ -5478,6 +5529,7 @@
     "admin": [
       "domain_proxy",
       "domain_transfer",
+      "machine_ca_backfill",
       "machine_migrate",
       "node_drain",
       "node_list",

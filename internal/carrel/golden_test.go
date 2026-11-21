@@ -523,6 +523,9 @@ func goldenScenario(g *goldenRun) {
 	call("migrate", "machine_migrate", D{"tenant": "alice", "machine": "api", "node": "carrel01"}, admin)
 	call("migrate", "machine_migrate", D{"tenant": "alice", "machine": "api", "node": "carrel01"}, alice)
 
+	call("backfill", "machine_ca_backfill", D{"tenant": "alice", "dry_run": true}, admin)
+	call("backfill", "machine_ca_backfill", D{"tenant": "alice", "dry_run": true}, alice)
+
 	call("drain", "node_drain", D{"node": "carrel01"}, admin)
 	call("drain", "node_undrain", D{"node": "carrel01"}, admin)
 	call("drain", "node_drain", D{"node": "carrel01"}, alice)
