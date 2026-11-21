@@ -387,3 +387,24 @@ func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
 		t.Fatalf("CA-created VM: %v", got)
 	}
 }
+
+// The input schema itself, not only the handler, requires tenant and owner with alias_confirmed.
+func TestCABackfillSchemaRequiresTenantAndOwnerWithAlias(t *testing.T) {
+	p, _, _ := backfillFixture(t)
+	app := NewApp(p, nil)
+	schema := app.schemas["machine_ca_backfill"]
+	for _, tc := range []struct {
+		args D
+		ok   bool
+	}{
+		{D{"alias_confirmed": false}, true},
+		{D{"alias_confirmed": true, "tenant": "ta-chen", "owner": "chen"}, true},
+		{D{"alias_confirmed": true}, false},
+		{D{"alias_confirmed": true, "tenant": "ta-chen"}, false},
+		{D{"alias_confirmed": true, "owner": "chen"}, false},
+	} {
+		if err := schema.Validate(map[string]any(tc.args)); (err == nil) != tc.ok {
+			t.Errorf("%v: ok=%v err=%v", tc.args, tc.ok, err)
+		}
+	}
+}
