@@ -60,7 +60,7 @@ func (e *Execution) withSSHUserCA(t, m, a D) D {
 	principal = tenantPrincipal(t, principal)
 	// How the machine takes later changes of who logs in (machine_access):
 	// a VM's guest reporter pulls them, a CT's node pushes them.
-	out := merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull"})
+	out := merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull", "ca_created": true})
 	if m["kind"] == "ct" {
 		// The node writes the file at creation, so the CT starts with it.
 		out["ca_sync"], out["ca_applied"] = "push", []any{principal}
@@ -204,7 +204,10 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 
 // recordedUsernames are the lossless portal usernames a tenant recorded: the
 // by of its saved keys and the ca_principals of its VMs created with the CA,
-// live or frozen. A backfilled VM is left out, its principal came from a caller's say-so.
+// live or frozen. Only a machine carrying the ca_created marker counts: a
+// backfilled VM, or one backfilled before the ca_backfilled flag existed, has
+// a principal that came from a caller's say-so, and without the marker the two
+// cannot be told apart from a CA-created one.
 func (e *Execution) recordedUsernames(t D) []string {
 	n, seen, out := integer(t["n"]), map[string]bool{}, []string{}
 	add := func(name string) {
@@ -217,7 +220,7 @@ func (e *Execution) recordedUsernames(t D) []string {
 		add(k.By)
 	}
 	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
-		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) {
+		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) || !boolean(m["ca_created"]) {
 			continue
 		}
 		for _, p := range arr(m["ca_principals"]) {

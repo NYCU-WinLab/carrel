@@ -319,7 +319,7 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	}
 	p.Store.Remove("keys", "k2")
 	// So does a frozen VM created with the CA.
-	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}})
+	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}, "ca_created": true})
 	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
 		t.Fatalf("contradicting frozen record: %s", encoded(got))
 	}
@@ -330,4 +330,23 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	// The flag needs tenant and owner.
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
+}
+
+func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
+	p, _, _ := backfillFixture(t)
+	tenant := p.Store.Register("user:li-sub", "li")
+	n := integer(tenant["n"])
+	ca := func(vmid int, name, principal string, extra D) D {
+		return merge(D{"vmid": vmid, "name": name, "ssh_user_ca": userCATestKey, "ca_sync": "pull", "ca_principals": []any{principal}}, extra)
+	}
+	recorded := func() []string { return (&Execution{P: p, S: p.Store}).recordedUsernames(tenant) }
+	p.Store.Put("machines", 10310, n, ca(10310, "legacy", "legacy-user", nil))
+	p.Store.Put("machines", 10311, n, ca(10311, "filled", "filled-user", D{"ca_backfilled": true}))
+	if got := recorded(); len(got) != 0 {
+		t.Fatalf("legacy and backfilled VMs counted: %v", got)
+	}
+	p.Store.Put("machines", 10312, n, ca(10312, "made", "made-user", D{"ca_created": true}))
+	if got := recorded(); !equal(got, []string{"made-user"}) {
+		t.Fatalf("CA-created VM: %v", got)
+	}
 }
