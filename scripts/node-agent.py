@@ -2600,14 +2600,15 @@ def free_nbd():
 
 
 def root_partition(device):
-    """The largest partition of the disk that holds a Linux filesystem."""
+    """The largest partition of the disk that holds a Linux filesystem, and its type."""
     run("udevadm", "settle", timeout=30)
     tree = json.loads(run("lsblk", "-J", "-b", "-o", "NAME,SIZE,TYPE,FSTYPE", device))
     parts = [c for d in tree["blockdevices"] for c in d.get("children", [])
              if c.get("type") == "part" and c.get("fstype") in ("ext4", "xfs", "btrfs")]
     if not parts:
         raise ValueError("no root partition")
-    return "/dev/" + max(parts, key=lambda c: int(c["size"]))["name"]
+    part = max(parts, key=lambda c: int(c["size"]))
+    return "/dev/" + part["name"], part["fstype"]
 
 
 def ca_backfill(m):
@@ -2651,7 +2652,11 @@ def ca_backfill_locked(m):
         mount.mkdir(0o700)
         run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
         try:
-            run("mount", "-o", "nodev,nosuid,noexec", root_partition(device), mount)
+            partition, fstype = root_partition(device)
+            # ext4 takes its error policy from the guest superblock unless the
+            # mount sets one, and a guest can set errors=panic there.
+            options = "nodev,nosuid,noexec" + (",errors=remount-ro" if fstype == "ext4" else "")
+            run("mount", "-t", fstype, "-o", options, partition, mount)
             try:
                 for path, content in files:
                     guest_write(mount, path, content, 0o755 if path.endswith(".py") else 0o644)

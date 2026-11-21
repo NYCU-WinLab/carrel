@@ -2148,7 +2148,7 @@ CA = "ssh-ed25519 " + "B" * 43
 
 
 def backfill_setup(
-    monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False, pve_lock=None
+    monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False, pve_lock=None, fstype="ext4"
 ):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
@@ -2160,7 +2160,7 @@ def backfill_setup(
     monkeypatch.setattr(module, "disk_volume", lambda m: {"disk_volume": "local-zfs:vm-10100-disk-0"})
     monkeypatch.setattr(module, "power_status", lambda m: power)
     monkeypatch.setattr(module, "free_nbd", lambda: "/dev/nbd0")
-    monkeypatch.setattr(module, "root_partition", lambda device: device + "p1")
+    monkeypatch.setattr(module, "root_partition", lambda device: (device + "p1", fstype))
     real_mkdtemp = module.tempfile.mkdtemp
     parents = []
 
@@ -2274,10 +2274,44 @@ def test_ca_backfill_mounts_below_a_private_dir_and_removes_both(monkeypatch, tm
     module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     (parent,) = module.backfill_parents
     mount = next(c for c in calls if c[0] == "mount")
-    assert mount[1:3] == ["-o", "nodev,nosuid,noexec"]
+    assert mount[1:5] == ["-t", "ext4", "-o", "nodev,nosuid,noexec,errors=remount-ro"]
     assert mount[-1] == str(parent / "root")
     assert not parent.exists()
     assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+
+
+def test_ca_backfill_mounts_an_ext4_root_with_its_type_and_errors_remount_ro(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fstype="ext4")
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    mount = next(c for c in calls if c[0] == "mount")
+    assert mount[1:3] == ["-t", "ext4"]
+    assert "errors=remount-ro" in mount[4].split(",")
+
+
+def test_ca_backfill_mounts_an_xfs_root_with_its_type_and_no_errors_option(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fstype="xfs")
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    mount = next(c for c in calls if c[0] == "mount")
+    assert mount[1:5] == ["-t", "xfs", "-o", "nodev,nosuid,noexec"]
+
+
+def test_root_partition_returns_the_largest_linux_partition_and_its_type(monkeypatch):
+    module = load("node-agent.py")
+    tree = {
+        "blockdevices": [
+            {
+                "name": "nbd0",
+                "type": "disk",
+                "children": [
+                    {"name": "nbd0p1", "size": "1048576", "type": "part", "fstype": "vfat"},
+                    {"name": "nbd0p2", "size": "536870912", "type": "part", "fstype": "xfs"},
+                    {"name": "nbd0p3", "size": "8589934592", "type": "part", "fstype": "ext4"},
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr(module, "run", lambda *a, **k: json.dumps(tree) if a[0] == "lsblk" else "")
+    assert module.root_partition("/dev/nbd0") == ("/dev/nbd0p3", "ext4")
 
 
 def test_ca_backfill_removes_the_mount_dirs_when_a_write_fails(monkeypatch, tmp_path):
