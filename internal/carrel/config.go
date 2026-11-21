@@ -207,11 +207,21 @@ func (c Config) Validate() error {
 	}
 	if c.KeycloakURL != "" || c.KeycloakRealm != "" || c.KeycloakClientID != "" || c.KeycloakClientSecretFile != "" {
 		// https only: the request carries the client secret.
-		if u, err := url.Parse(c.KeycloakURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("keycloak_url must be an https URL with no query")
+		// "?" and "#" are refused as text: url.Parse accepts a bare "?" with an
+		// empty RawQuery, which would move the route into the query.
+		if u, err := url.Parse(c.KeycloakURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.ContainsAny(c.KeycloakURL, "?#") || strings.Contains(c.KeycloakURL, "/.") {
+			return errors.New("keycloak_url must be an https URL with no query, fragment or dot segment")
 		}
 		if c.KeycloakRealm == "" || c.KeycloakClientID == "" || c.KeycloakClientSecretFile == "" {
 			return errors.New("keycloak_url needs keycloak_realm, keycloak_client_id and keycloak_client_secret_file")
+		}
+		if strings.ContainsAny(c.KeycloakRealm, "/?#\\%") || c.KeycloakRealm == "." || c.KeycloakRealm == ".." {
+			return errors.New("keycloak_realm must be a single path segment")
+		}
+		// Tenant subjects come from tokens of Issuer, so the lookup must
+		// address the same realm or no sub would ever match.
+		if strings.TrimRight(c.KeycloakURL, "/")+"/realms/"+c.KeycloakRealm != c.Issuer {
+			return errors.New("keycloak_url and keycloak_realm must form the issuer: keycloak_url + /realms/ + keycloak_realm")
 		}
 	}
 	if c.TelemetryURL != "" {

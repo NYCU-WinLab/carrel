@@ -57,6 +57,10 @@ func TestKeycloakSub(t *testing.T) {
 		{"no hit", `[]`, 200, "", "no user"},
 		{"two hits", `[{"id":"a","username":"alice"},{"id":"b","username":"alice"}]`, 200, "", "2 users"},
 		{"other name", `[{"id":"a","username":"alicia"}]`, 200, "", "no user"},
+		{"case differs", `[{"id":"a","username":"Alice"}]`, 200, "", "no user"},
+		{"blank id", `[{"id":"","username":"alice"}]`, 200, "", "no id"},
+		{"blank id and id", `[{"id":"","username":"alice"},{"id":"b","username":"alice"}]`, 200, "", "2 users"},
+		{"oversized", `[{"id":"a","username":"alice"}]` + strings.Repeat(" ", keycloakMaxBody), 200, "", "too large"},
 		{"server error", ``, 500, "", "status 500"},
 	}
 	for _, c := range cases {
@@ -86,7 +90,7 @@ func TestKeycloakSubNotConfigured(t *testing.T) {
 }
 
 func TestKeycloakConfigIsAllOrNothing(t *testing.T) {
-	c := Config{Origin: "https://carrel.example", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
+	c := Config{Origin: "https://carrel.example", Issuer: "https://sso.example/realms/lab", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +102,29 @@ func TestKeycloakConfigIsAllOrNothing(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	c.KeycloakURL = "http://sso.example"
-	if err := c.Validate(); err == nil {
-		t.Fatal("http keycloak url accepted")
+	bad := []struct{ name, url, realm, issuer string }{
+		{"http", "http://sso.example", "lab", "http://sso.example/realms/lab"},
+		{"bare question mark", "https://sso.example/?", "lab", "https://sso.example/?/realms/lab"},
+		{"fragment", "https://sso.example/#x", "lab", "https://sso.example/#x/realms/lab"},
+		{"dot segment", "https://sso.example/../x", "lab", "https://sso.example/../x/realms/lab"},
+		{"realm slash", "https://sso.example", "a/b", "https://sso.example/realms/a/b"},
+		{"realm dot", "https://sso.example", ".", "https://sso.example/realms/."},
+		{"realm dotdot", "https://sso.example", "..", "https://sso.example/realms/.."},
+		{"realm query", "https://sso.example", "lab?x", "https://sso.example/realms/lab?x"},
+		{"other realm", "https://sso.example", "other", "https://sso.example/realms/lab"},
+		{"other host", "https://sso.other", "lab", "https://sso.example/realms/lab"},
+	}
+	for _, b := range bad {
+		t.Run(b.name, func(t *testing.T) {
+			d := c
+			d.KeycloakURL, d.KeycloakRealm, d.Issuer = b.url, b.realm, b.issuer
+			if err := d.Validate(); err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+	c.KeycloakURL = "https://sso.example/"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("trailing slash: %v", err)
 	}
 }
