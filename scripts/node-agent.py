@@ -2611,11 +2611,27 @@ def root_partition(device):
     return "/dev/" + part["name"], part["fstype"]
 
 
+def deactivate_guest_vgs(device):
+    """Deactivate every guest VG that host LVM auto-activated on the nbd device (issue #475).
+
+    The LVM commands see only this device, so they never touch a host VG.
+    """
+    config = 'devices { global_filter = [ "a|^' + device + '(p[0-9]+)?$|", "r|.*|" ] }'
+    out = run("pvs", "--noheadings", "-o", "vg_name", "--config", config, timeout=60)
+    for vg in sorted({line.strip() for line in out.splitlines() if line.strip()}):
+        run("vgchange", "-an", "--config", config, vg, timeout=60)
+
+
 def ca_backfill(m):
     """Write the lab SSH user CA and the guest reporter into a stopped VM's disk (issue #458).
 
     The cloud-init seed is not touched, so the instance id stays. Writing the
     same files again leaves the same disk.
+
+    A guest VG on the disk can be auto-activated by host LVM while qemu-nbd
+    exposes it. After connecting, this waits for udev, and before disconnecting
+    it deactivates any VG found on the nbd device. Adding `r|/dev/nbd.*|` to the
+    node's LVM global_filter is still recommended.
     """
     if m.get("kind") != "vm":
         raise ValueError("ca_backfill is for VMs")
@@ -2652,6 +2668,7 @@ def ca_backfill_locked(m):
         mount.mkdir(0o700)
         run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
         try:
+            run("udevadm", "settle", timeout=30)
             partition, fstype = root_partition(device)
             # ext4 takes its error policy from the guest superblock unless the
             # mount sets one, and a guest can set errors=panic there.
@@ -2663,7 +2680,10 @@ def ca_backfill_locked(m):
             finally:
                 run("umount", mount)
         finally:
-            run("qemu-nbd", "--disconnect", device)
+            try:
+                deactivate_guest_vgs(device)
+            finally:
+                run("qemu-nbd", "--disconnect", device)
     finally:
         for path in (mount, parent):
             with contextlib.suppress(OSError):
