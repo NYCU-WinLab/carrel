@@ -320,11 +320,24 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	}
 	p.Store.Remove("keys", "k2")
 	// So does a frozen VM created with the CA.
-	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}})
+	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}, "ca_created": true})
 	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
 		t.Fatalf("contradicting frozen record: %s", encoded(got))
 	}
 	p.Store.Remove("frozen", 10299)
+	// VMs created with the CA before ca_sync existed still count as a record, live or frozen.
+	p.Store.Put("frozen", 10298, integer(tenant["n"]), D{"vmid": 10298, "name": "cold2", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_principals": []any{"tachen"}})
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("frozen record without ca_sync: %s", encoded(got))
+	}
+	p.Store.Remove("frozen", 10298)
+	live := seedMachine(p, "live-ca", 10297)
+	live["tenant_n"], live["ssh_user_ca"], live["ca_principals"] = tenant["n"], "ssh-ed25519 AAAA", []any{"tachen"}
+	p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id='10297'", tenant["n"], string(encoded(live)))
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("live record without ca_sync: %s", encoded(got))
+	}
+	p.Store.Remove("machines", 10297)
 	if got := run("chen", true); got["result"] != "backfilled" || !equal(storedMachine(p, 10203)["ca_principals"], []any{"chen"}) {
 		t.Fatalf("with the flag: %s", encoded(got))
 	}
@@ -436,5 +449,24 @@ func TestBackfillHoldsASnapshotUntilTheRecordIsSaved(t *testing.T) {
 	awaitStateWithin(t, p, id, "succeeded", 10*time.Second)
 	if len(trusted) != 1 || trusted[0] != userCATestKey {
 		t.Fatalf("the snapshot did not follow the saved record: %v", trusted)
+	}
+}
+
+func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
+	p, _, _ := backfillFixture(t)
+	tenant := p.Store.Register("user:li-sub", "li")
+	n := integer(tenant["n"])
+	ca := func(vmid int, name, principal string, extra D) D {
+		return merge(D{"vmid": vmid, "name": name, "ssh_user_ca": userCATestKey, "ca_sync": "pull", "ca_principals": []any{principal}}, extra)
+	}
+	recorded := func() []string { return (&Execution{P: p, S: p.Store}).recordedUsernames(tenant) }
+	p.Store.Put("machines", 10310, n, ca(10310, "legacy", "legacy-user", nil))
+	p.Store.Put("machines", 10311, n, ca(10311, "filled", "filled-user", D{"ca_backfilled": true}))
+	if got := recorded(); len(got) != 0 {
+		t.Fatalf("legacy and backfilled VMs counted: %v", got)
+	}
+	p.Store.Put("machines", 10312, n, ca(10312, "made", "made-user", D{"ca_created": true}))
+	if got := recorded(); !equal(got, []string{"made-user"}) {
+		t.Fatalf("CA-created VM: %v", got)
 	}
 }
