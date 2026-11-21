@@ -2148,7 +2148,14 @@ CA = "ssh-ed25519 " + "B" * 43
 
 
 def backfill_setup(
-    monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False, fail_umount=False, pve_lock=None, fstype="ext4"
+    monkeypatch,
+    tmp_path,
+    power="stopped",
+    fail_mount=False,
+    fail_connect=False,
+    fail_umount=False,
+    pve_lock=None,
+    fstype="ext4",
 ):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
@@ -2198,9 +2205,8 @@ def backfill_setup(
             assert target.parent in parents and target.parent.stat().st_mode & 0o777 == 0o700
             target.rmdir()
             target.symlink_to(guest)
-        if a[0] == "mountpoint":
-            if not Path(a[-1]).is_symlink():
-                raise module.CommandFailure("not a mountpoint")
+        if a[0] == "mountpoint" and not Path(a[-1]).is_symlink():
+            raise module.CommandFailure("not a mountpoint")
         if a[0] == "umount" and fail_umount:
             raise module.CommandFailure("umount failed: target is busy")
         if a[0] == "umount" and Path(a[-1]).is_symlink():
