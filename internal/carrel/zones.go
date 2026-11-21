@@ -141,55 +141,55 @@ func (e *Execution) publicZone(z zoneRecord) D {
 
 // ZoneAction runs zone_add, zone_list and zone_remove.
 func (e *Execution) ZoneAction(tool string, a, w D) D {
-	dry := boolean(a["dry_run"])
 	switch tool {
 	case "zone_list":
-		out := []D{{"name": specialZone, "open_to": "all", "site": true}}
-		for _, z := range e.zones() {
-			out = append(out, e.publicZone(z))
-		}
-		return D{"zones": out}
+		return e.zoneList()
 	case "zone_remove":
-		name := strings.ToLower(str(a["name"]))
-		if strings.ToLower(str(a["confirm"])) != name {
-			fail("invalid", "confirm must equal the zone name")
-		}
-		if name == specialZone {
-			fail("invalid", "The site's own zone cannot be removed")
-		}
-		if find(e.S.SiteRows("zone"), func(d D) bool { return d["name"] == name }) == nil {
-			fail("not_found", "This zone is not managed by carrel")
-		}
-		for _, g := range e.grants() {
-			if g.zone() == name {
-				fail("conflict", "Special domains in this zone are still granted: "+g.Name, D{"recovery": "resolve_prerequisite"})
-			}
-		}
-		for _, r := range e.S.Objects("requests") {
-			if r["kind"] == "domain" && r["status"] == "pending" && r["zone"] == name {
-				fail("conflict", "A pending request asks for a name in this zone", D{"recovery": "resolve_prerequisite"})
-			}
-		}
-		if !dry {
-			e.S.SiteRemove("zone", name)
-			_ = os.Remove(e.zoneTokenPath(name))
-		}
-		return D{"zone": D{"name": name, "state": "removed"}, "dry_run": dry}
+		return e.zoneRemove(a)
 	}
-	// zone_add: a new zone, or a new token and tenant list for one.
-	name := strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
-	if !zonePattern.MatchString(name) || len(name) > 253 {
-		fail("invalid", "Give the zone as its lowercase DNS name")
-	}
-	if under(name, specialZone) || under(specialZone, name) {
-		fail("invalid", "The site's own zone is configured, not added")
-	}
+	return e.zoneAdd(a, w)
+}
+
+func (e *Execution) zoneList() D {
+	out := []D{{"name": specialZone, "open_to": "all", "site": true}}
 	for _, z := range e.zones() {
-		if z.Name != name && (under(name, z.Name) || under(z.Name, name)) {
-			fail("conflict", "This zone overlaps the managed zone "+z.Name)
+		out = append(out, e.publicZone(z))
+	}
+	return D{"zones": out}
+}
+
+func (e *Execution) zoneRemove(a D) D {
+	dry := boolean(a["dry_run"])
+	name := strings.ToLower(str(a["name"]))
+	if strings.ToLower(str(a["confirm"])) != name {
+		fail("invalid", "confirm must equal the zone name")
+	}
+	if name == specialZone {
+		fail("invalid", "The site's own zone cannot be removed")
+	}
+	if find(e.S.SiteRows("zone"), func(d D) bool { return d["name"] == name }) == nil {
+		fail("not_found", "This zone is not managed by carrel")
+	}
+	for _, g := range e.grants() {
+		if g.zone() == name {
+			fail("conflict", "Special domains in this zone are still granted: "+g.Name, D{"recovery": "resolve_prerequisite"})
 		}
 	}
-	old := e.S.SiteGet("zone", name)
+	for _, r := range e.S.Objects("requests") {
+		if r["kind"] == "domain" && r["status"] == "pending" && r["zone"] == name {
+			fail("conflict", "A pending request asks for a name in this zone", D{"recovery": "resolve_prerequisite"})
+		}
+	}
+	if !dry {
+		e.S.SiteRemove("zone", name)
+		_ = os.Remove(e.zoneTokenPath(name))
+	}
+	return D{"zone": D{"name": name, "state": "removed"}, "dry_run": dry}
+}
+
+// zoneTenants lists the tenants a zone is open to after zone_add: the given
+// ones, or those of the existing zone when only a new token comes.
+func (e *Execution) zoneTenants(a, old D) []int {
 	tenants := []int{}
 	if old != nil && a["tenants"] == nil {
 		// A new token alone keeps the zone's tenants.
@@ -206,10 +206,15 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 			tenants = append(tenants, integer(t["n"]))
 		}
 	}
+	return tenants
+}
+
+// zoneToken reads the token of zone_add from its argument or its file.
+func (e *Execution) zoneToken(a D, name string) (token string, fromFile bool) {
 	// The token comes as an argument, or, so that it never passes through
 	// a client, from zone_dir/<zone>.token placed by an admin over SSH
 	// (issue #161).
-	token, fromFile := strings.TrimSpace(str(a["token"])), false
+	token = strings.TrimSpace(str(a["token"]))
 	if token == "" {
 		b, err := readSmall(e.zoneTokenPath(name), 4096)
 		if err != nil {
@@ -220,6 +225,11 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	if !matches(`^[A-Za-z0-9_-]{20,200}$`, token) {
 		fail("invalid", "The token is not a Cloudflare API token", D{"recovery": "revise_request"})
 	}
+	return token, fromFile
+}
+
+// zoneLookup asks Cloudflare which zone the token sees under name.
+func (e *Execution) zoneLookup(token, name string) D {
 	// The token must find exactly this zone and read its records. A token
 	// Cloudflare refuses is the caller's to fix, not a retry.
 	var found []D
@@ -235,7 +245,54 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	if found[0]["status"] != nil && found[0]["status"] != "active" {
 		fail("conflict", "The zone is not active in Cloudflare yet; finish its name servers first")
 	}
-	z := zoneRecord{ID: str(found[0]["id"]), Name: name, Tenants: tenants, AddedBy: str(w["sub"]), AddedAt: time.Now().Unix()}
+	return found[0]
+}
+
+// zoneProbe proves the token may write, then stores the zone and its token.
+func (e *Execution) zoneProbe(z *zoneRecord, access zoneAccess, old D, fromFile bool) {
+	name, token := z.Name, access.Token
+	// A probe record proves the token may write; it goes at once. One
+	// that a failed run left behind goes first.
+	for _, r := range dicts(e.cfIn(access, "GET", "?type=TXT&name=_carrel-probe."+name, nil)["result"]) {
+		if r["comment"] == "carrel:zone-probe" {
+			e.cfIn(access, "DELETE", "/"+str(r["id"]), nil)
+		}
+	}
+	probe := e.cfIn(access, "POST", "", D{"type": "TXT", "name": "_carrel-probe." + name, "content": "carrel zone check", "ttl": 60, "proxied": false, "comment": "carrel:zone-probe"})
+	e.cfIn(access, "DELETE", "/"+str(obj(probe["result"])["id"]), nil)
+	must(os.MkdirAll(e.zoneDir(), 0700))
+	path := e.zoneTokenPath(name)
+	if !fromFile {
+		must(os.WriteFile(path+".next", []byte(token+"\n"), 0600))
+		must(os.Rename(path+".next", path))
+	}
+	must(os.Chmod(path, 0600))
+	if old != nil {
+		z.AddedAt, z.AddedBy = int64(num(old["added_at"])), str(old["added_by"])
+	}
+	e.S.SitePut("zone", name, decode(string(encoded(*z))))
+}
+
+// zoneAdd adds a new zone, or a new token and tenant list for one.
+func (e *Execution) zoneAdd(a, w D) D {
+	dry := boolean(a["dry_run"])
+	name := strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
+	if !zonePattern.MatchString(name) || len(name) > 253 {
+		fail("invalid", "Give the zone as its lowercase DNS name")
+	}
+	if under(name, specialZone) || under(specialZone, name) {
+		fail("invalid", "The site's own zone is configured, not added")
+	}
+	for _, z := range e.zones() {
+		if z.Name != name && (under(name, z.Name) || under(z.Name, name)) {
+			fail("conflict", "This zone overlaps the managed zone "+z.Name)
+		}
+	}
+	old := e.S.SiteGet("zone", name)
+	tenants := e.zoneTenants(a, old)
+	token, fromFile := e.zoneToken(a, name)
+	found := e.zoneLookup(token, name)
+	z := zoneRecord{ID: str(found["id"]), Name: name, Tenants: tenants, AddedBy: str(w["sub"]), AddedAt: time.Now().Unix()}
 	if !matches(`^[0-9a-f]{32}$`, z.ID) {
 		fail("conflict", "Cloudflare returned an unexpected zone id")
 	}
@@ -255,26 +312,7 @@ func (e *Execution) ZoneAction(tool string, a, w D) D {
 	access := zoneAccess{Name: name, ID: z.ID, Token: token}
 	e.cfIn(access, "GET", "?per_page=1", nil)
 	if !dry {
-		// A probe record proves the token may write; it goes at once. One
-		// that a failed run left behind goes first.
-		for _, r := range dicts(e.cfIn(access, "GET", "?type=TXT&name=_carrel-probe."+name, nil)["result"]) {
-			if r["comment"] == "carrel:zone-probe" {
-				e.cfIn(access, "DELETE", "/"+str(r["id"]), nil)
-			}
-		}
-		probe := e.cfIn(access, "POST", "", D{"type": "TXT", "name": "_carrel-probe." + name, "content": "carrel zone check", "ttl": 60, "proxied": false, "comment": "carrel:zone-probe"})
-		e.cfIn(access, "DELETE", "/"+str(obj(probe["result"])["id"]), nil)
-		must(os.MkdirAll(e.zoneDir(), 0700))
-		path := e.zoneTokenPath(name)
-		if !fromFile {
-			must(os.WriteFile(path+".next", []byte(token+"\n"), 0600))
-			must(os.Rename(path+".next", path))
-		}
-		must(os.Chmod(path, 0600))
-		if old != nil {
-			z.AddedAt, z.AddedBy = int64(num(old["added_at"])), str(old["added_by"])
-		}
-		e.S.SitePut("zone", name, decode(string(encoded(z))))
+		e.zoneProbe(&z, access, old, fromFile)
 	}
 	return D{"zone": e.publicZone(z), "dry_run": dry}
 }
