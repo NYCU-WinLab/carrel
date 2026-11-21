@@ -492,6 +492,10 @@ service. The live wire contract is `internal/carrel/contract.json`.
 only shape the list: every tool the caller may use stays callable by name. `/mcp/read-only` registers and lists
 `readOnlyHint` tools plus `whoami`. The admin filter applies on every endpoint. Toolsets are defined in `contract.json`.
 
+`/mcp/read-only` only filters the tool list and the call set. It is not a credential boundary: both endpoints accept the
+same bearer token (audience `carrel-mcp`, no resource check), so a token obtained for `/mcp/read-only` also works on
+`/mcp`. Do not use it to delegate read-only access to another party.
+
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
 SHA-256. Select `debian-13-minimal` for the minimal environment, or `debian-13` / `ubuntu-24.04`
