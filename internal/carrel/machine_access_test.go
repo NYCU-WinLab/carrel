@@ -165,9 +165,27 @@ func TestANewMachineRecordsHowItSyncsAccess(t *testing.T) {
 		if m["ca_sync"] != want {
 			t.Fatalf("%s: %s", kind, encoded(m))
 		}
+		// The marker recordedUsernames relies on is written for both kinds,
+		// and a thaw keeps it.
+		if m["ca_created"] != true || thawRecord(m, nodeRef{Name: "n1"})["ca_created"] != true {
+			t.Fatalf("%s: ca_created not recorded or kept: %s", kind, encoded(m))
+		}
 		// A new CT has its file from creation: applied, not pending.
 		if kind == "ct" && e.caAccess(m)["applied"] != "applied" {
 			t.Fatalf("new CT: %s", encoded(e.caAccess(m)))
+		}
+	}
+}
+
+func TestACallerCannotSendCACreated(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	alice := person("alice", false)
+	tenant := p.Store.Tenant("user:alice")
+	for _, kind := range []string{"vm", "ct"} {
+		a := e.withCAPrincipal("machine_create", e.withPortalKeys("machine_create", D{"name": "box", "kind": kind, "ca_created": true, "ssh_keys": []any{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInlineKeyInTheRequest"}}, alice), alice)
+		if m := e.MachineSpec(tenant, a, false); m["ca_created"] != nil {
+			t.Fatalf("%s: a caller-sent marker reached the record: %s", kind, encoded(m))
 		}
 	}
 }

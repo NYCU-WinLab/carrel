@@ -3048,7 +3048,7 @@
           "alias_confirmed": {
             "type": "boolean",
             "default": false,
-            "description": "The administrator confirms that owner owns this personal tenant although its slug does not match, for a slug assigned by an administrator. Needs tenant and owner; a recorded username that differs from owner still refuses. The audit log records it."
+            "description": "The administrator confirms that owner owns this personal tenant although its slug does not match, for a slug assigned by an administrator. Needs tenant and owner; a recorded username that differs from owner still refuses, and so does a tenant with more than one recorded username. The audit log records it."
           },
           "idempotency_key": {
             "type": "string",
@@ -3071,7 +3071,23 @@
             "description": "summary (default) or full."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "if": {
+          "properties": {
+            "alias_confirmed": {
+              "const": true
+            }
+          },
+          "required": [
+            "alias_confirmed"
+          ]
+        },
+        "then": {
+          "required": [
+            "tenant",
+            "owner"
+          ]
+        }
       },
       "annotations": {
         "readOnlyHint": false,

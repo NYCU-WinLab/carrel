@@ -91,6 +91,7 @@ func backfillFixture(t *testing.T) (*Platform, *fakeBackend, *App) {
 	t.Helper()
 	p, b := fixture(t)
 	p.Config.SSHUserCA = userCATestKey
+	keycloak(t, p, `[{"id":"alice","username":"alice"}]`, 200)
 	b.call = func(r D, _ string) (any, error) {
 		if r["op"] == "status" {
 			return D{"status": "stopped"}, nil
@@ -277,15 +278,37 @@ func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
 		assertOK(t, r)
 		return dicts(r["machines"])[0]
 	}
-	// No record: the slug check alone decides, so both spellings pass.
-	if got := run("alex_smith", true); got["result"] != "would_backfill" {
-		t.Fatalf("slug fallback: %s", encoded(got))
+	// No record: the Keycloak sub decides, not the slug, so a spelling whose
+	// sub is another member's is refused although the slug matches.
+	keycloakFor(t, p, "alex_smith", `[{"id":"other-sub","username":"alex_smith"}]`, 200)
+	if got := run("alex_smith", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "Keycloak sub") {
+		t.Fatalf("sub mismatch: %s", encoded(got))
 	}
-	// A key saved by alex.smith is the record.
+	keycloakFor(t, p, "alex_smith", `[{"id":"alex-sub","username":"alex_smith"}]`, 200)
+	if got := run("alex_smith", true); got["result"] != "would_backfill" || !strings.Contains(str(got["message"]), "Keycloak sub") {
+		t.Fatalf("sub match: %s", encoded(got))
+	}
+	// A failed lookup skips the VM.
+	keycloakFor(t, p, "alex_smith", ``, 500)
+	if got := run("alex_smith", false); got["result"] != "skipped" || b.count("ca_backfill") != 0 {
+		t.Fatalf("lookup error: %s", encoded(got))
+	}
+	// Not configured skips it too.
+	p.Config.KeycloakURL = ""
+	if got := run("alex_smith", true); got["result"] != "skipped" {
+		t.Fatalf("lookup unavailable: %s", encoded(got))
+	}
+	// A key saved by alex.smith is the record; the lookup is not needed (and is down).
 	p.Store.Put("keys", "k1", integer(tenant["n"]), D{"id": "k1", "key": userCATestKey, "by": "alex.smith"})
 	if got := run("alex_smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "alex.smith") || b.count("ca_backfill") != 0 {
 		t.Fatalf("mismatch: %s", encoded(got))
 	}
+	// A second recorded username refuses although owner equals one of them.
+	p.Store.Put("keys", "k1b", integer(tenant["n"]), D{"id": "k1b", "key": userCATestKey, "by": "alex_smith"})
+	if got := run("alex.smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || b.count("ca_backfill") != 0 {
+		t.Fatalf("two recorded usernames: %s", encoded(got))
+	}
+	p.Store.Remove("keys", "k1b")
 	got := run("alex.smith", true)
 	if got["result"] != "would_backfill" || !strings.Contains(str(got["message"]), "alex.smith") {
 		t.Fatalf("exact match: %s", encoded(got))
@@ -319,6 +342,12 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	if got := run("chen", true); got["result"] != "skipped" || b.count("ca_backfill") != 0 {
 		t.Fatalf("contradicting record: %s", encoded(got))
 	}
+	// Two distinct records refuse even when owner equals one of them.
+	p.Store.Put("keys", "k3", integer(tenant["n"]), D{"id": "k3", "key": userCATestKey, "by": "chen"})
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("two recorded usernames: %s", encoded(got))
+	}
+	p.Store.Remove("keys", "k3")
 	p.Store.Remove("keys", "k2")
 	// So does a frozen VM created with the CA.
 	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}, "ca_created": true})
@@ -339,6 +368,9 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 		t.Fatalf("live record without ca_sync: %s", encoded(got))
 	}
 	p.Store.Remove("machines", 10297)
+	// A pre-ca_sync CA record that matches owner is accepted, and a backfilled row without ca_sync is no record.
+	p.Store.Put("frozen", 10296, integer(tenant["n"]), D{"vmid": 10296, "name": "cold3", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_principals": []any{"chen"}})
+	p.Store.Put("frozen", 10295, integer(tenant["n"]), D{"vmid": 10295, "name": "cold4", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_principals": []any{"tachen"}, "ca_backfilled": true})
 	if got := run("chen", true); got["result"] != "backfilled" || !equal(storedMachine(p, 10203)["ca_principals"], []any{"chen"}) {
 		t.Fatalf("with the flag: %s", encoded(got))
 	}
@@ -466,6 +498,10 @@ func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
 	if got := recorded(); len(got) != 0 {
 		t.Fatalf("legacy and backfilled VMs counted: %v", got)
 	}
+	p.Store.Put("machines", 10313, n, D{"vmid": 10313, "name": "flagged", "ssh_user_ca": userCATestKey, "ca_principals": []any{"flagged-user"}, "ca_backfilled": true})
+	if got := recorded(); len(got) != 0 {
+		t.Fatalf("backfilled VM without ca_sync counted: %v", got)
+	}
 	p.Store.Put("machines", 10312, n, ca(10312, "made", "made-user", D{"ca_created": true}))
 	if got := recorded(); !equal(got, []string{"made-user"}) {
 		t.Fatalf("CA-created VM: %v", got)
@@ -511,5 +547,26 @@ func TestBackfillDryRunsDoNotRaceTheInFlightSet(t *testing.T) {
 	readers.Wait()
 	if len(p.backfillVMIDs()) != 0 {
 		t.Fatal("the in-flight set is not empty")
+	}
+}
+
+// The input schema itself, not only the handler, requires tenant and owner with alias_confirmed.
+func TestCABackfillSchemaRequiresTenantAndOwnerWithAlias(t *testing.T) {
+	p, _, _ := backfillFixture(t)
+	app := NewApp(p, nil)
+	schema := app.schemas["machine_ca_backfill"]
+	for _, tc := range []struct {
+		args D
+		ok   bool
+	}{
+		{D{"alias_confirmed": false}, true},
+		{D{"alias_confirmed": true, "tenant": "ta-chen", "owner": "chen"}, true},
+		{D{"alias_confirmed": true}, false},
+		{D{"alias_confirmed": true, "tenant": "ta-chen"}, false},
+		{D{"alias_confirmed": true, "owner": "chen"}, false},
+	} {
+		if err := schema.Validate(map[string]any(tc.args)); (err == nil) != tc.ok {
+			t.Errorf("%v: ok=%v err=%v", tc.args, tc.ok, err)
+		}
 	}
 }

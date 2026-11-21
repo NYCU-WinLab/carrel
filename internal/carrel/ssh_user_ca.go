@@ -158,7 +158,8 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 	// share a slug, so a lossless record, when the tenant has one, decides.
 	// A tenant whose slug an administrator assigned fails the slug check;
 	// alias_confirmed lets the admin vouch for owner instead, and a recorded
-	// username that contradicts it still refuses.
+	// username that contradicts it still refuses. More than one distinct
+	// recorded username is ambiguous, so it refuses whatever owner is.
 	checked := ""
 	if principal == owner {
 		if !strings.HasPrefix(str(t["subject"]), "user:") {
@@ -168,14 +169,24 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 			return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"]) + "; if an administrator assigned the slug, confirm with alias_confirmed"
 		}
 		if recorded := e.recordedUsernames(t); len(recorded) > 0 {
+			if len(recorded) > 1 {
+				return "skipped", "personal tenant " + str(t["slug"]) + " records more than one username (" + strings.Join(recorded, ", ") + "); an administrator must resolve the tenant records first"
+			}
 			if !contains(recorded, owner) {
 				return "skipped", "owner " + owner + " does not match the usernames recorded for personal tenant " + str(t["slug"]) + " (" + strings.Join(recorded, ", ") + ")"
 			}
 			checked = "; owner checked against recorded usernames " + strings.Join(recorded, ", ")
-		} else if alias && normalizeSlug(owner) != str(t["slug"]) {
-			checked = "; owner confirmed by the administrator (alias_confirmed), no username record"
 		} else {
-			checked = "; owner checked against the tenant slug only, no username record"
+			// No record: the slug is lossy, the Keycloak sub is not. Fail
+			// closed when the lookup is unavailable or disagrees.
+			sub, err := e.keycloakSub(owner)
+			if err != nil {
+				return "skipped", "No username record and the owner's Keycloak sub could not be looked up (" + describe(err) + "); not backfilled"
+			}
+			if "user:"+sub != str(t["subject"]) {
+				return "skipped", "owner " + owner + " does not match the Keycloak sub of personal tenant " + str(t["slug"])
+			}
+			checked = "; owner checked against Keycloak sub"
 		}
 	}
 	var status string
