@@ -1,5 +1,6 @@
 """node-agent and its helpers, without a live node: PVE reads and commands are replaced."""
 
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -2146,8 +2147,12 @@ def test_guest_sets_prune_ignores_a_node_without_the_table():
 CA = "ssh-ed25519 " + "B" * 43
 
 
-def backfill_setup(monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False):
+def backfill_setup(
+    monkeypatch, tmp_path, power="stopped", fail_mount=False, fail_connect=False, pve_lock=None
+):
     module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "owned", lambda m: {"lock": pve_lock} if pve_lock else {})
     root = Path(__file__).parents[1]
     guest = tmp_path / "guest"
     guest.mkdir()
@@ -2245,6 +2250,22 @@ def test_ca_backfill_leaves_an_nbd_device_it_did_not_connect_alone(monkeypatch, 
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert not any(c[0] == "qemu-nbd" and c[1] == "--disconnect" for c in calls)
     assert not any(c[0] in ("mount", "umount") for c in calls)
+
+
+def test_ca_backfill_refuses_a_machine_whose_lock_a_migration_or_freeze_holds(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    with (tmp_path / f"vm-{MACHINE['vmid']}.lock").open("w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(ValueError, match="busy"):
+            module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] == "qemu-nbd" for c in calls)
+
+
+def test_ca_backfill_refuses_a_machine_with_a_proxmox_config_lock(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, pve_lock="backup")
+    with pytest.raises(ValueError, match="locked in Proxmox"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] == "qemu-nbd" for c in calls)
 
 
 def test_ca_backfill_takes_the_node_lock_so_a_start_waits_for_it(monkeypatch, tmp_path):

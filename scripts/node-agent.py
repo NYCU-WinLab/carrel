@@ -2618,6 +2618,20 @@ def ca_backfill(m):
     """
     if m.get("kind") != "vm":
         raise ValueError("ca_backfill is for VMs")
+    # main() holds node.lock; migrate and freeze hold only the VM's lock and may
+    # run for hours, so do not wait for it with the node lock held.
+    with (STATE / f"vm-{machine(m)}.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("the machine is busy (migrating or freezing); retry later") from None
+        return ca_backfill_locked(m)
+
+
+def ca_backfill_locked(m):
+    # A qm or vzdump job started outside Carrel sets a lock in the config.
+    if owned(m).get("lock"):
+        raise ValueError("the machine is locked in Proxmox; retry later")
     volume = disk_volume(m).get("disk_volume")
     if not volume:
         raise ValueError("no root disk")
@@ -3261,6 +3275,7 @@ def main():
     # only, so reconciles and other machines on this node go on.
     # ca_backfill is not long: it mounts a stopped disk, so a start (node.lock)
     # must wait for it, and it picks a free nbd device another backfill must not take.
+    # It also tries the VM's lock itself, so a migration or freeze excludes it.
     long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
