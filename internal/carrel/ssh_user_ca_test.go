@@ -680,3 +680,90 @@ func TestBackfillSkipsMachinesDeletedDuringTheRun(t *testing.T) {
 		t.Fatalf("deleted meanwhile: %s", encoded(r))
 	}
 }
+
+// A VMID reused by a replacement while the run is in progress: the original
+// name is reported as skipped and the replacement is never touched.
+func TestBackfillSkipsAReusedVMID(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	seedMachine(p, "later", 10202)
+	inner := b.call
+	replaced := false
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" && !replaced {
+			replaced = true
+			p.Store.Remove("machines", "10202")
+			seedMachine(p, "replacement", 10202)
+			p.Store.Put("machines", 10202, 1, merge(p.Store.Get("machines", "10202"), D{"allocation_id": "allocation-new", "operation_id": "original-new", "created_at": 2}))
+		}
+		return inner(r, target)
+	}
+	r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "owner": "alice"}, person("root", true))
+	assertOK(t, r)
+	var later D
+	for _, m := range dicts(r["machines"]) {
+		if m["machine"] == "later" {
+			later = m
+		}
+		if m["machine"] == "replacement" {
+			t.Fatalf("the replacement was reported: %s", encoded(r))
+		}
+	}
+	if later == nil || later["result"] != "skipped" || integer(obj(r["counts"])["skipped"]) < 1 {
+		t.Fatalf("reused VMID: %s", encoded(r))
+	}
+	if b.count("ca_backfill") != 1 || b.count("status") != 1 {
+		t.Fatalf("the replacement got node calls: %s", encoded(r))
+	}
+	if cur := p.Store.Get("machines", "10202"); str(cur["ssh_user_ca"]) != "" {
+		t.Fatalf("the replacement got a CA: %v", cur)
+	}
+}
+
+// An all-tenant run fixes its targets before the first node call: a VM of a
+// later tenant replaced at the same VMID while an earlier tenant's node call
+// runs is reported as skipped, and the replacement is never touched. Only
+// allocation_id changes, so dropping it from machineIdentity fails too.
+func TestBackfillAllTenantsSkipsAReusedVMIDInALaterTenant(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	n := integer(p.Store.Register("winlab-projects/later", "later")["n"])
+	listed := merge(seedMachine(p, "later", 10300), D{"tenant_n": n})
+	p.Store.Exec("UPDATE objects SET tenant=?, data=? WHERE kind='machines' AND id='10300'", n, string(encoded(listed)))
+	inner := b.call
+	replaced := false
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" && !replaced {
+			replaced = true
+			if obj(r["machine"])["name"] != "proj" {
+				t.Fatalf("the earlier tenant did not run first: %s", encoded(r))
+			}
+			p.Store.Remove("machines", "10300")
+			p.Store.Put("machines", 10300, n, merge(listed, D{"name": "replacement", "allocation_id": "allocation-new"}))
+		}
+		return inner(r, target)
+	}
+	r := app.Call(context.Background(), "machine_ca_backfill", D{}, person("root", true))
+	assertOK(t, r)
+	var later D
+	for _, m := range dicts(r["machines"]) {
+		if m["machine"] == "later" {
+			later = m
+		}
+		if m["machine"] == "replacement" {
+			t.Fatalf("the replacement was reported: %s", encoded(r))
+		}
+	}
+	if later == nil || later["result"] != "skipped" {
+		t.Fatalf("reused VMID in a later tenant: %s", encoded(r))
+	}
+	for _, c := range b.calls {
+		if integer(obj(c["machine"])["vmid"]) == 10300 {
+			t.Fatalf("the replacement got a node call: %s", encoded(c))
+		}
+	}
+	if b.count("ca_backfill") != 1 {
+		t.Fatalf("node calls: %s", encoded(b.calls))
+	}
+	if cur := p.Store.Get("machines", "10300"); str(cur["ssh_user_ca"]) != "" {
+		t.Fatalf("the replacement got a CA: %v", cur)
+	}
+}
