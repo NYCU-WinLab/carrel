@@ -136,8 +136,9 @@ func jumpCertificates(s *Store, ca string) D {
 // top (jumpSentGen). A write this process sent earlier, above a large held
 // value or before the clock stepped back, may still land on the jump host after
 // its ssh client timed out; the fallback stays above it, so that older state
-// cannot be accepted over a newer one. A jumpSentGen more than maxJumpGenAhead
-// above the clock only comes from a resend above a damaged held value, so it
+// cannot be accepted over a newer one. SyncJump records a send in jumpSentGen
+// only when it is at most maxJumpGenAhead above the clock at send time; a send
+// further ahead only comes from a resend above a damaged held value, so it
 // does not raise the fallback: a repaired jump host then returns to clock
 // scale instead of climbing back to the top. A damaged jump host refuses the
 // fallbacks as stale, and once an operator repairs its state the next pass is
@@ -162,7 +163,7 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 		if gen = now; gen <= e.P.jumpClockGen {
 			gen = e.P.jumpClockGen + 1
 		}
-		if gen <= e.P.jumpSentGen && e.P.jumpSentGen <= now+maxJumpGenAhead {
+		if gen <= e.P.jumpSentGen {
 			gen = e.P.jumpSentGen + 1
 		}
 		if gen >= maxJumpGen-1 {
@@ -343,7 +344,9 @@ const maxJumpGen = 1 << 53
 
 // maxJumpGenAhead is how far above the clock, in microseconds, a generation
 // can be before it counts as damage (24 hours): a held value or a send further
-// ahead only comes from a damaged jump sidecar, not from clock skew.
+// ahead only comes from a damaged jump sidecar, not from clock skew. SyncJump
+// applies it when it records jumpSentGen, so a recorded send is never dropped
+// later because the clock moved.
 const maxJumpGenAhead = int64(24 * time.Hour / time.Microsecond)
 
 // jumpResendBudget bounds the whole resend sequence in time: no resend starts
@@ -391,8 +394,10 @@ func (e *Execution) SyncJump(keys string, certs D, gen int64) string {
 		slog.Error("jump_sync_gen_range", "event", "jump_sync_gen_range")
 		return "unavailable"
 	}
-	if gen < maxJumpGen-1 && gen > e.P.jumpSentGen {
+	if gen < maxJumpGen-1 && gen <= time.Now().UnixMicro()+maxJumpGenAhead && gen > e.P.jumpSentGen {
 		// Counted before the call: a call that fails here may still write there.
+		// A send more than maxJumpGenAhead above the clock (a resend above a
+		// damaged held value) is not counted, so it cannot hide later sends.
 		e.P.jumpSentGen = gen
 	}
 	var res any

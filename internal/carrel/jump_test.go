@@ -1237,3 +1237,42 @@ func TestTheClockFallbackReturnsToTheClockAfterARepair(t *testing.T) {
 		}
 	}
 }
+
+// A send far above the clock must not hide a later send inside the window from
+// the floor: the fallback stays above a write at now+1h that may still land.
+func TestTheClockFallbackStaysAboveASendAfterAFarAheadSend(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	if r := e.SyncJump("", nil, maxJumpGen-3); r != "synced" {
+		t.Fatal(r)
+	}
+	ahead := time.Now().UnixMicro() + 3_600_000_000
+	if r := e.SyncJump("", nil, ahead); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if gen <= ahead || gen >= maxJumpGen-1 {
+		t.Fatal(gen, ahead)
+	}
+}
+
+// A send recorded before the clock stepped back more than maxJumpGenAhead still
+// raises the fallback: the bound applies at record time, not when it is read.
+func TestTheClockFallbackStaysAboveASendBeforeALongClockStepBack(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	sent := time.Now().UnixMicro() + 2*maxJumpGenAhead
+	p.jumpMu.Lock()
+	p.jumpSentGen = sent
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if gen <= sent || gen >= maxJumpGen-1 {
+		t.Fatal(gen, sent)
+	}
+}
