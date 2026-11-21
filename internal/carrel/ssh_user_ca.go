@@ -118,21 +118,33 @@ func (e *Execution) CABackfill(a, w D) D {
 		}
 		return lookedID, lookErr
 	}
-	results := []D{}
+	// The target set is fixed under the writer before the first node call, so
+	// a VM created or replaced in a later tenant while the writer is released
+	// is not picked up by this run.
+	type target struct {
+		tenant   D
+		machines []D
+	}
+	targets := []target{}
 	for _, t := range tenants {
 		machines := e.S.Objects("machines", integer(t["n"]))
 		if a["machine"] != nil {
 			machines = []D{e.Machine(t, a["machine"])}
 		}
 		sort.SliceStable(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
-		for _, m := range machines {
+		targets = append(targets, target{t, machines})
+	}
+	results := []D{}
+	for _, tg := range targets {
+		t := tg.tenant
+		for _, m := range tg.machines {
 			// The writer is released during node I/O, so the record may have
 			// changed since the list was read. A run only touches what it
-			// listed: a deleted machine, or a replacement in its slot, is
-			// reported and skipped.
+			// listed: a deleted, frozen or replaced machine is reported and
+			// skipped.
 			listed := m
 			if m = e.S.Get("machines", str(listed["vmid"])); m == nil || !equal(machineIdentity(m), machineIdentity(listed)) {
-				results = append(results, D{"tenant": t["slug"], "machine": listed["name"], "result": "skipped", "message": "Deleted or replaced meanwhile"})
+				results = append(results, D{"tenant": t["slug"], "machine": listed["name"], "result": "skipped", "message": "Deleted, frozen or replaced meanwhile"})
 				continue
 			}
 			result, message := e.backfillOne(t, m, owner, ca, dry, alias, lookup)
