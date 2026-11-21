@@ -525,7 +525,13 @@ func TestReadOnlyInstructionsAndNoOnboarding(t *testing.T) {
 	app := NewApp(p, testVerifier{who: person("newbie", false)})
 	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
 	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "machine_list", "arguments": D{}}}))
-	requestApp(app, "POST", "/mcp/read-only", body, headers)
+	denied := requestApp(app, "POST", "/mcp/read-only", body, headers)
+	if !strings.Contains(denied.Body.String(), "forbidden") {
+		t.Fatalf("read-only call was not refused as forbidden: %s", denied.Body.String())
+	}
+	if dns.requests != 0 {
+		t.Fatalf("a read-only call reached DNS %d times", dns.requests)
+	}
 	if p.Store.Tenant("user:newbie") != nil {
 		t.Fatal("a read-only call registered a tenant")
 	}

@@ -343,6 +343,10 @@ func TestOAuthAcceptsReadOnlyResource(t *testing.T) {
 	if code := authRequest(o, repeated, nil).Code; code != 400 {
 		t.Fatal("authorize accepted a repeated resource", code)
 	}
+	malformed := repeated[:strings.LastIndex(repeated, "&resource=")] + "&resource=%zz"
+	if code := authRequest(o, malformed, nil).Code; code != 400 {
+		t.Fatal("authorize accepted a malformed second resource", code)
+	}
 	base := url.Values{"client_id": {"desktop"}, "grant_type": {"authorization_code"}, "code": {"code"}, "code_verifier": {verifier}, "redirect_uri": {"http://localhost:1234/cb"}}
 	if w := authRequest(o, "/oauth/token", withValue(base, "resource", "https://carrel.test/mcp/other")); w.Code != 400 {
 		t.Fatal("token accepted an unknown resource", w.Code)
