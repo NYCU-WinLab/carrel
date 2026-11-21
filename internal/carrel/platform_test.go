@@ -386,3 +386,219 @@ func TestCapacityNamesTheNodeStorage(t *testing.T) {
 		t.Fatalf("configured storage %q", got)
 	}
 }
+
+func listedTools(t *testing.T, app *App, target string, headers map[string]string) ([]D, int) {
+	t.Helper()
+	base := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	for k, v := range headers {
+		base[k] = v
+	}
+	w := requestApp(app, "POST", target, string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": D{}})), base)
+	if w.Code != 200 {
+		t.Fatalf("%s: %d %s", target, w.Code, w.Body.String())
+	}
+	var result D
+	must(json.Unmarshal(w.Body.Bytes(), &result))
+	return dicts(obj(result["result"])["tools"]), len(obj(result["result"])["tools"].([]any))
+}
+
+func TestToolsetsCoverEveryTool(t *testing.T) {
+	in := map[string]bool{}
+	for _, set := range obj(Contract["toolsets"]) {
+		for _, name := range arr(set) {
+			in[str(name)] = true
+		}
+	}
+	for _, tool := range dicts(Contract["tools"]) {
+		if !in[str(tool["name"])] {
+			t.Fatalf("%s is in no toolset", tool["name"])
+		}
+	}
+}
+
+func TestMemberDefaultToolListIsSmall(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("alice", false)})
+	tools, _ := listedTools(t, app, "/mcp", nil)
+	if len(tools) >= 50 || len(encoded(tools)) >= 60*1024 {
+		t.Fatalf("default member list has %d tools in %d bytes", len(tools), len(encoded(tools)))
+	}
+}
+
+func TestToolListAuthorizationOnEveryEndpoint(t *testing.T) {
+	p, _ := fixture(t)
+	member := NewApp(p, testVerifier{who: person("alice", false)})
+	admin := NewApp(p, testVerifier{who: person("root", true)})
+	targets := []string{"/mcp", "/mcp?toolsets=all", "/mcp?toolsets=admin", "/mcp/read-only", "/mcp/read-only?toolsets=admin"}
+	sawAdmin := false
+	for _, target := range targets {
+		tools, _ := listedTools(t, member, target, nil)
+		for _, tool := range tools {
+			if named("admin_tools", str(tool["name"])) {
+				t.Fatalf("%s exposes admin tool %s to a member", target, tool["name"])
+			}
+			if strings.Contains(target, "read-only") && tool["name"] != "whoami" && !boolean(obj(tool["annotations"])["readOnlyHint"]) {
+				t.Fatalf("%s lists %s, which is not read-only", target, tool["name"])
+			}
+		}
+		tools, _ = listedTools(t, admin, target, nil)
+		for _, tool := range tools {
+			sawAdmin = sawAdmin || named("admin_tools", str(tool["name"]))
+		}
+	}
+	if !sawAdmin {
+		t.Fatal("admin lost the admin tools")
+	}
+	tools, _ := listedTools(t, member, "/mcp", map[string]string{"X-Carrel-Toolsets": "all"})
+	if len(tools) != len(dicts(Contract["tools"]))-len(arr(Contract["admin_tools"])) {
+		t.Fatalf("header toolsets=all gave %d tools", len(tools))
+	}
+}
+
+// Toolsets only shape tools/list: a tool outside the list stays callable by
+// name, and an admin on plain /mcp lists the admin tools.
+func TestUnlistedToolsStayCallable(t *testing.T) {
+	p, _ := fixture(t)
+	member := NewApp(p, testVerifier{who: person("alice", false)})
+	tools, _ := listedTools(t, member, "/mcp", nil)
+	for _, tool := range tools {
+		if str(tool["name"]) == "port_list" {
+			t.Fatal("port_list is listed in the core set")
+		}
+	}
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	call := func(app *App, target, name string) D {
+		var result D
+		body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": name, "arguments": D{}}}))
+		must(json.Unmarshal(requestApp(app, "POST", target, body, headers).Body.Bytes(), &result))
+		return result
+	}
+	if result := call(member, "/mcp", "port_list"); result["error"] != nil || obj(result["result"])["isError"] == true {
+		t.Fatalf("unlisted port_list not callable on /mcp: %v", result)
+	}
+	if result := call(member, "/mcp", "node_list"); result["error"] == nil {
+		t.Fatalf("member called admin tool node_list: %v", result)
+	}
+	admin := NewApp(p, testVerifier{who: person("root", true)})
+	tools, _ = listedTools(t, admin, "/mcp", nil)
+	sawAdmin := false
+	for _, tool := range tools {
+		sawAdmin = sawAdmin || str(tool["name"]) == "node_list"
+	}
+	if !sawAdmin {
+		t.Fatal("admin on plain /mcp does not list node_list")
+	}
+}
+
+func TestReadOnlyEndpointRefusesWrites(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("alice", false)})
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "machine_delete", "arguments": D{"machine": "x"}}}))
+	var result D
+	must(json.Unmarshal(requestApp(app, "POST", "/mcp/read-only", body, headers).Body.Bytes(), &result))
+	if result["error"] == nil {
+		t.Fatalf("write tool callable on the read-only endpoint: %v", result)
+	}
+	if w := requestApp(app, "POST", "/mcp?toolsets=nope", body, headers); w.Code != 400 {
+		t.Fatal(w.Code)
+	}
+	for _, target := range []string{"/mcp?toolsets=core&toolsets=bogus", "/mcp?toolsets=core;x=1", "/mcp?toolsets=%zz"} {
+		if w := requestApp(app, "POST", target, body, headers); w.Code != 400 {
+			t.Fatal(target, w.Code)
+		}
+	}
+	bad := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream", "X-Carrel-Toolsets": "bogus"}
+	if w := requestApp(app, "POST", "/mcp?toolsets=core", body, bad); w.Code != 400 {
+		t.Fatal("header toolsets skipped when the query has one", w.Code)
+	}
+}
+
+func TestReadOnlyEndpointListsWhoami(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("newbie", false)})
+	tools, _ := listedTools(t, app, "/mcp/read-only", nil)
+	listed := false
+	for _, tool := range tools {
+		listed = listed || tool["name"] == "whoami"
+	}
+	if !listed {
+		t.Fatal("/mcp/read-only does not list whoami")
+	}
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "whoami", "arguments": D{}}}))
+	var result D
+	must(json.Unmarshal(requestApp(app, "POST", "/mcp/read-only", body, headers).Body.Bytes(), &result))
+	if result["error"] != nil || result["result"] == nil {
+		t.Fatalf("whoami not callable on the read-only endpoint: %v", result)
+	}
+	if p.Store.Tenant("user:newbie") != nil {
+		t.Fatal("whoami on the read-only endpoint registered a tenant")
+	}
+}
+
+func TestReadOnlyInstructionsAndNoOnboarding(t *testing.T) {
+	p, _ := fixture(t)
+	if got := instructionsFor(selection{readOnly: true}); got == str(Contract["instructions"]) || !strings.Contains(got, "/mcp") || strings.Contains(got, "machine_create") {
+		t.Fatal(got)
+	}
+	dns := &statefulDNS{records: map[string][]D{}, list: true}
+	p.Config.CloudflareAPI = dns.serve(t).URL
+	p.Config.CloudflareToken, p.Config.CloudflareZone = "test", "test"
+	app := NewApp(p, testVerifier{who: person("newbie", false)})
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "machine_list", "arguments": D{}}}))
+	requestApp(app, "POST", "/mcp/read-only", body, headers)
+	if p.Store.Tenant("user:newbie") != nil {
+		t.Fatal("a read-only call registered a tenant")
+	}
+	requestApp(app, "POST", "/mcp", body, headers)
+	if p.Store.Tenant("user:newbie") == nil {
+		t.Fatal("a call on /mcp no longer registers a tenant")
+	}
+}
+
+// The annotation rule of PLAN 4.1, over every tool in the contract.
+func TestContractAnnotations(t *testing.T) {
+	destructive := map[string]bool{
+		"machine_delete": true, "snapshot_delete": true, "snapshot_rollback": true, "image_delete": true,
+		"public_ip_release": true, "vip_remove": true, "function_remove": true, "app_unlink": true,
+		"app_webhook_rotate": true,
+	}
+	tools := dicts(Contract["tools"])
+	if len(tools) == 0 {
+		t.Fatal("contract lists no tools")
+	}
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		name := str(tool["name"])
+		seen[name] = true
+		a := obj(tool["annotations"])
+		for _, key := range []string{"readOnlyHint", "destructiveHint", "openWorldHint"} {
+			if _, ok := a[key].(bool); !ok {
+				t.Errorf("%s: annotation %s is missing", name, key)
+			}
+		}
+		readOnly, hasIdempotent := boolean(a["readOnlyHint"]), a["idempotentHint"] != nil
+		if want := !named("mutations", name) && name != "whoami"; readOnly != want {
+			t.Errorf("%s: readOnlyHint is %v, want %v", name, readOnly, want)
+		}
+		if want := destructive[name]; boolean(a["destructiveHint"]) != want {
+			t.Errorf("%s: destructiveHint is %v, want %v", name, !want, want)
+		}
+		if readOnly && (boolean(a["destructiveHint"]) || hasIdempotent) {
+			t.Errorf("%s: a read-only tool sets destructiveHint or idempotentHint", name)
+		}
+		if hasIdempotent && !boolean(a["idempotentHint"]) {
+			t.Errorf("%s: idempotentHint is present but false; leave it out", name)
+		}
+	}
+	for name := range destructive {
+		if !seen[name] {
+			t.Errorf("%s is not in the contract", name)
+		}
+	}
+	if _, ok := Contract["visible"]; ok {
+		t.Error("contract still carries the unused visible list")
+	}
+}

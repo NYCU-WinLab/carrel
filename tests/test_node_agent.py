@@ -1,5 +1,6 @@
 """node-agent and its helpers, without a live node: PVE reads and commands are replaced."""
 
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -2141,3 +2142,448 @@ def test_guest_sets_prune_ignores_a_node_without_the_table():
         raise module.CommandFailure("no table")
 
     assert module.guest_sets_prune(run) == []
+
+
+CA = "ssh-ed25519 " + "B" * 43
+
+
+def backfill_setup(
+    monkeypatch,
+    tmp_path,
+    power="stopped",
+    fail_mount=False,
+    fail_connect=False,
+    fail_umount=False,
+    pve_lock=None,
+    fstype="ext4",
+):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "owned", lambda m: {"lock": pve_lock} if pve_lock else {})
+    root = Path(__file__).parents[1]
+    guest = tmp_path / "guest"
+    guest.mkdir()
+    (guest / "etc/ssh").mkdir(parents=True)
+    (guest / "etc/os-release").write_text("ID=debian\n")
+    calls = []
+    monkeypatch.setattr(module, "disk_volume", lambda m: {"disk_volume": "local-zfs:vm-10100-disk-0"})
+    monkeypatch.setattr(module, "power_status", lambda m: power)
+    monkeypatch.setattr(module, "free_nbd", lambda: "/dev/nbd0")
+    monkeypatch.setattr(module, "root_partitions", lambda device: [(device + "p1", fstype)])
+    real_mkdtemp = module.tempfile.mkdtemp
+    parents = []
+
+    def mkdtemp(prefix):
+        parents.append(Path(real_mkdtemp(prefix=prefix, dir=tmp_path)))
+        return str(parents[-1])
+
+    monkeypatch.setattr(module.tempfile, "mkdtemp", mkdtemp)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    monkeypatch.setattr(
+        module,
+        "write",
+        lambda *a, **k: pytest.fail("the cloud-init seed must not be written"),
+    )
+    real_path = module.Path
+    monkeypatch.setattr(
+        module,
+        "Path",
+        lambda p: (
+            root / "scripts/guest-report.py" if p == "/usr/local/lib/carrel/guest-report.py" else real_path(p)
+        ),
+    )
+
+    def run(*a, **k):
+        calls.append([str(x) for x in a])
+        if a[0] == "qemu-nbd" and a[1].startswith("--connect") and fail_connect:
+            raise module.CommandFailure("connect failed")
+        if a[0] == "mount" and fail_mount:
+            raise module.CommandFailure("mount failed")
+        if a[0] == "mount":
+            # stand in for the mount: the target becomes the guest root
+            target = Path(a[-1])
+            assert target.parent in parents and target.parent.stat().st_mode & 0o777 == 0o700
+            target.rmdir()
+            target.symlink_to(guest)
+        if a[0] == "mountpoint" and not Path(a[-1]).is_symlink():
+            raise module.CommandFailure("not a mountpoint")
+        if a[0] == "umount" and fail_umount:
+            raise module.CommandFailure("umount failed: target is busy")
+        if a[0] == "umount" and Path(a[-1]).is_symlink():
+            Path(a[-1]).unlink()
+            Path(a[-1]).mkdir(0o700)
+        if a[0] == "pvs":
+            return "  guestvg\n  guestvg\n"
+        return "/dev/zvol/rpool/vm-10100-disk-0" if a[0] == "pvesm" else ""
+
+    monkeypatch.setattr(module, "run", run)
+    module.backfill_parents = parents
+    return module, guest, calls
+
+
+def test_ca_backfill_writes_the_ca_files_and_reporter_and_is_idempotent(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    vm = dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice", "project:lab"])
+    module.ca_backfill(vm)
+    first = {
+        p.relative_to(guest): (p.read_text(), p.stat().st_mode & 0o777)
+        for p in guest.rglob("*")
+        if p.is_file()
+    }
+    assert first[Path("etc/ssh/ssh_user_ca.pub")] == (CA + "\n", 0o644)
+    assert first[Path("etc/ssh/sshd_config.d/50-carrel-user-ca.conf")][1] == 0o644
+    assert first[Path("etc/ssh/principals/user")] == ("alice\nproject:lab\n", 0o644)
+    reporter = Path(__file__).parents[1] / "scripts/guest-report.py"
+    assert first[Path("usr/local/lib/carrel/guest-report.py")] == (reporter.read_text(), 0o755)
+    assert len(first) == 5  # the four written files and the fixture os-release
+    assert [c[0] for c in calls if c[0] in ("qemu-nbd", "mount", "umount")] == [
+        "qemu-nbd",
+        "mount",
+        "umount",
+        "qemu-nbd",
+    ]
+    module.ca_backfill(vm)
+    second = {
+        p.relative_to(guest): (p.read_text(), p.stat().st_mode & 0o777)
+        for p in guest.rglob("*")
+        if p.is_file()
+    }
+    assert second == first
+
+
+def test_ca_backfill_refuses_a_machine_that_is_not_stopped(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, power="running")
+    with pytest.raises(ValueError, match="stop"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] in ("qemu-nbd", "mount") for c in calls)
+
+
+def test_ca_backfill_disconnects_the_nbd_device_when_a_step_fails(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fail_mount=True)
+    with pytest.raises(module.CommandFailure):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
+    assert not any(c[0] == "umount" for c in calls)
+
+
+def test_ca_backfill_keeps_the_nbd_device_when_umount_keeps_failing(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fail_umount=True)
+    with pytest.raises(module.CommandFailure, match="/dev/nbd0.*carrel-backfill"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    umounts = [c for c in calls if c[0] == "umount"]
+    assert [c[1] for c in umounts] == [umounts[0][1], umounts[0][1], "-l"]
+    assert not any(c[0] in ("vgchange", "pvs") for c in calls)
+    assert not any(c[:2] == ["qemu-nbd", "--disconnect"] for c in calls)
+
+
+def test_ca_backfill_unmounts_a_timed_out_mount_before_disconnecting(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    run = module.run
+
+    def timing_out(*a, **k):
+        out = run(*a, **k)
+        if a[0] == "mount":
+            raise module.subprocess.TimeoutExpired(a, 180)
+        return out
+
+    monkeypatch.setattr(module, "run", timing_out)
+    with pytest.raises(module.subprocess.TimeoutExpired):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    names = [c[0] for c in calls if c[0] in ("mount", "umount", "qemu-nbd")]
+    assert names == ["qemu-nbd", "mount", "umount", "qemu-nbd"]
+
+
+def test_ca_backfill_does_not_follow_a_guest_symlink_out_of_the_disk(monkeypatch, tmp_path):
+    module, guest, _ = backfill_setup(monkeypatch, tmp_path)
+    outside = tmp_path / "host-etc"
+    outside.mkdir()
+    (guest / "etc/ssh/principals").symlink_to(outside)
+    with pytest.raises(OSError):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert list(outside.iterdir()) == []
+
+
+def test_ca_backfill_leaves_an_nbd_device_it_did_not_connect_alone(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fail_connect=True)
+    with pytest.raises(module.CommandFailure, match="connect"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] == "qemu-nbd" and c[1] == "--disconnect" for c in calls)
+    assert not any(c[0] in ("mount", "umount") for c in calls)
+
+
+def test_ca_backfill_mounts_below_a_private_dir_and_removes_both(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    (parent,) = module.backfill_parents
+    mount = next(c for c in calls if c[0] == "mount")
+    assert mount[1:5] == ["-t", "ext4", "-o", "nodev,nosuid,noexec,errors=remount-ro"]
+    assert mount[-1] == str(parent / "root")
+    assert not parent.exists()
+    assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+
+
+def test_ca_backfill_mounts_an_ext4_root_with_its_type_and_errors_remount_ro(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fstype="ext4")
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    mount = next(c for c in calls if c[0] == "mount")
+    assert mount[1:3] == ["-t", "ext4"]
+    assert "errors=remount-ro" in mount[4].split(",")
+
+
+def test_ca_backfill_mounts_an_xfs_root_with_its_type_and_no_errors_option(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, fstype="xfs")
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    mount = next(c for c in calls if c[0] == "mount")
+    assert mount[1:5] == ["-t", "xfs", "-o", "nodev,nosuid,noexec"]
+
+
+def test_root_partitions_lists_the_linux_partitions_largest_first(monkeypatch):
+    module = load("node-agent.py")
+    tree = {
+        "blockdevices": [
+            {
+                "name": "nbd0",
+                "type": "disk",
+                "children": [
+                    {"name": "nbd0p1", "size": "1048576", "type": "part", "fstype": "vfat"},
+                    {"name": "nbd0p2", "size": "536870912", "type": "part", "fstype": "xfs"},
+                    {"name": "nbd0p3", "size": "8589934592", "type": "part", "fstype": "ext4"},
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr(module, "run", lambda *a, **k: json.dumps(tree) if a[0] == "lsblk" else "")
+    assert module.root_partitions("/dev/nbd0") == [("/dev/nbd0p3", "ext4"), ("/dev/nbd0p2", "xfs")]
+
+
+def test_ca_backfill_removes_the_mount_dirs_when_a_write_fails(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    (guest / "etc/ssh/ssh_user_ca.pub").mkdir()
+    with pytest.raises(OSError):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    (parent,) = module.backfill_parents
+    assert [c[0] for c in calls if c[0] in ("mount", "umount")] == ["mount", "umount"]
+    assert not parent.exists()
+
+
+def test_ca_backfill_refuses_a_machine_whose_lock_a_migration_or_freeze_holds(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    with (tmp_path / f"vm-{MACHINE['vmid']}.lock").open("w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with pytest.raises(ValueError, match="busy"):
+            module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] == "qemu-nbd" for c in calls)
+
+
+def test_ca_backfill_refuses_a_machine_with_a_proxmox_config_lock(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path, pve_lock="backup")
+    with pytest.raises(ValueError, match="locked in Proxmox"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not any(c[0] == "qemu-nbd" for c in calls)
+
+
+def test_ca_backfill_takes_the_node_lock_so_a_start_waits_for_it(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "ca_backfill", lambda m: {})
+    locks = []
+    monkeypatch.setattr(module.fcntl, "flock", lambda f, how: locks.append(Path(f.name).name))
+    request = json.dumps({"op": "ca_backfill", "machine": MACHINE}).encode() + b"\n"
+    monkeypatch.setattr(module.sys, "stdin", type("In", (), {"buffer": __import__("io").BytesIO(request)})())
+    module.main()
+    assert locks == ["node.lock"]
+
+
+def test_ca_backfill_deactivates_a_guest_vg_on_the_nbd_device_before_disconnect(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    names = [c[0] if c[0] != "qemu-nbd" else c[1].split("=")[0] for c in calls]
+    assert names.index("--connect") < names.index("udevadm") < names.index("pvs")
+    assert names.index("umount") < names.index("pvs") < names.index("vgchange") < names.index("--disconnect")
+    pvs = next(c for c in calls if c[0] == "pvs")
+    vgchange = [c for c in calls if c[0] == "vgchange"]
+    assert [c[-1] for c in vgchange] == ["guestvg"]
+    for c in (pvs, *vgchange):
+        config = c[c.index("--config") + 1]
+        assert "global_filter" in config and "/dev/nbd0" in config and "r|.*|" in config
+
+
+def test_ca_backfill_disconnects_even_when_the_vg_deactivation_fails(monkeypatch, tmp_path):
+    module, _, calls = backfill_setup(monkeypatch, tmp_path)
+    run = module.run
+
+    def failing(*a, **k):
+        if a[0] == "vgchange":
+            raise module.CommandFailure("vgchange failed")
+        return run(*a, **k)
+
+    monkeypatch.setattr(module, "run", failing)
+    with pytest.raises(module.CommandFailure):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
+
+
+def multi_partition_setup(monkeypatch, tmp_path, partitions, roots, subvols=""):
+    """partitions: [(device, fstype)] largest first; roots: {(device, subvol): guest dir}."""
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, "root_partitions", lambda device: partitions)
+    run = module.run
+    mounted = []
+
+    def multi(*a, **k):
+        if a[0] == "mount":
+            opts = a[4].split(",")
+            subvol = next((o[7:] for o in opts if o.startswith("subvol=")), None)
+            source = roots[(a[5], subvol)]
+            calls.append([str(x) for x in a])
+            target = Path(a[-1])
+            target.rmdir()
+            target.symlink_to(source)
+            mounted.append(target)
+            return ""
+        if a[0] == "btrfs":
+            calls.append([str(x) for x in a])
+            return subvols
+        return run(*a, **k)
+
+    monkeypatch.setattr(module, "run", multi)
+    return module, guest, calls
+
+
+def test_ca_backfill_skips_a_larger_data_partition_for_the_small_root(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    module, guest, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p2", "ext4"), ("/dev/nbd0p1", "ext4")],
+        {("/dev/nbd0p2", None): data, ("/dev/nbd0p1", None): tmp_path / "guest"},
+    )
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+    assert list(data.iterdir()) == []
+    assert [c[-2] for c in calls if c[0] == "mount"] == ["/dev/nbd0p2", "/dev/nbd0p1"]
+    assert [c[0] for c in calls].count("umount") == 2
+
+
+def test_ca_backfill_fails_naming_the_partitions_when_none_is_a_root(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    module, _, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p2", "ext4"), ("/dev/nbd0p1", "xfs")],
+        {("/dev/nbd0p2", None): data, ("/dev/nbd0p1", None): data},
+    )
+    with pytest.raises(module.CommandFailure, match="nbd0p2, /dev/nbd0p1"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert list(data.iterdir()) == []
+    assert calls[-1] == ["qemu-nbd", "--disconnect", "/dev/nbd0"]
+
+
+def test_ca_backfill_mounts_the_at_subvolume_of_a_btrfs_top_level(monkeypatch, tmp_path):
+    top = tmp_path / "top"
+    top.mkdir()
+    module, guest, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p1", "btrfs")],
+        {("/dev/nbd0p1", None): top, ("/dev/nbd0p1", "@"): tmp_path / "guest"},
+        subvols="ID 256 gen 8 top level 5 path @home\nID 257 gen 8 top level 5 path @\n",
+    )
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    mounts = [c for c in calls if c[0] == "mount"]
+    assert "subvol=@" in mounts[1][4].split(",")
+    assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+    assert list(top.iterdir()) == []
+
+
+def test_ca_backfill_fails_on_btrfs_without_a_root_subvolume(monkeypatch, tmp_path):
+    top = tmp_path / "top"
+    top.mkdir()
+    module, _, calls = multi_partition_setup(
+        monkeypatch,
+        tmp_path,
+        [("/dev/nbd0p1", "btrfs")],
+        {("/dev/nbd0p1", None): top},
+        subvols="ID 256 gen 8 top level 5 path data\n",
+    )
+    with pytest.raises(module.CommandFailure, match="nbd0p1"):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert len([c for c in calls if c[0] == "mount"]) == 1
+
+
+def test_ca_backfill_writes_the_principals_first_and_the_sshd_dropin_last(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    order = []
+    real = module.guest_write
+    monkeypatch.setattr(
+        module, "guest_write", lambda root, path, *a: (order.append(path), real(root, path, *a))
+    )
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert order[0] == "/etc/ssh/principals/user"
+    assert order[-1] == "/etc/ssh/sshd_config.d/50-carrel-user-ca.conf"
+    assert order.index("/etc/ssh/ssh_user_ca.pub") < len(order) - 1
+
+
+def test_ca_backfill_does_not_write_the_dropin_when_the_principals_write_fails(monkeypatch, tmp_path):
+    module, guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    (guest / "etc/ssh/principals").mkdir(parents=True)
+    (guest / "etc/ssh/principals/user").mkdir()
+    with pytest.raises(OSError):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not (guest / "etc/ssh/sshd_config.d/50-carrel-user-ca.conf").exists()
+    assert not (guest / "etc/ssh/ssh_user_ca.pub").exists()
+
+
+def test_guest_write_keeps_writing_after_a_short_write(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    real = module.os.write
+    monkeypatch.setattr(module.os, "write", lambda fd, data: real(fd, bytes(data)[:3]))
+    root = tmp_path / "root"
+    root.mkdir()
+    module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
+    assert (root / "etc/file").read_text() == "0123456789"
+
+
+def test_guest_write_does_not_rename_when_the_write_stalls(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    real = module.os.write
+    sent = []
+
+    def stall(fd, data):
+        if sent:
+            return 0
+        sent.append(1)
+        return real(fd, bytes(data)[:3])
+
+    monkeypatch.setattr(module.os, "write", stall)
+    root = tmp_path / "root"
+    root.mkdir()
+    with pytest.raises(OSError):
+        module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
+    assert not (root / "etc/file").exists()
+
+
+def test_guest_write_keeps_old_bytes_when_replacing_and_the_write_stalls(monkeypatch, tmp_path):
+    module, _guest, _calls = backfill_setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(module.os, "fchown", lambda *a: None)
+    real = module.os.write
+    sent = []
+
+    def stall(fd, data):
+        if sent:
+            return 0
+        sent.append(1)
+        return real(fd, bytes(data)[:3])
+
+    monkeypatch.setattr(module.os, "write", stall)
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    target = root / "etc/file"
+    target.write_text("old-content")
+    with pytest.raises(OSError):
+        module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
+    assert target.read_text() == "old-content"

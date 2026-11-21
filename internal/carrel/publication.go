@@ -97,3 +97,10 @@ func (e *Execution) PreparePublication() {
 	}
 	e.publicationPrepared = true
 }
+
+func init() {
+	registerPhases(Phases{Prepare: (*Execution).PreparePublication, Finish: (*Execution).FinishDeployment}, "deployment_apply")
+	registerPhases(Phases{Prepare: (*Execution).PreparePublication, Finish: func(e *Execution, t D) D {
+		return e.DomainAction("domain_add", obj(e.Op["args"]), t)
+	}}, "domain_add")
+}

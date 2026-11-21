@@ -81,8 +81,12 @@ func (e *Execution) RenameMachine(a, t D) D {
 // reach the machine: by its target, a deployment's machines or bindings, a
 // machine it created, or arguments that name it by name or vmid, since a
 // queued job binds those only when it runs (CheckBusy in operations.go).
+// A VM whose disk machine_ca_backfill is writing is busy too.
 func (e *Execution) machineBusy(n int, m D) bool {
 	vmid, name := integer(m["vmid"]), str(m["name"])
+	if e.P.isBackfilling(vmid) {
+		return true
+	}
 	names := func(v any) bool { return str(v) == name || str(v) == str(vmid) }
 	for _, o := range e.S.ActiveOperations(n) {
 		ids := arr(obj(o["deployment"])["machines"])

@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"time"
 )
@@ -253,7 +255,25 @@ func failureResult(v any) D {
 	if f, ok := v.(Failure); ok {
 		return f.Result
 	}
-	return D{"ok": false, "error": D{"code": "conflict", "message": "Operation failed; allocation retained for repair"}}
+	return D{"ok": false, "error": D{"code": "internal", "message": "Operation failed; allocation retained for repair"}}
+}
+
+// logPanic reports a recovered value that is neither a Failure nor a Waiting:
+// a bug, which failureResult hides behind code internal. Call it inside the
+// deferred recover so the stack still holds the panic site.
+func logPanic(site string, v any, attrs ...any) {
+	switch v.(type) {
+	case nil, Failure, Waiting:
+		return
+	}
+	slog.Error("unexpected_panic", append([]any{"site", site, "error_type", fmt.Sprintf("%T", v), "error", describe(v), "stack", string(debug.Stack())}, attrs...)...)
+}
+
+// attemptLogged is attempt that logs a non-Failure panic with its stack.
+func attemptLogged(site string, f func()) (err any) {
+	defer func() { err = recover(); logPanic(site, err) }()
+	f()
+	return nil
 }
 func attempt(f func()) (err any) { defer func() { err = recover() }(); f(); return nil }
 func sleep(ctx context.Context, d time.Duration) bool {

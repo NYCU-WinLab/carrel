@@ -137,9 +137,7 @@ func TestGoldenDomainEdges(t *testing.T) {
 	cert := func(a func() D) { mu.Lock(); answers = append(answers, a); mu.Unlock() }
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	go rec.guests(ctx)
+	rec.startGuests(t)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
 	domainEdgeScenario(g, dns, cert)
@@ -161,18 +159,22 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 	}
 	call := func(step, tool string, a, who D) D { r := g.call(step, tool, a, who); flush(step); return r }
 	// racy submits a job that the queue may or may not have picked up by the
-	// time the response is rendered (issue #115): those fields are masked.
+	// time the response is rendered (issue #115): only the stable fields are
+	// kept, because which others are present also varies (issue #531).
 	racy := func(step, tool string, a, who D) D {
 		r := g.app.Call(context.Background(), tool, a, who)
 		shown := clone(r)
 		if op := obj(shown["operation"]); op != nil {
-			for _, k := range []string{"attempts", "phase", "state", "next_action", "poll_after_seconds", "updated_at"} {
-				if _, ok := op[k]; ok {
-					op[k] = "<racy>"
+			for k := range op {
+				if k != "id" && k != "tool" && k != "created_at" {
+					delete(op, k)
 				}
 			}
 		}
-		g.record(step, tool, shown)
+		// Adapter requests of the queued job are taken by the next wait or
+		// settle, so which step reports them no longer depends on timing.
+		g.tools[tool] = true
+		g.lines = append(g.lines, step+" mcp "+normalize(encoded(shown)))
 		flush(step)
 		return r
 	}
@@ -192,6 +194,9 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 			for _, w := range want {
 				if op["state"] == w || op["phase"] == w {
 					g.lines = append(g.lines, fmt.Sprintf("%s reached %s", step, w))
+					for _, sent := range g.rec.take() {
+						g.lines = append(g.lines, step+" adapter "+sent)
+					}
 					flush(step)
 					return
 				}

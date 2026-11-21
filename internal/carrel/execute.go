@@ -12,6 +12,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 	e := p.execution(ctx)
 	defer func() {
 		if r := recover(); r != nil {
+			logPanic("execute", r, "tool", tool)
 			result = failureResult(r)
 			_ = attempt(func() { e.S.Log(str(w["sub"]), nil, tool, a, str(obj(result["error"])["code"])) })
 		}
@@ -111,7 +112,12 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 			return D{"operations": []D{publicOperation(e.P.Operations.Find(t, str(a["id"])))}}, t["n"]
 		}
 	}
-	onboarding := e.Register(w, str(a["tenant"]), tool == "whoami")
+	// A read-only endpoint must not write: a fresh identity is registered
+	// by its first call on /mcp, not by a read.
+	var onboarding []D
+	if sel, _ := e.Ctx.Value(selectionKey{}).(selection); !sel.readOnly {
+		onboarding = e.Register(w, str(a["tenant"]), tool == "whoami")
+	}
 	if tool == "whoami" {
 		ts := []D{}
 		for _, s := range subjects(w) {

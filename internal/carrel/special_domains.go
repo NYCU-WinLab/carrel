@@ -278,40 +278,23 @@ func (e *Execution) checkGrantOverlap(t D, kind, name, ignore, ignoreGrant, zone
 	return existing
 }
 
-// DomainRequest files a request for a special domain (PLAN 6.10 step 1).
-func (e *Execution) DomainRequest(a, w, t D) D {
-	dry, n := boolean(a["dry_run"]), integer(t["n"])
-	kind := str(fallback(a, "kind", "exact"))
-	name := strings.ToLower(strings.TrimSuffix(str(a["name"]), "."))
-	key := str(a["idempotency_key"])
-	fingerprint := digest(string(encoded(D{"kind": kind, "name": name, "reason": a["reason"]})))
-	if key != "" && !dry {
-		for _, old := range e.S.Objects("requests", n) {
-			if old["idempotency_key"] == key {
-				if old["fingerprint"] != fingerprint {
-					fail("conflict", "Idempotency key was already used for different arguments", D{"recovery": "revise_request"})
-				}
-				return D{"request": without(old, "fingerprint", "idempotency_key"), "quota_after": e.Quota(t), "reused": true}
-			}
-		}
-	}
-	zone, existing := e.checkSpecialName(t, kind, name, "")
-	pending := filter(e.S.Objects("requests", n), func(r D) bool { return r["kind"] == "domain" && r["status"] == "pending" })
-	if len(pending) >= maxPendingDomainRequests {
-		fail("quota_exceeded", "A tenant has at most 3 pending domain requests; wait for a decision", D{"recovery": "revise_request"})
-	}
-	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "domain", "status": "pending", "domain_kind": kind, "name": name, "zone": zone, "reason": a["reason"], "existing_record": existing, "actor": w["sub"], "created_at": time.Now().Unix()}
-	if !dry {
-		if key != "" {
-			r["idempotency_key"], r["fingerprint"] = key, fingerprint
-		}
-		e.Put("requests", r["id"], n, r)
-	} else {
-		r = without(r, "id", "tenant_n", "actor", "created_at")
-		r["status"] = "planned"
-	}
-	return D{"request": without(r, "fingerprint", "idempotency_key"), "dry_run": dry, "quota_after": e.Quota(t)}
+// domainRequestKind is the request flow of a special domain (PLAN 6.10 step 1).
+var domainRequestKind = requestKind{
+	name: "domain", noun: "domain", quotaAfter: true,
+	fingerprint: func(a D) D {
+		return D{"kind": str(fallback(a, "kind", "exact")), "name": requestedName(a), "reason": a["reason"]}
+	},
+	check: func(e *Execution, a, t D) D {
+		kind, name := str(fallback(a, "kind", "exact")), requestedName(a)
+		zone, existing := e.checkSpecialName(t, kind, name, "")
+		return D{"domain_kind": kind, "name": name, "zone": zone, "existing_record": existing}
+	},
 }
+
+func requestedName(a D) string { return strings.ToLower(strings.TrimSuffix(str(a["name"]), ".")) }
+
+// DomainRequest files a request for a special domain.
+func (e *Execution) DomainRequest(a, w, t D) D { return e.FileRequest(domainRequestKind, a, w, t) }
 
 // approveDomain decides a domain request. The rules are checked again: the
 // zone may have changed since the member asked.
@@ -332,24 +315,10 @@ func (e *Execution) approveDomain(tool string, a, w, r, t D) D {
 	if zone := str(r["zone"]); zone != specialZone {
 		g.Zone = zone
 	}
-	switch {
-	case dry && tool == "request_approve":
-		r["status"] = "planned_approval"
-	case dry:
-		r["status"] = "planned_rejection"
-	default:
-		e.Transaction(func(tx *Execution) {
-			if tool == "request_approve" {
-				tx.Put("domain_grants", g.ID, n, g)
-				r["status"] = "approved"
-				r["grant"] = g.ID
-			} else {
-				r["status"] = "rejected"
-			}
-			r["decided_by"] = w["sub"]
-			tx.Put("requests", r["id"], n, r)
-		})
-	}
+	e.decideRequest(tool, dry, w, r, func(tx *Execution) {
+		tx.Put("domain_grants", g.ID, n, g)
+		r["grant"] = g.ID
+	})
 	return D{"request": without(r, "idempotency_key", "fingerprint"), "dry_run": dry, "quota_after": e.Quota(t)}
 }
 

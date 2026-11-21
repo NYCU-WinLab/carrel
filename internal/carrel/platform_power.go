@@ -318,6 +318,8 @@ func (e *Execution) PerformPlatformPower() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A bug here is logged; the machines left over show in the next dry run.
+			defer func() { logPanic("platform_power_node", recover()) }()
 			for _, r := range list {
 				m := e.S.Get("machines", str(r["vmid"]))
 				t := e.S.TenantN(integer(r["tenant_n"]))
@@ -479,4 +481,13 @@ func (e *Execution) platformCheck(repair bool) []D {
 	}
 	wg.Wait()
 	return out
+}
+
+func init() {
+	registerPhases(Phases{Perform: (*Execution).PerformPlatformPower, Finish: func(e *Execution, _ D) D {
+		if e.Op["platform"] == nil {
+			return nil
+		}
+		return e.FinishPlatformPower()
+	}}, "platform_power")
 }

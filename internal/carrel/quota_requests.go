@@ -20,34 +20,19 @@ func validateGrantExpiry(value any) {
 	}
 }
 
-func (e *Execution) QuotaRequest(a, w, t D) D {
-	dry, n := boolean(a["dry_run"]), integer(t["n"])
-	key := str(a["idempotency_key"])
-	fingerprint := digest(string(encoded(pick(a, "dimension", "amount", "reason", "until"))))
-	if key != "" && !dry {
-		for _, old := range e.S.Objects("requests", n) {
-			if old["idempotency_key"] == key {
-				if old["fingerprint"] != fingerprint {
-					fail("conflict", "Idempotency key was already used for different arguments", D{"recovery": "revise_request"})
-				}
-				return D{"request": without(old, "fingerprint", "idempotency_key"), "quota_after": e.Quota(t), "reused": true}
-			}
-		}
-	}
-	validateQuotaLimit(t, str(a["dimension"]), a["amount"], true)
-	validateGrantExpiry(a["until"])
-	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "quota", "status": "pending", "dimension": a["dimension"], "amount": a["amount"], "reason": a["reason"], "until": a["until"], "actor": w["sub"], "created_at": time.Now().Unix()}
-	if !dry {
-		if key != "" {
-			r["idempotency_key"], r["fingerprint"] = key, fingerprint
-		}
-		e.Put("requests", r["id"], n, r)
-	} else {
-		r = without(r, "id", "tenant_n", "actor", "created_at")
-		r["status"] = "planned"
-	}
-	return D{"request": without(r, "fingerprint", "idempotency_key"), "dry_run": dry, "quota_after": e.Quota(t)}
+// quotaRequestKind is the request flow of a higher quota limit.
+var quotaRequestKind = requestKind{
+	name: "quota", quotaAfter: true,
+	fingerprint: func(a D) D { return pick(a, "dimension", "amount", "reason", "until") },
+	check: func(e *Execution, a, t D) D {
+		validateQuotaLimit(t, str(a["dimension"]), a["amount"], true)
+		validateGrantExpiry(a["until"])
+		return D{"dimension": a["dimension"], "amount": a["amount"], "until": a["until"]}
+	},
+	planned: func(out, a, t D) { out["current_limit"] = obj(t["quota"])[str(a["dimension"])] },
 }
+
+func (e *Execution) QuotaRequest(a, w, t D) D { return e.FileRequest(quotaRequestKind, a, w, t) }
 
 func publicRequests(requests []D) []D {
 	out := []D{}

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -119,7 +117,7 @@ func (o *Operations) Loop() {
 		case <-o.p.ctx.Done():
 			return
 		case id := <-o.queue:
-			o.apply(id)
+			attemptLogged("operations_loop", func() { o.apply(id) })
 		}
 	}
 }
@@ -205,7 +203,7 @@ func (o *Operations) apply(id string) {
 	e.Op = op
 	var result D
 	complete := false
-	err := attempt(func() {
+	err := attemptLogged("operation", func() {
 		if op["tool"] != "tenant_suspend" && find(e.S.ActiveOperations(), func(v D) bool { return v["tool"] == "tenant_suspend" }) != nil {
 			panic(Waiting{"waiting_for_priority_operation", now() + 0.05})
 		}
@@ -260,7 +258,7 @@ func (o *Operations) apply(id string) {
 	o.p.wg.Add(1)
 	go func() {
 		defer o.p.wg.Done()
-		problem := attempt(func() {
+		problem := attemptLogged("operation_ready", func() {
 			t := e.S.TenantN(integer(op["tenant_n"]))
 			machines := filter(e.S.Objects("machines", integer(t["n"])), func(m D) bool { return m["operation_id"] == id })
 			// Existing machines with attached NICs and snapshot restores also need readiness.
@@ -292,12 +290,7 @@ func (o *Operations) apply(id string) {
 					e.WaitReady(m, previous)
 				}
 			}
-			e.PreparePublication()
-			e.PerformMigration()
-			e.PerformImport()
-			e.PerformFreeze()
-			e.PerformThaw()
-			e.PerformPlatformPower()
+			e.runPhases()
 		})
 		o.p.writer.Lock()
 		defer o.p.writer.Unlock()
@@ -305,44 +298,9 @@ func (o *Operations) apply(id string) {
 			return
 		}
 		if problem == nil {
-			problem = attempt(func() {
+			problem = attemptLogged("operation_finish", func() {
 				t := e.S.TenantN(integer(op["tenant_n"]))
-				if op["tool"] == "domain_add" {
-					result = merge(result, e.DomainAction("domain_add", obj(op["args"]), t))
-				}
-				if op["tool"] == "machine_migrate" {
-					result = merge(result, e.FinishMigration(t))
-				}
-				if op["tool"] == "machine_freeze" {
-					result = merge(result, e.FinishFreeze(t))
-				}
-				if op["tool"] == "machine_thaw" {
-					result = merge(result, e.FinishThaw(t))
-				}
-				if op["tool"] == "iso_import" || op["tool"] == "image_import" {
-					result = merge(result, e.FinishImport())
-				}
-				if op["tool"] == "platform_power" && op["platform"] != nil {
-					result = merge(result, e.FinishPlatformPower())
-				}
-				if op["tool"] == "deployment_apply" {
-					e.PublishDeployment(t, obj(op["args"]), obj(op["who"]))
-					result = merge(result, e.AccessResult(t, obj(op["args"])))
-					machines := []D{}
-					for _, vmid := range arr(obj(op["deployment"])["machines"]) {
-						machines = append(machines, e.PublicMachine(e.Machine(t, vmid), e.ports(integer(t["n"]))))
-					}
-					result["machines"] = machines
-					updated := []D{}
-					bindings := slices.Collect(maps.Keys(obj(obj(op["deployment"])["bindings"])))
-					sort.Slice(bindings, func(i, j int) bool { return integer(bindings[i]) < integer(bindings[j]) })
-					for _, id := range bindings {
-						if find(machines, func(m D) bool { return integer(m["vmid"]) == integer(id) }) == nil {
-							updated = append(updated, e.PublicMachine(e.Machine(t, id), e.ports(integer(t["n"]))))
-						}
-					}
-					result["updated_machines"] = updated
-				}
+				result = merge(result, e.runFinish(t))
 				if pub := obj(result["machine"]); pub["name"] != nil && op["tool"] != "machine_freeze" && op["tool"] != "machine_thaw" {
 					result["machine"] = e.PublicMachine(e.Machine(t, pub["name"]), e.ports(integer(t["n"])))
 				}
@@ -556,6 +514,13 @@ func (e *Execution) CheckBusy(t D) {
 					targets[integer(m["vmid"])] = true
 				}
 			}
+		}
+	}
+	// machine_ca_backfill writes a stopped VM's disk with the writer
+	// released: a job on that VM waits until the record is saved.
+	for _, vmid := range e.P.backfillVMIDs() {
+		if targets[vmid] || e.Op["tool"] == "platform_power" {
+			panic(Waiting{"waiting_for_machine_operation", now() + 1})
 		}
 	}
 	for _, other := range e.S.ActiveOperations() {

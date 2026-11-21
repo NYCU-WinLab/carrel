@@ -19,8 +19,6 @@ import (
 // it appears in no tool argument, no tool result and no command line. carrel
 // keeps a record per runner so runner_list can say what runs where.
 
-const runnerUser = "carrel-runner"
-
 var (
 	runnerLabelRE    = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 	githubRunnerURL  = regexp.MustCompile(`^https://github\.com/([a-z0-9][a-z0-9-]{0,38})(?:/([a-z0-9._-]{1,100}))?$`)

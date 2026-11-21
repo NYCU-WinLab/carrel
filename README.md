@@ -487,6 +487,15 @@ Python node adapter, gateway sync, backup target and guest reporter remain. Go i
 (ACME DNS-01 through Cloudflare). The Python tests cover these scripts; the Go tests cover the
 service. The live wire contract is `internal/carrel/contract.json`.
 
+`/mcp` lists a small core toolset (under 50 tools, under 60 KB; admins also see the admin toolset). Add
+`?toolsets=machines,network,apps,functions` (or `all`, or the `X-Carrel-Toolsets` header) to list more. Toolsets
+only shape the list: every tool the caller may use stays callable by name. `/mcp/read-only` registers and lists
+`readOnlyHint` tools plus `whoami`. The admin filter applies on every endpoint. Toolsets are defined in `contract.json`.
+
+`/mcp/read-only` only filters the tool list and the call set. It is not a credential boundary: both endpoints accept the
+same bearer token (audience `carrel-mcp`, no resource check), so a token obtained for `/mcp/read-only` also works on
+`/mcp`. Do not use it to delegate read-only access to another party.
+
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
 SHA-256. Select `debian-13-minimal` for the minimal environment, or `debian-13` / `ubuntu-24.04`
@@ -612,6 +621,57 @@ access until their certificate expires (at most 24 hours). A VM gets `/etc/ssh/s
 `/etc/ssh/principals/user` through cloud-init, before sshd first starts; a CT gets the same files
 for `root` at creation. ISO installs and images that serve their own ports get nothing. Existing
 machines are not changed. Without the setting nothing changes.
+
+The node op `ca_backfill` writes the same files into an existing, stopped VM's disk. It attaches the
+disk with `qemu-nbd` and mounts the root partition on the node, so the node kernel parses a
+filesystem the tenant controls. The mount is read-write only (needed for the write) with
+`nodev,nosuid,noexec`, plus `errors=remount-ro` on ext4. Nodes must run a patched kernel before the
+maintenance-window run (#443).
+
+The admin tool `machine_ca_backfill` calls it per VM: it skips a VM that already has `ssh_user_ca`, a
+CT, a running VM, a VM with a queued or running operation, an ISO install, a VM with
+`service_ports` and a VM with snapshots (a rollback restores a pre-backfill disk that never pulls; delete
+the snapshots, then run it again); after the node op succeeds it saves
+`ssh_user_ca`, `ca_principals` and `ca_sync: pull`, so a failure leaves the record old and a second run
+retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`,
+and a VM is skipped unless that username's slug is the tenant's slug. For a tenant whose slug an
+administrator assigned, `alias_confirmed: true` waives only that slug gate; it needs `tenant` and
+`owner`, is only for a personal tenant (a project tenant is refused as `invalid`), applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
+audit log. A lossless recorded username (a saved key's `by`, or `ca_principals` of a live or frozen VM
+created with the CA) that contradicts `owner` still refuses, flag or not, and so does a tenant that records more
+than one distinct username (an administrator must resolve its records first). A personal tenant with no recorded
+username is skipped unless the Keycloak lookup succeeds and `user:<sub>` equals the tenant subject, flag or
+not; the lookup runs at most once per call and a failure is remembered for that call; a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
+its VMs, or neither for every tenant; `dry_run` lists what would change.
+
+Maintenance window runbook for the backfill (#443). Prerequisite: `keycloak_url`, `keycloak_realm`,
+`keycloak_client_id` and `keycloak_client_secret_file` must be configured, and `keycloak_url` + `/realms/` +
+`keycloak_realm` must equal `issuer`. Without them every VM of a personal tenant with no username record is
+skipped (`sites/b09/config.example.json` has no such fields, add them).
+
+The Keycloak client must be a separate one: the lookup uses the client credentials grant and then calls
+`GET /admin/realms/<realm>/users`, so it needs a confidential client with service accounts enabled, and its
+service account needs a narrow realm-management role (`view-users` or `query-users`). The checked-in
+`sites/b09/keycloak-client.json` (`carrel-mcp`) is public with service accounts disabled and cannot be reused.
+Provision the new client, put its secret in `keycloak_client_secret_file`, and before any downtime run a
+`dry_run` for one known tenant and confirm it reports `owner checked against Keycloak sub`. Startup validation
+passes without this, so a wrong client only shows up as skipped VMs.
+
+During the preflight `dry_run`, a running VM that passes the owner check still reports `skipped` with
+"stop it first". That is not an owner refusal; it only means the VM must be stopped before the real run.
+
+Read the `dry_run` messages before you stop any VM. Stop the VM, run `machine_ca_backfill` for it
+(use `dry_run` first; a VM with snapshots is skipped until an admin deletes them), start the VM, then check. Per VM, after start:
+
+1. `ssh_user_ca`, `ca_principals` and `ca_sync` are set on the machine record (`machine_get`).
+2. A lab certificate login with the principal succeeds.
+3. `machine_access` grants a second user and that user's login works; after a revoke the login fails
+   within about 15 seconds.
+4. The guest reports to carrel: the `guest_reports` row is fresh and comes from the new reporter.
+
+Never change the cloud-init instance id of a VM: it reruns first boot and regenerates the host keys.
+The `machine_access` message that tells owners to add files by hand applies only to a machine
+without `ca_sync`; once a VM is backfilled it has a puller and the message no longer applies.
 
 `machine_access` lets the tenant name other members who may log in with a certificate: grant and
 revoke take portal usernames, and the machine's principals file becomes its own principal followed

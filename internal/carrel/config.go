@@ -46,6 +46,15 @@ type Config struct {
 	// signs for the creator's Keycloak username. Empty: keys only.
 	SSHUserCA string `json:"ssh_user_ca,omitempty"`
 
+	// KeycloakURL is the Keycloak base URL, e.g. https://sso.winlab.tw, and
+	// KeycloakRealm, KeycloakClientID and KeycloakClientSecretFile name the
+	// service client that may view users. All empty: no username resolves to
+	// a sub. Partly set is a startup error.
+	KeycloakURL              string `json:"keycloak_url,omitempty"`
+	KeycloakRealm            string `json:"keycloak_realm,omitempty"`
+	KeycloakClientID         string `json:"keycloak_client_id,omitempty"`
+	KeycloakClientSecretFile string `json:"keycloak_client_secret_file,omitempty"`
+
 	// TelemetryURL is an OTLP/HTTP collector, e.g. https://sensorium.zyx.tw:
 	// WARN and ERROR log records and each node's capacity go to its
 	// /v1/logs and /v1/metrics. TelemetryTokenFile holds the bearer token.
@@ -195,6 +204,28 @@ func (c Config) Validate() error {
 	}
 	if c.SSHUserCA != "" && !sshUserCA.MatchString(c.SSHUserCA) {
 		return errors.New("ssh_user_ca must be one SSH public key: type and base64, no comment")
+	}
+	if c.KeycloakURL != "" || c.KeycloakRealm != "" || c.KeycloakClientID != "" || c.KeycloakClientSecretFile != "" {
+		// https only: the request carries the client secret.
+		// "?" and "#" are refused as text: url.Parse accepts a bare "?" with an
+		// empty RawQuery, which would move the route into the query.
+		if u, err := url.Parse(c.KeycloakURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.ContainsAny(c.KeycloakURL, "?#") || strings.Contains(c.KeycloakURL, "/.") {
+			return errors.New("keycloak_url must be an https URL with no query, fragment or dot segment")
+		}
+		if c.KeycloakRealm == "" || c.KeycloakClientID == "" || c.KeycloakClientSecretFile == "" {
+			return errors.New("keycloak_url needs keycloak_realm, keycloak_client_id and keycloak_client_secret_file")
+		}
+		if strings.ContainsAny(c.KeycloakRealm, "/?#\\%") || c.KeycloakRealm == "." || c.KeycloakRealm == ".." || url.PathEscape(c.KeycloakRealm) != c.KeycloakRealm {
+			// The lookup sends url.PathEscape(realm); a realm that changes
+			// under it (";", space) would not name the issuer's realm.
+			return errors.New("keycloak_realm must be a single path segment")
+		}
+		// Tenant subjects come from tokens of Issuer, so the lookup must
+		// address the same realm or no sub would ever match. NewApp trims
+		// trailing slashes from Issuer, so compare the same form.
+		if strings.TrimRight(c.KeycloakURL, "/")+"/realms/"+c.KeycloakRealm != strings.TrimRight(c.Issuer, "/") {
+			return errors.New("keycloak_url and keycloak_realm must form the issuer: keycloak_url + /realms/ + keycloak_realm")
+		}
 	}
 	if c.TelemetryURL != "" {
 		// https only: every request carries the write token.

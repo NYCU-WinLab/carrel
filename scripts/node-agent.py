@@ -7,6 +7,7 @@ control plane owns authorization and quotas; this boundary owns host integrity.
 """
 
 import contextlib
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -17,8 +18,10 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -1676,8 +1679,9 @@ CA_PRINCIPAL = r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}"
 
 
 def ca_files(m, user):
-    """The lab SSH user CA files for a new guest: the CA key, an sshd drop-in
-    and the login user's principals file. Empty when Carrel has no CA set."""
+    """The lab SSH user CA files for a new guest: the login user's principals
+    file, the CA key and the sshd drop-in. The drop-in is last: it is the only
+    file that turns trust on. Empty when Carrel has no CA set."""
     ca, principals = m.get("ssh_user_ca"), m.get("ca_principals") or []
     if not ca:
         return []
@@ -1686,10 +1690,10 @@ def ca_files(m, user):
     if not principals or any(not re.fullmatch(CA_PRINCIPAL, str(p)) for p in principals):
         raise ValueError("invalid certificate principal")
     return [
+        ("/etc/ssh/principals/" + user, "".join(str(p) + "\n" for p in principals)),
         ("/etc/ssh/ssh_user_ca.pub", ca + "\n"),
         ("/etc/ssh/sshd_config.d/50-carrel-user-ca.conf",
          "TrustedUserCAKeys /etc/ssh/ssh_user_ca.pub\nAuthorizedPrincipalsFile /etc/ssh/principals/%u\n"),
-        ("/etc/ssh/principals/" + user, "".join(str(p) + "\n" for p in principals)),
     ]
 
 
@@ -2558,6 +2562,248 @@ def create(m):
     return {"state": "running", "vmid": vmid, **cloud_init_files(m)}
 
 
+def guest_write(root, path, data, mode):
+    """Write one root-owned file below a guest's mounted root without following
+    a guest-controlled symlink out of it: every component is opened O_NOFOLLOW."""
+    *dirs, name = path.strip("/").split("/")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in dirs:
+            try:
+                os.mkdir(part, 0o755, dir_fd=fd)
+                made = True
+            except FileExistsError:
+                made = False
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            if made:
+                os.fchown(fd, 0, 0)
+        tmp = name + ".carrel-tmp"
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp, dir_fd=fd)
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=fd)
+        try:
+            view = memoryview(data.encode())
+            while view:
+                written = os.write(out, view)
+                if written <= 0:
+                    raise OSError(errno.ENOSPC, "short write to " + tmp)
+                view = view[written:]
+            os.fchmod(out, mode)
+            os.fchown(out, 0, 0)
+        finally:
+            os.close(out)
+        os.rename(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+def free_nbd():
+    run("modprobe", "nbd", "max_part=16")
+    for dev in sorted(Path("/sys/block").glob("nbd[0-9]*"), key=lambda p: int(p.name[3:])):
+        if not (dev / "pid").exists():
+            return "/dev/" + dev.name
+    raise CommandFailure("no free nbd device")
+
+
+def root_partitions(device):
+    """Every partition of the disk that holds a Linux filesystem, largest first, with its type."""
+    run("udevadm", "settle", timeout=30)
+    tree = json.loads(run("lsblk", "-J", "-b", "-o", "NAME,SIZE,TYPE,FSTYPE", device))
+    parts = [c for d in tree["blockdevices"] for c in d.get("children", [])
+             if c.get("type") == "part" and c.get("fstype") in ("ext4", "xfs", "btrfs")]
+    parts.sort(key=lambda c: int(c["size"]), reverse=True)
+    return [("/dev/" + c["name"], c["fstype"]) for c in parts]
+
+
+def is_guest_root(mount):
+    """True when the mounted filesystem has etc/os-release and etc/ssh/ (issue #476).
+
+    Walks from the mount without following a guest symlink, so a guest cannot
+    point the check at a host path.
+    """
+    try:
+        root = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            etc = os.open("etc", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        finally:
+            os.close(root)
+        try:
+            os.lstat("os-release", dir_fd=etc)
+            return stat.S_ISDIR(os.lstat("ssh", dir_fd=etc).st_mode)
+        finally:
+            os.close(etc)
+    except OSError:
+        return False
+
+
+def mount_guest(partition, fstype, mount, subvol=None):
+    """Mount a guest filesystem with the minimal options; False when the mount fails."""
+    # ext4 takes its error policy from the guest superblock unless the mount
+    # sets one, and a guest can set errors=panic there.
+    options = "nodev,nosuid,noexec" + (",errors=remount-ro" if fstype == "ext4" else "")
+    if subvol:
+        options += ",subvol=" + subvol
+    try:
+        run("mount", "-t", fstype, "-o", options, partition, mount)
+    except CommandFailure:
+        return False
+    return True
+
+
+def btrfs_root_subvol(mount):
+    """The `@` or `root` subvolume of a mounted btrfs top level, or None."""
+    try:
+        listing = run("btrfs", "subvolume", "list", mount)
+    except CommandFailure:
+        return None
+    paths = {m.group(1) for m in re.finditer(r"\bpath (\S+)$", listing, re.MULTILINE)}
+    return next((name for name in ("@", "root") if name in paths), None)
+
+
+def mount_guest_root(device, mount):
+    """Mount the guest's root filesystem on `mount`, leaving it mounted (issue #476).
+
+    Tries the partitions largest first and accepts the first whose mount has
+    etc/os-release and etc/ssh/, so a small root next to a larger data
+    partition is not skipped. A btrfs top level without them falls back to an
+    `@` or `root` subvolume.
+    """
+    checked = []
+    for partition, fstype in root_partitions(device):
+        checked.append(partition)
+        if not mount_guest(partition, fstype, mount):
+            continue
+        if is_guest_root(mount):
+            return
+        subvol = btrfs_root_subvol(mount) if fstype == "btrfs" else None
+        run("umount", mount)
+        if subvol and mount_guest(partition, fstype, mount, subvol):
+            if is_guest_root(mount):
+                return
+            run("umount", mount)
+    raise CommandFailure("no partition holds the guest root (etc/os-release and etc/ssh/); checked " + (", ".join(checked) or "none"))
+
+
+def deactivate_guest_vgs(device):
+    """Deactivate every guest VG that host LVM auto-activated on the nbd device (issue #475).
+
+    The LVM commands see only this device, so they never touch a host VG.
+    """
+    config = 'devices { global_filter = [ "a|^' + device + '(p[0-9]+)?$|", "r|.*|" ] }'
+    out = run("pvs", "--noheadings", "-o", "vg_name", "--config", config, timeout=60)
+    for vg in sorted({line.strip() for line in out.splitlines() if line.strip()}):
+        run("vgchange", "-an", "--config", config, vg, timeout=60)
+
+
+class StuckMount(CommandFailure):
+    """The guest filesystem is still mounted, so the nbd device must stay connected."""
+
+
+def is_mounted(path):
+    try:
+        run("mountpoint", "-q", path)
+    except CommandFailure:
+        return False
+    return True
+
+
+def release_guest_mount(device, mount):
+    """Unmount the guest root; raise StuckMount while it is still mounted (issue #478).
+
+    Disconnecting under a live mount can corrupt the guest filesystem and
+    strands the device. A mount that timed out may still have landed, so this
+    checks first. The umount is retried once, then lazy; the error names the
+    device and path for an operator.
+    """
+    for args in (("umount", mount), ("umount", mount), ("umount", "-l", mount)):
+        if not is_mounted(mount):
+            return
+        with contextlib.suppress(CommandFailure, subprocess.TimeoutExpired):
+            run(*args)
+    if is_mounted(mount):
+        raise StuckMount(f"umount failed; {device} is left connected and {mount} still mounted, clean up by hand")
+
+
+def ca_backfill(m):
+    """Write the lab SSH user CA and the guest reporter into a stopped VM's disk (issue #458).
+
+    The cloud-init seed is not touched, so the instance id stays. Writing the
+    same files again leaves the same disk.
+
+    A guest VG on the disk can be auto-activated by host LVM while qemu-nbd
+    exposes it. After connecting, this waits for udev, and before disconnecting
+    it deactivates any VG found on the nbd device. Adding `r|/dev/nbd.*|` to the
+    node's LVM global_filter is still recommended.
+
+    The node kernel parses a filesystem the tenant controls. qemu-nbd stays (no
+    new package on the nodes; libguestfs and `fsck -n` do not shrink the
+    surface), so the mitigation is a minimal mount: read-write only for the
+    write, with nodev,nosuid,noexec. Nodes must run a patched kernel before the
+    maintenance-window run (#443).
+    """
+    if m.get("kind") != "vm":
+        raise ValueError("ca_backfill is for VMs")
+    # main() holds node.lock; migrate and freeze hold only the VM's lock and may
+    # run for hours, so do not wait for it with the node lock held.
+    with (STATE / f"vm-{machine(m)}.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("the machine is busy (migrating or freezing); retry later") from None
+        return ca_backfill_locked(m)
+
+
+def ca_backfill_locked(m):
+    # A qm or vzdump job started outside Carrel sets a lock in the config.
+    if owned(m).get("lock"):
+        raise ValueError("the machine is locked in Proxmox; retry later")
+    volume = disk_volume(m).get("disk_volume")
+    if not volume:
+        raise ValueError("no root disk")
+    if power_status(m) != "stopped":
+        raise ValueError("stop the machine first")
+    files = ca_files(m, "user")
+    if not files:
+        raise ValueError("no SSH user CA is set")
+    # the sshd drop-in stays last: any failure before it leaves sshd unchanged
+    files.insert(-1, ("/usr/local/lib/carrel/guest-report.py", Path("/usr/local/lib/carrel/guest-report.py").read_text()))
+    source = run("pvesm", "path", volume)
+    device = free_nbd()
+    # mount over a child of the 0700 temp dir: the mount hides the child's own
+    # mode, so only the parent keeps other host users out of the guest root.
+    parent = Path(tempfile.mkdtemp(prefix=f"carrel-backfill-{m['vmid']}-"))
+    mount = parent / "root"
+    try:
+        mount.mkdir(0o700)
+        run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
+        keep_connected = False
+        try:
+            try:
+                run("udevadm", "settle", timeout=30)
+                mount_guest_root(device, mount)
+                for path, content in files:
+                    guest_write(mount, path, content, 0o755 if path.endswith(".py") else 0o644)
+            finally:
+                try:
+                    release_guest_mount(device, mount)
+                except StuckMount:
+                    keep_connected = True
+                    raise
+        finally:
+            if not keep_connected:
+                try:
+                    deactivate_guest_vgs(device)
+                finally:
+                    run("qemu-nbd", "--disconnect", device)
+    finally:
+        for path in (mount, parent):
+            with contextlib.suppress(OSError):
+                path.rmdir()
+    return {"ca_backfilled": [path for path, _ in files]}
+
+
 def power_status(m):
     kind = "qemu" if m["kind"] == "vm" else "lxc"
     status = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
@@ -3170,6 +3416,9 @@ def main():
         console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
+    # ca_backfill is not long: it mounts a stopped disk, so a start (node.lock)
+    # must wait for it, and it picks a free nbd device another backfill must not take.
+    # It also tries the VM's lock itself, so a migration or freeze excludes it.
     long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
@@ -3247,6 +3496,8 @@ def main():
             m = req["machine"]
             owned(m)
             out = cloud_init_files(m)
+        elif op == "ca_backfill":
+            out = ca_backfill(req["machine"])
         elif op == "disk_volume":
             out = disk_volume(req["machine"])
         elif op == "node_files":
