@@ -144,6 +144,7 @@ func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 	}
 	return keys[kid], nil
 }
+
 // Verify checks the token signature, issuer, audience and identity claims. The requested resource (/mcp or
 // /mcp/read-only) is deliberately not checked: the upstream issuer mints the tokens and sets no resource claim, so
 // /mcp/read-only is a tool filter, not a credential boundary.
