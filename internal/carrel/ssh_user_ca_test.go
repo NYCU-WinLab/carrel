@@ -210,3 +210,36 @@ func TestBackfillUsesTheProjectPrincipal(t *testing.T) {
 		t.Fatalf("project: %s %s", encoded(r), encoded(m))
 	}
 }
+
+func TestBackfillTakesAVMStoppedTheNormalWay(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	m := storedMachine(p, 10200)
+	m["state"] = "stopped"
+	p.Store.Put("machines", 10200, 1, m)
+	r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, person("root", true))
+	assertOK(t, r)
+	if dicts(r["machines"])[0]["result"] != "backfilled" || b.count("ca_backfill") != 1 || storedMachine(p, 10200)["ssh_user_ca"] != userCATestKey {
+		t.Fatalf("stopped: %s", encoded(r))
+	}
+}
+
+func TestBackfillRefusesAnOwnerOfAnotherTenant(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	for _, owner := range []string{"bob", "alicee"} {
+		r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": owner}, person("root", true))
+		assertOK(t, r)
+		if dicts(r["machines"])[0]["result"] != "skipped" || b.count("ca_backfill") != 0 || storedMachine(p, 10200)["ssh_user_ca"] != nil {
+			t.Fatalf("owner %s: %s", owner, encoded(r))
+		}
+	}
+}
+
+func TestBackfillSkipsABusyMachine(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	p.Store.Put("operations", "busy", 1, D{"id": "busy", "tenant_n": 1, "tool": "machine_freeze", "state": "running", "machine_target": D{"vmid": 10200}})
+	r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, person("root", true))
+	assertOK(t, r)
+	if dicts(r["machines"])[0]["result"] != "skipped" || b.count("ca_backfill") != 0 || storedMachine(p, 10200)["ssh_user_ca"] != nil {
+		t.Fatalf("busy: %s", encoded(r))
+	}
+}

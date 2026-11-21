@@ -629,9 +629,11 @@ filesystem the tenant controls. The mount is read-write only (needed for the wri
 maintenance-window run (#443).
 
 The admin tool `machine_ca_backfill` calls it per VM: it skips a VM that already has `ssh_user_ca`, a
-CT, a running VM, an ISO install and a VM with `service_ports`; after the node op succeeds it saves
+CT, a running VM, a VM with a queued or running operation, an ISO install and a VM with
+`service_ports`; after the node op succeeds it saves
 `ssh_user_ca`, `ca_principals` and `ca_sync: pull`, so a failure leaves the record old and a second run
-retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`;
+retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`,
+and a VM is skipped unless that username's slug is the tenant's slug (an aliased tenant cannot pass yet);
 a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
 its VMs, or neither for every tenant; `dry_run` lists what would change.
 

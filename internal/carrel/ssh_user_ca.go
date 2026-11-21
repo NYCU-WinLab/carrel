@@ -3,6 +3,7 @@ package carrel
 import (
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // sshUserCA is one SSH public key with no comment: what Config.SSHUserCA holds.
@@ -129,12 +130,20 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry bool) (string, str
 		return "skipped", "ISO install: no sshd Carrel configures"
 	case len(arr(m["service_ports"])) > 0:
 		return "skipped", "Serves its own ports: no sshd Carrel configures"
-	case m["state"] != "ready":
-		return "skipped", "The machine is " + str(m["state"]) + "; backfill once it is ready"
+	case m["state"] != "ready" && m["state"] != "stopped":
+		return "skipped", "The machine is " + str(m["state"]) + "; backfill once it is ready or stopped"
+	case e.machineBusy(n, m):
+		return "skipped", "An operation on this machine is queued or running; backfill once it has finished"
 	}
 	principal := tenantPrincipal(t, owner)
 	if principal == "" {
 		return "skipped", "Personal tenant: name the owner's portal username in owner"
+	}
+	// The slug of a personal tenant is derived from its owner's username at
+	// registration, so a mismatch is a wrong tenant or a typo: refuse it
+	// rather than let another member in. An aliased tenant cannot pass yet.
+	if principal == owner && (!strings.HasPrefix(str(t["subject"]), "user:") || normalizeSlug(owner) != str(t["slug"])) {
+		return "skipped", "owner " + owner + " does not own personal tenant " + str(t["slug"])
 	}
 	var status string
 	if err := attempt(func() { status = powerState(obj(e.Call(D{"op": "status", "machine": m}))) }); err != nil {

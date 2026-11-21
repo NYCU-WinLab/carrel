@@ -3027,7 +3027,7 @@
     },
     {
       "name": "machine_ca_backfill",
-      "description": "Admin: make stopped VMs created before the lab SSH user CA trust it. Per VM, the node writes the CA files into the disk, and only then the record gets ssh_user_ca, ca_principals and ca_sync pull; a failure leaves the record unchanged, so running it again retries. VMs that already trust the CA, CTs, running VMs, ISO installs and VMs with service_ports are skipped with a message. Give tenant and machine for one VM, tenant alone for all its VMs, or neither for every tenant. A personal tenant needs owner, the owner's portal username; a project tenant uses project:<name>. dry_run lists what would change.",
+      "description": "Admin: make stopped VMs created before the lab SSH user CA trust it. Per VM, the node writes the CA files into the disk, and only then the record gets ssh_user_ca, ca_principals and ca_sync pull; a failure leaves the record unchanged, so running it again retries. VMs that already trust the CA, CTs, running VMs, VMs with a queued or running operation, ISO installs and VMs with service_ports are skipped with a message. Give tenant and machine for one VM, tenant alone for all its VMs, or neither for every tenant. A personal tenant needs owner, the owner's portal username, and its VMs are skipped unless owner matches the tenant slug; a project tenant uses project:<name>. dry_run lists what would change.",
       "inputSchema": {
         "type": "object",
         "properties": {
