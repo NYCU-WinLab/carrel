@@ -1678,8 +1678,9 @@ CA_PRINCIPAL = r"[a-z0-9][a-z0-9._-]{0,63}|project:[a-z0-9][a-z0-9-]{0,62}"
 
 
 def ca_files(m, user):
-    """The lab SSH user CA files for a new guest: the CA key, an sshd drop-in
-    and the login user's principals file. Empty when Carrel has no CA set."""
+    """The lab SSH user CA files for a new guest: the login user's principals
+    file, the CA key and the sshd drop-in. The drop-in is last: it is the only
+    file that turns trust on. Empty when Carrel has no CA set."""
     ca, principals = m.get("ssh_user_ca"), m.get("ca_principals") or []
     if not ca:
         return []
@@ -1688,10 +1689,10 @@ def ca_files(m, user):
     if not principals or any(not re.fullmatch(CA_PRINCIPAL, str(p)) for p in principals):
         raise ValueError("invalid certificate principal")
     return [
+        ("/etc/ssh/principals/" + user, "".join(str(p) + "\n" for p in principals)),
         ("/etc/ssh/ssh_user_ca.pub", ca + "\n"),
         ("/etc/ssh/sshd_config.d/50-carrel-user-ca.conf",
          "TrustedUserCAKeys /etc/ssh/ssh_user_ca.pub\nAuthorizedPrincipalsFile /etc/ssh/principals/%u\n"),
-        ("/etc/ssh/principals/" + user, "".join(str(p) + "\n" for p in principals)),
     ]
 
 
@@ -2731,7 +2732,8 @@ def ca_backfill_locked(m):
     files = ca_files(m, "user")
     if not files:
         raise ValueError("no SSH user CA is set")
-    files.append(("/usr/local/lib/carrel/guest-report.py", Path("/usr/local/lib/carrel/guest-report.py").read_text()))
+    # the sshd drop-in stays last: any failure before it leaves sshd unchanged
+    files.insert(-1, ("/usr/local/lib/carrel/guest-report.py", Path("/usr/local/lib/carrel/guest-report.py").read_text()))
     source = run("pvesm", "path", volume)
     device = free_nbd()
     # mount over a child of the 0700 temp dir: the mount hides the child's own

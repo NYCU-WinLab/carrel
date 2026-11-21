@@ -2473,3 +2473,24 @@ def test_ca_backfill_fails_on_btrfs_without_a_root_subvolume(monkeypatch, tmp_pa
     with pytest.raises(module.CommandFailure, match="nbd0p1"):
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert len([c for c in calls if c[0] == "mount"]) == 1
+
+
+def test_ca_backfill_writes_the_principals_first_and_the_sshd_dropin_last(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    order = []
+    real = module.guest_write
+    monkeypatch.setattr(module, "guest_write", lambda root, path, *a: (order.append(path), real(root, path, *a)))
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert order[0] == "/etc/ssh/principals/user"
+    assert order[-1] == "/etc/ssh/sshd_config.d/50-carrel-user-ca.conf"
+    assert order.index("/etc/ssh/ssh_user_ca.pub") < len(order) - 1
+
+
+def test_ca_backfill_does_not_write_the_dropin_when_the_principals_write_fails(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    (guest / "etc/ssh/principals").mkdir(parents=True)
+    (guest / "etc/ssh/principals/user").mkdir()
+    with pytest.raises(OSError):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    assert not (guest / "etc/ssh/sshd_config.d/50-carrel-user-ca.conf").exists()
+    assert not (guest / "etc/ssh/ssh_user_ca.pub").exists()
