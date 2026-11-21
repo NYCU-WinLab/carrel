@@ -637,6 +637,19 @@ and a VM is skipped unless that username's slug is the tenant's slug (an aliased
 a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
 its VMs, or neither for every tenant; `dry_run` lists what would change.
 
+Maintenance window runbook for the backfill (#443): stop the VM, run `machine_ca_backfill` for it
+(use `dry_run` first), start the VM, then check. Per VM, after start:
+
+1. `ssh_user_ca`, `ca_principals` and `ca_sync` are set on the machine record (`machine_get`).
+2. A lab certificate login with the principal succeeds.
+3. `machine_access` grants a second user and that user's login works; after a revoke the login fails
+   within about 15 seconds.
+4. The guest reports to carrel: the `guest_reports` row is fresh and comes from the new reporter.
+
+Never change the cloud-init instance id of a VM: it reruns first boot and regenerates the host keys.
+The `machine_access` message that tells owners to add files by hand applies only to a machine
+without `ca_sync`; once a VM is backfilled it has a puller and the message no longer applies.
+
 `machine_access` lets the tenant name other members who may log in with a certificate: grant and
 revoke take portal usernames, and the machine's principals file becomes its own principal followed
 by the grants. A VM's guest reporter (`scripts/guest-report.py`) sends the file it has and writes the
