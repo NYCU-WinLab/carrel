@@ -647,7 +647,20 @@ its VMs, or neither for every tenant; `dry_run` lists what would change.
 Maintenance window runbook for the backfill (#443). Prerequisite: `keycloak_url`, `keycloak_realm`,
 `keycloak_client_id` and `keycloak_client_secret_file` must be configured, and `keycloak_url` + `/realms/` +
 `keycloak_realm` must equal `issuer`. Without them every VM of a personal tenant with no username record is
-skipped (`sites/b09/config.example.json` has no such fields, add them). Read the `dry_run` messages before you stop any VM. Stop the VM, run `machine_ca_backfill` for it
+skipped (`sites/b09/config.example.json` has no such fields, add them).
+
+The Keycloak client must be a separate one: the lookup uses the client credentials grant and then calls
+`GET /admin/realms/<realm>/users`, so it needs a confidential client with service accounts enabled, and its
+service account needs a narrow realm-management role (`view-users` or `query-users`). The checked-in
+`sites/b09/keycloak-client.json` (`carrel-mcp`) is public with service accounts disabled and cannot be reused.
+Provision the new client, put its secret in `keycloak_client_secret_file`, and before any downtime run a
+`dry_run` for one known tenant and confirm it reports `owner checked against Keycloak sub`. Startup validation
+passes without this, so a wrong client only shows up as skipped VMs.
+
+During the preflight `dry_run`, a running VM that passes the owner check still reports `skipped` with
+"stop it first". That is not an owner refusal; it only means the VM must be stopped before the real run.
+
+Read the `dry_run` messages before you stop any VM. Stop the VM, run `machine_ca_backfill` for it
 (use `dry_run` first; a VM with snapshots is skipped until an admin deletes them), start the VM, then check. Per VM, after start:
 
 1. `ssh_user_ca`, `ca_principals` and `ca_sync` are set on the machine record (`machine_get`).
