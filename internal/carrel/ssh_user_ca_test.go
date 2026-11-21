@@ -306,7 +306,7 @@ func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
 	}
 	// A second recorded username refuses although owner equals one of them.
 	p.Store.Put("keys", "k1b", integer(tenant["n"]), D{"id": "k1b", "key": userCATestKey, "by": "alex_smith"})
-	if got := run("alex.smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || b.count("ca_backfill") != 0 {
+	if got := run("alex.smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || !strings.Contains(str(got["message"]), "alex_smith") || b.count("ca_backfill") != 0 {
 		t.Fatalf("two recorded usernames: %s", encoded(got))
 	}
 	p.Store.Remove("keys", "k1b")
