@@ -215,7 +215,9 @@ func (c Config) Validate() error {
 		if c.KeycloakRealm == "" || c.KeycloakClientID == "" || c.KeycloakClientSecretFile == "" {
 			return errors.New("keycloak_url needs keycloak_realm, keycloak_client_id and keycloak_client_secret_file")
 		}
-		if strings.ContainsAny(c.KeycloakRealm, "/?#\\%") || c.KeycloakRealm == "." || c.KeycloakRealm == ".." {
+		if strings.ContainsAny(c.KeycloakRealm, "/?#\\%") || c.KeycloakRealm == "." || c.KeycloakRealm == ".." || url.PathEscape(c.KeycloakRealm) != c.KeycloakRealm {
+			// The lookup sends url.PathEscape(realm); a realm that changes
+			// under it (";", space) would not name the issuer's realm.
 			return errors.New("keycloak_realm must be a single path segment")
 		}
 		// Tenant subjects come from tokens of Issuer, so the lookup must
