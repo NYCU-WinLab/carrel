@@ -301,6 +301,12 @@ func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
 	if got := run("alex_smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "alex.smith") || b.count("ca_backfill") != 0 {
 		t.Fatalf("mismatch: %s", encoded(got))
 	}
+	// A second recorded username refuses although owner equals one of them.
+	p.Store.Put("keys", "k1b", integer(tenant["n"]), D{"id": "k1b", "key": userCATestKey, "by": "alex_smith"})
+	if got := run("alex.smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || b.count("ca_backfill") != 0 {
+		t.Fatalf("two recorded usernames: %s", encoded(got))
+	}
+	p.Store.Remove("keys", "k1b")
 	got := run("alex.smith", true)
 	if got["result"] != "would_backfill" || !strings.Contains(str(got["message"]), "alex.smith") {
 		t.Fatalf("exact match: %s", encoded(got))
@@ -334,6 +340,12 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	if got := run("chen", true); got["result"] != "skipped" || b.count("ca_backfill") != 0 {
 		t.Fatalf("contradicting record: %s", encoded(got))
 	}
+	// Two distinct records refuse even when owner equals one of them.
+	p.Store.Put("keys", "k3", integer(tenant["n"]), D{"id": "k3", "key": userCATestKey, "by": "chen"})
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "more than one username") || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("two recorded usernames: %s", encoded(got))
+	}
+	p.Store.Remove("keys", "k3")
 	p.Store.Remove("keys", "k2")
 	// So does a frozen VM created with the CA.
 	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}, "ca_created": true})
