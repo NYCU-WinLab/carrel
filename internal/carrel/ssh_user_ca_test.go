@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 const userCATestKey = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2eUS00sJeJA9ebfrquCmA8reWrgdWSL4yGkfm4bKEuRyPmVJoM72JdUwzhH/v3VWkAkfPQ6sxMtzgruck="
@@ -330,4 +331,40 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 	// The flag needs tenant and owner.
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"tenant": "ta-chen", "alias_confirmed": true}, admin), "invalid")
 	assertCode(t, app.Call(ctx, "machine_ca_backfill", D{"owner": "chen", "alias_confirmed": true}, admin), "invalid")
+}
+
+func TestBackfillReleasesTheWriterDuringNodeIO(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	ctx, admin := context.Background(), person("root", true)
+	inNode, release := make(chan struct{}), make(chan struct{})
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" {
+			close(inNode)
+			<-release
+		}
+		return inner(r, target)
+	}
+	done := make(chan D)
+	go func() {
+		done <- app.Call(ctx, "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, admin)
+	}()
+	<-inNode
+	locked := make(chan struct{})
+	go func() {
+		p.writer.Lock()
+		p.writer.Unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer is still held during the node call")
+	}
+	close(release)
+	r := <-done
+	assertOK(t, r)
+	if got := dicts(r["machines"])[0]["result"]; got != "backfilled" || storedMachine(p, 10200)["ssh_user_ca"] != userCATestKey {
+		t.Fatalf("after the node call: %s", encoded(r))
+	}
 }

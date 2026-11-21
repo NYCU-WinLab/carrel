@@ -108,6 +108,11 @@ func (e *Execution) CABackfill(a, w D) D {
 		}
 		sort.SliceStable(machines, func(i, j int) bool { return integer(machines[i]["vmid"]) < integer(machines[j]["vmid"]) })
 		for _, m := range machines {
+			// The writer is released during node I/O, so the record may have
+			// changed since the list was read.
+			if m = e.S.Get("machines", str(m["vmid"])); m == nil {
+				continue
+			}
 			result, message := e.backfillOne(t, m, owner, ca, dry, alias)
 			results = append(results, D{"tenant": t["slug"], "machine": m["name"], "result": result, "message": message})
 		}
@@ -184,13 +189,18 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 		return "would_backfill", "Would trust principal " + principal + checked
 	}
 	planned := merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull"})
-	if err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) }); err != nil {
+	// Release the writer while the node mounts and writes the disk, so other
+	// mutations are not blocked; the transaction below re-checks the record.
+	e.P.writer.Unlock()
+	err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) })
+	e.P.writer.Lock()
+	if err != nil {
 		return "failed", "The node did not write the CA; the record is unchanged: " + describe(err)
 	}
 	var message string
 	e.Transaction(func(tx *Execution) {
 		cur := tx.S.Get("machines", str(vmid))
-		if cur == nil || str(cur["ssh_user_ca"]) != "" {
+		if cur == nil || str(cur["ssh_user_ca"]) != "" || cur["state"] != m["state"] || tx.machineBusy(n, cur) {
 			message = "The record changed meanwhile; nothing saved"
 			return
 		}
