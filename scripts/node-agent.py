@@ -2616,6 +2616,12 @@ def ca_backfill(m):
 
     The cloud-init seed is not touched, so the instance id stays. Writing the
     same files again leaves the same disk.
+
+    The node kernel parses a filesystem the tenant controls. qemu-nbd stays (no
+    new package on the nodes; libguestfs and `fsck -n` do not shrink the
+    surface), so the mitigation is a minimal mount: read-write only for the
+    write, with nodev,nosuid,noexec. Nodes must run a patched kernel before the
+    maintenance-window run (#443).
     """
     if m.get("kind") != "vm":
         raise ValueError("ca_backfill is for VMs")

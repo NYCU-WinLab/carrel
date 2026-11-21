@@ -618,6 +618,12 @@ access until their certificate expires (at most 24 hours). A VM gets `/etc/ssh/s
 for `root` at creation. ISO installs and images that serve their own ports get nothing. Existing
 machines are not changed. Without the setting nothing changes.
 
+The node op `ca_backfill` writes the same files into an existing, stopped VM's disk. It attaches the
+disk with `qemu-nbd` and mounts the root partition on the node, so the node kernel parses a
+filesystem the tenant controls. The mount is read-write only (needed for the write) with
+`nodev,nosuid,noexec`, plus `errors=remount-ro` on ext4. Nodes must run a patched kernel before the
+maintenance-window run (#443).
+
 `machine_access` lets the tenant name other members who may log in with a certificate: grant and
 revoke take portal usernames, and the machine's principals file becomes its own principal followed
 by the grants. A VM's guest reporter (`scripts/guest-report.py`) sends the file it has and writes the
