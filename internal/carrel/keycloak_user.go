@@ -18,7 +18,10 @@ import (
 // users are all errors, and it never guesses a sub. The secret is read per
 // call and never logged or put in an error.
 
-const keycloakTimeout = 5 * time.Second
+const (
+	keycloakTimeout = 5 * time.Second
+	keycloakMaxBody = 1 << 20
+)
 
 func (e *Execution) keycloakSub(username string) (string, error) {
 	c := e.P.Config
@@ -68,16 +71,20 @@ func (e *Execution) keycloakSub(username string) (string, error) {
 	if err := keycloakJSON(client, req, &users); err != nil {
 		return "", fmt.Errorf("keycloak users: %w", err)
 	}
-	// Keycloak stores usernames in lower case; the exact flag is honoured by
-	// the server, but a hit for another name is still refused.
+	// Keycloak stores usernames in lower case and honours exact=true. Any
+	// other shape is refused: every row for the name counts, and the one id
+	// must be set.
 	var hits []string
 	for _, u := range users {
-		if strings.EqualFold(u.Username, username) && u.ID != "" {
+		if u.Username == username {
 			hits = append(hits, u.ID)
 		}
 	}
 	switch len(hits) {
 	case 1:
+		if hits[0] == "" {
+			return "", fmt.Errorf("keycloak user %q has no id", username)
+		}
 		return hits[0], nil
 	case 0:
 		return "", fmt.Errorf("keycloak has no user %q", username)
@@ -94,9 +101,12 @@ func keycloakJSON(client *http.Client, req *http.Request, out any) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, keycloakMaxBody+1))
 	if err != nil {
 		return errors.New("read failed")
+	}
+	if len(body) > keycloakMaxBody {
+		return errors.New("response too large")
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return errors.New("bad response")
