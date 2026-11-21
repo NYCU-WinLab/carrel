@@ -2161,7 +2161,14 @@ def backfill_setup(
     monkeypatch.setattr(module, "power_status", lambda m: power)
     monkeypatch.setattr(module, "free_nbd", lambda: "/dev/nbd0")
     monkeypatch.setattr(module, "root_partition", lambda device: device + "p1")
-    monkeypatch.setattr(module.tempfile, "mkdtemp", lambda prefix: str(guest))
+    real_mkdtemp = module.tempfile.mkdtemp
+    parents = []
+
+    def mkdtemp(prefix):
+        parents.append(Path(real_mkdtemp(prefix=prefix, dir=tmp_path)))
+        return str(parents[-1])
+
+    monkeypatch.setattr(module.tempfile, "mkdtemp", mkdtemp)
     monkeypatch.setattr(module.os, "fchown", lambda *a: None)
     monkeypatch.setattr(
         module,
@@ -2183,9 +2190,19 @@ def backfill_setup(
             raise module.CommandFailure("connect failed")
         if a[0] == "mount" and fail_mount:
             raise module.CommandFailure("mount failed")
+        if a[0] == "mount":
+            # stand in for the mount: the target becomes the guest root
+            target = Path(a[-1])
+            assert target.parent in parents and target.parent.stat().st_mode & 0o777 == 0o700
+            target.rmdir()
+            target.symlink_to(guest)
+        if a[0] == "umount":
+            Path(a[1]).unlink()
+            Path(a[1]).mkdir(0o700)
         return "/dev/zvol/rpool/vm-10100-disk-0" if a[0] == "pvesm" else ""
 
     monkeypatch.setattr(module, "run", run)
+    module.backfill_parents = parents
     return module, guest, calls
 
 
@@ -2250,6 +2267,27 @@ def test_ca_backfill_leaves_an_nbd_device_it_did_not_connect_alone(monkeypatch, 
         module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
     assert not any(c[0] == "qemu-nbd" and c[1] == "--disconnect" for c in calls)
     assert not any(c[0] in ("mount", "umount") for c in calls)
+
+
+def test_ca_backfill_mounts_below_a_private_dir_and_removes_both(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    (parent,) = module.backfill_parents
+    mount = next(c for c in calls if c[0] == "mount")
+    assert mount[1:3] == ["-o", "nodev,nosuid,noexec"]
+    assert mount[-1] == str(parent / "root")
+    assert not parent.exists()
+    assert (guest / "etc/ssh/ssh_user_ca.pub").exists()
+
+
+def test_ca_backfill_removes_the_mount_dirs_when_a_write_fails(monkeypatch, tmp_path):
+    module, guest, calls = backfill_setup(monkeypatch, tmp_path)
+    (guest / "etc").write_text("not a directory")
+    with pytest.raises(OSError):
+        module.ca_backfill(dict(MACHINE, ssh_user_ca=CA, ca_principals=["alice"]))
+    (parent,) = module.backfill_parents
+    assert [c[0] for c in calls if c[0] in ("mount", "umount")] == ["mount", "umount"]
+    assert not parent.exists()
 
 
 def test_ca_backfill_refuses_a_machine_whose_lock_a_migration_or_freeze_holds(monkeypatch, tmp_path):

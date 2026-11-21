@@ -2643,11 +2643,15 @@ def ca_backfill_locked(m):
     files.append(("/usr/local/lib/carrel/guest-report.py", Path("/usr/local/lib/carrel/guest-report.py").read_text()))
     source = run("pvesm", "path", volume)
     device = free_nbd()
-    mount = Path(tempfile.mkdtemp(prefix=f"carrel-backfill-{m['vmid']}-"))
+    # mount over a child of the 0700 temp dir: the mount hides the child's own
+    # mode, so only the parent keeps other host users out of the guest root.
+    parent = Path(tempfile.mkdtemp(prefix=f"carrel-backfill-{m['vmid']}-"))
+    mount = parent / "root"
     try:
+        mount.mkdir(0o700)
         run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
         try:
-            run("mount", "-o", "nodev,nosuid", root_partition(device), mount)
+            run("mount", "-o", "nodev,nosuid,noexec", root_partition(device), mount)
             try:
                 for path, content in files:
                     guest_write(mount, path, content, 0o755 if path.endswith(".py") else 0o644)
@@ -2656,8 +2660,9 @@ def ca_backfill_locked(m):
         finally:
             run("qemu-nbd", "--disconnect", device)
     finally:
-        with contextlib.suppress(OSError):
-            mount.rmdir()
+        for path in (mount, parent):
+            with contextlib.suppress(OSError):
+                path.rmdir()
     return {"ca_backfilled": [path for path, _ in files]}
 
 
