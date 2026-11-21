@@ -89,6 +89,7 @@ func backfillFixture(t *testing.T) (*Platform, *fakeBackend, *App) {
 	t.Helper()
 	p, b := fixture(t)
 	p.Config.SSHUserCA = userCATestKey
+	keycloak(t, p, `[{"id":"alice","username":"alice"}]`, 200)
 	b.call = func(r D, _ string) (any, error) {
 		if r["op"] == "status" {
 			return D{"status": "stopped"}, nil
@@ -275,11 +276,27 @@ func TestBackfillChecksOwnerAgainstTheUsernameRecord(t *testing.T) {
 		assertOK(t, r)
 		return dicts(r["machines"])[0]
 	}
-	// No record: the slug check alone decides, so both spellings pass.
-	if got := run("alex_smith", true); got["result"] != "would_backfill" {
-		t.Fatalf("slug fallback: %s", encoded(got))
+	// No record: the Keycloak sub decides, not the slug, so a spelling whose
+	// sub is another member's is refused although the slug matches.
+	keycloakFor(t, p, "alex_smith", `[{"id":"other-sub","username":"alex_smith"}]`, 200)
+	if got := run("alex_smith", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "Keycloak sub") {
+		t.Fatalf("sub mismatch: %s", encoded(got))
 	}
-	// A key saved by alex.smith is the record.
+	keycloakFor(t, p, "alex_smith", `[{"id":"alex-sub","username":"alex_smith"}]`, 200)
+	if got := run("alex_smith", true); got["result"] != "would_backfill" || !strings.Contains(str(got["message"]), "Keycloak sub") {
+		t.Fatalf("sub match: %s", encoded(got))
+	}
+	// A failed lookup skips the VM.
+	keycloakFor(t, p, "alex_smith", ``, 500)
+	if got := run("alex_smith", false); got["result"] != "skipped" || b.count("ca_backfill") != 0 {
+		t.Fatalf("lookup error: %s", encoded(got))
+	}
+	// Not configured skips it too.
+	p.Config.KeycloakURL = ""
+	if got := run("alex_smith", true); got["result"] != "skipped" {
+		t.Fatalf("lookup unavailable: %s", encoded(got))
+	}
+	// A key saved by alex.smith is the record; the lookup is not needed (and is down).
 	p.Store.Put("keys", "k1", integer(tenant["n"]), D{"id": "k1", "key": userCATestKey, "by": "alex.smith"})
 	if got := run("alex_smith", false); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "alex.smith") || b.count("ca_backfill") != 0 {
 		t.Fatalf("mismatch: %s", encoded(got))

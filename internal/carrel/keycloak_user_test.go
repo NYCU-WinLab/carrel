@@ -13,6 +13,12 @@ import (
 // keycloak stands in for the realm's token and admin users routes.
 func keycloak(t *testing.T, p *Platform, users string, status int) {
 	t.Helper()
+	keycloakFor(t, p, "alice", users, status)
+}
+
+// keycloakFor answers the admin users route for one username only.
+func keycloakFor(t *testing.T, p *Platform, name, users string, status int) {
+	t.Helper()
 	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/realms/lab/protocol/openid-connect/token":
@@ -23,7 +29,7 @@ func keycloak(t *testing.T, p *Platform, users string, status int) {
 			}
 			_, _ = w.Write([]byte(`{"access_token":"tok"}`))
 		case "/admin/realms/lab/users":
-			if r.Header.Get("Authorization") != "Bearer tok" || r.URL.Query().Get("exact") != "true" || r.URL.Query().Get("username") != "alice" {
+			if r.Header.Get("Authorization") != "Bearer tok" || r.URL.Query().Get("exact") != "true" || r.URL.Query().Get("username") != name {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}

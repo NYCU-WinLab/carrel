@@ -167,10 +167,17 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 				return "skipped", "owner " + owner + " does not match the usernames recorded for personal tenant " + str(t["slug"]) + " (" + strings.Join(recorded, ", ") + ")"
 			}
 			checked = "; owner checked against recorded usernames " + strings.Join(recorded, ", ")
-		} else if alias && normalizeSlug(owner) != str(t["slug"]) {
-			checked = "; owner confirmed by the administrator (alias_confirmed), no username record"
 		} else {
-			checked = "; owner checked against the tenant slug only, no username record"
+			// No record: the slug is lossy, the Keycloak sub is not. Fail
+			// closed when the lookup is unavailable or disagrees.
+			sub, err := e.keycloakSub(owner)
+			if err != nil {
+				return "skipped", "No username record and the owner's Keycloak sub could not be looked up (" + describe(err) + "); not backfilled"
+			}
+			if "user:"+sub != str(t["subject"]) {
+				return "skipped", "owner " + owner + " does not match the Keycloak sub of personal tenant " + str(t["slug"])
+			}
+			checked = "; owner checked against Keycloak sub"
 		}
 	}
 	var status string
