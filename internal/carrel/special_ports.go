@@ -62,39 +62,21 @@ func (e *Execution) checkSpecialPort(port int, proto, ignore string) {
 	}
 }
 
-// PortRequest files a request for a special public port.
-func (e *Execution) PortRequest(a, w, t D) D {
-	dry, n := boolean(a["dry_run"]), integer(t["n"])
-	port, proto := integer(a["public_port"]), str(fallback(a, "proto", "tcp"))
-	key := str(a["idempotency_key"])
-	fingerprint := digest(string(encoded(D{"public_port": port, "proto": proto, "reason": a["reason"]})))
-	if key != "" && !dry {
-		for _, old := range e.S.Objects("requests", n) {
-			if old["idempotency_key"] == key {
-				if old["fingerprint"] != fingerprint {
-					fail("conflict", "Idempotency key was already used for different arguments", D{"recovery": "revise_request"})
-				}
-				return D{"request": without(old, "fingerprint", "idempotency_key"), "quota_after": e.Quota(t), "reused": true}
-			}
-		}
-	}
-	e.checkSpecialPort(port, proto, "")
-	pending := filter(e.S.Objects("requests", n), func(r D) bool { return r["kind"] == "port" && r["status"] == "pending" })
-	if len(pending) >= maxPendingDomainRequests {
-		fail("quota_exceeded", "A tenant has at most 3 pending port requests; wait for a decision", D{"recovery": "revise_request"})
-	}
-	r := D{"id": randomID()[:16], "tenant_n": n, "kind": "port", "status": "pending", "public_port": port, "proto": proto, "reason": a["reason"], "actor": w["sub"], "created_at": time.Now().Unix()}
-	if !dry {
-		if key != "" {
-			r["idempotency_key"], r["fingerprint"] = key, fingerprint
-		}
-		e.Put("requests", r["id"], n, r)
-	} else {
-		r = without(r, "id", "tenant_n", "actor", "created_at")
-		r["status"] = "planned"
-	}
-	return D{"request": without(r, "fingerprint", "idempotency_key"), "dry_run": dry, "quota_after": e.Quota(t)}
+// portRequestKind is the request flow of a special public port.
+var portRequestKind = requestKind{
+	name: "port", noun: "port", quotaAfter: true,
+	fingerprint: func(a D) D {
+		return D{"public_port": integer(a["public_port"]), "proto": str(fallback(a, "proto", "tcp")), "reason": a["reason"]}
+	},
+	check: func(e *Execution, a, t D) D {
+		port, proto := integer(a["public_port"]), str(fallback(a, "proto", "tcp"))
+		e.checkSpecialPort(port, proto, "")
+		return D{"public_port": port, "proto": proto}
+	},
 }
+
+// PortRequest files a request for a special public port.
+func (e *Execution) PortRequest(a, w, t D) D { return e.FileRequest(portRequestKind, a, w, t) }
 
 // approvePort decides a port request; the rules are checked again.
 func (e *Execution) approvePort(tool string, a, w, r, t D) D {
@@ -103,24 +85,10 @@ func (e *Execution) approvePort(tool string, a, w, r, t D) D {
 		e.checkSpecialPort(integer(r["public_port"]), str(r["proto"]), str(r["id"]))
 	}
 	g := specialPort{ID: randomID()[:16], TenantN: n, PublicPort: integer(r["public_port"]), Proto: str(r["proto"]), RequestID: str(r["id"]), GrantedAt: time.Now().Unix(), UnusedSince: now()}
-	switch {
-	case dry && tool == "request_approve":
-		r["status"] = "planned_approval"
-	case dry:
-		r["status"] = "planned_rejection"
-	default:
-		e.Transaction(func(tx *Execution) {
-			if tool == "request_approve" {
-				tx.Put("port_grants", g.ID, n, g)
-				r["status"] = "approved"
-				r["grant"] = g.ID
-			} else {
-				r["status"] = "rejected"
-			}
-			r["decided_by"] = w["sub"]
-			tx.Put("requests", r["id"], n, r)
-		})
-	}
+	e.decideRequest(tool, dry, w, r, func(tx *Execution) {
+		tx.Put("port_grants", g.ID, n, g)
+		r["grant"] = g.ID
+	})
 	return D{"request": without(r, "idempotency_key", "fingerprint"), "dry_run": dry, "quota_after": e.Quota(t)}
 }
 

@@ -78,23 +78,17 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			fail("conflict", "Request is already decided")
 		}
 		t := e.S.TenantN(integer(r["tenant_n"]))
+		if r["kind"] != "domain" && boolean(a["adopt"]) {
+			fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
+		}
 		if r["kind"] == "domain" {
 			return e.approveDomain(tool, a, w, r, t)
 		}
 		if r["kind"] == "public_ip" {
-			if boolean(a["adopt"]) {
-				fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
-			}
 			return e.approvePublicIP(tool, a, w, r, t)
 		}
 		if r["kind"] == "port" {
-			if boolean(a["adopt"]) {
-				fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
-			}
 			return e.approvePort(tool, a, w, r, t)
-		}
-		if boolean(a["adopt"]) {
-			fail("invalid", "adopt applies only to domain requests", D{"recovery": "revise_request"})
 		}
 		limits := obj(t["quota"])
 		dim := str(r["dimension"])
