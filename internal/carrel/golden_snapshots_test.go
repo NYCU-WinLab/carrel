@@ -56,9 +56,7 @@ func snapshotSetup(t *testing.T) (*goldenRun, *flakyBackend, *fakeBackend) {
 	rec := &recorder{fakeBackend: b, p: p}
 	fb := &flakyBackend{recorder: rec, fails: map[string]int{}}
 	p.Backend = fb
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	go rec.guests(ctx)
+	rec.startGuests(t)
 	runQueue(p)
 	return &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}, fb, b
 }

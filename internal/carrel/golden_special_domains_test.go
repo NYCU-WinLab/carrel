@@ -34,9 +34,7 @@ func TestGoldenSpecialDomains(t *testing.T) {
 	}
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec
-	ctx, stop := context.WithCancel(context.Background())
-	t.Cleanup(stop)
-	go rec.guests(ctx)
+	rec.startGuests(t)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
 	specialDomainScenario(g, dns)
