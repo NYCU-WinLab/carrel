@@ -257,6 +257,9 @@ func (o *OAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resource := o.Origin + "/mcp"
 	callback := o.Origin + "/oauth/callback"
 	if strings.HasPrefix(path, "/.well-known/oauth-protected-resource") && method == "GET" {
+		if path == "/.well-known/oauth-protected-resource/mcp/read-only" {
+			resource += "/read-only"
+		}
 		jsonResponse(w, 200, D{"resource": resource, "authorization_servers": []string{o.Origin}, "scopes_supported": scopes, "bearer_methods_supported": []string{"header"}})
 		return
 	}

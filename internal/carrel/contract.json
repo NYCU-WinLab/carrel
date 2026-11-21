@@ -258,7 +258,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -270,7 +270,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -279,7 +279,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "public_ssh": {
             "type": "boolean",
@@ -338,7 +338,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [],
@@ -372,7 +372,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -409,7 +409,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -423,14 +423,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -474,7 +474,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -488,14 +488,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -547,7 +547,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -561,14 +561,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -699,7 +699,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -713,14 +713,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -754,7 +754,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -768,14 +768,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -818,7 +818,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -830,7 +830,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -839,7 +839,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -942,7 +942,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -954,7 +954,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -963,7 +963,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1020,7 +1020,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1032,7 +1032,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1041,7 +1041,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1080,7 +1080,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1092,7 +1092,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1101,7 +1101,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1140,7 +1140,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1152,7 +1152,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1161,7 +1161,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1195,7 +1195,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1209,7 +1209,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1262,7 +1262,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1276,7 +1276,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1331,7 +1331,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1345,14 +1345,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -1406,7 +1406,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1420,14 +1420,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -1482,7 +1482,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1496,14 +1496,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "function": {
             "type": "string",
@@ -1559,7 +1559,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1573,14 +1573,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -1627,7 +1627,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1639,7 +1639,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1648,7 +1648,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1703,7 +1703,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1715,7 +1715,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1724,7 +1724,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1766,7 +1766,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1778,7 +1778,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1787,7 +1787,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1840,7 +1840,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1852,7 +1852,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1861,7 +1861,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1906,7 +1906,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1918,7 +1918,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -1927,7 +1927,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -1981,7 +1981,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -1993,7 +1993,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -2002,7 +2002,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -2039,7 +2039,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2053,14 +2053,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -2125,7 +2125,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2139,14 +2139,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -2188,7 +2188,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2202,14 +2202,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -2253,7 +2253,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2265,7 +2265,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -2274,7 +2274,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -2318,7 +2318,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2330,7 +2330,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -2339,7 +2339,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "format": {
             "enum": [
@@ -2478,7 +2478,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2535,7 +2535,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2587,7 +2587,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2626,7 +2626,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2697,7 +2697,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2709,7 +2709,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -2718,7 +2718,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -2751,7 +2751,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2763,7 +2763,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -2772,7 +2772,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "additionalProperties": false
@@ -2878,7 +2878,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2923,7 +2923,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           }
         },
         "required": [
@@ -2960,7 +2960,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -2972,7 +2972,7 @@
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -2981,7 +2981,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "from": {
             "type": "string",
@@ -3015,7 +3015,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -3048,7 +3048,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -3105,7 +3105,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -3140,7 +3140,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -3194,7 +3194,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -3228,7 +3228,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -3485,7 +3485,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3520,7 +3520,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [],
@@ -3553,7 +3553,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3597,7 +3597,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3638,7 +3638,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3682,7 +3682,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3723,7 +3723,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3787,7 +3787,7 @@
           "dry_run": {
             "type": "boolean",
             "default": false,
-            "description": "Preview only: no resource writes."
+            "description": "Preview only; nothing changes."
           }
         },
         "required": [
@@ -3844,7 +3844,7 @@
           "dry_run": {
             "type": "boolean",
             "default": false,
-            "description": "Preview only: no resource writes."
+            "description": "Preview only; nothing changes."
           }
         },
         "required": [
@@ -3938,7 +3938,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -3967,7 +3967,8 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
-            "default": 0
+            "default": 0,
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "tenant": {
             "type": "string",
@@ -3980,7 +3981,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -4174,7 +4175,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [],
@@ -4212,7 +4213,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -4256,7 +4257,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [
@@ -4975,14 +4976,14 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "detail": {
             "type": "string",
@@ -4991,7 +4992,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "access": {
             "type": "array",
@@ -5046,7 +5047,8 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
-            "default": 55
+            "default": 55,
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           },
           "tenant": {
             "type": "string",
@@ -5059,7 +5061,7 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           }
         },
         "required": [],
@@ -5090,7 +5092,7 @@
             "type": "string",
             "minLength": 8,
             "maxLength": 128,
-            "description": "Stable unique key for retrying a background submission after a lost response; reuse only with identical arguments."
+            "description": "Reuse to retry a lost submission with identical arguments."
           },
           "dry_run": {
             "type": "boolean",
@@ -5104,14 +5106,14 @@
               "full"
             ],
             "default": "summary",
-            "description": "Summary returns the outcome and access details. Use full for diagnostics and complete quota/internal identifiers. Previews and failures retain their diagnostic details."
+            "description": "summary (default) or full."
           },
           "wait_seconds": {
             "type": "integer",
             "minimum": 0,
             "maximum": 55,
             "default": 55,
-            "description": "Wait up to 55 seconds for completion, including readiness when starting guests. Zero returns the durable job immediately. Disconnects do not cancel the job."
+            "description": "Seconds to wait for completion; 0 returns the job at once."
           }
         },
         "required": [
@@ -5448,5 +5450,117 @@
     "existing_machine_access": true,
     "machine_freeze": false
   },
-  "instructions": "WinLab machines through MCP. Call the tool for the task directly with the known machine name; whoami, catalog_get, quota_get and capacity_get are not prerequisites, and no discovery or preview is needed for an authorized action. Use machine_list only to list or when the target is ambiguous. Omit tenant for personal resources. Do not use operator memories, runbooks, hypervisor access or unrelated SSH inspection. Tools only, no MCP resources.\nRouting: create -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; delete -> machine_delete; park a stopped machine -> machine_freeze, back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push, or any website or service built from a GitHub repository -> app_link (then run its install line over SSH and commit its workflow), not manual SSH copies; status -> app_get. CI jobs on your own machine -> runner_add. A container image that runs only while it has requests (webhook, API, untrusted code) -> function_deploy, then function_get with wait_seconds until deployed. Features, images, size presets and quota defaults -> catalog_get.\nIsolation: to let one machine reach another in the same tenant, or to limit what reaches a machine, use deployment_apply with access=[{machine, network_access, confirm: machine_name}] together with connections; restricted permits declared connections and public services, tenant allows same-tenant traffic. peer_allow is only for another tenant. Preview only when asked to plan or compare: deployment_plan is the complete preview. Authorized groups go straight to deployment_apply.\nSSH: after creating a machine or connection for a local CLI client, merge the returned ssh_config into the client config, keep existing entries, verify the tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short. Do not wait for a separate alias request. If local file access is unavailable, the user opts out or setup fails, present ssh and say the alias is not installed. Status-only requests need no local edits. Never disable host-key checking or replace unrelated aliases. A creation with no ssh_keys uses the tenant's saved keys, then the creator's key; pass a key inline only when the plan lists ssh_public_key as a requirement, reading only the known default public key. Never read or send private keys or tokens.\nResults: member mutations wait up to 55 seconds. Read operation.state/result/error; succeeded needs no follow-up poll, list or quota call. If pending, follow next_action and poll_after_seconds with operation_get. Queued is not reserved or completed, and disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission; operation_retry resumes, revise_request needs corrected arguments. Summary is the default, detail=full gives full accounting. A result may carry suggestions: a Carrel feature that fits the task. Follow one that matches the user's goal, or mention it in one sentence.\nSafety: shutdown is graceful, stop is forced and needs explicit intent. Deletion is never a substitute for shutdown. Do not shut down running work just to resize without authorization. Required confirmation fields express the user's existing authorization; ask only when intent or target is unclear. VM pause retains RAM, disks and quota; CT pause is unsupported. machine_list state is recorded, machine_get power and SSH are live. not_checked and routing_configured do not verify an application response. Units: MiB for memory_mb and swap_mb, GiB for disk_gb."
+  "instructions": "WinLab machines through MCP. Call the tool for the task directly with the known machine name; whoami, catalog_get, quota_get and capacity_get are not prerequisites, and no discovery or preview is needed for an authorized action. Use machine_list only to list or when the target is ambiguous. Omit tenant for personal resources. Do not use operator memories, runbooks, hypervisor access or unrelated SSH inspection. Tools only, no MCP resources. dry_run previews; wait_seconds 0 returns the job at once. This list is the core set: add ?toolsets=machines,network,apps,functions (or all) to the URL; /mcp/read-only lists reads only.\nRouting: create -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; delete -> machine_delete; park a stopped machine -> machine_freeze, back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push, or any website or service built from a GitHub repository -> app_link (then run its install line over SSH and commit its workflow), not manual SSH copies; status -> app_get. CI jobs on your own machine -> runner_add. A container image that runs only while it has requests (webhook, API, untrusted code) -> function_deploy, then function_get with wait_seconds until deployed. Features, images, size presets and quota defaults -> catalog_get.\nIsolation: to let one machine reach another in the same tenant, or to limit what reaches a machine, use deployment_apply with access=[{machine, network_access, confirm: machine_name}] together with connections; restricted permits declared connections and public services, tenant allows same-tenant traffic. peer_allow is only for another tenant. Preview only when asked to plan or compare: deployment_plan is the complete preview. Authorized groups go straight to deployment_apply.\nSSH: after creating a machine or connection for a local CLI client, merge the returned ssh_config into the client config, keep existing entries, verify the tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short. If local file access is unavailable, the user opts out or setup fails, present ssh and say the alias is not installed. Status-only requests need no local edits. Never disable host-key checking or replace unrelated aliases. A creation with no ssh_keys uses the tenant's saved keys, then the creator's key; pass a key inline only when the plan lists ssh_public_key as a requirement, reading only the known default public key. Never read or send private keys or tokens.\nResults: member mutations wait up to 55 seconds. Read operation.state/result/error; succeeded needs no follow-up poll, list or quota call. If pending, follow next_action and poll_after_seconds with operation_get. Queued is not reserved or completed, and disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission; operation_retry resumes, revise_request needs corrected arguments. detail=full gives full accounting. A result may carry suggestions: a Carrel feature that fits the task. Follow one that matches the user's goal, or mention it in one sentence.\nSafety: shutdown is graceful, stop is forced and needs explicit intent. Deletion is never a substitute for shutdown. Do not shut down running work just to resize without authorization. Required confirmation fields express the user's existing authorization; ask only when intent or target is unclear. VM pause retains RAM, disks and quota; CT pause is unsupported. machine_list state is recorded, machine_get power and SSH are live. not_checked and routing_configured do not verify an application response. Units: MiB for memory_mb and swap_mb, GiB for disk_gb.",
+  "toolsets": {
+    "core": [
+      "whoami",
+      "quota_get",
+      "catalog_get",
+      "capacity_get",
+      "machine_create",
+      "machine_list",
+      "machine_get",
+      "machine_delete",
+      "machine_power",
+      "machine_resize",
+      "machine_rename",
+      "machine_access",
+      "machine_metrics",
+      "ssh_key_add",
+      "ssh_key_list",
+      "ssh_key_remove",
+      "deployment_plan",
+      "deployment_apply",
+      "operation_get",
+      "operation_retry",
+      "request_list"
+    ],
+    "machines": [
+      "machine_freeze",
+      "machine_thaw",
+      "machine_media",
+      "machine_console_url",
+      "machine_nic_attach",
+      "machine_nic_detach",
+      "snapshot_create",
+      "snapshot_list",
+      "snapshot_delete",
+      "snapshot_rollback",
+      "iso_import",
+      "image_import",
+      "image_list",
+      "image_delete",
+      "audit_log"
+    ],
+    "network": [
+      "network_create",
+      "network_list",
+      "network_delete",
+      "port_open",
+      "port_list",
+      "port_close",
+      "domain_add",
+      "domain_list",
+      "domain_remove",
+      "peer_allow",
+      "peer_list",
+      "peer_revoke",
+      "vip_add",
+      "vip_list",
+      "vip_remove",
+      "vpn_client_add",
+      "vpn_client_list",
+      "vpn_client_remove",
+      "quota_request",
+      "domain_request",
+      "port_request",
+      "public_ip_request",
+      "public_ip_list",
+      "public_ip_bind",
+      "public_ip_release"
+    ],
+    "apps": [
+      "app_link",
+      "app_list",
+      "app_get",
+      "app_deploy",
+      "app_rollback",
+      "app_unlink",
+      "app_webhook_rotate",
+      "runner_add",
+      "runner_list",
+      "runner_remove"
+    ],
+    "functions": [
+      "function_deploy",
+      "function_get",
+      "function_logs",
+      "function_env",
+      "function_registry",
+      "function_link",
+      "function_list",
+      "function_rollback",
+      "function_remove"
+    ],
+    "admin": [
+      "domain_proxy",
+      "domain_transfer",
+      "machine_migrate",
+      "node_drain",
+      "node_list",
+      "node_undrain",
+      "quota_set",
+      "reconcile_run",
+      "platform_power",
+      "request_approve",
+      "request_list_all",
+      "request_reject",
+      "tenant_list",
+      "tenant_suspend",
+      "usage_report",
+      "zone_add",
+      "zone_list",
+      "zone_remove"
+    ]
+  }
 }

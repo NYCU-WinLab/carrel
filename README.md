@@ -487,6 +487,10 @@ Python node adapter, gateway sync, backup target and guest reporter remain. Go i
 (ACME DNS-01 through Cloudflare). The Python tests cover these scripts; the Go tests cover the
 service. The live wire contract is `internal/carrel/contract.json`.
 
+`/mcp` lists a small core toolset (under 50 tools, under 60 KB). Add `?toolsets=machines,network,apps,functions`
+(or `all`, or the `X-Carrel-Toolsets` header) for more; `/mcp/read-only` lists only `readOnlyHint` tools.
+The admin filter applies on every endpoint. Toolsets are defined in `contract.json`.
+
 Prepared VM templates move operating-system updates and base-package installation out of the member
 creation path. On the sandbox, use `scripts/prepare-template.py` with a verified vendor qcow2 and its
 SHA-256. Select `debian-13-minimal` for the minimal environment, or `debian-13` / `ubuntu-24.04`

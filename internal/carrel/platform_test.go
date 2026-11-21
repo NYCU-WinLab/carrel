@@ -386,3 +386,86 @@ func TestCapacityNamesTheNodeStorage(t *testing.T) {
 		t.Fatalf("configured storage %q", got)
 	}
 }
+
+func listedTools(t *testing.T, app *App, target string, headers map[string]string) ([]D, int) {
+	t.Helper()
+	base := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	for k, v := range headers {
+		base[k] = v
+	}
+	w := requestApp(app, "POST", target, string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": D{}})), base)
+	if w.Code != 200 {
+		t.Fatalf("%s: %d %s", target, w.Code, w.Body.String())
+	}
+	var result D
+	must(json.Unmarshal(w.Body.Bytes(), &result))
+	return dicts(obj(result["result"])["tools"]), len(obj(result["result"])["tools"].([]any))
+}
+
+func TestToolsetsCoverEveryTool(t *testing.T) {
+	in := map[string]bool{}
+	for _, set := range obj(Contract["toolsets"]) {
+		for _, name := range arr(set) {
+			in[str(name)] = true
+		}
+	}
+	for _, tool := range dicts(Contract["tools"]) {
+		if !in[str(tool["name"])] {
+			t.Fatalf("%s is in no toolset", tool["name"])
+		}
+	}
+}
+
+func TestMemberDefaultToolListIsSmall(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("alice", false)})
+	tools, _ := listedTools(t, app, "/mcp", nil)
+	if len(tools) >= 50 || len(encoded(tools)) >= 60*1024 {
+		t.Fatalf("default member list has %d tools in %d bytes", len(tools), len(encoded(tools)))
+	}
+}
+
+func TestToolListAuthorizationOnEveryEndpoint(t *testing.T) {
+	p, _ := fixture(t)
+	member := NewApp(p, testVerifier{who: person("alice", false)})
+	admin := NewApp(p, testVerifier{who: person("root", true)})
+	targets := []string{"/mcp", "/mcp?toolsets=all", "/mcp?toolsets=admin", "/mcp/read-only", "/mcp/read-only?toolsets=admin"}
+	sawAdmin := false
+	for _, target := range targets {
+		tools, _ := listedTools(t, member, target, nil)
+		for _, tool := range tools {
+			if named("admin_tools", str(tool["name"])) {
+				t.Fatalf("%s exposes admin tool %s to a member", target, tool["name"])
+			}
+			if strings.Contains(target, "read-only") && !boolean(obj(tool["annotations"])["readOnlyHint"]) {
+				t.Fatalf("%s lists %s, which is not read-only", target, tool["name"])
+			}
+		}
+		tools, _ = listedTools(t, admin, target, nil)
+		for _, tool := range tools {
+			sawAdmin = sawAdmin || named("admin_tools", str(tool["name"]))
+		}
+	}
+	if !sawAdmin {
+		t.Fatal("admin lost the admin tools")
+	}
+	tools, _ := listedTools(t, member, "/mcp", map[string]string{"X-Carrel-Toolsets": "all"})
+	if len(tools) != len(dicts(Contract["tools"]))-len(arr(Contract["admin_tools"])) {
+		t.Fatalf("header toolsets=all gave %d tools", len(tools))
+	}
+}
+
+func TestReadOnlyEndpointRefusesWrites(t *testing.T) {
+	p, _ := fixture(t)
+	app := NewApp(p, testVerifier{who: person("alice", false)})
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+	body := string(encoded(D{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": D{"name": "machine_delete", "arguments": D{"machine": "x"}}}))
+	var result D
+	must(json.Unmarshal(requestApp(app, "POST", "/mcp/read-only", body, headers).Body.Bytes(), &result))
+	if result["error"] == nil {
+		t.Fatalf("write tool callable on the read-only endpoint: %v", result)
+	}
+	if w := requestApp(app, "POST", "/mcp?toolsets=nope", body, headers); w.Code != 400 {
+		t.Fatal(w.Code)
+	}
+}
