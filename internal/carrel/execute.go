@@ -12,6 +12,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 	e := p.execution(ctx)
 	defer func() {
 		if r := recover(); r != nil {
+			logPanic("execute", r, "tool", tool)
 			result = failureResult(r)
 			_ = attempt(func() { e.S.Log(str(w["sub"]), nil, tool, a, str(obj(result["error"])["code"])) })
 		}

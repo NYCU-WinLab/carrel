@@ -469,3 +469,48 @@ func TestReadOnlyEndpointRefusesWrites(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+// The annotation rule of PLAN 4.1, over every tool in the contract.
+func TestContractAnnotations(t *testing.T) {
+	destructive := map[string]bool{
+		"machine_delete": true, "snapshot_delete": true, "snapshot_rollback": true, "image_delete": true,
+		"public_ip_release": true, "vip_remove": true, "function_remove": true, "app_unlink": true,
+		"app_webhook_rotate": true,
+	}
+	tools := dicts(Contract["tools"])
+	if len(tools) == 0 {
+		t.Fatal("contract lists no tools")
+	}
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		name := str(tool["name"])
+		seen[name] = true
+		a := obj(tool["annotations"])
+		for _, key := range []string{"readOnlyHint", "destructiveHint", "openWorldHint"} {
+			if _, ok := a[key].(bool); !ok {
+				t.Errorf("%s: annotation %s is missing", name, key)
+			}
+		}
+		readOnly, hasIdempotent := boolean(a["readOnlyHint"]), a["idempotentHint"] != nil
+		if want := !named("mutations", name) && name != "whoami"; readOnly != want {
+			t.Errorf("%s: readOnlyHint is %v, want %v", name, readOnly, want)
+		}
+		if want := destructive[name]; boolean(a["destructiveHint"]) != want {
+			t.Errorf("%s: destructiveHint is %v, want %v", name, !want, want)
+		}
+		if readOnly && (boolean(a["destructiveHint"]) || hasIdempotent) {
+			t.Errorf("%s: a read-only tool sets destructiveHint or idempotentHint", name)
+		}
+		if hasIdempotent && !boolean(a["idempotentHint"]) {
+			t.Errorf("%s: idempotentHint is present but false; leave it out", name)
+		}
+	}
+	for name := range destructive {
+		if !seen[name] {
+			t.Errorf("%s is not in the contract", name)
+		}
+	}
+	if _, ok := Contract["visible"]; ok {
+		t.Error("contract still carries the unused visible list")
+	}
+}
