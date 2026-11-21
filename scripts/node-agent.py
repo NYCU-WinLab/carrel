@@ -19,6 +19,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -2558,6 +2559,94 @@ def create(m):
     return {"state": "running", "vmid": vmid, **cloud_init_files(m)}
 
 
+def guest_write(root, path, data, mode):
+    """Write one root-owned file below a guest's mounted root without following
+    a guest-controlled symlink out of it: every component is opened O_NOFOLLOW."""
+    *dirs, name = path.strip("/").split("/")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in dirs:
+            try:
+                os.mkdir(part, 0o755, dir_fd=fd)
+                made = True
+            except FileExistsError:
+                made = False
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            if made:
+                os.fchown(fd, 0, 0)
+        tmp = name + ".carrel-tmp"
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp, dir_fd=fd)
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=fd)
+        try:
+            os.write(out, data.encode())
+            os.fchmod(out, mode)
+            os.fchown(out, 0, 0)
+        finally:
+            os.close(out)
+        os.rename(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+def free_nbd():
+    run("modprobe", "nbd", "max_part=16")
+    for dev in sorted(Path("/sys/block").glob("nbd[0-9]*"), key=lambda p: int(p.name[3:])):
+        if not (dev / "pid").exists():
+            return "/dev/" + dev.name
+    raise CommandFailure("no free nbd device")
+
+
+def root_partition(device):
+    """The largest partition of the disk that holds a Linux filesystem."""
+    run("udevadm", "settle", timeout=30)
+    tree = json.loads(run("lsblk", "-J", "-b", "-o", "NAME,SIZE,TYPE,FSTYPE", device))
+    parts = [c for d in tree["blockdevices"] for c in d.get("children", [])
+             if c.get("type") == "part" and c.get("fstype") in ("ext4", "xfs", "btrfs")]
+    if not parts:
+        raise ValueError("no root partition")
+    return "/dev/" + max(parts, key=lambda c: int(c["size"]))["name"]
+
+
+def ca_backfill(m):
+    """Write the lab SSH user CA and the guest reporter into a stopped VM's disk (issue #458).
+
+    The cloud-init seed is not touched, so the instance id stays. Writing the
+    same files again leaves the same disk.
+    """
+    if m.get("kind") != "vm":
+        raise ValueError("ca_backfill is for VMs")
+    volume = disk_volume(m).get("disk_volume")
+    if not volume:
+        raise ValueError("no root disk")
+    if power_status(m) != "stopped":
+        raise ValueError("stop the machine first")
+    files = ca_files(m, "user")
+    if not files:
+        raise ValueError("no SSH user CA is set")
+    files.append(("/usr/local/lib/carrel/guest-report.py", Path("/usr/local/lib/carrel/guest-report.py").read_text()))
+    source = run("pvesm", "path", volume)
+    device = free_nbd()
+    mount = Path(tempfile.mkdtemp(prefix=f"carrel-backfill-{m['vmid']}-"))
+    try:
+        run("qemu-nbd", "--connect=" + device, "--format=qcow2" if source.endswith(".qcow2") else "--format=raw", source)
+        try:
+            run("mount", "-o", "nodev,nosuid", root_partition(device), mount)
+            try:
+                for path, content in files:
+                    guest_write(mount, path, content, 0o755 if path.endswith(".py") else 0o644)
+            finally:
+                run("umount", mount)
+        finally:
+            run("qemu-nbd", "--disconnect", device)
+    finally:
+        with contextlib.suppress(OSError):
+            mount.rmdir()
+    return {"ca_backfilled": [path for path, _ in files]}
+
+
 def power_status(m):
     kind = "qemu" if m["kind"] == "vm" else "lxc"
     status = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
@@ -3170,7 +3259,7 @@ def main():
         console(req["machine"], req.get("mode"), req.get("ticket"))
     # A migration copies disks for minutes: it takes a lock of its machine
     # only, so reconciles and other machines on this node go on.
-    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
+    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove", "ca_backfill")
     lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store", "vmids_present"):
@@ -3247,6 +3336,8 @@ def main():
             m = req["machine"]
             owned(m)
             out = cloud_init_files(m)
+        elif op == "ca_backfill":
+            out = ca_backfill(req["machine"])
         elif op == "disk_volume":
             out = disk_volume(req["machine"])
         elif op == "node_files":
