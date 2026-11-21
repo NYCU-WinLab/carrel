@@ -3071,7 +3071,23 @@
             "description": "summary (default) or full."
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "if": {
+          "properties": {
+            "alias_confirmed": {
+              "const": true
+            }
+          },
+          "required": [
+            "alias_confirmed"
+          ]
+        },
+        "then": {
+          "required": [
+            "tenant",
+            "owner"
+          ]
+        }
       },
       "annotations": {
         "readOnlyHint": false,
