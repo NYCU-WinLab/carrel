@@ -330,7 +330,11 @@ func (o *OAuth) register(w http.ResponseWriter, r *http.Request) {
 func (o *OAuth) authorize(w http.ResponseWriter, r *http.Request) {
 	resource := o.Origin + "/mcp"
 	callback := o.Origin + "/oauth/callback"
-	q := r.URL.Query()
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		oauthError(w, "invalid_request", 400)
+		return
+	}
 	c := o.Store.OAuthGet("client", q.Get("client_id"))
 	if c == nil || !contains(c["redirect_uris"], q.Get("redirect_uri")) {
 		oauthError(w, "invalid_client", 400)

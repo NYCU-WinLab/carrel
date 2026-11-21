@@ -27,7 +27,9 @@ type statefulDNS struct {
 	log     []string
 	n       int
 	list    bool
-	zones   []D
+	// requests counts every call the fake received, reads included.
+	requests int
+	zones    []D
 	// failPatches makes the next PATCH requests fail as a 502 would.
 	failPatches int
 }
@@ -36,6 +38,7 @@ func (f *statefulDNS) serve(t *testing.T) *httptest.Server {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.requests++
 		var body D
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
