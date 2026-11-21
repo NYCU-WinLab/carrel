@@ -308,3 +308,51 @@ func TestOAuthRegistrationsAreBoundedPerAddressAndExpireUnused(t *testing.T) {
 		t.Fatalf("an unused registration lives %v s", left)
 	}
 }
+
+// The read-only endpoint advertises its own resource, so authorize and token
+// must accept it as well as /mcp, and still refuse any other value.
+func TestOAuthAcceptsReadOnlyResource(t *testing.T) {
+	p, _ := fixture(t)
+	s := p.Store
+	verifier := strings.Repeat("x", 50)
+	s.OAuthPut("client", "desktop", D{"client_id": "desktop", "redirect_uris": []any{"http://localhost:1234/cb"}}, clientTTL)
+	s.OAuthPut("code", digest("code"), D{"client": "desktop", "redirect": "http://localhost:1234/cb", "challenge": challenge(verifier)}, 120)
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse(w, 200, D{"access_token": "access", "refresh_token": "refresh", "refresh_expires_in": 0, "scope": "offline_access"})
+	}))
+	defer issuer.Close()
+	o := &OAuth{Store: s, Origin: "https://carrel.test", Issuer: issuer.URL, ClientID: "carrel-mcp", HTTP: issuer.Client(), Verifier: testVerifier{who: person("alice", false)}}
+	w := authRequest(o, "/.well-known/oauth-protected-resource/mcp/read-only", nil)
+	var meta D
+	must(json.Unmarshal(w.Body.Bytes(), &meta))
+	resource := str(meta["resource"])
+	if resource != "https://carrel.test/mcp/read-only" {
+		t.Fatal(resource)
+	}
+	authorize := func(res string) int {
+		q := url.Values{"client_id": {"desktop"}, "redirect_uri": {"http://localhost:1234/cb"}, "response_type": {"code"}, "code_challenge_method": {"S256"}, "code_challenge": {challenge(verifier)}, "state": {"s"}, "resource": {res}}
+		return authRequest(o, "/oauth/authorize?"+q.Encode(), nil).Code
+	}
+	if code := authorize(resource); code != 302 {
+		t.Fatal("authorize refused the read-only resource", code)
+	}
+	if code := authorize("https://carrel.test/mcp/other"); code != 400 {
+		t.Fatal("authorize accepted an unknown resource", code)
+	}
+	base := url.Values{"client_id": {"desktop"}, "grant_type": {"authorization_code"}, "code": {"code"}, "code_verifier": {verifier}, "redirect_uri": {"http://localhost:1234/cb"}}
+	if w := authRequest(o, "/oauth/token", withValue(base, "resource", "https://carrel.test/mcp/other")); w.Code != 400 {
+		t.Fatal("token accepted an unknown resource", w.Code)
+	}
+	if w := authRequest(o, "/oauth/token", withValue(base, "resource", resource)); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+}
+
+func withValue(values url.Values, key, value string) url.Values {
+	out := url.Values{}
+	for k, v := range values {
+		out[k] = append([]string{}, v...)
+	}
+	out.Set(key, value)
+	return out
+}

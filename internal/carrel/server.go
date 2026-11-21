@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,34 +47,18 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 		must(err)
 		a.schemas[name] = schema
 	}
-	servers := map[bool]*mcp.Server{}
-	for _, admin := range []bool{false, true} {
-		server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: str(Contract["instructions"])})
-		for _, definition := range dicts(Contract["tools"]) {
-			name := str(definition["name"])
-			if !admin && named("admin_tools", name) {
-				continue
-			}
-			var tool mcp.Tool
-			must(json.Unmarshal(encoded(definition), &tool))
-			server.AddTool(&tool, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				args := D{}
-				var result D
-				if len(request.Params.Arguments) > 0 {
-					if json.Unmarshal(request.Params.Arguments, &args) != nil {
-						result = D{"ok": false, "error": D{"code": "invalid", "message": "Invalid arguments"}}
-					}
-				}
-				if result == nil {
-					result = a.Call(ctx, name, args, obj(ctx.Value(identityKey{})))
-				}
-				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}, nil
-			})
-		}
-		servers[admin] = server
-	}
+	var serversMu sync.Mutex
+	servers := map[string]*mcp.Server{}
 	stream := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		return servers[boolean(obj(r.Context().Value(identityKey{}))["admin"])]
+		admin := boolean(obj(r.Context().Value(identityKey{}))["admin"])
+		sel, _ := r.Context().Value(selectionKey{}).(selection)
+		key := sel.key(admin)
+		serversMu.Lock()
+		defer serversMu.Unlock()
+		if servers[key] == nil {
+			servers[key] = a.mcpServer(admin, sel)
+		}
+		return servers[key]
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 262144})
 	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: "carrel-mcp", Hosted: []string{}, Verifier: verifier, HTTP: &http.Client{Timeout: 15 * time.Second}}
 	oauth.Hosted = append(oauth.Hosted, p.Config.HostedRedirects...)
@@ -128,27 +114,37 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	a.keysRoutes(mux)
 	a.statusRoute(mux, p)
 	a.askRoute(mux, p)
-	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authorization := r.Header.Get("Authorization")
-		var who D
-		var err error
-		if !strings.HasPrefix(authorization, "Bearer ") {
-			err = errors.New("missing token")
-		} else {
-			who, err = verifier.Verify(r.Context(), authorization[7:])
-		}
-		if err != nil {
-			var unavailable IssuerUnavailable
-			if errors.As(err, &unavailable) {
-				jsonResponse(w, 503, D{"error": "temporarily_unavailable"})
+	mcpHandler := func(readOnly bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			authorization := r.Header.Get("Authorization")
+			var who D
+			var err error
+			if !strings.HasPrefix(authorization, "Bearer ") {
+				err = errors.New("missing token")
 			} else {
-				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+origin+`/.well-known/oauth-protected-resource/mcp"`)
-				jsonResponse(w, 401, D{"error": "invalid_token"})
+				who, err = verifier.Verify(r.Context(), authorization[7:])
 			}
-			return
+			if err != nil {
+				var unavailable IssuerUnavailable
+				if errors.As(err, &unavailable) {
+					jsonResponse(w, 503, D{"error": "temporarily_unavailable"})
+				} else {
+					w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+origin+`/.well-known/oauth-protected-resource`+strings.TrimSuffix(r.URL.Path, "/")+`"`)
+					jsonResponse(w, 401, D{"error": "invalid_token"})
+				}
+				return
+			}
+			sel, err := parseSelection(readOnly, boolean(who["admin"]), r.URL.Query().Get("toolsets"), r.Header.Get("X-Carrel-Toolsets"))
+			if err != nil {
+				jsonResponse(w, 400, D{"error": "invalid_toolsets", "message": err.Error()})
+				return
+			}
+			ctx := context.WithValue(context.WithValue(r.Context(), identityKey{}, who), selectionKey{}, sel)
+			stream.ServeHTTP(w, r.WithContext(ctx))
 		}
-		stream.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, who)))
-	}))
+	}
+	mux.Handle("/mcp", mcpHandler(false))
+	mux.Handle("/mcp/read-only", mcpHandler(true))
 	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
 		guest := strings.HasPrefix(r.URL.Path, "/internal/")
@@ -398,4 +394,111 @@ func (e *Execution) MaintainDomains() {
 			slog.Warn("domain_maintenance_failed", "tenant", n, "code", failure["code"], "backend_code", failure["backend_code"])
 		}
 	}
+}
+
+type selectionKey struct{}
+
+// selection is the part of the tool surface a caller asked for: the toolsets
+// named in the URL or header (core by default, core and admin for an admin)
+// and whether only read-only tools are wanted. Toolsets only shape tools/list;
+// the admin and read-only filters in mcpServer decide what is callable.
+type selection struct {
+	readOnly bool
+	sets     []string
+}
+
+func (s selection) key(admin bool) string {
+	return strconv.FormatBool(admin) + "|" + strconv.FormatBool(s.readOnly) + "|" + strings.Join(s.sets, ",")
+}
+
+func parseSelection(readOnly, admin bool, values ...string) (selection, error) {
+	known := obj(Contract["toolsets"])
+	want := map[string]bool{}
+	for _, value := range values {
+		for _, name := range strings.Split(value, ",") {
+			if name = strings.TrimSpace(name); name == "all" {
+				for k := range known {
+					want[k] = true
+				}
+			} else if name != "" {
+				if known[name] == nil {
+					return selection{}, errors.New("unknown toolset " + name)
+				}
+				want[name] = true
+			}
+		}
+	}
+	if len(want) == 0 && !readOnly {
+		want["core"] = true
+		want["admin"] = admin
+	}
+	sel := selection{readOnly: readOnly}
+	for k, ok := range want {
+		if ok {
+			sel.sets = append(sel.sets, k)
+		}
+	}
+	sort.Strings(sel.sets)
+	return sel, nil
+}
+
+// lists reports whether tools/list shows a tool. The read-only endpoint
+// without toolsets lists every readOnlyHint tool.
+func (s selection) lists(definition D) bool {
+	if len(s.sets) == 0 {
+		return true
+	}
+	for _, set := range s.sets {
+		if contains(obj(Contract["toolsets"])[set], definition["name"]) {
+			return true
+		}
+	}
+	return false
+}
+
+// mcpServer registers every tool the caller may call: admin tools only for an
+// admin, and only readOnlyHint tools on the read-only endpoint. A tool outside
+// the selected toolsets stays callable by name but is left out of tools/list,
+// so configured clients keep working while the per-turn list stays small.
+func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: str(Contract["instructions"])})
+	listed := map[string]bool{}
+	for _, definition := range dicts(Contract["tools"]) {
+		name := str(definition["name"])
+		if !admin && named("admin_tools", name) || sel.readOnly && !boolean(obj(definition["annotations"])["readOnlyHint"]) {
+			continue
+		}
+		listed[name] = sel.lists(definition)
+		var tool mcp.Tool
+		must(json.Unmarshal(encoded(definition), &tool))
+		server.AddTool(&tool, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			args := D{}
+			var result D
+			if len(request.Params.Arguments) > 0 {
+				if json.Unmarshal(request.Params.Arguments, &args) != nil {
+					result = D{"ok": false, "error": D{"code": "invalid", "message": "Invalid arguments"}}
+				}
+			}
+			if result == nil {
+				result = a.Call(ctx, name, args, obj(ctx.Value(identityKey{})))
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}, nil
+		})
+	}
+	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			result, err := next(ctx, method, request)
+			if list, ok := result.(*mcp.ListToolsResult); ok && err == nil {
+				tools := []*mcp.Tool{}
+				for _, tool := range list.Tools {
+					if listed[tool.Name] {
+						tools = append(tools, tool)
+					}
+				}
+				list.Tools = tools
+			}
+			return result, err
+		}
+	})
+	return server
 }
