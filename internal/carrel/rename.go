@@ -84,7 +84,7 @@ func (e *Execution) RenameMachine(a, t D) D {
 // A VM whose disk machine_ca_backfill is writing is busy too.
 func (e *Execution) machineBusy(n int, m D) bool {
 	vmid, name := integer(m["vmid"]), str(m["name"])
-	if e.P.backfilling[vmid] {
+	if e.P.isBackfilling(vmid) {
 		return true
 	}
 	names := func(v any) bool { return str(v) == name || str(v) == str(vmid) }

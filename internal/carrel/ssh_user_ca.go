@@ -193,11 +193,11 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 	// mutations are not blocked. The VM is marked in flight meanwhile: jobs
 	// on it wait (CheckBusy) and machineBusy refuses it, so a second backfill,
 	// a power start or a snapshot cannot interleave with the write.
-	e.P.backfilling[integer(vmid)] = true
+	e.P.markBackfill(integer(vmid), true)
 	e.P.writer.Unlock()
 	err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) })
 	e.P.writer.Lock()
-	delete(e.P.backfilling, integer(vmid))
+	e.P.markBackfill(integer(vmid), false)
 	if err != nil {
 		return "failed", "The node did not write the CA; the record is unchanged: " + describe(err)
 	}
@@ -246,4 +246,33 @@ func (e *Execution) recordedUsernames(t D) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// markBackfill adds or removes a VMID from the in-flight backfill set.
+func (p *Platform) markBackfill(vmid int, on bool) {
+	p.backfillMu.Lock()
+	defer p.backfillMu.Unlock()
+	if on {
+		p.backfilling[vmid] = true
+	} else {
+		delete(p.backfilling, vmid)
+	}
+}
+
+// isBackfilling reports whether machine_ca_backfill is writing the VM's disk.
+func (p *Platform) isBackfilling(vmid int) bool {
+	p.backfillMu.Lock()
+	defer p.backfillMu.Unlock()
+	return p.backfilling[vmid]
+}
+
+// backfillVMIDs returns a copy of the in-flight backfill set.
+func (p *Platform) backfillVMIDs() []int {
+	p.backfillMu.Lock()
+	defer p.backfillMu.Unlock()
+	ids := make([]int, 0, len(p.backfilling))
+	for vmid := range p.backfilling {
+		ids = append(ids, vmid)
+	}
+	return ids
 }

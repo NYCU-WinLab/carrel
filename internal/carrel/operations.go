@@ -518,7 +518,7 @@ func (e *Execution) CheckBusy(t D) {
 	}
 	// machine_ca_backfill writes a stopped VM's disk with the writer
 	// released: a job on that VM waits until the record is saved.
-	for vmid := range e.P.backfilling {
+	for _, vmid := range e.P.backfillVMIDs() {
 		if targets[vmid] || e.Op["tool"] == "platform_power" {
 			panic(Waiting{"waiting_for_machine_operation", now() + 1})
 		}

@@ -53,8 +53,10 @@ type Platform struct {
 	HTTP      *http.Client
 	writer    sync.Mutex
 	// backfilling holds the VMIDs whose disk machine_ca_backfill is writing
-	// with the writer released; read and set under the writer.
+	// with the writer released. Dry runs read it without the writer, so it
+	// has its own lock: use markBackfill, isBackfilling and backfillVMIDs.
 	backfilling  map[int]bool
+	backfillMu   sync.Mutex
 	snapshotting sync.Mutex
 	originRetry  backoff
 	certificates sync.Mutex

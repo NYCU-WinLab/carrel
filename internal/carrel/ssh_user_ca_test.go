@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -417,7 +418,7 @@ func TestBackfillRefusesASecondRunOnTheSameVM(t *testing.T) {
 	}
 	close(release)
 	r = <-done
-	if got := dicts(r["machines"])[0]["result"]; got != "backfilled" || !equal(storedMachine(p, 10200)["ca_principals"], []any{"alice"}) || len(p.backfilling) != 0 {
+	if got := dicts(r["machines"])[0]["result"]; got != "backfilled" || !equal(storedMachine(p, 10200)["ca_principals"], []any{"alice"}) || len(p.backfillVMIDs()) != 0 {
 		t.Fatalf("first run: %s", encoded(r))
 	}
 }
@@ -468,5 +469,47 @@ func TestRecordedUsernamesCountsOnlyCACreated(t *testing.T) {
 	p.Store.Put("machines", 10312, n, ca(10312, "made", "made-user", D{"ca_created": true}))
 	if got := recorded(); !equal(got, []string{"made-user"}) {
 		t.Fatalf("CA-created VM: %v", got)
+	}
+}
+
+// Dry runs read the in-flight set without the writer: a member's dry-run
+// rename or an admin's dry-run backfill during a backfill must not race the
+// insert and delete (run with -race).
+func TestBackfillDryRunsDoNotRaceTheInFlightSet(t *testing.T) {
+	p, _, app := backfillFixture(t)
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for _, call := range []func(){
+		func() {
+			p.Execute(context.Background(), "machine_rename", D{"machine": "old", "name": "crate", "confirm": "old", "dry_run": true}, person("alice", false))
+		},
+		func() {
+			p.Execute(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice", "dry_run": true}, person("root", true))
+		},
+	} {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					call()
+				}
+			}
+		}()
+	}
+	for range 20 {
+		seedMachine(p, "old", 10200)
+		r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, person("root", true))
+		if got := dicts(r["machines"])[0]["result"]; got != "backfilled" {
+			t.Errorf("backfill: %s", encoded(r))
+		}
+	}
+	close(stop)
+	readers.Wait()
+	if len(p.backfillVMIDs()) != 0 {
+		t.Fatal("the in-flight set is not empty")
 	}
 }
