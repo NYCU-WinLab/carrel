@@ -634,8 +634,11 @@ CT, a running VM, a VM with a queued or running operation, an ISO install, a VM 
 the snapshots, then run it again); after the node op succeeds it saves
 `ssh_user_ca`, `ca_principals` and `ca_sync: pull`, so a failure leaves the record old and a second run
 retries. A personal tenant does not record its owner's portal username, so the call names it in `owner`,
-and a VM is skipped unless that username's slug is the tenant's slug (an aliased tenant cannot pass yet);
-a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
+and a VM is skipped unless that username's slug is the tenant's slug. For a tenant whose slug an
+administrator assigned, `alias_confirmed: true` vouches for `owner` instead; it needs `tenant` and
+`owner`, applies to every eligible VM of the tenant when `machine` is omitted, and is recorded in the
+audit log. A lossless recorded username (a saved key's `by`, or `ca_principals` of a live or frozen VM
+created with the CA) that contradicts `owner` still refuses, flag or not; a project tenant gets `project:<name>`. Give `tenant` and `machine` for one VM, `tenant` alone for all
 its VMs, or neither for every tenant; `dry_run` lists what would change.
 
 Maintenance window runbook for the backfill (#443): stop the VM, run `machine_ca_backfill` for it

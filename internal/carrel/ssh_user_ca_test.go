@@ -318,6 +318,12 @@ func TestBackfillAliasConfirmed(t *testing.T) {
 		t.Fatalf("contradicting record: %s", encoded(got))
 	}
 	p.Store.Remove("keys", "k2")
+	// So does a frozen VM created with the CA.
+	p.Store.Put("frozen", 10299, integer(tenant["n"]), D{"vmid": 10299, "name": "cold", "state": "frozen", "ssh_user_ca": "ssh-ed25519 AAAA", "ca_sync": "pull", "ca_principals": []any{"tachen"}})
+	if got := run("chen", true); got["result"] != "skipped" || !strings.Contains(str(got["message"]), "tachen") || b.count("ca_backfill") != 0 {
+		t.Fatalf("contradicting frozen record: %s", encoded(got))
+	}
+	p.Store.Remove("frozen", 10299)
 	if got := run("chen", true); got["result"] != "backfilled" || !equal(storedMachine(p, 10203)["ca_principals"], []any{"chen"}) {
 		t.Fatalf("with the flag: %s", encoded(got))
 	}

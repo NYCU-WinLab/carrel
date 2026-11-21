@@ -203,8 +203,8 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 }
 
 // recordedUsernames are the lossless portal usernames a tenant recorded: the
-// by of its saved keys and the ca_principals of its VMs created with the CA.
-// A backfilled VM is left out, its principal came from a caller's say-so.
+// by of its saved keys and the ca_principals of its VMs created with the CA,
+// live or frozen. A backfilled VM is left out, its principal came from a caller's say-so.
 func (e *Execution) recordedUsernames(t D) []string {
 	n, seen, out := integer(t["n"]), map[string]bool{}, []string{}
 	add := func(name string) {
@@ -216,7 +216,7 @@ func (e *Execution) recordedUsernames(t D) []string {
 	for _, k := range rowsOf[sshKey](e.S, "keys", n) {
 		add(k.By)
 	}
-	for _, m := range e.S.Objects("machines", n) {
+	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
 		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) {
 			continue
 		}
