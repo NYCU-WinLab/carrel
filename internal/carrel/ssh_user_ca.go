@@ -217,7 +217,7 @@ func (e *Execution) recordedUsernames(t D) []string {
 		add(k.By)
 	}
 	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
-		if str(m["ssh_user_ca"]) == "" || str(m["ca_sync"]) == "" || boolean(m["ca_backfilled"]) {
+		if str(m["ssh_user_ca"]) == "" || boolean(m["ca_backfilled"]) {
 			continue
 		}
 		for _, p := range arr(m["ca_principals"]) {
