@@ -49,9 +49,12 @@ type Platform struct {
 	Backend Backend
 	Config  Config
 	// Telemetry is where capacity gauges go; nil sends nothing.
-	Telemetry    *Telemetry
-	HTTP         *http.Client
-	writer       sync.Mutex
+	Telemetry *Telemetry
+	HTTP      *http.Client
+	writer    sync.Mutex
+	// backfilling holds the VMIDs whose disk machine_ca_backfill is writing
+	// with the writer released; read and set under the writer.
+	backfilling  map[int]bool
 	snapshotting sync.Mutex
 	originRetry  backoff
 	certificates sync.Mutex
@@ -121,7 +124,7 @@ type Execution struct {
 
 func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, netboxKick: make(chan struct{}, 1)}
+	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)
 	return p
 }

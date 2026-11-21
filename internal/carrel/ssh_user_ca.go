@@ -190,17 +190,23 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool) (stri
 	}
 	planned := merge(m, D{"ssh_user_ca": ca, "ca_principals": []any{principal}, "ca_sync": "pull"})
 	// Release the writer while the node mounts and writes the disk, so other
-	// mutations are not blocked; the transaction below re-checks the record.
+	// mutations are not blocked. The VM is marked in flight meanwhile: jobs
+	// on it wait (CheckBusy) and machineBusy refuses it, so a second backfill,
+	// a power start or a snapshot cannot interleave with the write.
+	e.P.backfilling[integer(vmid)] = true
 	e.P.writer.Unlock()
 	err := attempt(func() { e.Call(D{"op": "ca_backfill", "machine": planned}) })
 	e.P.writer.Lock()
+	delete(e.P.backfilling, integer(vmid))
 	if err != nil {
 		return "failed", "The node did not write the CA; the record is unchanged: " + describe(err)
 	}
+	// The disk now trusts the CA: record it whenever the same allocation
+	// still has none, so the record never disagrees with the disk.
 	var message string
 	e.Transaction(func(tx *Execution) {
 		cur := tx.S.Get("machines", str(vmid))
-		if cur == nil || str(cur["ssh_user_ca"]) != "" || cur["state"] != m["state"] || tx.machineBusy(n, cur) {
+		if cur == nil || !equal(machineIdentity(cur), machineIdentity(m)) || str(cur["ssh_user_ca"]) != "" {
 			message = "The record changed meanwhile; nothing saved"
 			return
 		}

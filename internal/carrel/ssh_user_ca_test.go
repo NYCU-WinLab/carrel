@@ -368,3 +368,73 @@ func TestBackfillReleasesTheWriterDuringNodeIO(t *testing.T) {
 		t.Fatalf("after the node call: %s", encoded(r))
 	}
 }
+
+// blockBackfill makes the node stop inside ca_backfill until release is
+// closed, and starts a backfill of alice's old VM as owner.
+func blockBackfill(t *testing.T, b *fakeBackend, app *App, owner string) (chan struct{}, chan D) {
+	t.Helper()
+	inNode, release := make(chan struct{}), make(chan struct{})
+	inner := b.call
+	var once bool
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "ca_backfill" && !once {
+			once = true
+			close(inNode)
+			<-release
+		}
+		return inner(r, target)
+	}
+	done := make(chan D)
+	go func() {
+		done <- app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": owner}, person("root", true))
+	}()
+	<-inNode
+	return release, done
+}
+
+func TestBackfillRefusesASecondRunOnTheSameVM(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	release, done := blockBackfill(t, b, app, "alice")
+	// A second run while the first writes the disk must not write another
+	// principal into it.
+	r := app.Call(context.Background(), "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice", "alias_confirmed": true}, person("root", true))
+	assertOK(t, r)
+	if got := dicts(r["machines"])[0]["result"]; got != "skipped" || b.count("ca_backfill") != 1 {
+		t.Fatalf("second run during the write: %s", encoded(r))
+	}
+	close(release)
+	r = <-done
+	if got := dicts(r["machines"])[0]["result"]; got != "backfilled" || !equal(storedMachine(p, 10200)["ca_principals"], []any{"alice"}) || len(p.backfilling) != 0 {
+		t.Fatalf("first run: %s", encoded(r))
+	}
+}
+
+func TestBackfillHoldsASnapshotUntilTheRecordIsSaved(t *testing.T) {
+	p, b, app := backfillFixture(t)
+	release, done := blockBackfill(t, b, app, "alice")
+	inner := b.call
+	var trusted []any
+	b.call = func(r D, target string) (any, error) {
+		switch {
+		case r["op"] == "inventory":
+			return baseInventory(), nil
+		case r["op"] == "action" && r["action"] == "snapshot":
+			trusted = append(trusted, storedMachine(p, 10200)["ssh_user_ca"])
+		}
+		return inner(r, target)
+	}
+	runQueue(p)
+	r := p.Execute(context.Background(), "snapshot_create", D{"machine": "old", "name": "s1", "wait_seconds": 0}, person("alice", false))
+	assertOK(t, r)
+	id := str(obj(r["operation"])["id"])
+	awaitState(t, p, id, "waiting_for_machine_operation")
+	if len(trusted) != 0 {
+		t.Fatal("the snapshot ran while the disk was being written")
+	}
+	close(release)
+	assertOK(t, <-done)
+	awaitStateWithin(t, p, id, "succeeded", 10*time.Second)
+	if len(trusted) != 1 || trusted[0] != userCATestKey {
+		t.Fatalf("the snapshot did not follow the saved record: %v", trusted)
+	}
+}
