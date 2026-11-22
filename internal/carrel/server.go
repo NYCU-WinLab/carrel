@@ -526,7 +526,7 @@ func instructionsFor(sel selection) string {
 // admin, and only readOnlyHint tools plus whoami on the read-only endpoint (whoami
 // is not annotated read-only but only reports state there). A tool outside
 // the selected toolsets stays callable by name but is left out of tools/list,
-// so configured clients keep working while the per-turn list stays small.
+// for clients that ask for a smaller list and still call tools by name.
 func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: instructionsFor(sel)})
 	listed := map[string]bool{}
