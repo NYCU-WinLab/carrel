@@ -84,9 +84,16 @@ type Platform struct {
 	jumpMu sync.Mutex
 	// jumpGen is the last generation number sent; read and set under jumpMu.
 	jumpGen int64
-	// jumpClockGen is the last generation lockJumpState sent from the clock
-	// because jumpGen+1 was out of range; read and set under jumpMu.
+	// jumpClockGen is the last generation lockJumpState took from the clock
+	// fallback (raised above jumpSentGen) because jumpGen+1 was out of range;
+	// read and set under jumpMu.
 	jumpClockGen int64
+	// jumpSentGen is the highest generation SyncJump sent below maxJumpGen-1
+	// and at most maxJumpGenAhead above the clock at send time or the last
+	// recorded send, whichever is higher, so the clock fallback never goes
+	// below a write that may still land on the jump host; read and set under
+	// jumpMu.
+	jumpSentGen int64
 	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
 	jumpQueueMu sync.Mutex
 	jumpPending bool
