@@ -450,9 +450,12 @@ func (e *Execution) MaintainDomains() {
 type selectionKey struct{}
 
 // selection is the part of the tool surface a caller asked for: the toolsets
-// named in the URL or header (core by default, core and admin for an admin)
-// and whether only read-only tools are wanted. Toolsets only shape tools/list;
-// the admin and read-only filters in mcpServer decide what is callable.
+// named in the URL or header, and whether only read-only tools are wanted.
+// With none named, /mcp lists every toolset (admin only for an admin): a client
+// such as Claude Code can call only tools it was listed, so a smaller default
+// would cut members off from tools they use. Clients that load every listed
+// tool on every turn can ask for fewer. Toolsets only shape tools/list; the
+// admin and read-only filters in mcpServer decide what is callable.
 type selection struct {
 	readOnly bool
 	sets     []string
@@ -480,8 +483,9 @@ func parseSelection(readOnly, admin bool, values ...string) (selection, error) {
 		}
 	}
 	if len(want) == 0 && !readOnly {
-		want["core"] = true
-		want["admin"] = admin
+		for k := range known {
+			want[k] = k != "admin" || admin
+		}
 	}
 	sel := selection{readOnly: readOnly}
 	for k, ok := range want {

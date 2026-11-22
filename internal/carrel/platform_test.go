@@ -416,12 +416,27 @@ func TestToolsetsCoverEveryTool(t *testing.T) {
 	}
 }
 
-func TestMemberDefaultToolListIsSmall(t *testing.T) {
+func TestCoreToolListIsSmall(t *testing.T) {
 	p, _ := fixture(t)
 	app := NewApp(p, testVerifier{who: person("alice", false)})
-	tools, _ := listedTools(t, app, "/mcp", nil)
+	tools, _ := listedTools(t, app, "/mcp?toolsets=core", nil)
 	if len(tools) >= 50 || len(encoded(tools)) >= 60*1024 {
-		t.Fatalf("default member list has %d tools in %d bytes", len(tools), len(encoded(tools)))
+		t.Fatalf("core member list has %d tools in %d bytes", len(tools), len(encoded(tools)))
+	}
+}
+
+// Claude Code can call only listed tools, so plain /mcp lists every tool the
+// caller may use: all member tools for a member, those plus admin for an admin.
+func TestDefaultListsEveryCallableTool(t *testing.T) {
+	p, _ := fixture(t)
+	member := NewApp(p, testVerifier{who: person("alice", false)})
+	admin := NewApp(p, testVerifier{who: person("root", true)})
+	all := len(dicts(Contract["tools"]))
+	if _, n := listedTools(t, member, "/mcp", nil); n != all-len(arr(Contract["admin_tools"])) {
+		t.Fatalf("member default lists %d tools", n)
+	}
+	if _, n := listedTools(t, admin, "/mcp", nil); n != all {
+		t.Fatalf("admin default lists %d tools of %d", n, all)
 	}
 }
 
@@ -455,12 +470,12 @@ func TestToolListAuthorizationOnEveryEndpoint(t *testing.T) {
 	}
 }
 
-// Toolsets only shape tools/list: a tool outside the list stays callable by
-// name, and an admin on plain /mcp lists the admin tools.
+// Toolsets only shape tools/list: a tool outside the selected sets stays
+// callable by name, and an admin on plain /mcp lists the admin tools.
 func TestUnlistedToolsStayCallable(t *testing.T) {
 	p, _ := fixture(t)
 	member := NewApp(p, testVerifier{who: person("alice", false)})
-	tools, _ := listedTools(t, member, "/mcp", nil)
+	tools, _ := listedTools(t, member, "/mcp?toolsets=core", nil)
 	for _, tool := range tools {
 		if str(tool["name"]) == "port_list" {
 			t.Fatal("port_list is listed in the core set")
@@ -473,10 +488,10 @@ func TestUnlistedToolsStayCallable(t *testing.T) {
 		must(json.Unmarshal(requestApp(app, "POST", target, body, headers).Body.Bytes(), &result))
 		return result
 	}
-	if result := call(member, "/mcp", "port_list"); result["error"] != nil || obj(result["result"])["isError"] == true {
-		t.Fatalf("unlisted port_list not callable on /mcp: %v", result)
+	if result := call(member, "/mcp?toolsets=core", "port_list"); result["error"] != nil || obj(result["result"])["isError"] == true {
+		t.Fatalf("unlisted port_list not callable on /mcp?toolsets=core: %v", result)
 	}
-	if result := call(member, "/mcp", "node_list"); result["error"] == nil {
+	if result := call(member, "/mcp?toolsets=core", "node_list"); result["error"] == nil {
 		t.Fatalf("member called admin tool node_list: %v", result)
 	}
 	admin := NewApp(p, testVerifier{who: person("root", true)})
