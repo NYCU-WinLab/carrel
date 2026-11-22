@@ -89,9 +89,10 @@ type Platform struct {
 	// read and set under jumpMu.
 	jumpClockGen int64
 	// jumpSentGen is the highest generation SyncJump sent below maxJumpGen-1
-	// and at most maxJumpGenAhead above the clock at send time, so the clock
-	// fallback never goes below a write that may still land on the jump host;
-	// read and set under jumpMu.
+	// and at most maxJumpGenAhead above the clock at send time or the last
+	// recorded send, whichever is higher, so the clock fallback never goes
+	// below a write that may still land on the jump host; read and set under
+	// jumpMu.
 	jumpSentGen int64
 	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
 	jumpQueueMu sync.Mutex

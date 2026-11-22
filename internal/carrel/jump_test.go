@@ -1276,3 +1276,72 @@ func TestTheClockFallbackStaysAboveASendBeforeALongClockStepBack(t *testing.T) {
 		t.Fatal(gen, sent)
 	}
 }
+
+// After the clock stepped back more than maxJumpGenAhead, the normal +1 sends
+// above the old clock-scale generations are still counted: the fallback stays
+// above the last of them.
+func TestTheClockFallbackStaysAboveNormalSendsAfterALongClockStepBack(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	held := map[any]int64{}
+	b.call = func(r D, _ string) (any, error) {
+		gen := r["gen"].(int64)
+		if gen < held[r["op"]] {
+			return D{"changed": false, "stale": true, "held": float64(held[r["op"]])}, nil
+		}
+		held[r["op"]] = gen
+		return D{"changed": true}, nil
+	}
+	start := time.Now().UnixMicro() + 2*maxJumpGenAhead
+	p.jumpMu.Lock()
+	p.jumpSentGen, p.jumpGen = start, start
+	p.jumpMu.Unlock()
+	var last int64
+	for i := 0; i < 3; i++ {
+		keys, certs, gen := e.lockJumpState()
+		if r := e.SyncJump(keys, certs, gen); r != "synced" {
+			t.Fatal(i, r)
+		}
+		p.jumpMu.Unlock()
+		last = gen
+	}
+	if last != start+3 {
+		t.Fatal(last, start)
+	}
+	p.jumpMu.Lock()
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if gen <= last || gen >= maxJumpGen-1 {
+		t.Fatal(gen, last)
+	}
+}
+
+// Two top refusals after a long clock step back, with a normal send between
+// them, never repeat a fallback number.
+func TestTheClockFallbackDoesNotRepeatAfterALongClockStepBack(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	sent := time.Now().UnixMicro() + 2*maxJumpGenAhead
+	p.jumpMu.Lock()
+	p.jumpSentGen = sent
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	keys, certs, first := e.lockJumpState()
+	if r := e.SyncJump(keys, certs, first); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	keys, certs, normal := e.lockJumpState()
+	if r := e.SyncJump(keys, certs, normal); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, second := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if first != sent+1 || normal != sent+2 || second <= normal || second >= maxJumpGen-1 {
+		t.Fatal(first, normal, second, sent)
+	}
+}
