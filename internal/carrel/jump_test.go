@@ -1002,11 +1002,12 @@ func TestNoGenAtOrAbove2To53IsSent(t *testing.T) {
 	}
 	p.jumpMu.Lock()
 	defer p.jumpMu.Unlock()
-	p.jumpGen = maxJumpGen - 2
+	p.jumpGen = maxJumpGen - 3
 	b.call = func(r D, _ string) (any, error) {
 		return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
 	}
-	// The refusal lifts jumpGen to 2^53-1; one more would be 2^53, so no resend.
+	// A held value at the top is damage, so it does not lift jumpGen and
+	// nothing is resent at 2^53-1 or above.
 	e.syncJumpResending("", nil, maxJumpGen-3)
 	if _, gens := jumpGens(b); len(gens) != 1 {
 		t.Fatal(gens)
@@ -1122,16 +1123,18 @@ func TestTheClockFallbackStaysAboveTheResendsSent(t *testing.T) {
 	if sent != held+1 {
 		t.Fatal(gens, held)
 	}
-	// A later refusal reports a damaged floor at the top.
+	// A later refusal reports a damaged floor at the top: it is not followed.
 	b.call = func(r D, _ string) (any, error) {
 		return D{"changed": false, "stale": true, "held": float64(maxJumpGen - 1)}, nil
 	}
 	keys, certs, gen = e.lockJumpState()
 	e.syncJumpResending(keys, certs, gen)
 	p.jumpMu.Unlock()
-	if p.jumpGen != maxJumpGen-1 {
-		t.Fatal(p.jumpGen)
+	if p.jumpGen != gen {
+		t.Fatal(p.jumpGen, gen)
 	}
+	// jumpGen at the top (from before #432) still falls back above the sends.
+	p.jumpGen = maxJumpGen - 1
 	for i := 0; i < 2; i++ {
 		_, _, next := e.lockJumpState()
 		p.jumpMu.Unlock()
@@ -1215,9 +1218,12 @@ func TestTheClockFallbackReturnsToTheClockAfterARepair(t *testing.T) {
 		t.Fatal(r)
 	}
 	p.jumpMu.Unlock()
-	if p.jumpGen != maxJumpGen-1 {
+	// The held value at the top is damage and is not followed (#432); start
+	// from jumpGen at the top as a process from before that change would.
+	if p.jumpGen == maxJumpGen-1 {
 		t.Fatal(p.jumpGen)
 	}
+	p.jumpGen = maxJumpGen - 1
 	// The operator resets the jump host to 0.
 	held := map[any]int64{}
 	b.call = func(r D, _ string) (any, error) {
@@ -1343,5 +1349,69 @@ func TestTheClockFallbackDoesNotRepeatAfterALongClockStepBack(t *testing.T) {
 	p.jumpMu.Unlock()
 	if first != sent+1 || normal != sent+2 || second <= normal || second >= maxJumpGen-1 {
 		t.Fatal(first, normal, second, sent)
+	}
+}
+
+// A held value far above the clock is a damaged sidecar (#432): a resend above
+// it would climb into the top of the range and saturate the other sidecar, as
+// keys.gen=2^53-2 with certs.gen=2^53-1 makes a resend write 2^53-1 into keys.gen.
+func TestAHeldGenFarAboveTheClockCausesNoResend(t *testing.T) {
+	for _, tc := range []struct {
+		name, refuse, outcome string
+		held                  int64
+		ops                   []any
+	}{
+		{"keys", "sync", "stale", maxJumpGen - 2, []any{"sync"}},
+		{"certs", "certs", "keys_only", maxJumpGen - 1, []any{"sync", "certs"}},
+		{"day ahead", "sync", "stale", time.Now().UnixMicro() + 2*maxJumpGenAhead, []any{"sync"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, b := fixture(t)
+			e := p.execution(context.Background())
+			b.call = func(r D, _ string) (any, error) {
+				if r["op"] == tc.refuse {
+					return D{"changed": false, "stale": true, "held": float64(tc.held)}, nil
+				}
+				return D{"changed": true}, nil
+			}
+			keys, certs, gen := e.lockJumpState()
+			r := e.syncJumpResending(keys, certs, gen)
+			p.jumpMu.Unlock()
+			if r != tc.outcome {
+				t.Fatal(r)
+			}
+			if p.jumpGen != gen {
+				t.Fatal(p.jumpGen, gen)
+			}
+			ops, gens := jumpGens(b)
+			if fmt.Sprint(ops) != fmt.Sprint(tc.ops) {
+				t.Fatal(ops, gens)
+			}
+			for _, g := range gens {
+				if g != float64(gen) {
+					t.Fatal(ops, gens)
+				}
+			}
+		})
+	}
+}
+
+// A held value only a little above the clock (a clock step back) still
+// resends above it.
+func TestAHeldGenSlightlyAboveTheClockStillResends(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	held := time.Now().UnixMicro() + int64(time.Hour/time.Microsecond)
+	b.call = func(r D, _ string) (any, error) {
+		if r["gen"].(int64) <= held {
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
+		}
+		return D{"changed": true}, nil
+	}
+	keys, certs, gen := e.lockJumpState()
+	r := e.syncJumpResending(keys, certs, gen)
+	p.jumpMu.Unlock()
+	if r != "synced" || p.jumpGen != held+1 {
+		t.Fatal(r, p.jumpGen, held)
 	}
 }
