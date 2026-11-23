@@ -349,7 +349,8 @@ const maxJumpGen = 1 << 53
 // applies it when it records jumpSentGen, relative to the clock or the last
 // recorded send, whichever is higher, so a recorded send is never dropped
 // later because the clock moved, and normal sends after a clock step back are
-// still recorded.
+// still recorded. raiseJumpGen applies the same bound to a held value, so a
+// damaged sidecar is not followed.
 const maxJumpGenAhead = int64(24 * time.Hour / time.Microsecond)
 
 // jumpResendBudget bounds the whole resend sequence in time: no resend starts
@@ -447,6 +448,14 @@ func (e *Execution) raiseJumpGen(res any) {
 	// a generation, anything else is ignored.
 	held, ok := obj(res)["held"].(float64)
 	if !ok || held < 0 || held >= maxJumpGen || held != math.Trunc(held) {
+		return
+	}
+	// A held value more than maxJumpGenAhead above both the clock and the last
+	// counted send is a damaged sidecar (#432). Resending above it would climb
+	// to the top of the range and saturate the other sidecar, so jumpGen stays
+	// and the outcome stays stale or keys_only until an operator repairs it.
+	if int64(held) > max(time.Now().UnixMicro(), e.P.jumpSentGen)+maxJumpGenAhead {
+		slog.Error("jump_sync_held_damaged", "event", "jump_sync_held_damaged", "held", int64(held))
 		return
 	}
 	if int64(held) > e.P.jumpGen {
