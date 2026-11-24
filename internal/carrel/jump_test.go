@@ -1,8 +1,10 @@
 package carrel
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -1413,5 +1415,63 @@ func TestAHeldGenSlightlyAboveTheClockStillResends(t *testing.T) {
 	p.jumpMu.Unlock()
 	if r != "synced" || p.jumpGen != held+1 {
 		t.Fatal(r, p.jumpGen, held)
+	}
+}
+
+// Refusals that each report a held value just under the bound must not move the
+// bound: after a resend counted in jumpSentGen, the next held value of the same
+// distance from the clock is still damage (#545).
+func TestRefusalDrivenResendsDoNotMoveTheHeldDamageBound(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+	held := time.Now().UnixMicro() + maxJumpGenAhead - 1_000_000
+	b.call = func(r D, _ string) (any, error) {
+		if r["gen"].(int64) <= held {
+			return D{"changed": false, "stale": true, "held": float64(held)}, nil
+		}
+		return D{"changed": true}, nil
+	}
+	keys, certs, gen := e.lockJumpState()
+	if r := e.syncJumpResending(keys, certs, gen); r != "synced" {
+		t.Fatal(r)
+	}
+	p.jumpMu.Unlock()
+	if p.jumpSentGen != held+1 {
+		t.Fatal(p.jumpSentGen, held)
+	}
+	// The next sync's refusal reports a value above the first, still within a
+	// day of jumpSentGen but beyond a day of the clock and the baseline.
+	held += 2 * 3_600_000_000
+	keys, certs, gen = e.lockJumpState()
+	r := e.syncJumpResending(keys, certs, gen)
+	p.jumpMu.Unlock()
+	if r != "stale" || p.jumpGen > gen {
+		t.Fatal(r, p.jumpGen, gen)
+	}
+	if !strings.Contains(logs.String(), "jump_sync_held_damaged") {
+		t.Fatal(logs.String())
+	}
+}
+
+// A held value exactly at the bound is followed with a held+1 resend; one above
+// it is not.
+func TestAHeldGenAtTheBoundResendsAndOneAboveDoesNot(t *testing.T) {
+	p, _ := fixture(t)
+	e := p.execution(context.Background())
+	p.jumpMu.Lock()
+	p.jumpBaseGen = time.Now().UnixMicro() + 10*maxJumpGenAhead
+	base := p.jumpBaseGen
+	p.jumpMu.Unlock()
+	e.raiseJumpGen(D{"held": float64(base + maxJumpGenAhead)})
+	if p.jumpGen != base+maxJumpGenAhead {
+		t.Fatal(p.jumpGen)
+	}
+	e.raiseJumpGen(D{"held": float64(base + maxJumpGenAhead + 1)})
+	if p.jumpGen != base+maxJumpGenAhead {
+		t.Fatal(p.jumpGen)
 	}
 }

@@ -175,6 +175,12 @@ func (e *Execution) lockJumpState() (keys string, certs D, gen int64) {
 		e.P.jumpClockGen = gen
 	}
 	e.P.jumpGen = gen
+	if gen < maxJumpGen-1 {
+		// The baseline for the damage bound on a held value (raiseJumpGen). It
+		// moves to the clock or one step up, never to a number a resend lifted
+		// jumpGen to, so refusals cannot walk it forward.
+		e.P.jumpBaseGen = max(e.P.jumpBaseGen, min(gen, max(now, e.P.jumpBaseGen)+1))
+	}
 	ok = true
 	return keys, certs, gen
 }
@@ -450,11 +456,12 @@ func (e *Execution) raiseJumpGen(res any) {
 	if !ok || held < 0 || held >= maxJumpGen || held != math.Trunc(held) {
 		return
 	}
-	// A held value more than maxJumpGenAhead above both the clock and the last
-	// counted send is a damaged sidecar (#432). Resending above it would climb
+	// A held value more than maxJumpGenAhead above both the clock and the
+	// highest generation lockJumpState took (not a resend, so refusals cannot
+	// move the bound) is a damaged sidecar (#432). Resending above it would climb
 	// to the top of the range and saturate the other sidecar, so jumpGen stays
 	// and the outcome stays stale or keys_only until an operator repairs it.
-	if int64(held) > max(time.Now().UnixMicro(), e.P.jumpSentGen)+maxJumpGenAhead {
+	if int64(held) > max(time.Now().UnixMicro(), e.P.jumpBaseGen)+maxJumpGenAhead {
 		slog.Error("jump_sync_held_damaged", "event", "jump_sync_held_damaged", "held", int64(held))
 		return
 	}

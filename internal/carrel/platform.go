@@ -94,6 +94,11 @@ type Platform struct {
 	// below a write that may still land on the jump host; read and set under
 	// jumpMu.
 	jumpSentGen int64
+	// jumpBaseGen is the highest generation lockJumpState took within
+	// maxJumpGenAhead of the clock or the last such number. Resends above a
+	// held value do not move it, so it bounds a held value without following
+	// refusals; read and set under jumpMu.
+	jumpBaseGen int64
 	// jumpQueueMu guards the background jump sync: one worker, one pending ask.
 	jumpQueueMu sync.Mutex
 	jumpPending bool
