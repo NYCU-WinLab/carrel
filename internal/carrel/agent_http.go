@@ -22,26 +22,35 @@ const maxAgentClaim = 1 << 20
 func (p *Platform) AgentHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sites/v1/agent/claim", func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			Node    string   `json:"node"`
-			Session string   `json:"session"`
-			Seq     uint64   `json:"seq"`
-			Held    []string `json:"held"`
-		}
-		if json.NewDecoder(io.LimitReader(r.Body, maxAgentClaim)).Decode(&in) != nil || in.Session == "" || in.Seq == 0 {
-			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "The body must be JSON with node, session and seq"}})
-			return
-		}
-		if !p.agentAllowed(r, in.Node) {
+		// The node is in the query, so the token is checked before the
+		// body is read.
+		node := r.URL.Query().Get("node")
+		if !p.agentAllowed(r, node) {
 			jsonResponse(w, 403, D{"ok": false, "error": D{"code": "forbidden", "message": "Invalid agent token"}})
 			return
 		}
-		jobs := p.Hub.Claim(r.Context(), in.Node, in.Session, in.Seq, in.Held, agentPoll)
+		var in struct {
+			Session string   `json:"session"`
+			Seq     uint64   `json:"seq"`
+			Held    []string `json:"held"`
+			// Drain: the agent is shutting down and takes no job.
+			Drain bool `json:"drain"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, maxAgentClaim)).Decode(&in) != nil || in.Session == "" || in.Seq == 0 {
+			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "The body must be JSON with session and seq"}})
+			return
+		}
+		if in.Drain {
+			p.Hub.Heartbeat(node, in.Session, in.Seq, in.Held)
+			jsonResponse(w, 200, D{"jobs": []AgentJob{}})
+			return
+		}
+		jobs := p.Hub.Claim(r.Context(), node, in.Session, in.Seq, in.Held, agentPoll)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		if err := json.NewEncoder(w).Encode(D{"jobs": jobs}); err != nil {
+		if err := json.NewEncoder(w).Encode(D{"jobs": jobs}); err != nil && len(jobs) > 0 {
 			// The answer did not reach the agent: its jobs never ran.
-			p.Hub.Release(in.Node, in.Session, jobs)
+			p.Hub.Release(node, in.Session, jobs)
 		}
 	})
 	mux.HandleFunc("POST /sites/v1/agent/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {

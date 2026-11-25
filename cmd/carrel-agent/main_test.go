@@ -123,7 +123,7 @@ func TestAgentRefusesPlainHTTPAndOtherCAs(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.session = "s1"
-	if _, err := a.claim(context.Background()); err == nil || !strings.Contains(err.Error(), "certificate") {
+	if _, err := a.claim(context.Background(), false); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("a certificate under another CA was trusted: %v", err)
 	}
 }
@@ -183,5 +183,71 @@ func TestAgentRunsAJobHandedOutTwiceOnce(t *testing.T) {
 	<-done
 	if runs.Load() != 1 || answers != 1 {
 		t.Fatalf("runs %d answers %d", runs.Load(), answers)
+	}
+}
+
+// A stop signal while a job runs neither drops nor loses its answer: the
+// agent sends drain heartbeats until the job ends, then answers it.
+func TestAgentAnswersAJobThatEndsAfterStop(t *testing.T) {
+	dir := t.TempDir()
+	store, err := carrel.OpenStore(filepath.Join(dir, "carrel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	sum := sha256.Sum256([]byte("agent-token"))
+	cfg := carrel.Config{Nodes: []carrel.NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: hex.EncodeToString(sum[:]), AgentSource: "127.0.0.1"},
+	}}
+	p := carrel.NewPlatform(store, sshOnly{}, cfg)
+	p.UseAgents()
+	server := httptest.NewTLSServer(p.AgentHandler())
+	defer server.Close()
+	ca := writeFile(t, dir, "ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	conf, _ := json.Marshal(config{Control: server.URL, CAFile: ca, TokenFile: writeFile(t, dir, "token", "agent-token"), Node: "pve1"})
+	a, err := load(writeFile(t, dir, "agent.json", string(conf)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.session = "s1"
+	heartbeat = 20 * time.Millisecond
+	started, release := make(chan struct{}), make(chan struct{})
+	a.run = func(context.Context, []byte) ([]byte, bool) {
+		close(started)
+		<-release
+		return []byte(`{"ok":true,"result":{"via":"agent"}}`), false
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.loop(ctx); close(done) }()
+	type reply struct {
+		v   any
+		err error
+	}
+	got := make(chan reply, 1)
+	go func() {
+		call, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		v, err := p.Backend.Call(call, carrel.D{"op": "freeze"}, "carrel-node")
+		got <- reply{v, err}
+	}()
+	<-started
+	stop()
+	// Several drain heartbeats pass while the job still runs.
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("the agent exited with a job running")
+	default:
+	}
+	close(release)
+	r := <-got
+	if r.err != nil || r.v.(map[string]any)["via"] != "agent" {
+		t.Fatalf("answer after stop: %v %v", r.v, r.err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent did not exit after its last answer")
 	}
 }

@@ -106,7 +106,9 @@ func load(path string) (*agent, error) {
 		return nil, fmt.Errorf("token_file: %w", err)
 	}
 	a := &agent{cfg: c, token: strings.TrimSpace(string(token)), held: map[string]bool{},
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}}}}
+		client: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}},
+			// A redirect would carry the token elsewhere: never follow one.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	a.run = a.nodeAgent
 	return a, nil
 }
@@ -138,17 +140,19 @@ func (l *limited) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// loop claims jobs until ctx ends. A failed claim waits and tries again with
-// the next number, so the control plane ignores any poll still open.
-func (a *agent) loop(ctx context.Context) {
+// loop claims jobs until stop ends. A failed claim waits and tries again
+// with the next number, so the control plane ignores any poll still open.
+// After stop it takes no new job, but keeps answering and sends heartbeats
+// with what it holds until the last running job is answered: a root op
+// that finishes during a restart is reported, not swept as lost.
+func (a *agent) loop(stop context.Context) {
 	var wg sync.WaitGroup
-	defer wg.Wait()
-	for ctx.Err() == nil {
-		jobs, err := a.claim(ctx)
+	for stop.Err() == nil {
+		jobs, err := a.claim(stop, false)
 		if err != nil {
-			if ctx.Err() == nil {
+			if stop.Err() == nil {
 				slog.Warn("claim_failed", "error", err)
-				sleep(ctx, retry)
+				sleep(stop, retry)
 			}
 			continue
 		}
@@ -165,24 +169,52 @@ func (a *agent) loop(ctx context.Context) {
 			wg.Add(1)
 			go func(j job) {
 				defer wg.Done()
-				a.do(ctx, j)
+				a.do(j)
 			}(j)
 		}
 	}
+	for a.holding() > 0 {
+		if _, err := a.claim(context.Background(), true); err != nil {
+			slog.Warn("heartbeat_failed", "error", err)
+		}
+		a.wait(heartbeat)
+	}
+	wg.Wait()
 }
 
-func (a *agent) claim(ctx context.Context) ([]job, error) {
-	a.seq++
+// heartbeat is the pause between heartbeats while shutting down, well
+// inside the control plane's 90 second silence limit.
+var heartbeat = 10 * time.Second
+
+func (a *agent) holding() int {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.held)
+}
+
+// wait sleeps up to d, or until the last held job is answered.
+func (a *agent) wait(d time.Duration) {
+	end := time.Now().Add(d)
+	for time.Now().Before(end) && a.holding() > 0 {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// claim polls for jobs; with drain it only reports what the agent holds.
+func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
+	a.mu.Lock()
+	a.seq++
+	seq := a.seq
 	held := make([]string, 0, len(a.held))
 	for id := range a.held {
 		held = append(held, id)
 	}
 	a.mu.Unlock()
-	body, _ := json.Marshal(map[string]any{"node": a.cfg.Node, "session": a.session, "seq": a.seq, "held": held})
+	body, _ := json.Marshal(map[string]any{"session": a.session, "seq": seq, "held": held, "drain": drain})
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(a.cfg.Control, "/")+"/sites/v1/agent/claim", bytes.NewReader(body))
+	target := strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/claim?node=" + url.QueryEscape(a.cfg.Node)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -206,19 +238,19 @@ func (a *agent) claim(ctx context.Context) ([]job, error) {
 }
 
 // do runs a job and posts its output until the control plane takes the
-// answer. The job stays held until then, so the next claim does not report
-// it lost.
-func (a *agent) do(ctx context.Context, j job) {
+// answer, also while the agent shuts down. The job stays held until then,
+// so no claim reports it lost.
+func (a *agent) do(j job) {
 	started := time.Now()
-	out, failed := a.run(ctx, j.Request)
+	out, failed := a.run(context.Background(), j.Request)
 	slog.Info("job_done", "job", j.ID, "failed", failed, "seconds", time.Since(started).Seconds())
-	for ctx.Err() == nil {
-		if err := a.answer(ctx, j.ID, out, failed); err != nil {
-			slog.Warn("answer_failed", "job", j.ID, "error", err)
-			sleep(ctx, retry)
-			continue
+	for {
+		err := a.answer(context.Background(), j.ID, out, failed)
+		if err == nil {
+			break
 		}
-		break
+		slog.Warn("answer_failed", "job", j.ID, "error", err)
+		time.Sleep(retry)
 	}
 	a.mu.Lock()
 	delete(a.held, j.ID)

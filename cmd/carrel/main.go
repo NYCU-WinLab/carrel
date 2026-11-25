@@ -103,7 +103,7 @@ func main() {
 	}()
 	if cfg.AgentListen != "" {
 		// Node agents (PLAN 8.6): their own TLS listener, never the gateway.
-		agents := &http.Server{Addr: cfg.AgentListen, Handler: platform.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16,
+		agents := &http.Server{Addr: cfg.AgentListen, Handler: platform.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16,
 			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
 		go func() {
 			<-ctx.Done()

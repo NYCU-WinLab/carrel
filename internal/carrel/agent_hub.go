@@ -119,26 +119,11 @@ func (h *AgentHub) Call(ctx context.Context, request D, node, target string) (an
 // all jobs of a process that was replaced. Only a job nobody took is handed
 // out again.
 func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, held []string, wait time.Duration) []AgentJob {
-	holding := map[string]bool{}
-	for _, id := range held {
-		holding[id] = true
-	}
-	h.mu.Lock()
-	n := h.node(node)
-	if session == "" || n.retired[session] || (session == n.session && seq <= n.seq) {
-		h.mu.Unlock()
+	if !h.accept(node, session, seq, held) {
 		return []AgentJob{}
 	}
-	if session != n.session && n.session != "" {
-		n.retired[n.session] = true
-	}
-	n.session, n.seq, n.seen = session, seq, time.Now()
-	for id, job := range n.jobs {
-		if job.taken && (job.session != session || !holding[id]) {
-			delete(n.jobs, id)
-			job.done <- agentOutput{failed: errAgentLostJob}
-		}
-	}
+	h.mu.Lock()
+	n := h.node(node) // accept made it; the map is read under the lock
 	h.mu.Unlock()
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
@@ -174,6 +159,39 @@ func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, 
 			return out
 		}
 	}
+}
+
+// accept records a poll: it is from the current process and newer than its
+// last one, or it is refused. It fails what the agent lost and marks the
+// agent alive.
+func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool {
+	holding := map[string]bool{}
+	for _, id := range held {
+		holding[id] = true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.node(node)
+	if session == "" || n.retired[session] || (session == n.session && seq <= n.seq) {
+		return false
+	}
+	if session != n.session && n.session != "" {
+		n.retired[n.session] = true
+	}
+	n.session, n.seq, n.seen = session, seq, time.Now()
+	for id, job := range n.jobs {
+		if job.taken && (job.session != session || !holding[id]) {
+			delete(n.jobs, id)
+			job.done <- agentOutput{failed: errAgentLostJob}
+		}
+	}
+	return true
+}
+
+// Heartbeat is a poll that takes no job: an agent shutting down sends it
+// while its last jobs finish, so they are not swept as lost.
+func (h *AgentHub) Heartbeat(node, session string, seq uint64, held []string) {
+	h.accept(node, session, seq, held)
 }
 
 // Release puts back jobs a poll took but could not deliver (its answer

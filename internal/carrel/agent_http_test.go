@@ -26,9 +26,7 @@ func TestAgentRoutesCheckTokenAndSource(t *testing.T) {
 		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
 		{Name: "pve2", Target: "carrel02", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
 	}
-	claim := func(node string) string {
-		return `{"node":"` + node + `","session":"s","seq":1,"held":[]}`
-	}
+	body := `{"session":"s","seq":1,"held":[]}`
 	for _, c := range []struct {
 		token, from, node string
 		want              int
@@ -39,11 +37,11 @@ func TestAgentRoutesCheckTokenAndSource(t *testing.T) {
 		{"cat_good", "10.200.0.1", "pve2", 403},
 		{"cat_good", "10.200.0.1", "nobody", 403},
 	} {
-		if code := agentRequest(t, p, "/sites/v1/agent/claim", c.token, c.from, claim(c.node)); code != c.want {
+		if code := agentRequest(t, p, "/sites/v1/agent/claim?node="+c.node, c.token, c.from, body); code != c.want {
 			t.Errorf("%+v: %d", c, code)
 		}
 	}
-	if code := agentRequest(t, p, "/sites/v1/agent/claim", "cat_good", "10.200.0.1", `{"node":"pve1"}`); code != 400 {
+	if code := agentRequest(t, p, "/sites/v1/agent/claim?node=pve1", "cat_good", "10.200.0.1", `{}`); code != 400 {
 		t.Fatalf("no session: %d", code)
 	}
 	if code := agentRequest(t, p, "/sites/v1/agent/jobs/x?node=pve1", "cat_bad", "10.200.0.1", "{}"); code != 403 {
