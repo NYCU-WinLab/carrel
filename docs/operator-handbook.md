@@ -229,6 +229,11 @@ pick a value above the clock, or the jump host refuses Carrel's writes as stale 
 catches up. No control plane restart is needed: the next reconcile sends a generation in range and
 the writes are accepted again. Check with `{"op": "status"}` or the next reconcile result.
 
+Carrel spots one kind of damage itself. A refusal whose held value is more than 24 hours above
+both the clock and the last generation Carrel took is logged as `jump_sync_held_damaged`. Carrel
+does not resend above it, because that would climb to the top of the range. The writes stay
+`stale` or `keys_only` until the file is repaired as above.
+
 ## Telemetry
 
 With `telemetry_url` in `config.json`, the control plane exports to any OTLP/HTTP collector
