@@ -64,7 +64,10 @@ type Platform struct {
 	certificates sync.Mutex
 	registration sync.Mutex
 	delivered    atomic.Value
-	delegated    sync.Mutex
+	// desired holds, per node name, the revision of the last reconcile the
+	// node took (#603); node_list compares what the node reports with it.
+	desired   sync.Map
+	delegated sync.Mutex
 	// delegatedAsks bounds the work Caddy's on-demand asks cause.
 	delegatedAsks askLimiter
 	// proxyProbe replaces the check through Cloudflare in tests.

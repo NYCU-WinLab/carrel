@@ -53,6 +53,11 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			programs := obj(obj(inventory)["programs"])
 			entry = merge(entry, D{"capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
 				"programs": programs, "programs_current": programs["version"] == Version && programs["intact"] == true})
+			// Whether the node holds the last state this control plane sent
+			// it; unknown until this process has reconciled the node (#603).
+			if sent, ok := e.P.desired.Load(n.Name); ok {
+				entry["desired_current"] = obj(obj(inventory)["desired"])["revision"] == sent
+			}
 			nodes = append(nodes, entry)
 		}
 		// A node whose programs came from another release than the control
@@ -63,16 +68,27 @@ func (e *Execution) Admin(tool string, a, w D) D {
 				stale = append(stale, n["name"])
 			}
 		}
+		// A node behind on its desired state: its last reconcile failed, so
+		// a reboot would replay an older one.
+		lagging := []any{}
+		for _, n := range nodes {
+			if n["desired_current"] == false {
+				lagging = append(lagging, n["name"])
+			}
+		}
+		if len(lagging) > 0 {
+			slog.Warn("nodes_lagging", "nodes", lagging)
+		}
 		if len(nodes) == 1 {
-			out := D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale}
-			for _, k := range []string{"agent", "error"} {
+			out := D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale, "lagging_nodes": lagging}
+			for _, k := range []string{"agent", "error", "desired_current"} {
 				if v, ok := nodes[0][k]; ok {
 					out[k] = v
 				}
 			}
 			return out
 		}
-		return D{"inventory": nodes[0]["inventory"], "nodes": nodes, "control_plane": Build(), "stale_nodes": stale}
+		return D{"inventory": nodes[0]["inventory"], "nodes": nodes, "control_plane": Build(), "stale_nodes": stale, "lagging_nodes": lagging}
 	case "machine_migrate":
 		return e.PlanMigration(a)
 	case "node_drain", "node_undrain":

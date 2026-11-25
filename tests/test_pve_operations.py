@@ -437,3 +437,59 @@ def test_reboot_waits_for_separate_pve_start_worker(monkeypatch):
     result = module.power_action({"vmid": 10100, "kind": "vm"}, {"onboot": 1}, "reboot")
     assert result == {"power_state": "running", "changed": True, "boot_changed": True}
     assert calls == [("qm", "reboot", 10100)]
+
+
+def test_reconcile_stores_its_revision_and_a_boot_replay_restores_only_this_node(tmp_path, monkeypatch):
+    """Issue #603: the state is kept with its revision, and the boot unit puts
+    back only what lives in /run, never the cluster-wide SDN or firewalls."""
+    module = script("node-agent.py")
+
+    def local(path):
+        path = Path(path)
+        return path if path.is_relative_to(tmp_path) else tmp_path / str(path).lstrip("/")
+
+    monkeypatch.setattr(module, "Path", local)
+    monkeypatch.setattr(module, "STATE", tmp_path / "state")
+    module.STATE.mkdir()
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "node.json")
+    module.CONFIG.write_text('{"protected_addresses": []}')
+    local("/sys/class/net/t001").mkdir(parents=True)
+    responses = {
+        "/cluster/sdn/vnets": [{"vnet": "t001", "zone": "tenants"}],
+        "/cluster/sdn/vnets/t001/subnets": [{}],
+    }
+    commands = []
+    monkeypatch.setattr(module, "run", lambda *a, **kw: commands.append(a) or "clsact")
+    monkeypatch.setattr(module, "pve_get", pve_api(responses, []))
+    monkeypatch.setattr(module, "api", lambda *a, **kw: None)
+    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: None)
+    monkeypatch.setattr(module, "first_exit_node", lambda: True)
+    monkeypatch.setattr(module, "public_ingress", lambda: None)
+    state = {"tenants": [{"n": 1, "slug": "alice"}], "networks": [], "machines": [], "domains": []}
+    module.reconcile(state, revision="ab" * 32)
+    assert module.desired_info()["revision"] == "ab" * 32
+    assert ("systemctl", "enable", "carrel-replay") in commands
+    assert "node-agent.py replay" in local("/etc/systemd/system/carrel-replay.service").read_text()
+
+    # The boot replay: DHCP and VPN from the stored state, nothing else.
+    replayed = []
+    monkeypatch.setattr(module, "private_dhcp", lambda s, serve=True: replayed.append(("dhcp", s, serve)))
+    monkeypatch.setattr(module, "vpn", lambda s: replayed.append(("vpn", s)) or {"1": {}})
+
+    def refuse(*a, **kw):
+        raise AssertionError("a replay touched cluster-wide state")
+
+    monkeypatch.setattr(module, "api", refuse)
+    monkeypatch.setattr(module, "pve_get", refuse)
+    written = []
+    real_write = module.write
+    monkeypatch.setattr(
+        module, "write", lambda path, *a, **kw: written.append(str(path)) or real_write(path, *a, **kw)
+    )
+    out = module.replay()
+    assert out["replayed"] is True and out["revision"] == "ab" * 32 and out["vpn_tenants"] == ["1"]
+    assert [r[0] for r in replayed] == ["dhcp", "vpn"] and replayed[0][1] == json.loads(json.dumps(state))
+    assert not any("/etc/pve" in p for p in written)
+    # A node that never reconciled has nothing to replay.
+    (module.STATE / "desired.json").unlink()
+    assert module.replay() == {"replayed": False}

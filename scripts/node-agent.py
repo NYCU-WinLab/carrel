@@ -1347,7 +1347,49 @@ def sdn_owed(links_missing, first, wait=30):
     return True
 
 
-def reconcile(state, first=True):
+REPLAY_UNIT = """[Unit]
+Description=Carrel node replay of its last desired state (issue #603)
+After=pve-cluster.service networking.service
+Wants=pve-cluster.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/carrel/node-agent.py replay
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=600
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def replay():
+    """At boot, bring back what lives only in /run: private DHCP namespaces and
+    VPN interfaces, from the state the last reconcile stored.
+
+    Only this node's own part: SDN and guest firewalls are cluster-wide, and a
+    node that was down may hold an older state than the cluster, so it never
+    writes them here. The control plane's next reconcile does the rest."""
+    saved = STATE / "desired.json"
+    if not saved.exists():
+        return {"replayed": False}
+    with (STATE / "node.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = json.loads(saved.read_text())
+        private_dhcp(state, serve=first_exit_node())
+        tunnels = vpn(state)
+    return {"replayed": True, **desired_info(), "vpn_tenants": sorted(tunnels)}
+
+
+def desired_info():
+    """The revision of the stored state and when it was applied (#603)."""
+    path = STATE / "desired-revision.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {"revision": None}
+
+
+def reconcile(state, first=True, revision=None):
     config = json.loads(CONFIG.read_text())
     changed = []
     # One fresh observation per reconciliation. Mutations remain serialized
@@ -1568,6 +1610,12 @@ WantedBy=multi-user.target
     # Every time, so an enable that failed once is retried.
     run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
+    if revision is not None:
+        write(STATE / "desired-revision.json", json.dumps({"revision": revision, "applied_at": int(time.time())}))
+    if write("/etc/systemd/system/carrel-replay.service", REPLAY_UNIT):
+        run("systemctl", "daemon-reload")
+    # Enabled, not started: it runs at the next boot.
+    run("systemctl", "enable", "carrel-replay")
     out = {"changed": changed}
     pruned = guest_sets_prune()
     if pruned:
@@ -3456,7 +3504,10 @@ def main():
                 print(journal.read_text())
                 return
         if op == "reconcile":
-            out = reconcile(req["state"], first=req.get("first", True))
+            revision = req.get("revision")
+            if revision is not None and not re.fullmatch(r"[a-f0-9]{64}", str(revision)):
+                raise ValueError("invalid revision")
+            out = reconcile(req["state"], first=req.get("first", True), revision=revision)
         elif op == "create":
             out = create(req["machine"])
             try:
@@ -3481,6 +3532,7 @@ def main():
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
                 "snapshot_bytes": snapshot_bytes(storage_definition(storage)["pool"]),
                 "programs": programs_info(),
+                "desired": desired_info(),
             }
         elif op == "vmids_present":
             out = vmids_present(req["vmids"])
@@ -3548,6 +3600,9 @@ if __name__ == "__main__":
     # Only the systemd unit passes an argument; the SSH forced command cannot.
     if sys.argv[1:] == ["vip-probe"]:
         vip_probe()
+    if sys.argv[1:] == ["replay"]:
+        print(json.dumps(replay()))
+        sys.exit(0)
     if sys.argv[1:] == ["public-ips"]:
         # At boot, after carrel-ports: the addresses the last reconcile held.
         public_addresses(json.loads(PUBLIC_IPS.read_text()) if PUBLIC_IPS.exists() else {})

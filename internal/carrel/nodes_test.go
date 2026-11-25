@@ -433,3 +433,37 @@ func TestNodeListNamesNodesOnAnotherRelease(t *testing.T) {
 		t.Fatal(encoded(result))
 	}
 }
+
+// A reconcile sends a revision each node stores; node_list names a node that
+// reports another one, as after its reconcile failed (#603).
+func TestNodeListNamesNodesBehindOnTheirDesiredState(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	admin := person("admin", true)
+	if r := p.execution(context.Background()).Admin("node_list", D{}, admin); len(arr(r["lagging_nodes"])) != 0 || dicts(r["nodes"])[0]["desired_current"] != nil {
+		t.Fatal("unknown before a reconcile: ", encoded(r["lagging_nodes"]))
+	}
+	stored := map[string]any{}
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" && target != "node-02" {
+			stored[target] = r["revision"]
+		}
+		out, err := inner(r, target)
+		if r["op"] == "inventory" {
+			out = merge(obj(out), D{"desired": D{"revision": stored[target]}})
+		}
+		return out, err
+	}
+	p.execution(context.Background()).Reconcile()
+	if len(str(stored["node-01"])) != 64 {
+		t.Fatalf("revision %v", stored)
+	}
+	r := p.execution(context.Background()).Admin("node_list", D{}, admin)
+	nodes := dicts(r["nodes"])
+	if nodes[0]["desired_current"] != true || nodes[1]["desired_current"] != false || nodes[2]["desired_current"] != true {
+		t.Fatal(encoded(nodes))
+	}
+	if lag := arr(r["lagging_nodes"]); len(lag) != 1 || lag[0] != "carrel02" {
+		t.Fatal(encoded(r["lagging_nodes"]))
+	}
+}
