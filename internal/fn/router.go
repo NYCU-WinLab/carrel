@@ -329,17 +329,10 @@ func (r *Router) allowed(req *http.Request) bool {
 }
 
 // functionName takes the function from the X-Carrel-Function header the
-// gateway sets, or from the first label of the host name.
+// gateway sets on every route. The host name is not a fallback: a caller
+// that reaches the router without the header picks no function (#280).
 func functionName(req *http.Request) string {
-	if name := req.Header.Get("X-Carrel-Function"); name != "" {
-		return name
-	}
-	host := req.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	label, _, _ := strings.Cut(host, ".")
-	return label
+	return req.Header.Get("X-Carrel-Function")
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -348,6 +341,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	name := functionName(req)
+	if name == "" {
+		http.Error(w, "no such function", http.StatusNotFound)
+		return
+	}
 	// A state can be retired between the lookup and its use, by a deploy or
 	// a removal. Look it up again; a few tries cover any real sequence.
 	for range 4 {
