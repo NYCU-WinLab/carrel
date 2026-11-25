@@ -91,9 +91,16 @@ func (h *AgentHub) Call(ctx context.Context, request D, node, target string) (an
 	case got = <-job.done:
 	case <-ctx.Done():
 		h.mu.Lock()
+		_, waiting := n.jobs[job.id]
 		delete(n.jobs, job.id)
 		h.mu.Unlock()
 		got = agentOutput{failed: ctx.Err()}
+		if !waiting {
+			// An answer or a loss was taken just before the deadline: its
+			// sender removed the job and is about to send. The node did
+			// the work, so the caller hears what it did.
+			got = <-job.done
+		}
 	}
 	return adapterReply(parent, ctx, request, target, started, got.out, got.failed)
 }
@@ -147,6 +154,11 @@ func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, 
 		wake := n.wake
 		h.mu.Unlock()
 		if len(out) > 0 {
+			if ctx.Err() != nil {
+				// The poll is gone: nobody will receive these.
+				h.Release(node, session, out)
+				return []AgentJob{}
+			}
 			return out
 		}
 		select {
@@ -157,6 +169,22 @@ func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, 
 			return out
 		}
 	}
+}
+
+// Release puts back jobs a poll took but could not deliver (its answer
+// failed to reach the agent), so the next poll hands them out instead of
+// failing them as lost. They never ran.
+func (h *AgentHub) Release(node, session string, jobs []AgentJob) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.node(node)
+	for _, j := range jobs {
+		if job := n.jobs[j.ID]; job != nil && job.taken && job.session == session {
+			job.taken, job.session, job.seq = false, "", 0
+		}
+	}
+	close(n.wake)
+	n.wake = make(chan struct{})
 }
 
 // Complete takes a job's output: what node-agent.py printed, and whether it

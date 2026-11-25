@@ -250,3 +250,24 @@ func TestGoldenThroughTheAgent(t *testing.T) {
 		t.Fatalf("records differ in length: %d and %d lines", len(a), len(b))
 	}
 }
+
+// A poll whose answer never reached the agent gives its jobs back: the next
+// poll takes them, and they are not failed as lost.
+func TestAgentHubReleasesUndeliveredJobs(t *testing.T) {
+	hub := NewAgentHub()
+	results := make(chan error, 1)
+	go func() {
+		_, err := hub.Call(context.Background(), D{"op": "status"}, "pve1", "pve1")
+		results <- err
+	}()
+	lost := hub.Claim(context.Background(), "pve1", "a", 1, nil, 5*time.Second)
+	hub.Release("pve1", "a", lost)
+	again := hub.Claim(context.Background(), "pve1", "a", 2, nil, 5*time.Second)
+	if len(again) != 1 || again[0].ID != lost[0].ID {
+		t.Fatalf("released job not handed out again: %v", again)
+	}
+	hub.Complete("pve1", again[0].ID, []byte(`{"ok":true,"result":{}}`), false)
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
+}
