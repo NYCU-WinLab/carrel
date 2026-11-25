@@ -1,9 +1,11 @@
 package carrel
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func agentRequest(t *testing.T, p *Platform, path, token, from, body string) int {
@@ -80,5 +82,45 @@ func TestAgentTransportConfig(t *testing.T) {
 		if err := base(c.node, c.listen).Validate(); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: %v", c, err)
 		}
+	}
+}
+
+// An agent on a protocol this control plane no longer serves is refused with
+// the release to install, before the hub sees it; a served one is recorded
+// for node_list (#561).
+func TestAgentProtocolIsChecked(t *testing.T) {
+	p, _, _ := originFixture(t)
+	p.Config.Nodes = []NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
+	}
+	claim := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "https://10.200.0.3:8443/sites/v1/agent/claim?node=pve1", strings.NewReader(body))
+		req.RemoteAddr = "10.200.0.1:40000"
+		req.Header.Set("Authorization", "Bearer cat_good")
+		w := httptest.NewRecorder()
+		p.AgentHandler().ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+	for _, old := range []string{`"protocol":"v0",`, ``} {
+		code, body := claim(`{` + old + `"session":"s","seq":1,"held":[],"drain":true}`)
+		if code != 426 || !strings.Contains(body, "protocol_unsupported") || !strings.Contains(body, "release "+Version) {
+			t.Fatalf("%q: %d %s", old, code, body)
+		}
+	}
+	if s := p.Hub.Status("pve1", time.Now()); s["connected"] != false {
+		t.Fatalf("a refused agent was recorded: %v", s)
+	}
+	for i, protocol := range agentProtocols {
+		code, body := claim(fmt.Sprintf(`{"protocol":%q,"release":"0.11.0","session":"s","seq":%d,"held":[],"drain":true}`, protocol, i+1))
+		if code != 200 {
+			t.Fatalf("%s: %d %s", protocol, code, body)
+		}
+	}
+	s := p.Hub.Status("pve1", time.Now())
+	if s["connected"] != true || s["protocol"] != AgentProtocol || s["release"] != "0.11.0" {
+		t.Fatalf("status %v", s)
+	}
+	if s := p.Hub.Status("pve1", time.Now().Add(agentSilence)); s["connected"] != false {
+		t.Fatalf("a silent agent still connected: %v", s)
 	}
 }

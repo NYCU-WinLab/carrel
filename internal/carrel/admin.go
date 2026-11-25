@@ -26,8 +26,14 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			inventory := e.Call(D{"op": "inventory"}, n.Target)
 			reservations, snapshots := e.nodeLoad(n, nil)
 			programs := obj(obj(inventory)["programs"])
-			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
-				"programs": programs, "programs_current": programs["version"] == Version && programs["intact"] == true})
+			entry := D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
+				"programs": programs, "programs_current": programs["version"] == Version && programs["intact"] == true}
+			if e.P.onAgent(n.Name) {
+				// The agent's own report: a node left on another protocol or
+				// release shows here (#561).
+				entry["agent"] = e.P.Hub.Status(n.Name, time.Now())
+			}
+			nodes = append(nodes, entry)
 		}
 		// A node whose programs came from another release than the control
 		// plane is listed, so a half finished upgrade or rollback shows (#555).

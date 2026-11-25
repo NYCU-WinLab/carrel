@@ -32,6 +32,8 @@ type agentNode struct {
 	retired map[string]bool
 	// seen is when the node's agent last polled.
 	seen time.Time
+	// protocol and release are what the agent reported in its latest poll.
+	protocol, release string
 	// wake is closed and replaced when a job is queued, so a waiting claim
 	// answers at once instead of on its next tick.
 	wake chan struct{}
@@ -186,6 +188,27 @@ func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool 
 		}
 	}
 	return true
+}
+
+// Hello records the protocol and release a node's agent reported.
+func (h *AgentHub) Hello(node, protocol, release string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.node(node)
+	n.protocol, n.release = protocol, release
+}
+
+// Status is what node_list shows for a node on the agent transport: whether
+// its agent polls, and the protocol and release it reported.
+func (h *AgentHub) Status(node string, now time.Time) D {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.nodes[node]
+	if n == nil || n.seen.IsZero() {
+		return D{"connected": false}
+	}
+	return D{"connected": now.Sub(n.seen) < agentSilence, "protocol": n.protocol, "release": n.release,
+		"last_poll": n.seen.UTC().Format(time.RFC3339)}
 }
 
 // Heartbeat is a poll that takes no job: an agent shutting down sends it

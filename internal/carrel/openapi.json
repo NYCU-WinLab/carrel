@@ -1135,12 +1135,16 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "node",
+                  "protocol",
                   "session",
                   "seq"
                 ],
                 "properties": {
-                  "node": {
+                  "protocol": {
+                    "type": "string",
+                    "description": "Agent protocol, such as v1. Unserved protocols get 426 with the release to install."
+                  },
+                  "release": {
                     "type": "string"
                   },
                   "session": {
@@ -1154,6 +1158,9 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "drain": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -1167,7 +1174,17 @@
           "default": {
             "$ref": "#/components/responses/Error"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "node",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/sites/v1/agent/jobs/{id}": {

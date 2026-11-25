@@ -251,3 +251,31 @@ func TestAgentAnswersAJobThatEndsAfterStop(t *testing.T) {
 		t.Fatal("the agent did not exit after its last answer")
 	}
 }
+
+// The agent reports its protocol and the release beside node-agent.py, and
+// a refusal's message reaches its log (#561).
+func TestAgentReportsItsProtocolAndRelease(t *testing.T) {
+	dir := t.TempDir()
+	var got map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(426)
+		_, _ = w.Write([]byte(`{"ok":false,"error":{"code":"protocol_unsupported","message":"Install carrel-agent from release 9.9.9."}}`))
+	}))
+	defer server.Close()
+	ca := writeFile(t, dir, "ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	writeFile(t, dir, "release.json", `{"version":"0.12.0","sha256":{}}`)
+	conf, _ := json.Marshal(config{Control: server.URL, CAFile: ca, TokenFile: writeFile(t, dir, "token", "x"), Node: "pve1", NodeAgent: filepath.Join(dir, "node-agent.py")})
+	a, err := load(writeFile(t, dir, "agent.json", string(conf)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.session = "s1"
+	_, err = a.claim(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "release 9.9.9") {
+		t.Fatalf("refusal: %v", err)
+	}
+	if got["protocol"] != protocol || got["release"] != "0.12.0" {
+		t.Fatalf("hello %v", got)
+	}
+}

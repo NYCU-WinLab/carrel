@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,6 +49,9 @@ const (
 	// maxOutput matches the control plane's cap on an adapter's reply.
 	maxOutput = 32 << 20
 	retry     = 5 * time.Second
+	// protocol is what this agent speaks; the control plane serves the
+	// current and the previous one (#561).
+	protocol = "v1"
 )
 
 type job struct {
@@ -61,6 +65,9 @@ type agent struct {
 	client  *http.Client
 	session string
 	seq     uint64
+	// release is the version in release.json beside node-agent.py: the
+	// release these node programs came from, empty when unknown.
+	release string
 	mu      sync.Mutex
 	// held are the jobs taken and not yet acknowledged: running, or
 	// answered with the POST not yet accepted.
@@ -110,6 +117,12 @@ func load(path string) (*agent, error) {
 			// A redirect would carry the token elsewhere: never follow one.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	a.run = a.nodeAgent
+	var record struct {
+		Version string `json:"version"`
+	}
+	if content, err := os.ReadFile(filepath.Join(filepath.Dir(c.NodeAgent), "release.json")); err == nil && json.Unmarshal(content, &record) == nil {
+		a.release = record.Version
+	}
 	return a, nil
 }
 
@@ -217,7 +230,7 @@ func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
 		held = append(held, id)
 	}
 	a.mu.Unlock()
-	body, _ := json.Marshal(map[string]any{"session": a.session, "seq": seq, "held": held, "drain": drain})
+	body, _ := json.Marshal(map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain})
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	target := strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/claim?node=" + url.QueryEscape(a.cfg.Node)
@@ -233,7 +246,15 @@ func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("claim answered %s", resp.Status)
+		// The control plane's message says what to do, such as which release
+		// to install when it no longer serves this protocol.
+		var refusal struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&refusal)
+		return nil, fmt.Errorf("claim answered %s: %s", resp.Status, refusal.Error.Message)
 	}
 	var answer struct {
 		Jobs []job `json:"jobs"`
