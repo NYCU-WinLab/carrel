@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
@@ -287,4 +288,75 @@ func (p *Platform) FunctionEnvFor(token, source, function, version string) D {
 	}
 	fail("not_found", "No such version on this host")
 	return nil
+}
+
+// sealedKey says which configured key opens a sealed value: "current", the
+// index of an old key as "old:0", or "none".
+func (p *Platform) sealedKey(aad, sealed string) string {
+	raw, err := base64.StdEncoding.DecodeString(sealed)
+	keys := append([]string{p.Config.FunctionEnvKey}, p.Config.FunctionEnvOldKeys...)
+	for i, k := range keys {
+		aead := envAEAD(k)
+		if aead == nil || err != nil || len(raw) < aead.NonceSize() {
+			continue
+		}
+		if _, e := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], []byte(aad)); e == nil {
+			if i == 0 {
+				return "current"
+			}
+			return "old:" + strconv.Itoa(i-1)
+		}
+	}
+	return "none"
+}
+
+// ResealFunctionValues counts every stored sealed value per key: version
+// environments and registry credentials. Unless dry, it seals again with
+// function_env_key each value an old key opens, so that old key can be
+// dropped once its count is zero. A value no key opens is counted as
+// "none" and left alone.
+func (p *Platform) ResealFunctionValues(dry bool) (result D, err error) {
+	if problem := attempt(func() { result = p.resealFunctionValues(dry) }); problem != nil {
+		return nil, fmt.Errorf("%v", problem)
+	}
+	return result, nil
+}
+
+func (p *Platform) resealFunctionValues(dry bool) D {
+	p.writer.Lock()
+	defer p.writer.Unlock()
+	counts := D{}
+	resealed := 0
+	reseal := func(s *Store, kind string, id any, n int, rec D, field, aad string) {
+		sealed := str(rec[field])
+		if sealed == "" {
+			return
+		}
+		which := p.sealedKey(aad, sealed)
+		counts[which] = integer(counts[which]) + 1
+		if dry || !strings.HasPrefix(which, "old:") {
+			return
+		}
+		var plain any
+		p.openValue(aad, sealed, &plain)
+		rec[field] = p.sealValue(aad, plain)
+		s.Put(kind, id, n, rec)
+		resealed++
+	}
+	p.functionEnvAEAD()
+	p.Store.Transaction(func(s *Store) {
+		tenants := map[string]int{}
+		for _, f := range s.Objects("functions") {
+			tenants[str(f["id"])] = integer(f["tenant_n"])
+			reseal(s, "functions", f["id"], integer(f["tenant_n"]), f, "registry_auth", str(f["id"])+"#registry")
+		}
+		for _, v := range s.Objects("function_versions") {
+			fid := str(v["function"])
+			if n, ok := tenants[fid]; ok {
+				reseal(s, "function_versions", v["id"], n, v, "env", fid)
+			}
+		}
+	})
+	slog.Info("function_values_resealed", "dry_run", dry, "counts", counts, "resealed", resealed)
+	return D{"dry_run": dry, "counts": counts, "resealed": resealed}
 }

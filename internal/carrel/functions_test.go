@@ -639,3 +639,34 @@ func TestFunctionRegistryCredentialsGoToTheirRegistryOnly(t *testing.T) {
 		t.Fatalf("auth after clear: %d", code)
 	}
 }
+
+func TestResealFunctionValuesMovesStoredValuesToTheCurrentKey(t *testing.T) {
+	p, _ := functionFixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	p.Store.Put("functions", "1-hook", 1, D{"id": "1-hook", "tenant_n": 1, "registry_auth": p.sealValue("1-hook#registry", D{"registry": "r", "username": "u", "password": "p"})})
+	p.Store.Put("function_versions", "1-hook-1", 1, D{"id": "1-hook-1", "function": "1-hook", "env": p.sealFunctionEnv("1-hook", []string{"A=1"})})
+	p.Store.Put("function_versions", "1-hook-2", 1, D{"id": "1-hook-2", "function": "1-hook"})
+	fresh := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	p.Config.FunctionEnvKey, p.Config.FunctionEnvOldKeys = fresh, []string{testEnvKey}
+	dry, err := p.ResealFunctionValues(true)
+	if err != nil || integer(obj(dry["counts"])["old:0"]) != 2 || p.sealedKey("1-hook", str(p.Store.Get("function_versions", "1-hook-1")["env"])) != "old:0" {
+		t.Fatalf("dry run %v %v", dry, err)
+	}
+	done, err := p.ResealFunctionValues(false)
+	if err != nil || integer(done["resealed"]) != 2 {
+		t.Fatalf("reseal %v %v", done, err)
+	}
+	p.Config.FunctionEnvOldKeys = nil
+	if got := p.openFunctionEnv("1-hook", str(p.Store.Get("function_versions", "1-hook-1")["env"])); len(got) != 1 || got[0] != "A=1" {
+		t.Fatalf("environment after reseal %v", got)
+	}
+	var auth D
+	p.openValue("1-hook#registry", str(p.Store.Get("functions", "1-hook")["registry_auth"]), &auth)
+	if auth["password"] != "p" {
+		t.Fatalf("registry credentials after reseal %v", auth)
+	}
+	again, _ := p.ResealFunctionValues(true)
+	if integer(obj(again["counts"])["current"]) != 2 {
+		t.Fatalf("counts after reseal %v", again)
+	}
+}
