@@ -292,6 +292,12 @@ func TestGoldenEdges(t *testing.T) { runGolden(t, "edges.txt", edgeScenario, fal
 func TestGoldenDomains(t *testing.T) { runGolden(t, "domains.txt", domainScenario, false) }
 
 func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool bool) {
+	checkGolden(t, file, goldenText(t, scenario, everyTool, nil))
+}
+
+// goldenText runs a scenario and returns its record. wrap, when set, puts a
+// transport between the platform and the recorder.
+func goldenText(t *testing.T, scenario func(*goldenRun), everyTool bool, wrap func(*Platform, *recorder) Backend) string {
 	saved := randomSource
 	randomSource = &seededReader{}
 	t.Cleanup(func() { randomSource = saved })
@@ -307,6 +313,9 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 	p.certificatePrepare = func(D) D { return D{"state": "ready"} }
 	rec := &recorder{fakeBackend: b, p: p}
 	p.Backend = rec
+	if wrap != nil {
+		p.Backend = wrap(p, rec)
+	}
 	rec.startGuests(t)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}
@@ -317,7 +326,7 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 			t.Errorf("tool %s has no golden step", tool["name"])
 		}
 	}
-	checkGolden(t, file, strings.Join(g.lines, "\n")+"\n")
+	return strings.Join(g.lines, "\n") + "\n"
 }
 
 // checkGolden compares got with testdata/golden/<file>, or rewrites it
