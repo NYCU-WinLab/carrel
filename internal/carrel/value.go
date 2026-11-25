@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const Version = "0.10.0"
+const Version = "0.10.0" // x-release-please-version
 
 type D = map[string]any
 
