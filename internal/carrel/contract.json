@@ -5229,6 +5229,47 @@
         "destructiveHint": false,
         "openWorldHint": false
       }
+    },
+    {
+      "name": "operation_cancel",
+      "description": "Cancel an operation that has changed nothing yet: one still queued, or one waiting its turn behind another job. It ends failed with error code cancelled and frees its queue place; operation_retry runs it again. Anything that has started changing resources answers conflict with its state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Check that the operation can be cancelled without cancelling it."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary",
+            "description": "summary (default) or full."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
     }
   ],
   "admin_tools": [
@@ -5319,7 +5360,8 @@
     "function_rollback",
     "function_remove",
     "runner_add",
-    "runner_remove"
+    "runner_remove",
+    "operation_cancel"
   ],
   "async_tools": [
     "deployment_apply",
@@ -5478,6 +5520,7 @@
       "deployment_apply",
       "operation_get",
       "operation_retry",
+      "operation_cancel",
       "request_list"
     ],
     "machines": [

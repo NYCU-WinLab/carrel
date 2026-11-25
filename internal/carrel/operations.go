@@ -186,6 +186,38 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	return D{"operation": publicOperation(op)}
 }
 
+// cancelPhases are the waits a job reaches before it changes anything: each
+// one is raised ahead of the tool's first write (#584).
+var cancelPhases = []string{"waiting_for_priority_operation", "waiting_for_machine_operation", "waiting_for_import_slot", "waiting_for_migration_slot"}
+
+// Cancel ends an operation that has not changed anything yet: one never
+// started, or one waiting its turn. It runs under the writer, so no worker
+// holds the job, and a worker that picks it up later finds it finished.
+func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
+	op := o.Find(t, id)
+	reserved := false
+	for _, kind := range []string{"machines", "networks", "snapshots", "ports", "domains", "peers", "vips", "vpn_clients"} {
+		for _, v := range o.p.Store.Objects(kind, integer(op["tenant_n"])) {
+			reserved = reserved || v["operation_id"] == op["id"]
+		}
+	}
+	fresh := op["state"] == "queued" && integer(op["attempts"]) == 0
+	waiting := op["state"] == "waiting" && contains(cancelPhases, op["phase"]) && op["resource_changes"] == false && op["prepared_result"] == nil && !reserved
+	if !fresh && !waiting {
+		fail("conflict", fmt.Sprintf("Only an operation that has changed nothing can be cancelled; this one is %s (%s)", op["state"], op["phase"]), D{"state": op["state"], "phase": op["phase"]})
+	}
+	if dry {
+		return D{"operation": publicOperation(op)}
+	}
+	op = merge(op, D{"state": "failed", "phase": "cancelled", "cancelled_by": w["sub"],
+		"error": D{"code": "cancelled", "message": "Cancelled before it changed anything", "recovery": "retry"}})
+	for _, k := range []string{"ready_at", "waiting_for"} {
+		delete(op, k)
+	}
+	o.Save(op)
+	return D{"operation": publicOperation(op)}
+}
+
 // The FIFO writer applies durable changes. Guest readiness runs outside this writer.
 // A restarted job resumes from its persisted result, without repeating PVE actions.
 func (o *Operations) apply(id string) {
