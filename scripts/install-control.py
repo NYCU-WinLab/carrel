@@ -276,7 +276,9 @@ def host(stage, version):
     for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], capture_output=True, check=False)
     before = {"node-agent.py": LIB / "node-agent.py", "templates.json": TEMPLATES,
-              **{h: LIB / h for h in HELPERS}}
+              "release.json": LIB / "release.json", **{h: LIB / h for h in HELPERS}}
+    # Read before anything can fail: only a record this run created may be removed.
+    had_release = (LIB / "release.json").exists()
     configured = activated = False
     try:
         ct_command("preflight")
@@ -291,6 +293,11 @@ def host(stage, version):
         for name, mode in {**HELPERS, "node-agent.py": "755"}.items():
             run("install", "-m", mode, stage / name, str(LIB / name) + ".next")
             os.replace(str(LIB / name) + ".next", LIB / name)
+        # The release the node programs came from, which node-agent reports in
+        # its inventory so node_list shows a node left on another version (#555).
+        release = stage / "release.json"
+        release.write_text(json.dumps({"version": version, "sha256": json.loads((stage / "hashes.json").read_text())}) + "\n")
+        run("install", "-m", "644", release, LIB / "release.json")
         # Same programs on every site node; CT 100 must reach each adapter.
         configured = True
         run("python3", stage / "configure-nodes.py")
@@ -321,6 +328,9 @@ def host(stage, version):
             saved = stage / ("before-" + name)
             if saved.exists():
                 shutil.copy2(saved, path)
+            elif name == "release.json" and not had_release and path.exists():
+                # An install before #555 had no release record: none is truer than the new one.
+                path.unlink()
         # The restored binary may send no "gen", which jump-sync.py refuses once a
         # generation is recorded; carrel is stopped, so no write races this.
         if (configured or activated) and jump_site():
