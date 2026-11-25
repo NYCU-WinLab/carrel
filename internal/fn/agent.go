@@ -105,7 +105,16 @@ type Agent struct {
 	// failed holds the error of a version that did not build, so the agent
 	// does not build it again while the control plane still names it.
 	failed map[string]string
+	// retries counts a version's failed builds, and retryAt holds when it
+	// may build again: a registry hiccup or a full disk must not fail a
+	// version for good.
+	retries map[string]int
+	retryAt map[string]time.Time
 }
+
+// buildRetryPauses are the pauses before building a version again after a
+// failed build; the build after the last pause that fails, fails the version.
+var buildRetryPauses = []time.Duration{time.Minute, 5 * time.Minute}
 
 const (
 	// agentPoll is how long one request for the state may wait for a change.
@@ -361,9 +370,14 @@ func (a *Agent) apply(ctx context.Context, desired Desired) {
 	}
 	// Forget the failures the control plane no longer asks for.
 	for key := range a.failed {
-		id, version, _ := strings.Cut(key, "/")
-		if !wanted[id][version] {
+		if id, version, _ := strings.Cut(key, "/"); !wanted[id][version] {
 			delete(a.failed, key)
+		}
+	}
+	for key := range a.retries {
+		if id, version, _ := strings.Cut(key, "/"); !wanted[id][version] {
+			delete(a.retries, key)
+			delete(a.retryAt, key)
 		}
 	}
 	if ctx.Err() == nil {
@@ -385,7 +399,7 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 		key := f.ID + "/" + v.Version
 		// The live version stays, even one built before versions kept
 		// their own function.json.
-		if !keep[v.Version] || Built(a.Root, f.ID, v.Version) || a.failed[key] != "" || v.Version == liveVersion(a.Root, f.ID) {
+		if !keep[v.Version] || Built(a.Root, f.ID, v.Version) || a.failed[key] != "" || v.Version == liveVersion(a.Root, f.ID) || time.Now().Before(a.retryAt[key]) {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -429,10 +443,20 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 			if ctx.Err() != nil {
 				return // a stop is not a failed build
 			}
+			if n := a.retries[key]; n < len(buildRetryPauses) {
+				if a.retries == nil {
+					a.retries, a.retryAt = map[string]int{}, map[string]time.Time{}
+				}
+				a.retries[key], a.retryAt[key] = n+1, time.Now().Add(buildRetryPauses[n])
+				slog.Warn("version not built, trying again", "function", f.ID, "version", v.Version, "error", err, "after_seconds", buildRetryPauses[n].Seconds())
+				continue
+			}
 			a.failed[key] = clip(err.Error())
 			slog.Warn("version not built", "function", f.ID, "version", v.Version, "error", err)
 			continue
 		}
+		delete(a.retries, key)
+		delete(a.retryAt, key)
 		slog.Info("version built", "function", f.ID, "version", v.Version, "seconds", time.Since(start).Seconds())
 	}
 	if f.Current != "" && keep[f.Current] && liveVersion(a.Root, f.ID) != f.Current && Built(a.Root, f.ID, f.Current) {
