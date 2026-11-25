@@ -990,3 +990,28 @@ func TestReconcileAfterAFailedDeleteReconcileLeavesNothingForTheOldMachine(t *te
 		t.Fatalf("expected a node and a gateway request, saw %d", sent)
 	}
 }
+
+// A freeze whose VM is gone but whose follow-up reconcile fails must not
+// leave the machine record in "deleting": the sweep skips a record beside a
+// frozen row, so it would hold its reservation until a retry (#298).
+func TestFreezeRemovesTheRecordWhenReconcileFails(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	deleted := false
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "action" && r["action"] == "delete" {
+			deleted = true
+		}
+		if r["op"] == "reconcile" && deleted {
+			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "node unreachable", "recovery": "retry_infrastructure"}}}, true
+		}
+		return nil, nil, false
+	})
+	r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box"})
+	assertOK(t, r)
+	if op := obj(r["operation"]); op["state"] != "succeeded" {
+		t.Fatalf("a tolerated reconcile failure failed the freeze: %s", encoded(r))
+	}
+	if !deleted || p.Store.Get("machines", "10100") != nil || p.Store.Get("frozen", "10100") == nil {
+		t.Fatal("the machine record stayed, or the frozen row is missing")
+	}
+}

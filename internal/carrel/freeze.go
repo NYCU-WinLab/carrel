@@ -1,7 +1,9 @@
 package carrel
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 )
@@ -342,11 +344,27 @@ func (e *Execution) FinishFreeze(t D) D {
 	}
 	e.Call(D{"op": "action", "machine": m, "action": "delete", "confirm": m["name"]})
 	e.P.invalidateInventory()
-	e.Reconcile()
+	// As for a delete: the VM is gone, so a reconcile that fails (a node or
+	// the gateway not answering) must not leave the record in "deleting",
+	// where the sweep skips it beside its frozen row (#298).
+	problem := attempt(func() { e.Reconcile() })
+	if problem != nil {
+		level := slog.LevelError
+		if _, ok := problem.(Failure); ok {
+			level = slog.LevelWarn
+		}
+		slog.Log(context.Background(), level, "freeze_reconcile_failed", "vmid", m["vmid"], "error", describe(problem))
+	}
 	e.Transaction(func(tx *Execution) {
 		tx.S.Remove("guest_reports", m["vmid"])
 		tx.S.Remove("machines", m["vmid"])
 	})
+	if _, ok := problem.(Failure); problem != nil && !ok {
+		if e.Op != nil {
+			e.Op["resource_changes"] = true
+		}
+		fail("internal", "The machine was frozen, but the follow-up reconcile hit an internal error; the next reconcile pass will catch up", D{"recovery": "contact_administrator"})
+	}
 	return D{"machine": e.PublicFrozen(e.S.Get("frozen", str(m["vmid"]))), "dry_run": false, "quota_after": e.Quota(t)}
 }
 
