@@ -1,8 +1,8 @@
 package carrel
 
 import (
-	"errors"
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
