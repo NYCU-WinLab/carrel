@@ -147,6 +147,7 @@ class Node:
 
     def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False):
         self.calls, self.fail_on = [], fail_on
+        self.agent_stdout, self.journal = '{"agent": "absent"}', ""
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
         for name in ("node-agent.py", "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py"):
@@ -170,7 +171,14 @@ class Node:
     def subprocess_run(self, args, clear_fails):
         self.calls.append(tuple(args))
         failed = clear_fails and tuple(args[:5]) == ("pct", "exec", "102", "--", "rm")
-        return SimpleNamespace(returncode=1 if failed else 0)
+        stdout = (
+            self.agent_stdout
+            if "--agent-service" in args
+            else self.journal
+            if args[0] == "journalctl"
+            else ""
+        )
+        return SimpleNamespace(returncode=1 if failed else 0, stdout=stdout)
 
     def run(self, *args, **kwargs):
         args = tuple(str(a) for a in args)
@@ -435,3 +443,15 @@ def test_the_agent_starts_or_stops_only_after_the_health_check(tmp_path, monkeyp
     monkeypatch.setattr(module.subprocess, "run", lambda args, **kw: record(args, False))
     module.host(staged(tmp_path), "1.0.0")
     assert order == ["health", "agent"]
+
+
+def test_a_started_agent_must_reach_the_control_plane(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    node.agent_stdout = '{"agent": "started"}'
+    with pytest.raises(SystemExit, match="did not reach the control plane"):
+        module.host(staged(tmp_path), "1.0.0")
+    node.journal = '{"level":"INFO","msg":"agent_connected","node":"carrel01"}'
+    (tmp_path / "again").mkdir()
+    module.host(staged(tmp_path / "again"), "1.0.0")

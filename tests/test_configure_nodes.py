@@ -520,3 +520,15 @@ def test_the_agent_service_follows_the_site_file_without_blocking(tmp_path, monk
     module.SITE.write_text(json.dumps(SITE))
     assert module.agent_service() == "stopped"
     assert calls == [("systemctl", "disable", "--now", "--no-block", "carrel-agent.service")]
+
+
+def test_a_token_rotates_only_when_asked_and_the_old_one_stays_until_then(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    monkeypatch.setattr(module, "AGENT_TOKEN", tmp_path / "agent-token")
+    monkeypatch.setattr(module, "AGENT_ROTATE", tmp_path / "agent-token.rotate")
+    first = module.agent_token()
+    assert module.agent_token() == first
+    (tmp_path / "agent-token.rotate").touch()
+    second = module.agent_token()
+    assert second != first and not (tmp_path / "agent-token.rotate").exists()
+    assert (tmp_path / "agent-token").stat().st_mode & 0o777 == 0o600

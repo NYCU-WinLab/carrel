@@ -61,6 +61,9 @@ BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
 # gets the listener's certificate and key, the node the CA to pin and its token.
 AGENT_CA = Path("/etc/carrel/agent-ca")
 AGENT_TOKEN = Path("/etc/carrel/agent-token")
+# An operator asks for a new token by creating this file. The old token stays
+# until the new one is written, so a failed deploy puts the old one back.
+AGENT_ROTATE = Path("/etc/carrel/agent-token.rotate")
 AGENT_JSON = Path("/etc/carrel/agent.json")
 AGENT_UNIT = Path("/etc/systemd/system/carrel-agent.service")
 AGENT_LISTEN = "10.200.0.3:8443"
@@ -179,8 +182,9 @@ def agent_nodes(site, nodes):
 
 def agent_token():
     """This node's agent token: made once, kept across runs. Returns its digest."""
-    if not AGENT_TOKEN.exists() or not AGENT_TOKEN.read_text().strip():
+    if AGENT_ROTATE.exists() or not AGENT_TOKEN.exists() or not AGENT_TOKEN.read_text().strip():
         replace_file(AGENT_TOKEN, secrets.token_urlsafe(32), 0o600)
+        AGENT_ROTATE.unlink(missing_ok=True)
     return hashlib.sha256(AGENT_TOKEN.read_text().strip().encode()).hexdigest()
 
 

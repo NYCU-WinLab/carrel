@@ -80,8 +80,9 @@ def main():
         artifacts, scripts = args.artifacts.resolve(), ROOT / "scripts"
         revision = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True).stdout.strip()
     sources = [artifacts / name for name in BINARIES] + [scripts / name for name in SCRIPTS]
-    sources += [artifacts / name for name in OPTIONAL if (artifacts / name).is_file()]
-    for path in sources[: len(BINARIES)]:
+    # A development build is this checkout, which has the agent.
+    sources += [artifacts / name for name in OPTIONAL if args.artifacts or (artifacts / name).is_file()]
+    for path in [p for p in sources if p.parent == artifacts]:
         if not path.is_file():
             raise SystemExit("Missing binary: " + path.name)
     if args.templates:

@@ -258,6 +258,17 @@ def healthy(version, host_name):
     raise SystemExit("Health check failed: the new version did not answer")
 
 
+def agent_connected(since, wait=60):
+    """True once the agent logs a claim the control plane took, after since."""
+    for _ in range(wait):
+        log = subprocess.run(["journalctl", "-u", "carrel-agent", "--since", f"@{since}", "-o", "cat"],
+                             capture_output=True, text=True, check=False)
+        if '"agent_connected"' in (log.stdout or ""):
+            return True
+        time.sleep(1)
+    return False
+
+
 def host(stage, version):
     stamp = stage.name.removeprefix("go-upgrade-")
     for name, expected in json.loads((stage / "hashes.json").read_text()).items():
@@ -336,8 +347,13 @@ def host(stage, version):
                 if saved.exists():
                     # Beside the target, then renamed: a running carrel-agent
                     # keeps its file busy (ETXTBSY) against a copy in place.
-                    shutil.copy2(saved, str(path) + ".restore")
-                    os.replace(str(path) + ".restore", path)
+                    # Created 0600, so the token is never readable on the way.
+                    pending = Path(str(path) + ".restore")
+                    pending.unlink(missing_ok=True)
+                    with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                        stream.write(saved.read_bytes())
+                    shutil.copystat(saved, pending)
+                    os.replace(pending, path)
                 elif name == "release.json" and not had_release and path.exists():
                     # An install before #555 had no release record: none is truer than the new one.
                     path.unlink()
@@ -359,10 +375,16 @@ def host(stage, version):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
     # The node's agent starts or stops only now, against a healthy control
     # plane: a failed upgrade above never touched it.
-    agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False)
+    since = int(time.time())
+    agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False,
+                           capture_output=True, text=True)
     if agent.returncode:
-        print("WARNING: carrel-agent was not started or stopped; run "
-              f"python3 {stage}/configure-nodes.py --agent-service on this node", file=sys.stderr)
+        raise SystemExit("carrel-agent was not started or stopped; run "
+                         f"python3 {stage}/configure-nodes.py --agent-service on this node")
+    if '"started"' in (agent.stdout or "") and not agent_connected(since):
+        # The control plane is up, but this node's jobs wait for its agent.
+        raise SystemExit("carrel-agent did not reach the control plane within 60 s: see journalctl -u "
+                         "carrel-agent. To go back to SSH, remove this node from agent_nodes and deploy again.")
     for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
         shutil.rmtree(old)
 
