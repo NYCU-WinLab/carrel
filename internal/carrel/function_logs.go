@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -171,7 +172,10 @@ func (e *Execution) functionLogs(f D, a D) D {
 		fail("unavailable", "The function's host did not answer; try again in a minute", D{"retryable": true})
 	}
 	if msg := str(answer["error"]); msg != "" {
-		fail("unavailable", "The function's host could not read the log", D{"detail": truncate(msg, 300)})
+		// The host's error can name paths on the host: it goes to the log,
+		// not to the member.
+		slog.Warn("function_log_read_failed", "function", f["id"], "host", host.Name, "detail", truncate(msg, 300))
+		fail("unavailable", "The function's host could not read the log")
 	}
 	text := str(answer["text"])
 	if len(text) > limit {
