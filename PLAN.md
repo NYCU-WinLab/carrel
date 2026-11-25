@@ -1650,7 +1650,8 @@ guests.
 A host that cannot meet 8.3 is a separate site with its own cluster. Sites never share a corosync
 ring. One control plane manages every site, and each site runs a site agent: it connects out to
 the control plane, pulls the desired state, applies it to its own Proxmox and reports the actual
-state. With the control plane away, a site keeps running what it last received. Sites come in two
+state. The site agent is one process per node (8.6), because each node applies its own firewall
+and units. With the control plane away, a site keeps running what it last received. Sites come in two
 kinds:
 
 | Kind | Run by | Trust | Who places machines there |
@@ -1692,6 +1693,55 @@ Coupling counts how many core files name the feature (grep of `internal/carrel`,
 coupling moves first. Snapshot is still the first plugin, because its long operation tests the
 operation shape of the contract (issue #564). Freeze goes second: a frozen machine keeps its names
 as public entry state, so the contract must let one plugin ask another to hold state.
+
+### 8.6 Site agent protocol (issue #560)
+
+**Today.** The control plane reaches hosts through one seam, `Backend.Call` in `backend.go`: it runs
+`ssh <target>` with a JSON request on stdin, and a forced command runs `node-agent.py` as root
+with a closed set of ops (about 40: reads such as `inventory` and `status`, writes such as
+`create`, `action` and `reconcile`). A call goes to the machine's node, or to the first exit node;
+the gateway and the jump host have their own sync scripts. Go has no other path to a host.
+Constraints the agent has to keep, found in the code (2026-11-25):
+
+| Constraint | Where | What the agent has to do |
+|---|---|---|
+| Calls run up to 4 hours (`migrate`, `freeze`) and up to 3 hours for a `create` that imports a disk; `create` and `action` run while the control plane holds its writer lock | `backend.go`, `operations.go` | carry an operation id, survive a reconnect mid-call, and answer the same id twice with one result |
+| Only `create` and `action` carry a `request_id` with a node-side journal | `node-agent.py` | extend the journal to every write |
+| Reconcile is per node: every node writes its own nft files and units; only the first exit node runs fetch, DHCP and the guest firewall files | `network.go`, `node-agent.py` | run on every node, not one per site |
+| The node keeps `desired.json` but nothing replays it at boot; private DHCP namespaces live in `/run` and come back only with the next reconcile | `node-agent.py` | store the desired state with a revision, replay it at boot, report the revision applied |
+| The control plane dials into the site network: readiness probes to machine addresses, guest reports to 10.200.0.3, the gateway's `/gateway/ask` | `lifecycle.go`, `server.go`, `gateway.go` | stays for a lab site, where the control plane sits in the site network; a private site needs the agent to proxy these |
+| The jump host drops its lab certificate map after 30 minutes without the control plane | `jump-cert.py` | accepted: a site without the control plane loses new lab certificates, not machines |
+
+**Design.**
+
+1. **Unit.** One `carrel-agent` per node, wrapping `node-agent.py`, so the closed op set and its root
+   checks stay as they are. The site agent of 8.4 is the set of its nodes' agents; site-wide ops
+   still go to the first exit node. One process per site would have to reach the other nodes
+   itself, which is the SSH path again.
+2. **Transport.** The agent connects out over HTTPS and long-polls for jobs, as `carrel-fnd` does
+   (`GET /sites/v1/agent/jobs`). A job carries an id, the op and its request; the agent posts the
+   result to `POST /sites/v1/agent/jobs/{id}`. The job id is the `request_id`, so a repeated job
+   returns the journaled result. The agent runs jobs concurrently, as SSH calls run today, so a
+   4 hour `migrate` does not hold up `status` or `inventory` on the same node. The control plane
+   waits for the result with the timeouts it uses today, so the writer lock and the operation
+   phases do not change in the first step.
+3. **Identity.** The agent runs root ops it pulls, so it must know whom it talks to: it speaks
+   HTTPS only, to a control plane certificate under a CA it pins, in every mode. Tenant machines
+   can reach 10.200.0.3, so plain HTTP is never allowed. The agent signs in with a short-lived
+   client certificate from the lab step-ca, bound to one node and one site; until that lands, with
+   a hashed bearer token and a fixed source address, as `carrel-fnd` does. A node that uses the
+   agent has no `authorized_keys` line for the control plane.
+4. **Versions.** The first request carries `protocol: "v1"`, the agent's release and its capabilities
+   (#561, #562). The control plane serves the current and the previous protocol version.
+5. **Durable state.** The agent stores each reconcile request with its revision, replays the last one
+   at boot, and reports the applied revision in `inventory`.
+6. **Rollout.** A per-node setting `transport` (`ssh` or `agent`) picks the path; the default is `ssh`.
+   B09 moves one node at a time with no machine change; the SSH path goes after the last node.
+   The release archive ships `carrel-agent` with the other node programs (#565).
+
+Console streams, the gateway sync, the jump host sync and the off-site backup also use the
+control plane's SSH key today. They move off it in their own issue (#606) before the key goes
+(#604).
 
 ## 9. Observability
 
