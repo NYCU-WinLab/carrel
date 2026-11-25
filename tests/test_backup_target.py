@@ -56,3 +56,19 @@ def test_refuses_anything_but_a_gzip_backup(tmp_path, monkeypatch, request_body)
     with pytest.raises((ValueError, base64.binascii.Error)):
         module.main()
     assert not list((tmp_path / "backups").glob("control-*"))
+
+
+def test_incomplete_archive_does_not_replace_the_one_of_the_day(tmp_path, monkeypatch, capsys):
+    module = load(tmp_path, monkeypatch)
+    module.BASE.mkdir(mode=0o700)
+    first, second = gzip.compress(b"complete"), gzip.compress(b"without nodes")
+    send(module, monkeypatch, capsys, {"op": "backup", "archive": base64.b64encode(first).decode()})
+    result = send(
+        module,
+        monkeypatch,
+        capsys,
+        {"op": "backup", "archive": base64.b64encode(second).decode(), "missing_nodes": ["n1"]},
+    )
+    assert result["result"]["kept"] is True
+    (stored,) = module.BASE.glob("control-*.tar.gz")
+    assert stored.read_bytes() == first

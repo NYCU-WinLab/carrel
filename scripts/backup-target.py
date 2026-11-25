@@ -16,10 +16,14 @@ BASE = Path("/var/lib/carrel-backups")
 KEEP = 14
 
 
-def store(archive):
+def store(archive, incomplete=False):
     if not 1 <= len(archive) <= 10_000_000 or not archive.startswith(b"\x1f\x8b"):
         raise ValueError("invalid backup archive")
     name = datetime.now(UTC).strftime("control-%Y-%m-%d.tar.gz")
+    # An archive that reports missing node files never replaces one already stored
+    # for the day, which may be the complete one (#627).
+    if incomplete and (BASE / name).exists():
+        return {"file": name, "kept": True}
     pending = BASE / "pending"
     pending.write_bytes(archive)
     pending.chmod(0o600)
@@ -39,7 +43,7 @@ def main():
         req = json.loads(raw)
         if req.get("op") != "backup":
             raise ValueError("unknown operation")
-        result = store(base64.b64decode(req["archive"], validate=True))
+        result = store(base64.b64decode(req["archive"], validate=True), bool(req.get("missing_nodes")))
         print(json.dumps({"ok": True, "result": result}))
 
 
