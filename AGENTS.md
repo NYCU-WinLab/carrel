@@ -38,6 +38,10 @@ diff.
 4. The body has a Verification section: what you ran and what you saw.
 5. Squash merge once every check passes. Delete the branch.
 
+Release Please keeps one release pull request open with the next version and `CHANGELOG.md`.
+Merging it tags `vX.Y.Z` and bumps `Version` in `internal/carrel/value.go`; never edit that line
+by hand. A release does not deploy.
+
 ## High risk changes
 
 A change is high risk when a mistake leaks access, loses data or acts outside carrel: auth and

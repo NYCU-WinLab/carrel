@@ -1,0 +1,49 @@
+name: release-please
+
+# Publishing is a merge, not a command. Every push to main hands the commit log
+# to Release Please, which keeps one open pull request holding the next version
+# and the changelog. Merging that pull request is the release: it tags
+# `v<version>`. Any other push only refreshes the pending pull request.
+# A release does not deploy: an admin deploys a release with scripts/deploy-go.py.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # A pull request opened by GITHUB_TOKEN starts no workflow, so the release
+      # pull request would carry no checks and the release commit would ship
+      # unproven. `workflow_dispatch` is one of the two documented exceptions to
+      # that rule, so CI is asked for by name on the release branch. The run
+      # reports against the branch head, which is the commit the pull request
+      # shows.
+      - name: Run CI on the release pull request
+        if: steps.release.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The job has no checkout, so gh cannot read the repo from git.
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ fromJSON(steps.release.outputs.pr || '{}').headBranchName }}
+        run: gh workflow run check.yml --ref "$BRANCH"
