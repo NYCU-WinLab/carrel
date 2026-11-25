@@ -2642,16 +2642,16 @@ def test_replay_brings_back_the_site_ipv6_tunnel_and_reports_its_error(monkeypat
         module.replay()
 
 
-def test_replay_on_a_node_that_is_not_the_first_exit_node_skips_dhcp_and_vpn(monkeypatch, tmp_path):
+def test_replay_on_a_node_that_is_not_the_first_exit_node_runs_dhcp_without_serving(monkeypatch, tmp_path):
     module = _replay_module(monkeypatch, tmp_path, False)
-
-    def called(*a, **k):
-        raise AssertionError("only the first exit node serves DHCP and the VPN")
-
-    monkeypatch.setattr(module, "private_dhcp", called)
-    monkeypatch.setattr(module, "vpn", called)
+    serves = []
+    monkeypatch.setattr(module, "private_dhcp", lambda state, serve=True: serves.append(serve))
+    monkeypatch.setattr(module, "vpn", lambda state: {})
     monkeypatch.setattr(module, "ipv6", lambda state, v6: {})
     assert module.replay()["replayed"] is True
+    # It still runs for the per-node work (IPv6 off on the private bridges),
+    # but does not serve DHCP.
+    assert serves == [False]
 
 
 def test_a_failed_reconcile_keeps_the_pending_marker_and_a_good_one_clears_it(monkeypatch, tmp_path):

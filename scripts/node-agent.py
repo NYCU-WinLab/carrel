@@ -1387,12 +1387,11 @@ def replay():
     with (STATE / "node.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(saved.read_text())
-        # The first exit node alone serves private DHCP and the VPN; a node
-        # that site.json still names but is no longer first skips both.
-        tunnels = {}
-        if first_exit_node():
-            private_dhcp(state, serve=True)
-            tunnels = vpn(state)
+        # Every node runs private_dhcp: it also turns IPv6 off on the private
+        # bridges and cleans stale namespaces. Only the first exit node serves;
+        # vpn() and ipv6() check public_ingress() themselves.
+        private_dhcp(state, serve=first_exit_node())
+        tunnels = vpn(state)
         site6 = ipv6(state, site_ipv6())
     if "error" in tunnels:
         # Exit non-zero, so systemd tries again (Restart=on-failure).
