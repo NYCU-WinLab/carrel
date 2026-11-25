@@ -3,6 +3,7 @@ package carrel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -1473,5 +1474,29 @@ func TestAHeldGenAtTheBoundResendsAndOneAboveDoesNot(t *testing.T) {
 	e.raiseJumpGen(D{"held": float64(base + maxJumpGenAhead + 1)})
 	if p.jumpGen != base+maxJumpGenAhead {
 		t.Fatal(p.jumpGen)
+	}
+}
+
+// A high send that fails may still have written on the jump host, so it is
+// counted before the call: after a top-of-range refusal, the clock fallback
+// stays above it (#436).
+func TestTheClockFallbackStaysAboveAHighSendThatFailed(t *testing.T) {
+	p, b := fixture(t)
+	e := p.execution(context.Background())
+	b.call = func(D, string) (any, error) { return nil, errors.New("timed out") }
+	high := time.Now().UnixMicro() + maxJumpGenAhead/2
+	p.jumpMu.Lock()
+	if r := e.SyncJump("", nil, high); r != "unavailable" {
+		t.Fatal(r)
+	}
+	if p.jumpSentGen != high {
+		t.Fatal(p.jumpSentGen, high)
+	}
+	p.jumpGen = maxJumpGen - 1
+	p.jumpMu.Unlock()
+	_, _, gen := e.lockJumpState()
+	p.jumpMu.Unlock()
+	if gen <= high || gen >= maxJumpGen-1 {
+		t.Fatal(gen, high)
 	}
 }
