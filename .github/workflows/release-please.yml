@@ -76,7 +76,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")"
           name="carrel-$TAG-linux-amd64"
           mkdir -p "$name/dist"
-          for cmd in carrel carrel-deployd carrel-fetch carrel-fnd carrel-fn-init; do
+          for cmd in carrel carrel-agent carrel-deployd carrel-fetch carrel-fnd carrel-fn-init; do
             CGO_ENABLED=0 go build -trimpath \
               -ldflags "-X github.com/NYCU-WinLab/carrel/internal/carrel.Release=true" \
               -o "$name/dist/$cmd" "./cmd/$cmd"

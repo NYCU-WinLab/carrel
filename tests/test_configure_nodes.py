@@ -419,3 +419,79 @@ def test_the_ksm_command_succeeds_on_a_second_run_and_when_the_unit_is_absent(tm
     run_file.unlink()
     done = subprocess.run(["sh", "-c", command], env=env, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
+
+
+def test_only_the_first_exit_node_may_run_the_agent_for_now():
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    assert module.agent_nodes({}, nodes) == set()
+    assert module.agent_nodes({"agent_nodes": ["carrel01"]}, nodes) == {"carrel01"}
+    for names, message in ((["carrel02"], "only the first exit node"), (["pve9"], "not a site node")):
+        try:
+            module.agent_nodes({"agent_nodes": names}, nodes)
+        except SystemExit as e:
+            assert message in str(e)
+        else:
+            raise AssertionError(names)
+
+
+def test_an_agent_node_carries_its_transport_and_the_others_stay_on_ssh():
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    entries = module.node_entries(nodes, {"carrel01"}, "ab" * 32)
+    assert entries[0] == {
+        "name": "carrel01",
+        "target": "carrel-node",
+        "transport": "agent",
+        "agent_token_sha256": "ab" * 32,
+        "agent_source": "10.200.0.1",
+    }
+    assert entries[1] == {"name": "carrel02", "target": "carrel02"}
+    assert module.node_entries(nodes, set(), "") == [
+        {"name": n["name"], "target": n["target"]} for n in nodes
+    ]
+
+
+def test_the_agent_token_is_made_once_and_its_digest_matches(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    monkeypatch.setattr(module, "AGENT_TOKEN", tmp_path / "agent-token")
+    first = module.agent_token()
+    token = (tmp_path / "agent-token").read_text()
+    assert len(token) >= 40 and (tmp_path / "agent-token").stat().st_mode & 0o777 == 0o600
+    assert first == hashlib.sha256(token.encode()).hexdigest()
+    assert module.agent_token() == first and (tmp_path / "agent-token").read_text() == token
+
+
+def test_the_agent_certificates_chain_to_the_ca_and_a_second_run_keeps_them(tmp_path):
+    module = load("configure-nodes.py")
+    script = module.AGENT_CERTIFICATES.replace(str(module.AGENT_CA), str(tmp_path / "ca"))
+    subprocess.run(["sh", "-c", script], check=True, capture_output=True)
+    d = tmp_path / "ca"
+    files = {name: (d / name).read_bytes() for name in ("ca.key", "ca.pem", "server.key", "server.pem")}
+    assert (d / "ca.key").stat().st_mode & 0o777 == 0o600
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", d / "ca.pem", d / "server.pem"], check=True, capture_output=True
+    )
+    text = subprocess.run(
+        ["openssl", "x509", "-in", d / "server.pem", "-noout", "-text"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "IP Address:10.200.0.3" in text and "TLS Web Server Authentication" in text
+    subprocess.run(["sh", "-c", script], check=True, capture_output=True)
+    assert {name: (d / name).read_bytes() for name in files} == files
+    assert sorted(p.name for p in d.iterdir()) == sorted(files)
+    # A new CA makes a new listener certificate under it.
+    (d / "ca.key").unlink()
+    subprocess.run(["sh", "-c", script], check=True, capture_output=True)
+    assert (d / "server.pem").read_bytes() != files["server.pem"]
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", d / "ca.pem", d / "server.pem"], check=True, capture_output=True
+    )
+
+
+def test_the_agent_unit_lets_running_jobs_finish():
+    unit = load("configure-nodes.py").AGENT_SERVICE
+    assert "KillMode=mixed" in unit and "TimeoutStopSec=4h30min" in unit
+    assert "ExecStart=/usr/local/lib/carrel/carrel-agent -config /etc/carrel/agent.json" in unit

@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "NYCU-WinLab/carrel"
-BINARIES = ("carrel", "carrel-deployd", "carrel-fetch")
+BINARIES = ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch")
 # install-control.py runs the release; the rest are the node programs it installs.
 SCRIPTS = ("install-control.py", "node-agent.py", "configure-reader.py", "configure-nodes.py",
            "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py")

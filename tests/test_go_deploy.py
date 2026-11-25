@@ -22,7 +22,7 @@ def load(name):
 
 def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, monkeypatch):
     deploy = load("deploy-go.py")
-    for name in ("carrel", "carrel-deployd", "carrel-fetch"):
+    for name in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     calls = []
     monkeypatch.setattr(
@@ -36,6 +36,7 @@ def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, 
     names = {Path(p).name for p in copied[1:-1]}
     assert {
         "carrel",
+        "carrel-agent",
         "carrel-deployd",
         "carrel-fetch",
         "install-control.py",
@@ -82,7 +83,10 @@ def release_archive(work, tag, extra=None, sums=None):
     with tarfile.open(archive, "w:gz") as tar:
         files = {f"{name}/REVISION": b"abc123\n"}
         files.update(
-            {f"{name}/dist/{b}": b"release binary" for b in ("carrel", "carrel-deployd", "carrel-fetch")}
+            {
+                f"{name}/dist/{b}": b"release binary"
+                for b in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch")
+            }
         )
         files.update({f"{name}/scripts/{s.name}": s.read_bytes() for s in (ROOT / "scripts").glob("*.py")})
         files.update(extra or {})
@@ -186,6 +190,7 @@ def staged(tmp_path, tamper=False):
     hashes = {}
     for name in (
         "carrel",
+        "carrel-agent",
         "carrel-deployd",
         "carrel-fetch",
         "install-control.py",

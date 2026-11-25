@@ -34,6 +34,9 @@ SITE = Path("/etc/carrel/site.json")
 JUMP_GENS = ["/var/lib/carrel-jump/keys.gen", "/var/lib/carrel-jump/certs.gen"]
 TEMPLATES = Path("/etc/carrel/templates.json")
 HELPERS = {"guest-report.py": "644", "gateway-sync.py": "644", "jump-sync.py": "644", "jump-cert.py": "644"}
+# Node programs that run: node-agent.py behind SSH, carrel-agent on a node whose
+# transport is agent (PLAN 8.6; configure-nodes.py starts it).
+EXECUTABLES = {"node-agent.py": "755", "carrel-agent": "755"}
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
 KEEP = 5
 DATABASE = Path("/var/lib/carrel/carrel.db")
@@ -275,8 +278,8 @@ def host(stage, version):
     # A first install has no units yet; stopping them is then a no-op.
     for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], capture_output=True, check=False)
-    before = {"node-agent.py": LIB / "node-agent.py", "templates.json": TEMPLATES,
-              "release.json": LIB / "release.json", **{h: LIB / h for h in HELPERS}}
+    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json",
+              **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
     # Read before anything can fail: only a record this run created may be removed.
     had_release = (LIB / "release.json").exists()
     configured = activated = False
@@ -290,7 +293,7 @@ def host(stage, version):
         merged.write_text(json.dumps(templates, indent=2) + "\n")
         run("install", "-m", "600", merged, TEMPLATES)
         push(merged, "/etc/carrel/templates.next.json", "600")
-        for name, mode in {**HELPERS, "node-agent.py": "755"}.items():
+        for name, mode in {**HELPERS, **EXECUTABLES}.items():
             run("install", "-m", mode, stage / name, str(LIB / name) + ".next")
             os.replace(str(LIB / name) + ".next", LIB / name)
         # The release the node programs came from, which node-agent reports in
