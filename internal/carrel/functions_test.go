@@ -1,6 +1,8 @@
 package carrel
 
 import (
+	"fmt"
+	"strconv"
 	"context"
 	"encoding/json"
 	"net/http/httptest"
@@ -245,6 +247,23 @@ func TestFunctionBuildsHoldQuota(t *testing.T) {
 	// A reported size replaces the reserve.
 	report(t, a, `{"functions":[{"id":"t1-a","versions":[{"version":"v1","state":"ready","bytes":536870912}]}]}`)
 	assertOK(t, call("c"))
+}
+
+// A redeploy at the function_gb limit fits when the old version it prunes
+// frees the room: before, the function had to be removed first (#249).
+func TestARedeployCountsTheVersionItPrunes(t *testing.T) {
+	p, a := functionFixture(t)
+	alice := person("alice", false)
+	p.Store.Exec(`UPDATE tenants SET quota=json_set(quota,'$.function_gb',5) WHERE n=1`)
+	for i := 1; i <= 3; i++ {
+		assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "a", "image": "x/y:" + strconv.Itoa(i)}, alice))
+		report(t, a, fmt.Sprintf(`{"functions":[{"id":"t1-a","versions":[{"version":"v%d","state":"ready","bytes":1073741824}]}]}`, i))
+	}
+	// 3 GiB kept plus a 2.5 GiB build is over 5 GiB, but v1 goes with this deploy.
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "a", "image": "x/y:4"}, alice))
+	if used := p.execution(context.Background()).functionBytes(1); used > 5*GiB {
+		t.Fatalf("kept %v bytes over the limit", used)
+	}
 }
 
 // A suspended tenant's function must stop answering on its domains: unlike

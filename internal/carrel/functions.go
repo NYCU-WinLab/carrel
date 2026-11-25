@@ -195,13 +195,33 @@ func buildReserve(memoryMB int) float64 { return 2*GiB + float64(memoryMB)*MiB }
 func (e *Execution) functionBytes(n int) float64 {
 	total := 0.0
 	for _, v := range e.S.Objects("function_versions", n) {
-		if v["state"] == "building" {
-			total += buildReserve(integer(v["memory_mb"]))
-		} else {
-			total += num(v["bytes"])
-		}
+		total += versionBytes(v)
 	}
 	return total
+}
+
+// versionBytes is what one version counts: its size, or the reserve while
+// it builds.
+func versionBytes(v D) float64 {
+	if v["state"] == "building" {
+		return buildReserve(integer(v["memory_mb"]))
+	}
+	return num(v["bytes"])
+}
+
+// prunedBytes is what the versions a new deploy of f prunes count. The new
+// version takes the first kept place and becomes the pending one, so the
+// old pending version loses its protection (pruneFunctionVersions).
+func (e *Execution) prunedBytes(f D) float64 {
+	keep := map[string]bool{str(f["current"]): true, str(f["previous"]): true}
+	freed := 0.0
+	for i, v := range e.FunctionVersions(f) {
+		if i+1 < keptFunctionVersions || keep[str(v["version"])] {
+			continue
+		}
+		freed += versionBytes(v)
+	}
+	return freed
 }
 
 // nextFunctionVersion numbers versions across every function and every
@@ -301,7 +321,8 @@ func (e *Execution) startFunctionVersion(t, f, spec, delta, env D, dry bool, als
 	n := integer(t["n"])
 	quota := e.Quota(t, delta)
 	reserve := buildReserve(integer(spec["memory_mb"]))
-	if limit := num(obj(t["quota"])["function_gb"]) * GiB; e.functionBytes(n)+reserve > limit {
+	// A deploy at the limit fits when the versions it prunes free the room (#249).
+	if limit := num(obj(t["quota"])["function_gb"]) * GiB; e.functionBytes(n)-e.prunedBytes(f)+reserve > limit {
 		fail("quota_exceeded", "Kept and building function versions would exceed function_gb; a build holds 2 GiB plus its memory until its size is known. Remove a function or wait for builds", D{"dimension": "function_gb"})
 	}
 	keys := env["env_keys"]
