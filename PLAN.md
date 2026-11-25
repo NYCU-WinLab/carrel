@@ -29,7 +29,8 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
   Functions (section 7.11) are the one planned exception: a single container image that carrel
   runs while it has work. They add no manifest language and no orchestration.
 - Not a public cloud. One installation serves one organization, and tenants are lab members and
-  lab projects.
+  lab projects. A member may pair a Proxmox host of their own as a private site (section 8.4),
+  which only their own tenants use; carrel never places another tenant's machine on it.
 - Not a place where admins look inside tenant machines (section 7.7).
 - Not a human web UI. The one browser page carrel serves is the machine console (section 7.8).
   OAuth login also has a small consent page that binds a registered MCP client to its callback.
@@ -68,6 +69,9 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-10-20 | `network_access=restricted` filters the primary NIC only. Restricted machines may have private NICs, which stay unfiltered on the tenant's own segments (issue #75) |
 | 2026-10-22 | carrel can push machines, networks and addresses to NetBox, off by default and best effort. One shared VRF for tenant segments, one VRF per private network, all owned by carrel; the `owner` is set at creation (section 9.4, issue #141) |
 | 2026-10-24 | The lab website moves onto a tenant: `winlab.tw` and `www.winlab.tw` may be granted as exact special names. `www` stays reserved as a tenant slug, and the zone's wildcard is never granted (section 6.10) |
+| 2026-11-25 | One control plane manages several sites. Each site runs a site agent that connects out to the control plane, pulls the desired state and reports the actual state (section 8.4) |
+| 2026-11-25 | A member may pair their own Proxmox host as a private site. Its owner has root on it, so carrel treats it as untrusted: only the owner's tenants use it, and its quota counts only there (section 8.4) |
+| 2026-11-25 | Features outside the core become plugins that run next to the site agent, and each site reports which it supports. Snapshot and freeze are the first two (section 8.5) |
 | 2026-11-12 | Functions: a container image that sleeps without memory and wakes from a microVM snapshot on a request. The contract is an OCI image that serves HTTP, so the same image runs on AWS Lambda. Pet machines stay the default. Built since: the host agent and the control plane side (section 7.11) |
 
 ### 1.6 Current core and deferred work
@@ -765,7 +769,8 @@ section 6.4.
 carrel names its network objects after their AWS counterparts where one exists, and each tool
 description says what differs. Members and agents already know the AWS model, so a request such
 as "connect my machines to the lab network and route between my projects" needs no carrel
-vocabulary. carrel stays a lab platform on one cluster: no accounts, IAM, regions or zones.
+vocabulary. carrel stays a lab platform: no accounts or IAM, and no regions. Several clusters
+become sites (section 8.4), carrel's counterpart of availability zones.
 
 | AWS | carrel | Differs from AWS |
 |---|---|---|
@@ -1638,10 +1643,33 @@ guests.
 5. `/etc/pve` is shared by the cluster (firewall, SDN, pools, permissions, storage definitions).
    Interfaces, disks, templates and NAT are per node, and the installer keeps them identical.
 
-### 8.4 Another room
+### 8.4 Several sites
 
-A host that cannot meet 8.3 is a separate site with its own cluster. The platform manages sites
-side by side. A tenant's machines stay in one site in version 1.
+A host that cannot meet 8.3 is a separate site with its own cluster. Sites never share a corosync
+ring. One control plane manages every site, and each site runs a site agent: it connects out to
+the control plane, pulls the desired state, applies it to its own Proxmox and reports the actual
+state. With the control plane away, a site keeps running what it last received. Sites come in two
+kinds:
+
+| Kind | Run by | Trust | Who places machines there |
+|---|---|---|---|
+| Lab site | lab admins (B09, and later GPU, DPU or dev clusters, issue #217) | trusted like B09 | any tenant the site's access rule allows |
+| Private site | the member who owns the hardware (issue #568) | untrusted: its owner has root | only the owner's tenants; the quota it adds counts only there |
+
+A private site joins through a WireGuard gateway to a lab site, and the lab site treats its traffic
+as external. Its public entry either goes through the lab site's address, which needs an admin's
+approval and can be revoked at the lab gateway, or through the owner's own address, which carrel
+only records. A lab name such as `*.winlab.tw` always needs approval. The address plan and the
+trust model for both kinds are decided in issue #567. Until a second site exists, a tenant's
+machines stay in one site.
+
+### 8.5 Core and plugins
+
+The core is what every site must run: machines, images, tenant networks and isolation, tenants,
+quota, requests, keys, audit, capacity and reconcile. Every other feature is a plugin that runs next
+to the site agent. A site reports which plugins it runs and what each one needs (a capability), and
+a tool whose plugin a site lacks fails there with a message that names the sites that have it. The
+table of core and plugin features is in issue #550; the plugin contract is in issue #564.
 
 ## 9. Observability
 
@@ -1960,6 +1988,11 @@ old host.
 - Builds inside carrel. Apps build in GitHub Actions and carrel only stores and hands out releases
   (section 7.9).
 - Apps from GitLab (section 7.9).
+- Placing a tenant's machine on another member's private site, or sharing a private site's capacity
+  with other tenants (section 8.4).
+- A control plane of several replicas with consensus. One control plane plus a tested restore is
+  the plan (issue #571).
+- Plugins loaded into the control plane process. Plugins run next to the site agent.
 
 ### 11.3 Milestones
 
@@ -2039,16 +2072,24 @@ old host.
 | Term | Meaning |
 |---|---|
 | admission | the physical capacity check at create or start, separate from quota |
+| agent | the member's own AI client (Claude Code, Codex, any MCP client); not the site agent or `carrel-deployd` |
+| capability | something a site can do beyond the core, provided by a plugin, such as snapshots or freeze (section 8.5) |
+| control plane | the one carrel service that holds the database and serves MCP, CT 100 at B09 |
+| core | what every site runs, with no plugin (section 8.5) |
 | `carrel-deployd` | the agent a member installs in a machine to receive app releases (section 7.9) |
 | exit node | the node with the public address; does SNAT and DNAT |
 | fetch network | the reserved network `N = 255`, used only by the image fetcher's namespace on each node |
 | grant | one allocation: a port, a domain (own or special), a peer rule, a snapshot |
+| lab site | a site run by the lab admins (section 8.4) |
 | managed machine | a machine carrel can configure and check from outside: cloud-init keys and addresses, the SSH check |
+| plugin | a separate program next to the site agent that adds one capability (section 8.5) |
 | primary network | the tenant's routed `/24`, where every machine's `net0` sits |
 | private network | a layer 2 segment of one tenant, with no gateway and no filtering (section 6.8) |
+| private site | a site on hardware a member owns, used only by that member's tenants (section 8.4) |
 | reconciler | the loop that rebuilds derived state from the database |
 | serial `N` | a tenant's permanent number; addresses, VMIDs and ports derive from it |
-| site | one Proxmox cluster in one room |
+| site | one Proxmox cluster in one room; carrel's counterpart of an availability zone. Not "zone", which means a DNS zone or an EVPN zone |
+| site agent | the program on each site that connects out to the control plane and applies its desired state (section 8.4); today the control plane reaches `node-agent` over SSH instead |
 | slug | a tenant's DNS-safe name, fixed at registration |
 | source | a Proxmox host that machines are imported from |
 | special domain, special port | a name or public port outside the tenant's own subtree or block, granted by an admin (section 6.10) |
