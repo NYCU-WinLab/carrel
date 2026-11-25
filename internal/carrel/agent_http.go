@@ -64,7 +64,13 @@ func (p *Platform) AgentHandler() http.Handler {
 				"message": fmt.Sprintf("This control plane serves agent protocols %s, not %q. Install carrel-agent from release %s.", strings.Join(agentProtocols, ", "), in.Protocol, Version)}})
 			return
 		}
-		p.Hub.Hello(node, in.Session, in.Protocol, in.Release, in.Capabilities...)
+		capabilities := in.Capabilities
+		if in.Drain {
+			// An agent shutting down claims nothing, so it takes no console:
+			// consoles go back to SSH until its successor polls.
+			capabilities = nil
+		}
+		p.Hub.Hello(node, in.Session, in.Protocol, in.Release, capabilities...)
 		if in.Drain {
 			p.Hub.Heartbeat(node, in.Session, in.Seq, in.Held)
 			jsonResponse(w, 200, D{"jobs": []AgentJob{}})

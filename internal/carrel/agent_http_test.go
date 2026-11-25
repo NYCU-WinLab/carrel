@@ -240,3 +240,26 @@ func TestAgentStreamThatNobodyOpens(t *testing.T) {
 		t.Fatal("the stream was left behind")
 	}
 }
+
+// An agent that drains loses its capabilities, so consoles fall back to SSH
+// instead of waiting for a claim that never comes.
+func TestAgentDrainingTakesNoConsole(t *testing.T) {
+	p, _, _ := originFixture(t)
+	p.Config.Nodes = []NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
+	}
+	claim := func(body string) int {
+		req := httptest.NewRequest("POST", "https://10.200.0.3:8443/sites/v1/agent/claim?node=pve1", strings.NewReader(body))
+		req.RemoteAddr = "10.200.0.1:40000"
+		req.Header.Set("Authorization", "Bearer cat_good")
+		w := httptest.NewRecorder()
+		p.AgentHandler().ServeHTTP(w, req)
+		return w.Code
+	}
+	if claim(`{"protocol":"v1","session":"s","seq":1,"held":[],"drain":true,"capabilities":["stream"]}`) != 200 {
+		t.Fatal("drain refused")
+	}
+	if p.Hub.Capable("pve1", "stream", time.Now()) {
+		t.Fatal("a draining agent takes consoles")
+	}
+}
