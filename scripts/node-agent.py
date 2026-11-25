@@ -1366,6 +1366,9 @@ WantedBy=multi-user.target
 """
 
 
+PENDING = STATE / "reconcile.pending"
+
+
 def replay():
     """At boot, bring back what lives only in /run: private DHCP namespaces and
     VPN interfaces, from the state the last reconcile stored.
@@ -1376,6 +1379,11 @@ def replay():
     saved = STATE / "desired.json"
     if not saved.exists():
         return {"replayed": False}
+    if PENDING.exists():
+        # A reconcile died after it began writing node files and before it saved
+        # desired.json, so the stored state is older than what is on disk.
+        # Exit 0 so systemd does not retry; the next reconcile redoes the work.
+        return {"replayed": False, "skipped": "pending reconcile"}
     with (STATE / "node.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(saved.read_text())
@@ -1403,6 +1411,9 @@ def reconcile(state, first=True, revision=None):
     # by the node adapter's infrastructure lock.
     vnets, subnets_by_vnet = topology_read()
     v6 = site_ipv6()
+    # From here on, node files change. Until desired.json is saved, a boot
+    # replay would bring back older state, so it stays out (see replay).
+    write(PENDING, "")
     for t in state["tenants"]:
         n, vnet = tenant_config(t)
         if ensure(
@@ -1617,6 +1628,7 @@ WantedBy=multi-user.target
     # Every time, so an enable that failed once is retried.
     run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
+    PENDING.unlink(missing_ok=True)
     if revision is not None:
         write(STATE / "desired-revision.json", json.dumps({"revision": revision, "applied_at": int(time.time())}))
     if write("/etc/systemd/system/carrel-replay.service", REPLAY_UNIT):
