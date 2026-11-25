@@ -77,6 +77,7 @@ func setup(t *testing.T, handler http.HandlerFunc) (*Router, *fakeRuntime, strin
 
 func get(router *Router, name string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, "http://"+name+".example.test/", nil)
+	req.Header.Set("X-Carrel-Function", name)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)
 	return recorder
@@ -426,5 +427,16 @@ func TestParseCallersRefusesBadLists(t *testing.T) {
 		if _, err := ParseCallers(values); err == nil {
 			t.Errorf("%q: no error", values)
 		}
+	}
+}
+
+// The host name picks no function: only the header the gateway sets does (#280).
+func TestTheHostNamePicksNoFunction(t *testing.T) {
+	router, runtime, _ := setup(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.test/", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound || runtime.wakes.Load() != 0 {
+		t.Fatalf("status = %d, wakes = %d", recorder.Code, runtime.wakes.Load())
 	}
 }
