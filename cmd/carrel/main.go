@@ -24,7 +24,7 @@ func main() {
 	stderr := slog.NewJSONHandler(os.Stderr, nil)
 	slog.SetDefault(slog.New(stderr))
 	if *version {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"version": carrel.Version})
+		_ = json.NewEncoder(os.Stdout).Encode(carrel.Build())
 		return
 	}
 	content, err := os.ReadFile(*configFile)
@@ -87,7 +87,7 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(shutdown)
 	}()
-	slog.Info("carrel_started", "version", carrel.Version)
+	slog.Info("carrel_started", "build", carrel.Build())
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("http_server_failed", "error", err)
 		stop()

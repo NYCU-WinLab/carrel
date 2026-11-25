@@ -81,7 +81,9 @@ func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string) {
 	mux.Handle("/console/", console)
 	mux.Handle("/.well-known/", oauth)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, D{"status": "ok", "service": "carrel", "version": Version})
+		health := Build()
+		health["status"], health["service"] = "ok", "carrel"
+		jsonResponse(w, 200, health)
 	})
 }
 func (a *App) guestRoutes(mux *http.ServeMux) {
