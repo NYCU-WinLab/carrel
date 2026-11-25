@@ -303,14 +303,18 @@ carrel sends no alerts itself. Point an alerting service at the collector's back
 1. Generate a new key: `openssl rand -base64 32`.
 2. In `/etc/carrel/config.json`, move the current key into `function_env_old_keys` and put the new
    key in `function_env_key`. Restart carrel.
-3. New uploads are sealed with the new key. Values sealed earlier stay sealed with the old key,
-   so keep it in `function_env_old_keys` until every member has uploaded their environment and
-   registry credentials again.
+3. New uploads are sealed with the new key. Nothing re-encrypts stored values: every kept
+   version, the rollback target included, and every function's registry credentials stay sealed
+   with the key they were sealed with. Carrel has no count of values per key, so keep every old
+   key in `function_env_old_keys`. Drop one only when it leaked, and accept the failures below.
 
-Dropping an old key too early fails each version that still needs it: the function host reports
-the version failed with `environment: ... cannot be decrypted with any configured key`, and the
-control plane logs `function_value_open_failed`. The member fixes it with `function_env` or
-`function_registry`.
+Copy the old key exactly: a wrong old key passes validation, and the versions it should open fail.
+
+A version no configured key opens fails when a function host builds it: the host reports
+`environment: ... cannot be decrypted with any configured key` (or `registry credentials: ...`),
+and the control plane logs `function_value_open_failed`. The member uploads the environment again
+with `function_env`, which builds a new version. For registry credentials, the member uploads
+them again with `function_registry`, then deploys again.
 
 ## NetBox sync
 
