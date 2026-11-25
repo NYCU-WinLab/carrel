@@ -1710,7 +1710,7 @@ Constraints the agent has to keep, found in the code (2026-11-25):
 | Constraint | Where | What the agent has to do |
 |---|---|---|
 | Calls run up to 4 hours (`migrate`, `freeze`) and up to 3 hours for a `create` that imports a disk; `create` and `action` run while the control plane holds its writer lock | `backend.go`, `operations.go` | carry an operation id, survive a reconnect mid-call, and answer the same id twice with one result |
-| Only `create` and `action` carry a `request_id` with a node-side journal | `node-agent.py` | extend the journal to every write |
+| Only `create` and `action` carry a `request_id` with a node-side journal; its key stays the same when a failed operation is retried, so it cannot stretch to every write | `node-agent.py`, `platform.go` | stop a job delivered twice by its job id, not by `request_id` (#602 closed) |
 | Reconcile is per node: every node writes its own nft files and units; only the first exit node runs fetch, DHCP and the guest firewall files | `network.go`, `node-agent.py` | run on every node, not one per site |
 | The node keeps `desired.json` but nothing replays it at boot; private DHCP namespaces live in `/run` and come back only with the next reconcile | `node-agent.py` | store the desired state with a revision, replay it at boot, report the revision applied |
 | The control plane dials into the site network: readiness probes to machine addresses, guest reports to 10.200.0.3, the gateway's `/gateway/ask` | `lifecycle.go`, `server.go`, `gateway.go` | stays for a lab site, where the control plane sits in the site network; a private site needs the agent to proxy these |
@@ -1724,14 +1724,21 @@ Constraints the agent has to keep, found in the code (2026-11-25):
    itself, which is the SSH path again.
 2. **Transport.** The agent connects out over HTTPS and long-polls for jobs, as `carrel-fnd` does
    (`GET /sites/v1/agent/jobs`). A job carries an id, the op and its request; the agent posts the
-   result to `POST /sites/v1/agent/jobs/{id}`. The job id is the `request_id`, so a repeated job
-   returns the journaled result. The agent runs jobs concurrently, as SSH calls run today, so a
+   result to `POST /sites/v1/agent/jobs/{id}`. A job id is unique per dispatch, and the agent
+   keeps each job's result until the control plane acknowledges it, so a job delivered twice
+   after a reconnect runs once. Only a job no agent has taken is sent again: a job an agent took
+   and lost (the agent restarted mid-job) fails as `adapter_process_failed`, as a dropped SSH
+   session does today, and the operation's own retry decides what happens next. The agent runs jobs concurrently, as SSH calls run today, so a
    4 hour `migrate` does not hold up `status` or `inventory` on the same node. The control plane
    waits for the result with the timeouts it uses today, so the writer lock and the operation
    phases do not change in the first step.
 3. **Identity.** The agent runs root ops it pulls, so it must know whom it talks to: it speaks
    HTTPS only, to a control plane certificate under a CA it pins, in every mode. Tenant machines
-   can reach 10.200.0.3, so plain HTTP is never allowed. The agent signs in with a short-lived
+   can reach 10.200.0.3, so plain HTTP is never allowed. The control plane serves the agent
+   routes on their own TLS listener on the infrastructure address, with a CA the control plane
+   owns, made at install and copied to each node with its agent settings. The gateway is not in
+   the path: it would put CT 101 between root jobs and their source, and the control plane
+   would lose the source address check. The agent signs in with a short-lived
    client certificate from the lab step-ca, bound to one node and one site; until that lands, with
    a hashed bearer token and a fixed source address, as `carrel-fnd` does. A node that uses the
    agent has no `authorized_keys` line for the control plane.
