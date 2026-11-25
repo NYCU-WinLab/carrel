@@ -339,6 +339,10 @@ func (a *agent) stream(ctx context.Context, j job) {
 	}
 }
 
+// streamKeepAlive bounds a silent network loss on a console stream to about
+// 30 seconds; the control plane sets the same on its end.
+var streamKeepAlive = net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 3}
+
 func (a *agent) streamOnce(ctx context.Context, j job) error {
 	u, err := url.Parse(strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/streams/" + url.PathEscape(j.ID) + "?node=" + url.QueryEscape(a.cfg.Node))
 	if err != nil {
@@ -350,7 +354,7 @@ func (a *agent) streamOnce(ctx context.Context, j job) error {
 	}
 	dial, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	c, err := (&tls.Dialer{Config: a.tls.Clone()}).DialContext(dial, "tcp", address)
+	c, err := (&tls.Dialer{NetDialer: &net.Dialer{KeepAliveConfig: streamKeepAlive}, Config: a.tls.Clone()}).DialContext(dial, "tcp", address)
 	if err != nil {
 		return err
 	}
