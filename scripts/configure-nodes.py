@@ -33,6 +33,7 @@ import re
 import secrets
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 SITE = Path("/etc/carrel/site.json")
@@ -280,6 +281,32 @@ def agent_peers():
     return out
 
 
+def peers_connected(since, wait=60):
+    """The other agent nodes whose agent logged agent_connected after since, within wait seconds.
+
+    Returns the names that never did: their jobs wait on an agent that cannot
+    reach the listener (for example an infra firewall without the 8443 rule)."""
+    site = json.loads(SITE.read_text())
+    nodes = targets(site, socket.gethostname().split(".")[0])
+    agents = agent_nodes(site, nodes)
+    pending = [n for n in nodes[1:] if n["name"] in agents]
+    for _ in range(wait):
+        for n in list(pending):
+            # A stalled peer costs at most 10 s a round and does not block the others.
+            try:
+                log = subprocess.run(["ssh", "-o", "ConnectTimeout=5", *peer(n), "root@" + n["address"],
+                                      f"journalctl -u carrel-agent --since @{int(since)} -o cat"],
+                                     text=True, capture_output=True, check=False, timeout=10).stdout
+            except subprocess.TimeoutExpired:
+                log = ""
+            if '"agent_connected"' in (log or ""):
+                pending.remove(n)
+        if not pending:
+            break
+        time.sleep(1)
+    return [n["name"] for n in pending]
+
+
 def node_entries(nodes, agents, digests):
     """config.json "nodes": an agent node carries its transport, token digest and source."""
     out = []
@@ -520,5 +547,9 @@ if __name__ == "__main__":
 
     if sys.argv[1:] == ["--agent-service"]:
         print(json.dumps({"agent": agent_service(), "peers": agent_peers()}))
+    elif sys.argv[1:2] == ["--agent-check"] and len(sys.argv) == 3:
+        missing = peers_connected(int(sys.argv[2]))
+        print(json.dumps({"not_connected": missing}))
+        sys.exit(1 if missing else 0)
     else:
         main()

@@ -455,3 +455,30 @@ def test_a_started_agent_must_reach_the_control_plane(tmp_path, monkeypatch):
     node.journal = '{"level":"INFO","msg":"agent_connected","node":"carrel01"}'
     (tmp_path / "again").mkdir()
     module.host(staged(tmp_path / "again"), "1.0.0")
+
+
+def test_a_pushed_peer_agent_must_reach_the_control_plane(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    node.agent_stdout = '{"agent": "absent", "peers": {"carrel02": "pushed", "carrel03": "absent"}}'
+    real = node.subprocess_run
+    checks = []
+
+    def record(args, clear_fails):
+        if "--agent-check" in args:
+            checks.append(args)
+            return SimpleNamespace(returncode=1, stdout='{"not_connected": ["carrel02"]}')
+        return real(args, clear_fails)
+
+    monkeypatch.setattr(module.subprocess, "run", lambda args, **kw: record(args, False))
+    with pytest.raises(SystemExit, match="carrel02"):
+        module.host(staged(tmp_path), "1.0.0")
+    assert checks and checks[0][-2] == "--agent-check"
+
+
+def test_no_peer_check_without_a_pushed_peer(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    node.agent_stdout = '{"agent": "absent", "peers": {"carrel02": "removed"}}'
+    module.host(staged(tmp_path), "1.0.0")
+    assert not any("--agent-check" in c for c in node.calls)

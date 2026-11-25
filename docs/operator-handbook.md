@@ -134,17 +134,34 @@ To move the first exit node to the agent:
 3. Check it: `node_list` shows the node, and `journalctl -u carrel-agent` on the node shows
    `agent_started` and no `claim_failed`.
 
+To move another node to the agent, after the first exit node runs it:
+
+1. Run `bootstrap-platform.py --firewall` on the first exit node first, so the infra firewall
+   admits port 8443 from the other nodes' underlay addresses. Without that rule the node's agent
+   never connects.
+2. Add the node to `agent_nodes` in `sites/<site>/cluster.json`, copy it to
+   `/etc/carrel/site.json` on the first exit node, and deploy. The deploy makes the node's token
+   in `/etc/carrel/agent-tokens/<node>` on the first exit node, pushes the CA, token,
+   `agent.json`, binary and unit to the node over SSH, starts the agent after the health check,
+   then waits up to 60 seconds for `agent_connected` in `journalctl -u carrel-agent` on that node
+   and fails loudly without it.
+3. Check it as above, on that node.
+
 To go back to SSH, remove the node from `agent_nodes` and deploy again: the node's entry loses
 its transport, `config.json` loses the listener keys, and the agent stops after the health
 check. The CA, the token and the certificate files stay, so moving back needs no new ones. The SSH key line stays in both modes until #604, so either
 transport works at any time.
 
-The listener serves only `10.200.0.3:8443`, TLS 1.3. The infra firewall already drops tenant
-traffic to `10.200.0.3` on any port but 8080. A request needs the node's token and must come from
-`10.200.0.1`. Stopping the agent lets running jobs finish: systemd waits up to 4 hours 30 minutes
-(`TimeoutStopSec`), the longest a root op runs. To rotate the token, create
-`/etc/carrel/agent-token.rotate` on the node and deploy again; a failed deploy keeps the old
-token. Do not delete the token file: the restored configuration would then name a token no file
+The listener serves only `10.200.0.3:8443`, TLS 1.3. The infra firewall drops tenant traffic to
+`10.200.0.3` on any port but 8080; port 8443 is open only to the other site nodes' underlay
+addresses, arriving on the underlay interface. A request needs the node's token and must come from
+the node's `agent_source`: `10.200.0.1` for the first exit node, the node's underlay address for
+any other. Stopping the agent lets running jobs finish: systemd waits up to 4 hours 30 minutes
+(`TimeoutStopSec`), the longest a root op runs. To rotate a token, on the first exit node create
+`/etc/carrel/agent-token.rotate` for the first exit node's own token, or
+`/etc/carrel/agent-tokens/<node>.rotate` for another node's, and deploy again. A failed health
+check keeps the first exit node's old token; a rotated token of another node takes effect at the
+next deploy that passes the health check. Do not delete the token file: the restored configuration would then name a token no file
 holds.
 
 ## Keys from the portal

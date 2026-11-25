@@ -558,3 +558,36 @@ def test_a_token_rotates_only_when_asked_and_the_old_one_stays_until_then(tmp_pa
     second = module.agent_token()
     assert second != first and not (tmp_path / "agent-token.rotate").exists()
     assert (tmp_path / "agent-token").stat().st_mode & 0o777 == 0o600
+
+
+def test_a_peer_agent_that_never_connects_is_named(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    site = {**SITE, "agent_nodes": ["carrel02", "carrel03"]}
+    (tmp_path / "site.json").write_text(json.dumps(site))
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    monkeypatch.setattr(module.socket, "gethostname", lambda: "carrel01")
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    nodes = module.targets(SITE, "carrel01")
+    seen = []
+
+    def fake(args, **kw):
+        seen.append(args)
+        connected = args[-2] == "root@" + nodes[1]["address"]
+        assert (
+            "ConnectTimeout=5" in args and args[-1] == "journalctl -u carrel-agent --since @1700000000 -o cat"
+        )
+        return subprocess.CompletedProcess(args, 0, '{"msg":"agent_connected"}' if connected else "", "")
+
+    monkeypatch.setattr(module.subprocess, "run", fake)
+    assert module.peers_connected(1700000000, wait=3) == ["carrel03"]
+    # carrel02 is asked once, carrel03 on every round.
+    assert sum(a[-2].endswith(nodes[1]["address"]) for a in seen) == 1
+    assert sum(a[-2].endswith(nodes[2]["address"]) for a in seen) == 3
+
+
+def test_the_handbook_names_the_rotate_files_the_code_reads():
+    module = load("configure-nodes.py")
+    handbook = (ROOT / "docs/operator-handbook.md").read_text()
+    assert f"`{module.AGENT_ROTATE}`" in handbook
+    assert f"`{module.AGENT_TOKENS}/<node>.rotate`" in handbook
+    assert "bootstrap-platform.py --firewall" in handbook and "8443" in handbook
