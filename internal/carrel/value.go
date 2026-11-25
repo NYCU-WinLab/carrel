@@ -19,6 +19,27 @@ import (
 
 const Version = "0.10.0" // x-release-please-version
 
+// Release is "true" only in binaries the release workflow builds (-ldflags -X);
+// every other build reports itself as a development build.
+var Release = "false"
+
+// Build describes this binary: its version, the commit it was built from,
+// whether the tree had uncommitted changes, and whether it is a release.
+func Build() D {
+	b := D{"version": Version, "release": Release == "true", "revision": "unknown", "modified": false}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				b["revision"] = s.Value
+			case "vcs.modified":
+				b["modified"] = s.Value == "true"
+			}
+		}
+	}
+	return b
+}
+
 type D = map[string]any
 
 func obj(v any) D {

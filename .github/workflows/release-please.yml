@@ -47,3 +47,38 @@ jobs:
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ fromJSON(steps.release.outputs.pr || '{}').headBranchName }}
         run: gh workflow run check.yml --ref "$BRANCH"
+
+  # Runs only on the push that merged the release pull request, so the artifact
+  # is built from the release commit and attached to the release just created.
+  build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+      # The archive holds every binary, built with Release=true so /healthz says
+      # it is a release, and the scripts deploy-go.py installs from it.
+      - name: Build and upload the release archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          name="carrel-$TAG-linux-amd64"
+          mkdir -p "$name/dist"
+          for cmd in carrel carrel-deployd carrel-fetch carrel-fnd carrel-fn-init; do
+            CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-X github.com/NYCU-WinLab/carrel/internal/carrel.Release=true" \
+              -o "$name/dist/$cmd" "./cmd/$cmd"
+          done
+          cp -r scripts "$name/scripts"
+          rm -rf "$name/scripts/__pycache__"
+          git rev-parse HEAD > "$name/REVISION"
+          tar -czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > SHA256SUMS
+          gh release upload "$TAG" "$name.tar.gz" SHA256SUMS --clobber

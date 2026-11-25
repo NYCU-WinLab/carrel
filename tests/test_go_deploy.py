@@ -49,7 +49,7 @@ def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, 
         "hashes.json",
     } == names
     assert copied[-1].startswith("root@192.168.19.101:/var/lib/carrel/go-upgrade-")
-    command = calls[-2]
+    command = next(c for c in calls if c[0] == "ssh" and "install-control.py" in c[2])
     assert command[:2] == ["ssh", "root@192.168.19.101"] and "install-control.py host --stage" in command[2]
     report = json.loads((tmp_path / "deploy-go.json").read_text())
     assert f"--version {report['version']}" in command[2]
@@ -63,11 +63,79 @@ def test_deploy_needs_an_explicit_host(tmp_path, monkeypatch):
     deploy = load("deploy-go.py")
     for argv in (
         ["--artifacts", str(tmp_path)],
+        ["--host", "root@carrel01"],
+        ["--host", "root@carrel01", "--artifacts", str(tmp_path), "--release", "v0.11.0"],
         ["--host", "-oProxyCommand=x", "--artifacts", str(tmp_path)],
     ):
         monkeypatch.setattr(sys, "argv", ["deploy-go.py", *argv])
         with pytest.raises(SystemExit):
             deploy.main()
+
+
+def release_archive(work, tag, extra=None, sums=None):
+    """Write what `gh release download` would leave in work: the archive and SHA256SUMS."""
+    import io
+    import tarfile
+
+    name = f"carrel-{tag}-linux-amd64"
+    archive = work / f"{name}.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        files = {f"{name}/REVISION": b"abc123\n"}
+        files.update(
+            {f"{name}/dist/{b}": b"release binary" for b in ("carrel", "carrel-deployd", "carrel-fetch")}
+        )
+        files.update({f"{name}/scripts/{s.name}": s.read_bytes() for s in (ROOT / "scripts").glob("*.py")})
+        files.update(extra or {})
+        for path, data in files.items():
+            info = tarfile.TarInfo(path)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    digest = sums or hashlib.sha256(archive.read_bytes()).hexdigest()
+    (work / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n")
+
+
+def deploy_release(tmp_path, monkeypatch, **archive):
+    deploy = load("deploy-go.py")
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        if args[:3] == ["gh", "release", "download"]:
+            release_archive(Path(args[args.index("-D") + 1]), args[3], **archive)
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(deploy, "run", run)
+    monkeypatch.setattr(deploy.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["deploy-go.py", "--host", "root@carrel01", "--release", "v0.11.0"])
+    deploy.main()
+    return calls
+
+
+def test_a_release_deploy_installs_the_checked_archive(tmp_path, monkeypatch):
+    calls = deploy_release(tmp_path, monkeypatch)
+    command = next(c for c in calls if c[0] == "ssh" and "install-control.py host" in c[2])
+    assert "--version 0.11.0" in command[2]
+    report = json.loads((tmp_path / "carrel-v0.11.0-linux-amd64/dist/deploy-go.json").read_text())
+    assert report["release"] is True and report["revision"] == "abc123"
+    copied = next(c for c in calls if c[0] == "scp")
+    assert all("carrel-v0.11.0-linux-amd64" in p for p in copied[1:-1])
+
+
+def test_a_release_archive_that_does_not_match_its_checksum_is_refused(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match="SHA256SUMS"):
+        deploy_release(tmp_path, monkeypatch, sums="0" * 64)
+
+
+def test_a_release_archive_with_a_path_outside_its_folder_is_refused(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit, match="Unexpected path"):
+        deploy_release(tmp_path, monkeypatch, extra={"carrel-v0.11.0-linux-amd64/../evil": b"x"})
+
+
+def test_a_release_must_be_a_version_tag(tmp_path, monkeypatch):
+    deploy = load("deploy-go.py")
+    monkeypatch.setattr(sys, "argv", ["deploy-go.py", "--host", "root@carrel01", "--release", "main"])
+    with pytest.raises(SystemExit):
+        deploy.main()
 
 
 class Node:
