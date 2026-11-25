@@ -122,6 +122,26 @@ func TestTelemetrySendsWarningsAndErrorsOnly(t *testing.T) {
 	}
 }
 
+// A stock collector takes no token: no Authorization header goes out, and
+// the resource names the site so one collector can hold several.
+func TestTelemetryWithoutATokenNamesTheSite(t *testing.T) {
+	c := newCollector(t)
+	tel := newTelemetry(Config{Origin: "https://carrel.example", TelemetryURL: c.server.URL}, c.server.Client(), slog.NewJSONHandler(io.Discard, nil))
+	tel.Gauge("carrel.node.reachable", "1", 1, "node", "carrel01")
+	tel.Close()
+	posts := c.seen("/v1/metrics")
+	if len(posts) != 1 || posts[0].authorization != "" {
+		t.Fatal(posts)
+	}
+	attrs := map[string]any{}
+	for _, a := range dicts(walk(posts[0].body, "resourceMetrics", 0, "resource", "attributes")) {
+		attrs[str(a["key"])] = walk(a, "value", "stringValue")
+	}
+	if attrs["service.name"] != "carrel" || attrs["service.version"] != Version || attrs["service.instance.id"] != "carrel.example" {
+		t.Fatal(attrs)
+	}
+}
+
 func TestTelemetryGaugesCarryTheirAttributes(t *testing.T) {
 	c := newCollector(t)
 	tel, token := telemetryFixture(t, c, slog.NewJSONHandler(io.Discard, nil))
@@ -283,8 +303,12 @@ func TestTelemetryConfig(t *testing.T) {
 	}{
 		{"", "", true},
 		{"https://sensorium.example", "/etc/carrel/telemetry.token", true},
-		{"https://sensorium.example", "", false},
+		// A stock collector with no token, over http or https.
+		{"https://sensorium.example", "", true},
+		{"http://127.0.0.1:4318", "", true},
+		// A token never goes over http.
 		{"http://sensorium.example", "/etc/carrel/telemetry.token", false},
+		{"ftp://sensorium.example", "", false},
 		{"https://user@sensorium.example", "/etc/carrel/telemetry.token", false},
 		{"https://sensorium.example/?x=1", "/etc/carrel/telemetry.token", false},
 	} {

@@ -25,6 +25,7 @@ import (
 type Telemetry struct {
 	url       string
 	tokenFile string
+	site      string
 	client    *http.Client
 	stderr    slog.Handler
 	queue     chan telemetryItem
@@ -72,6 +73,7 @@ func newTelemetry(c Config, client *http.Client, stderr slog.Handler) *Telemetry
 	t := &Telemetry{
 		url:       strings.TrimRight(c.TelemetryURL, "/"),
 		tokenFile: c.TelemetryTokenFile,
+		site:      c.OriginHost(),
 		client:    client,
 		stderr:    stderr,
 		queue:     make(chan telemetryItem, telemetryQueue),
@@ -213,15 +215,15 @@ func (t *Telemetry) loop() {
 	var logs, metrics, spans []D
 	flush := func() {
 		if len(logs) > 0 {
-			t.post("/v1/logs", D{"resourceLogs": []D{{"resource": otlpResource(), "scopeLogs": []D{{"scope": D{"name": "carrel"}, "logRecords": logs}}}}})
+			t.post("/v1/logs", D{"resourceLogs": []D{{"resource": t.otlpResource(), "scopeLogs": []D{{"scope": D{"name": "carrel"}, "logRecords": logs}}}}})
 			logs = nil
 		}
 		if len(metrics) > 0 {
-			t.post("/v1/metrics", D{"resourceMetrics": []D{{"resource": otlpResource(), "scopeMetrics": []D{{"scope": D{"name": "carrel"}, "metrics": metrics}}}}})
+			t.post("/v1/metrics", D{"resourceMetrics": []D{{"resource": t.otlpResource(), "scopeMetrics": []D{{"scope": D{"name": "carrel"}, "metrics": metrics}}}}})
 			metrics = nil
 		}
 		if len(spans) > 0 {
-			t.post("/v1/traces", D{"resourceSpans": []D{{"resource": otlpResource(), "scopeSpans": []D{{"scope": D{"name": "carrel"}, "spans": spans}}}}})
+			t.post("/v1/traces", D{"resourceSpans": []D{{"resource": t.otlpResource(), "scopeSpans": []D{{"scope": D{"name": "carrel"}, "spans": spans}}}}})
 			spans = nil
 		}
 	}
@@ -259,20 +261,26 @@ func (t *Telemetry) loop() {
 	}
 }
 
-func otlpResource() D {
-	return D{"attributes": []D{otlpString("service.name", "carrel"), otlpString("service.version", Version)}}
+// otlpResource names the sender. service.instance.id is the site's host
+// name, so one collector can take several sites apart.
+func (t *Telemetry) otlpResource() D {
+	return D{"attributes": []D{otlpString("service.name", "carrel"), otlpString("service.version", Version),
+		otlpString("service.instance.id", t.site)}}
 }
 
 // post sends one request. The token is read on every send, so rotating it
 // needs no restart.
 func (t *Telemetry) post(path string, body D) {
 	problem := func() string {
-		token, err := os.ReadFile(t.tokenFile)
-		if err != nil {
-			return "token file unreadable"
-		}
-		if len(bytes.TrimSpace(token)) == 0 {
-			return "token file empty"
+		var token []byte
+		if t.tokenFile != "" {
+			var err error
+			if token, err = os.ReadFile(t.tokenFile); err != nil {
+				return "token file unreadable"
+			}
+			if token = bytes.TrimSpace(token); len(token) == 0 {
+				return "token file empty"
+			}
 		}
 		content, err := json.Marshal(body)
 		if err != nil {
@@ -283,7 +291,9 @@ func (t *Telemetry) post(path string, body D) {
 			return "invalid request"
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+		if token != nil {
+			req.Header.Set("Authorization", "Bearer "+string(token))
+		}
 		resp, err := t.client.Do(req)
 		if err != nil {
 			return "collector unreachable"
