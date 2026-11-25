@@ -131,7 +131,7 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 	must(os.MkdirAll(config, 0700))
 	p.Config.Database = filepath.Join(root, "state.db")
 	p.Config.CertificateDir = filepath.Join(root, "certificates")
-	for _, name := range []string{"config.json", "node_key", "node_key.pub", "ssh_config", "known_hosts"} {
+	for _, name := range []string{"config.json", "node_key", "node_key.pub", "service_key", "service_key.pub", "ssh_config", "known_hosts"} {
 		must(os.WriteFile(filepath.Join(config, name), []byte("fixture"), 0600))
 	}
 	cert := p.execution(context.Background()).CertificateDir()
@@ -184,7 +184,7 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 				t.Fatal("certificate link lost")
 			}
 		}
-		if !files["etc/carrel/node_key"] || !files["certificates/live/certificate"] {
+		if !files["etc/carrel/node_key"] || !files["etc/carrel/service_key"] || !files["certificates/live/certificate"] {
 			t.Fatal("incomplete backup")
 		}
 		if !nodeDown && (!files["nodes/carrel01/node.json"] || !files["nodes/carrel01/templates.json"]) {
@@ -203,5 +203,49 @@ func TestBackupRoundTripPreservesDatabaseConfigAndSymlinks(t *testing.T) {
 	result, err := p.Backup(context.Background(), config)
 	if err != nil || !equal(result["missing_nodes"], []any{"carrel-node"}) {
 		t.Fatalf("%v %v", err, encoded(result))
+	}
+}
+
+// A key that is not there yet (the service key before configure-nodes.py
+// runs) or any more (the node key after #604) is left out; any other file
+// must be there.
+func TestBackupWithoutAKeyFile(t *testing.T) {
+	p, b := fixture(t)
+	root := t.TempDir()
+	config := filepath.Join(root, "etc")
+	must(os.MkdirAll(config, 0700))
+	p.Config.Database = filepath.Join(root, "state.db")
+	p.Config.CertificateDir = filepath.Join(root, "certificates")
+	for _, name := range []string{"config.json", "service_key", "service_key.pub", "ssh_config", "known_hosts"} {
+		must(os.WriteFile(filepath.Join(config, name), []byte("fixture"), 0600))
+	}
+	var names []string
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] != "backup" {
+			return D{"node": "carrel01", "files": D{}}, nil
+		}
+		raw, err := base64.StdEncoding.DecodeString(str(r["archive"]))
+		must(err)
+		gz, err := gzip.NewReader(bytes.NewReader(raw))
+		must(err)
+		archive := tar.NewReader(gz)
+		names = nil
+		for h, err := archive.Next(); err == nil; h, err = archive.Next() {
+			names = append(names, h.Name)
+		}
+		return D{"stored": true}, nil
+	}
+	if _, err := p.Backup(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(names, "etc/carrel/service_key") || contains(names, "etc/carrel/node_key") {
+		t.Fatalf("archive %v", names)
+	}
+	for _, name := range []string{"ssh_config", "config.json"} {
+		must(os.Remove(filepath.Join(config, name)))
+		if _, err := p.Backup(context.Background(), config); err == nil {
+			t.Fatalf("a backup without %s succeeded", name)
+		}
+		must(os.WriteFile(filepath.Join(config, name), []byte("fixture"), 0600))
 	}
 }

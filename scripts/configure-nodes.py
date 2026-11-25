@@ -38,9 +38,16 @@ from pathlib import Path
 
 SITE = Path("/etc/carrel/site.json")
 PROGRAMS = ["node-agent.py", "guest-report.py"]
-GATEWAY = {"name": "carrel-gateway", "target": "carrel-gateway", "host": "10.200.0.2"}
+# The control plane reaches the gateway, the jump host and the off-site backup
+# with its service key, never with the node key, so the node key can go once
+# every node uses the agent (#606, #604).
+SERVICE_KEY = "/etc/carrel/service_key"
+GATEWAY = {"name": "carrel-gateway", "target": "carrel-gateway", "host": "10.200.0.2", "identity": SERVICE_KEY}
 GATEWAY_SYNC = "/usr/local/lib/carrel/gateway-sync.py"
-JUMP = {"name": "carrel-jump", "target": "carrel-jump", "host": "10.200.0.4"}
+JUMP = {"name": "carrel-jump", "target": "carrel-jump", "host": "10.200.0.4", "identity": SERVICE_KEY}
+# The backup target is outside the cluster; its address stays in the hand-written
+# part of ssh_config, and only its key is managed here.
+BACKUP = {"target": "carrel-backup", "identity": SERVICE_KEY}
 JUMP_SYNC = "/usr/local/lib/carrel/jump-sync.py"
 JUMP_CERT = "/usr/local/lib/carrel/jump-cert.py"
 # Lab certificates on the jump host, for the user ca: jump-cert.py turns a certificate's
@@ -319,17 +326,21 @@ def node_entries(nodes, agents, digests):
     return out
 
 
-def gateway(key):
-    """Install gateway-sync.py in CT 101 as the forced command for CT 100's key."""
+def gateway(*keys):
+    """Install gateway-sync.py in CT 101 as the forced command for CT 100's keys.
+
+    The service key, and the node key until it goes (#604): a failed deploy
+    puts back an older ssh_config that offers only the node key.
+    """
     run("pct", "exec", "101", "--", "install", "-d", "-m", "755", "/usr/local/lib/carrel")
     run("pct", "push", "101", GATEWAY_SYNC, GATEWAY_SYNC, "--perms", "755")
     current = run("pct", "exec", "101", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
     kept = [x for x in current.splitlines() if GATEWAY_SYNC not in x]
-    line = f'from="10.200.0.3",restrict,command="{GATEWAY_SYNC}" {key}'
+    lines = [f'from="10.200.0.3",restrict,command="{GATEWAY_SYNC}" {key}' for key in keys]
     run("pct", "exec", "101", "--", "sh", "-c",
         "umask 077 && mkdir -p /root/.ssh && cat > /root/.ssh/authorized_keys.carrel-next"
         " && mv /root/.ssh/authorized_keys.carrel-next /root/.ssh/authorized_keys",
-        input="\n".join([*kept, line]) + "\n")
+        input="\n".join([*kept, *lines]) + "\n")
     # Keys only: CT 101 holds every tenant's private keys. Restart, not
     # reload: ssh.socket holds port 22, and a reloaded sshd binds it itself.
     run("pct", "exec", "101", "--", "sh", "-c",
@@ -363,8 +374,8 @@ def jump_cert_apply(f):
     )
 
 
-def jump(key):
-    """Install jump-sync.py in CT 102 as the forced command for CT 100's key (issue #98)."""
+def jump(*keys):
+    """Install jump-sync.py in CT 102 as the forced command for CT 100's keys (issue #98), as gateway() does."""
     run("pct", "exec", "102", "--", "install", "-d", "-m", "755", "/usr/local/lib/carrel")
     run("pct", "push", "102", JUMP_SYNC, JUMP_SYNC, "--perms", "755")
     run("pct", "push", "102", JUMP_CERT, JUMP_CERT, "--perms", "755")
@@ -375,11 +386,11 @@ def jump(key):
     run("pct", "exec", "102", "--", "sh", "-c", jump_cert_apply(JUMP_CERT_SSHD_PATH), input=JUMP_CERT_SSHD)
     current = run("pct", "exec", "102", "--", "sh", "-c", "cat /root/.ssh/authorized_keys 2>/dev/null || true")
     kept = [x for x in current.splitlines() if JUMP_SYNC not in x]
-    line = f'from="10.200.0.3",restrict,command="{JUMP_SYNC}" {key}'
+    lines = [f'from="10.200.0.3",restrict,command="{JUMP_SYNC}" {key}' for key in keys]
     run("pct", "exec", "102", "--", "sh", "-c",
         "umask 077 && mkdir -p /root/.ssh && cat > /root/.ssh/authorized_keys.carrel-next"
         " && mv /root/.ssh/authorized_keys.carrel-next /root/.ssh/authorized_keys",
-        input="\n".join([*kept, line]) + "\n")
+        input="\n".join([*kept, *lines]) + "\n")
     return " ".join(run("pct", "exec", "102", "--", "cat", "/etc/ssh/ssh_host_ed25519_key.pub").split()[:2])
 
 
@@ -426,7 +437,13 @@ def ksm_off(n, local):
 def ssh_config(existing, nodes):
     block = [BEGIN]
     for n in nodes:
-        block += [f"Host {n['target']}", f"  HostName {n['host']}"]
+        block.append(f"Host {n['target']}")
+        if n.get("host"):
+            block.append(f"  HostName {n['host']}")
+        if n.get("identity"):
+            # ssh offers the node key of "Host *" first, then this one; once
+            # the node key goes (#604), this one is left.
+            block.append(f"  IdentityFile {n['identity']}")
     block.append(END)
     if BEGIN in existing and END in existing:
         head, rest = existing.split(BEGIN, 1)
@@ -436,7 +453,7 @@ def ssh_config(existing, nodes):
     lines, skip = [], False
     for line in existing.splitlines():
         if line.startswith("Host "):
-            skip = line.split()[1] in {n["target"] for n in nodes}
+            skip = line.split()[1] in {n["target"] for n in nodes if n.get("host")}
         if not skip:
             lines.append(line)
     if not lines:
@@ -481,10 +498,16 @@ def main():
     ct("sh", "-c", 'mkdir -p /etc/carrel && { test -f /etc/carrel/node_key || ssh-keygen -q -t ed25519 -N "" -f /etc/carrel/node_key; }')
     ct("sh", "-c", "id carrel >/dev/null 2>&1 && chown carrel:carrel /etc/carrel/node_key || true; chmod 600 /etc/carrel/node_key")
     key = " ".join(ct("cat", "/etc/carrel/node_key.pub").split()[:2])
+    ct("sh", "-c", f'{{ test -f {SERVICE_KEY} || ssh-keygen -q -t ed25519 -N "" -C carrel-service -f {SERVICE_KEY}; }}')
+    ct("sh", "-c", f"id carrel >/dev/null 2>&1 && chown carrel:carrel {SERVICE_KEY} || true; chmod 600 {SERVICE_KEY}")
+    service = " ".join(ct("cat", SERVICE_KEY + ".pub").split()[:2])
     replace_file(AUTHORIZED, merge_authorized(AUTHORIZED.read_text() if AUTHORIZED.exists() else "", authorized_line(key, me["address"]), key), 0o600)
+    # The service key goes into ssh_config before CT 101 and CT 102 take it.
+    current = ct("sh", "-c", "cat /etc/carrel/ssh_config 2>/dev/null || true")
+    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, [*nodes, *infra, BACKUP]))
     # 3. The gateway's forced command in CT 101.
-    gateway_key = gateway(key)
-    jump_key = jump(key) if site.get("ssh_jump") else None
+    gateway_key = gateway(service, key)
+    jump_key = jump(service, key) if site.get("ssh_jump") else None
     # 4. CT 100: targets, pinned host keys, the node list.
     entries = []
     for n in nodes:
@@ -496,8 +519,6 @@ def main():
     entries.append((GATEWAY["host"], gateway_key))
     if jump_key:
         entries.append((JUMP["host"], jump_key))
-    current = ct("sh", "-c", "cat /etc/carrel/ssh_config 2>/dev/null || true")
-    ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, [*nodes, *infra]))
     current = ct("sh", "-c", "cat /etc/carrel/known_hosts 2>/dev/null || true")
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
     # The agent listener's keys are in config.json only while a node uses it.

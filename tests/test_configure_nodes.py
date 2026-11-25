@@ -147,7 +147,7 @@ def test_infra_containers_match_the_infra_bridge_mtu(monkeypatch):
     assert net.endswith(",mtu=1450")
 
 
-def test_the_gateway_takes_only_the_control_planes_key_as_a_forced_command(monkeypatch):
+def test_the_gateway_takes_the_control_planes_keys_as_a_forced_command(monkeypatch):
     module = load("configure-nodes.py")
     calls = []
 
@@ -175,6 +175,14 @@ def test_the_gateway_takes_only_the_control_planes_key_as_a_forced_command(monke
     assert "reload" not in next(a[-1] for a, i in calls if i == sshd)
     config = module.ssh_config("", [*module.targets(SITE, "carrel01"), module.GATEWAY])
     assert "Host carrel-gateway\n  HostName 10.200.0.2" in config
+    # The service key and, until #604, the node key: both lines replace the old one.
+    calls.clear()
+    module.gateway("ssh-ed25519 SERVICE", "ssh-ed25519 NODE")
+    written = next(i for a, i in calls if i and "authorized_keys.carrel-next" in a[-1])
+    assert written.splitlines()[1:] == [
+        'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/gateway-sync.py" ssh-ed25519 SERVICE',
+        'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/gateway-sync.py" ssh-ed25519 NODE',
+    ]
 
 
 def test_the_pinned_caddy_replaces_the_running_package_caddy(monkeypatch, tmp_path):
@@ -591,3 +599,40 @@ def test_the_handbook_names_the_rotate_files_the_code_reads():
     assert f"`{module.AGENT_ROTATE}`" in handbook
     assert f"`{module.AGENT_TOKENS}/<node>.rotate`" in handbook
     assert "bootstrap-platform.py --firewall" in handbook and "8443" in handbook
+
+
+def test_ssh_config_gives_the_gateway_jump_and_backup_the_service_key():
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    legacy = "Host *\n  User root\n  IdentityFile /etc/carrel/node_key\nHost carrel-backup\n  HostName 140.113.194.229\n  Port 1121\n"
+    config = module.ssh_config(legacy, [*nodes, module.GATEWAY, module.JUMP, module.BACKUP])
+    assert "Host carrel-gateway\n  HostName 10.200.0.2\n  IdentityFile /etc/carrel/service_key\n" in config
+    assert "Host carrel-jump\n  HostName 10.200.0.4\n  IdentityFile /etc/carrel/service_key\n" in config
+    # The hand-written address of the backup target stays; only its key is added.
+    assert "Host carrel-backup\n  HostName 140.113.194.229\n  Port 1121\n" in config
+    assert "Host carrel-backup\n  IdentityFile /etc/carrel/service_key\n" in config
+    # Nodes keep the node key of "Host *" and get no service key.
+    assert "Host carrel-node\n  HostName 10.200.0.1\nHost" in config
+    assert module.ssh_config(config, [*nodes, module.GATEWAY, module.JUMP, module.BACKUP]) == config
+
+
+def test_the_jump_host_takes_both_keys_as_a_forced_command(monkeypatch):
+    module = load("configure-nodes.py")
+    calls = []
+
+    def run(*args, input=None):
+        calls.append((args, input))
+        if args[-1] == "cat /root/.ssh/authorized_keys 2>/dev/null || true":
+            return 'ssh-ed25519 ADMIN admin\nfrom="10.200.0.3",restrict,command="/usr/local/lib/carrel/jump-sync.py" ssh-ed25519 OLD\n'
+        if args[-1] == "/etc/ssh/ssh_host_ed25519_key.pub":
+            return "ssh-ed25519 HOSTKEY root@carrel-jump\n"
+        return ""
+
+    monkeypatch.setattr(module, "run", run)
+    assert module.jump("ssh-ed25519 SERVICE", "ssh-ed25519 NODE") == "ssh-ed25519 HOSTKEY"
+    written = next(i for a, i in calls if i and "authorized_keys.carrel-next" in a[-1])
+    assert written.splitlines() == [
+        "ssh-ed25519 ADMIN admin",
+        'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/jump-sync.py" ssh-ed25519 SERVICE',
+        'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/jump-sync.py" ssh-ed25519 NODE',
+    ]
