@@ -168,7 +168,12 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	}
 	// The archive leaves the cluster: carrel-backup is a forced command on a
 	// host outside it (scripts/backup-target.py).
-	response, e := p.Backend.Call(ctx, D{"op": "backup", "archive": base64.StdEncoding.EncodeToString(buffer.Bytes())}, "carrel-backup")
+	request := D{"op": "backup", "archive": base64.StdEncoding.EncodeToString(buffer.Bytes())}
+	if len(missing) > 0 {
+		// The target keeps a complete archive of the day over this one (#627).
+		request["missing_nodes"] = missing
+	}
+	response, e := p.Backend.Call(ctx, request, "carrel-backup")
 	if e != nil {
 		return nil, e
 	}
