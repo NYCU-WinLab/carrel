@@ -2619,6 +2619,12 @@ def test_replay_does_nothing_while_a_reconcile_is_pending(monkeypatch, tmp_path)
     assert module.replay() == {"replayed": False, "skipped": "pending reconcile"}
 
 
+def test_replay_unit_orders_after_pve_cluster_without_pulling_it_in():
+    unit = load("node-agent.py").REPLAY_UNIT
+    assert "After=pve-cluster.service" in unit
+    assert "Wants=pve-cluster.service" not in unit
+
+
 def _replay_module(monkeypatch, tmp_path, first):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
