@@ -145,10 +145,8 @@ def test_a_release_must_be_a_version_tag(tmp_path, monkeypatch):
 class Node:
     """Records what install-control's host part runs, and can fail one step."""
 
-    def __init__(
-        self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False, agent_ran=True
-    ):
-        self.calls, self.fail_on, self.agent_ran = [], fail_on, agent_ran
+    def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False):
+        self.calls, self.fail_on = [], fail_on
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
         for name in ("node-agent.py", "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py"):
@@ -172,7 +170,6 @@ class Node:
     def subprocess_run(self, args, clear_fails):
         self.calls.append(tuple(args))
         failed = clear_fails and tuple(args[:5]) == ("pct", "exec", "102", "--", "rm")
-        failed = failed or (not self.agent_ran and tuple(args[:2]) == ("systemctl", "is-active"))
         return SimpleNamespace(returncode=1 if failed else 0)
 
     def run(self, *args, **kwargs):
@@ -397,18 +394,18 @@ def test_a_binary_of_another_version_stops_the_install(monkeypatch, tmp_path):
     assert asked == [(tmp_path / "carrel", "-version")]
 
 
-@pytest.mark.parametrize(
-    "ran, expected",
-    [(True, ("systemctl", "restart", "--no-block")), (False, ("systemctl", "disable", "--now"))],
-)
-def test_a_failed_upgrade_restores_programs_beside_them_and_the_agent_as_it_ran(
-    tmp_path, monkeypatch, ran, expected
-):
+def test_a_failed_upgrade_restores_programs_beside_them_and_leaves_the_agent_alone(tmp_path, monkeypatch):
     module = load("install-control.py")
-    unit = tmp_path / "carrel-agent.service"
-    unit.write_text("[Unit]\n")
-    monkeypatch.setattr(module, "AGENT_UNIT", unit)
-    node = Node(module, monkeypatch, tmp_path, fail_on=lambda a: a[-1] == "activate", agent_ran=ran)
+    token = tmp_path / "agent-token"
+    token.write_text("old token")
+    monkeypatch.setattr(module, "AGENT_TOKEN", token)
+
+    def fail_on(args):
+        if "configure-nodes.py" in args[-1]:
+            token.write_text("new token")  # configure-nodes.py rotated it
+        return args[-1] == "activate"
+
+    node = Node(module, monkeypatch, tmp_path, fail_on=fail_on)
     (node.lib / "carrel-agent").write_text("old carrel-agent")
     copies = []
     real = module.shutil.copy2
@@ -417,4 +414,24 @@ def test_a_failed_upgrade_restores_programs_beside_them_and_the_agent_as_it_ran(
         module.host(staged(tmp_path), "1.0.0")
     assert (node.lib / "carrel-agent").read_text() == "old carrel-agent"
     assert str(node.lib / "carrel-agent") not in copies, "copied in place over a running binary"
-    assert any(c[: len(expected)] == expected for c in node.calls), node.calls
+    assert token.read_text() == "old token"
+    assert not any("--agent-service" in c for c in node.calls), "the agent was touched by a failed upgrade"
+
+
+def test_the_agent_starts_or_stops_only_after_the_health_check(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    order = []
+    monkeypatch.setattr(
+        module, "healthy", lambda version, host: order.append("health") or {"version": version}
+    )
+    real = node.subprocess_run
+
+    def record(args, clear_fails):
+        if "--agent-service" in args:
+            order.append("agent")
+        return real(args, clear_fails)
+
+    monkeypatch.setattr(module.subprocess, "run", lambda args, **kw: record(args, False))
+    module.host(staged(tmp_path), "1.0.0")
+    assert order == ["health", "agent"]

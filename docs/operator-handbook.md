@@ -123,12 +123,14 @@ To move the first exit node to the agent:
      `agent_listen`, `agent_cert_file` and `agent_key_file` in `config.json`;
    - makes the node's token in `/etc/carrel/agent-token` (mode 0600, kept across deploys) and
      writes `transport`, `agent_token_sha256` and `agent_source` into the node's `config.json` entry;
-   - writes `/etc/carrel/agent.json` and starts `carrel-agent.service`.
+   - once the new control plane answers its health check, writes `/etc/carrel/agent.json` and
+     starts `carrel-agent.service`. A failed deploy never touches a running agent.
 3. Check it: `node_list` shows the node, and `journalctl -u carrel-agent` on the node shows
    `agent_started` and no `claim_failed`.
 
-To go back to SSH, remove the node from `agent_nodes` and deploy again: the agent stops and the
-node's entry loses its transport. The SSH key line stays in both modes until #604, so either
+To go back to SSH, remove the node from `agent_nodes` and deploy again: the node's entry loses
+its transport, `config.json` loses the listener keys, and the agent stops after the health
+check. The CA, the token and the certificate files stay, so moving back needs no new ones. The SSH key line stays in both modes until #604, so either
 transport works at any time.
 
 The listener serves only `10.200.0.3:8443`, TLS 1.3. The infra firewall already drops tenant

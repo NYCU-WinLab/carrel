@@ -495,3 +495,28 @@ def test_the_agent_unit_lets_running_jobs_finish():
     unit = load("configure-nodes.py").AGENT_SERVICE
     assert "KillMode=mixed" in unit and "TimeoutStopSec=4h30min" in unit
     assert "ExecStart=/usr/local/lib/carrel/carrel-agent -config /etc/carrel/agent.json" in unit
+
+
+def test_the_agent_service_follows_the_site_file_without_blocking(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a) or "")
+    monkeypatch.setattr(module.socket, "gethostname", lambda: "carrel01")
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    monkeypatch.setattr(module, "AGENT_JSON", tmp_path / "agent.json")
+    monkeypatch.setattr(module, "AGENT_UNIT", tmp_path / "carrel-agent.service")
+    assert module.SITE.write_text(json.dumps(SITE)) and module.agent_service() == "absent"
+    assert calls == []
+    module.SITE.write_text(json.dumps({**SITE, "agent_nodes": ["carrel01"]}))
+    assert module.agent_service() == "started"
+    assert json.loads((tmp_path / "agent.json").read_text()) == {
+        "control": "https://10.200.0.3:8443",
+        "ca_file": "/etc/carrel/agent-ca/ca.pem",
+        "token_file": "/etc/carrel/agent-token",
+        "node": "carrel01",
+    }
+    assert ("systemctl", "restart", "--no-block", "carrel-agent.service") in calls
+    calls.clear()
+    module.SITE.write_text(json.dumps(SITE))
+    assert module.agent_service() == "stopped"
+    assert calls == [("systemctl", "disable", "--now", "--no-block", "carrel-agent.service")]

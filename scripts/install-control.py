@@ -37,7 +37,9 @@ HELPERS = {"guest-report.py": "644", "gateway-sync.py": "644", "jump-sync.py": "
 # Node programs that run: node-agent.py behind SSH, carrel-agent on a node whose
 # transport is agent (PLAN 8.6; configure-nodes.py starts it).
 EXECUTABLES = {"node-agent.py": "755", "carrel-agent": "755"}
-AGENT_UNIT = Path("/etc/systemd/system/carrel-agent.service")
+# configure-nodes.py makes it once; a run that rotates it and then fails puts
+# the old one back with the old digest in config.json.
+AGENT_TOKEN = Path("/etc/carrel/agent-token")
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
 KEEP = 5
 DATABASE = Path("/var/lib/carrel/carrel.db")
@@ -279,13 +281,10 @@ def host(stage, version):
     # A first install has no units yet; stopping them is then a no-op.
     for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], capture_output=True, check=False)
-    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json",
+    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json", "agent-token": AGENT_TOKEN,
               **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
     # Read before anything can fail: only a record this run created may be removed.
     had_release = (LIB / "release.json").exists()
-    # configure-nodes.py may start or stop the node's agent; a failed upgrade
-    # puts it back as it was, on the restored binary and configuration.
-    agent_ran = subprocess.run(["systemctl", "is-active", "--quiet", "carrel-agent.service"], check=False).returncode == 0
     configured = activated = False
     try:
         ct_command("preflight")
@@ -344,13 +343,6 @@ def host(stage, version):
                     path.unlink()
             except OSError as error:
                 print(f"WARNING: could not restore {path}: {error}", file=sys.stderr)
-        if AGENT_UNIT.exists():
-            # --no-block: an agent finishing a job must not hold up carrel's restart.
-            if agent_ran:
-                subprocess.run(["systemctl", "enable", "carrel-agent.service"], check=False)
-                subprocess.run(["systemctl", "restart", "--no-block", "carrel-agent.service"], check=False)
-            else:
-                subprocess.run(["systemctl", "disable", "--now", "--no-block", "carrel-agent.service"], check=False)
         # The restored binary may send no "gen", which jump-sync.py refuses once a
         # generation is recorded; carrel is stopped, so no write races this.
         if (configured or activated) and jump_site():
@@ -365,6 +357,12 @@ def host(stage, version):
     finally:
         # Absent only when a first install failed before its units existed.
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
+    # The node's agent starts or stops only now, against a healthy control
+    # plane: a failed upgrade above never touched it.
+    agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False)
+    if agent.returncode:
+        print("WARNING: carrel-agent was not started or stopped; run "
+              f"python3 {stage}/configure-nodes.py --agent-service on this node", file=sys.stderr)
     for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
         shutil.rmtree(old)
 

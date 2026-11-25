@@ -14,9 +14,13 @@ and bootstrap-platform.py and after the node programs are installed there. It:
 4. writes CT 100's SSH targets, pinned host keys and config.json "nodes";
 5. asks every node's adapter for its inventory, and the gateway for its
    status, through CT 100;
-6. runs carrel-agent on the nodes the site file lists in "agent_nodes"
+6. prepares carrel-agent for the nodes the site file lists in "agent_nodes"
    (PLAN 8.6): a CA and the listener's certificate, a token per node, and the
    node's transport set to agent. Every other node keeps the SSH transport.
+
+`--agent-service` starts or stops the agent itself. install-control.py runs it
+only once the new control plane is healthy, so a failed upgrade never touches
+a running agent, and an agent that stops can still hand in its last answers.
 
 It never prints a key or a secret, and keeps every config.json key it does not own.
 """
@@ -193,19 +197,26 @@ def agent_listener():
             "agent_key_file": f"{AGENT_TLS}/server.key"}
 
 
-def agent_start(name):
-    replace_file(AGENT_JSON, json.dumps({"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
-                                         "token_file": str(AGENT_TOKEN), "node": name}, indent=2) + "\n", 0o644)
-    replace_file(AGENT_UNIT, AGENT_SERVICE, 0o644)
-    run("systemctl", "daemon-reload")
-    run("systemctl", "enable", "carrel-agent.service")
-    # A new binary or token takes effect; the agent answers what it runs first.
-    run("systemctl", "restart", "carrel-agent.service")
+def agent_service():
+    """Start the agent on this node when the site file lists it, else stop it.
 
-
-def agent_stop():
+    --no-block: an agent finishing a long job keeps its old process until the
+    job is answered, and the deploy does not wait for it."""
+    site = json.loads(SITE.read_text())
+    me = targets(site, socket.gethostname().split(".")[0])[0]
+    if me["name"] in agent_nodes(site, targets(site, me["name"])):
+        replace_file(AGENT_JSON, json.dumps({"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
+                                             "token_file": str(AGENT_TOKEN), "node": me["name"]}, indent=2) + "\n", 0o644)
+        replace_file(AGENT_UNIT, AGENT_SERVICE, 0o644)
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "carrel-agent.service")
+        # A new binary or token takes effect.
+        run("systemctl", "restart", "--no-block", "carrel-agent.service")
+        return "started"
     if AGENT_UNIT.exists():
-        run("systemctl", "disable", "--now", "carrel-agent.service")
+        run("systemctl", "disable", "--now", "--no-block", "carrel-agent.service")
+        return "stopped"
+    return "absent"
 
 
 def node_entries(nodes, agents, digest):
@@ -422,16 +433,10 @@ def main():
         status = json.loads(ct("ssh", "-F", "/etc/carrel/ssh_config", JUMP["target"], input='{"op":"status"}'))
         if not status.get("ok"):
             raise SystemExit("the jump host did not answer through carrel-jump")
-    # 6. carrel-agent where the site file asks for it; the SSH line above stays
-    # until #604, so either transport answers.
-    if me["name"] in agents:
-        agent_start(me["name"])
-    else:
-        agent_stop()
-    # 7. ksmtuned off on every node; a second run changes nothing.
+    # 6. ksmtuned off on every node; a second run changes nothing.
     for n in nodes:
         ksm_off(n, n is me)
-    # 8. Keys only on every node, last: everything above already answered by
+    # 7. Keys only on every node, last: everything above already answered by
     # key. The site turns it on once nobody logs in to a node by password.
     if site.get("ssh_keys_only"):
         for n in nodes:
@@ -444,4 +449,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if sys.argv[1:] == ["--agent-service"]:
+        print(json.dumps({"agent": agent_service()}))
+    else:
+        main()
