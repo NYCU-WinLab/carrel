@@ -170,7 +170,7 @@ func makeRootfs(ctx context.Context, image imageSource, initPath string, spec gu
 	}
 	defer os.Remove(stream.Name())
 	defer stream.Close()
-	size, err := rootTar(image, stream, initPath, spec)
+	size, err := rootTar(ctx, image, stream, initPath, spec)
 	if err != nil {
 		return err
 	}

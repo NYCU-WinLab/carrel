@@ -411,9 +411,13 @@ type rootSize struct {
 // The stream is never unpacked on the host: mke2fs reads it straight into
 // the file system image. Names are still made plain here, so that a strange
 // name fails with a clear error and the image cannot bring its own /.fn.
-func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (rootSize, error) {
+func rootTar(ctx context.Context, image v1.Image, out io.Writer, initPath string, spec guestSpec) (rootSize, error) {
 	flat := mutate.Extract(image) // layers merged, deletions applied
 	defer flat.Close()
+	// The build deadline stops the merge too, not only network reads: closing
+	// the merged stream ends a read in progress (#234).
+	stop := context.AfterFunc(ctx, func() { flat.Close() })
+	defer stop()
 	reader, writer := tar.NewReader(flat), tar.NewWriter(&capped{out: out, left: maxStreamBytes})
 	seen := map[string]bool{"": true}
 	var size rootSize
@@ -465,6 +469,9 @@ func rootTar(image v1.Image, out io.Writer, initPath string, spec guestSpec) (ro
 	}
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return size, err
+		}
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
 			break
