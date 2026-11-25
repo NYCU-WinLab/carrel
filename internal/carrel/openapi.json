@@ -1,0 +1,1123 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "carrel HTTP API",
+    "version": "v1",
+    "summary": "The HTTP routes of the carrel control plane, apart from MCP.",
+    "description": "Members and their agents use MCP at /mcp; its tools are described by MCP tools/list, not here. This document covers the other routes: health and status, OAuth, app and function delivery from CI, and the routes that agents inside the platform call. Each operation carries x-carrel-audience: public (anyone), ci (a CI job with a forge OIDC token), member (a member's agent holding a link token), agent (a program carrel installed, on the infra network or in a member machine), or internal (the infra network only: the gateway, function hosts, guests). Internal routes are not reachable through the public gateway and may change without a version bump."
+  },
+  "servers": [
+    {
+      "url": "https://carrel.winlab.tw"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "oauth": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "/oauth/authorize",
+            "tokenUrl": "/oauth/token",
+            "scopes": {}
+          }
+        }
+      },
+      "ciOidc": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A GitHub Actions or GitLab CI OIDC token whose audience is carrel's CI audience."
+      },
+      "agentToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The token carrel gave the agent when it was installed or linked."
+      }
+    },
+    "parameters": {
+      "tenant": {
+        "name": "tenant",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Tenant slug."
+      },
+      "app": {
+        "name": "app",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "function": {
+        "name": "function",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "token": {
+        "name": "token",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "A link token from app_link",
+        "function_env or function_registry.": null
+      },
+      "id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "forbidden",
+                  "not_found",
+                  "invalid",
+                  "conflict",
+                  "quota_exceeded",
+                  "capacity_exhausted",
+                  "internal"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Ok": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "responses": {
+      "Ok": {
+        "description": "Done",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Ok"
+            }
+          }
+        }
+      },
+      "Error": {
+        "description": "Refused or failed; the status follows the error code (403",
+        "404": null,
+        "400": null,
+        "409": null,
+        "507": null,
+        "500)": null,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Json": {
+        "description": "A JSON object",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "Script": {
+        "description": "A shell script",
+        "content": {
+          "text/x-shellscript": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Health and build of the control plane",
+        "responses": {
+          "200": {
+            "description": "The control plane answers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "const": "ok"
+                    },
+                    "service": {
+                      "const": "carrel"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": "string"
+                    },
+                    "modified": {
+                      "type": "boolean"
+                    },
+                    "release": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Site status page data, cached for a short time",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "This document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "OAuth authorization server metadata (RFC 8414)",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/.well-known/openid-configuration": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "The same metadata under the OpenID name",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Protected resource metadata for /mcp (RFC 9728)",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp/read-only": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Protected resource metadata for /mcp/read-only",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/oauth/register": {
+      "post": {
+        "x-carrel-audience": "public",
+        "summary": "Dynamic client registration (RFC 7591)",
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Json"
+          },
+          "400": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Start a sign-in; redirects to Keycloak",
+        "responses": {
+          "302": {
+            "description": "Redirect"
+          }
+        }
+      }
+    },
+    "/oauth/callback": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Keycloak returns here",
+        "responses": {
+          "302": {
+            "description": "Redirect"
+          }
+        }
+      }
+    },
+    "/oauth/consent": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Consent page that binds a registered client to its callback",
+        "responses": {
+          "200": {
+            "description": "HTML page"
+          }
+        }
+      },
+      "post": {
+        "x-carrel-audience": "public",
+        "summary": "Answer the consent page",
+        "responses": {
+          "302": {
+            "description": "Redirect"
+          }
+        }
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "x-carrel-audience": "public",
+        "summary": "Exchange a code or refresh token",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "400": {
+            "$ref": "#/components/responses/Json"
+          }
+        }
+      }
+    },
+    "/oauth/revoke": {
+      "post": {
+        "x-carrel-audience": "public",
+        "summary": "Revoke a token (RFC 7009)",
+        "responses": {
+          "200": {
+            "description": "Revoked"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "x-carrel-audience": "public",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "MCP over Streamable HTTP; the tools are listed by MCP",
+        "responses": {
+          "200": {
+            "description": "MCP response"
+          }
+        }
+      }
+    },
+    "/mcp/read-only": {
+      "post": {
+        "x-carrel-audience": "public",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "MCP with only readOnlyHint tools and whoami",
+        "responses": {
+          "200": {
+            "description": "MCP response"
+          }
+        }
+      }
+    },
+    "/console/": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "The machine console page and its websocket",
+        "opened from machine_console_url": null,
+        "responses": {
+          "200": {
+            "description": "HTML page"
+          }
+        }
+      }
+    },
+    "/apps/v1/install.sh": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Installer for carrel-deployd in a member machine",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Script"
+          }
+        }
+      }
+    },
+    "/apps/v1/deploy.sh": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Script a CI job runs to upload a release",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Script"
+          }
+        }
+      }
+    },
+    "/apps/v1/runner.sh": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Installer for a CI runner (runner_add)",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Script"
+          }
+        }
+      }
+    },
+    "/apps/v1/keys/install.sh": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "Installer for carrel-keys in a member machine",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Script"
+          }
+        }
+      }
+    },
+    "/apps/v1/carrel-deployd": {
+      "get": {
+        "x-carrel-audience": "public",
+        "summary": "The carrel-deployd binary",
+        "responses": {
+          "200": {
+            "description": "Binary",
+            "content": {
+              "application/octet-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/apps/v1/{tenant}/{app}/releases": {
+      "post": {
+        "x-carrel-audience": "ci",
+        "security": [
+          {
+            "ciOidc": []
+          }
+        ],
+        "summary": "Upload a release archive built by CI",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/tenant"
+          },
+          {
+            "$ref": "#/components/parameters/app"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/{tenant}/{app}/releases/{id}": {
+      "get": {
+        "x-carrel-audience": "ci",
+        "security": [
+          {
+            "ciOidc": []
+          }
+        ],
+        "summary": "State of an uploaded release",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/tenant"
+          },
+          {
+            "$ref": "#/components/parameters/app"
+          },
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/hooks/{token}": {
+      "post": {
+        "x-carrel-audience": "member",
+        "summary": "Webhook that tells a pull-mode app to check its source",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/agent/source": {
+      "get": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Where a pull-mode app fetches its source",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/agent/upload": {
+      "post": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Upload a release a pull-mode app built in the machine",
+        "parameters": [
+          {
+            "name": "X-Carrel-Sha",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/gzip": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/agent/next": {
+      "post": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Long poll for the next release to switch to",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "204": {
+            "description": "Nothing new"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/agent/releases/{id}": {
+      "get": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Download a release archive",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Archive",
+            "content": {
+              "application/gzip": {}
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/agent/report": {
+      "post": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Report a switch",
+        "its health check and its result": null,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/deploy/{tenant}/{function}": {
+      "post": {
+        "x-carrel-audience": "ci",
+        "security": [
+          {
+            "ciOidc": []
+          }
+        ],
+        "summary": "Deploy an image CI pushed to a linked function",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/tenant"
+          },
+          {
+            "$ref": "#/components/parameters/function"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/deploy/{tenant}/{function}/{version}": {
+      "get": {
+        "x-carrel-audience": "ci",
+        "security": [
+          {
+            "ciOidc": []
+          }
+        ],
+        "summary": "State of a deployed function version",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/tenant"
+          },
+          {
+            "$ref": "#/components/parameters/function"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/env/{token}": {
+      "put": {
+        "x-carrel-audience": "member",
+        "summary": "Upload a function's environment file through a function_env link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "x-carrel-audience": "member",
+        "summary": "Upload a function's environment file through a function_env link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/registry/{token}": {
+      "put": {
+        "x-carrel-audience": "member",
+        "summary": "Upload registry credentials through a function_registry link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "x-carrel-audience": "member",
+        "summary": "Upload registry credentials through a function_registry link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/agent/state": {
+      "get": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Desired state for a function host, newer than since",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/agent/report": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Actual state of a function host",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/agent/auth": {
+      "get": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Registry credentials for one function version",
+        "parameters": [
+          {
+            "name": "function",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/agent/env": {
+      "get": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Environment for one function version",
+        "parameters": [
+          {
+            "name": "function",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/functions/v1/agent/logs": {
+      "get": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Log requests waiting for a function host",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Answer a log request",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/gateway/ask": {
+      "get": {
+        "x-carrel-audience": "internal",
+        "summary": "The gateway asks whether it may get a certificate for a name (Caddy on-demand TLS)",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Allowed"
+          },
+          "403": {
+            "description": "Not allowed"
+          }
+        }
+      }
+    },
+    "/internal/guest-status": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "summary": "A guest reporter sends its machine's state",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "403": {
+            "description": "Not a guest"
+          }
+        }
+      }
+    },
+    "/internal/guest-keys": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "summary": "carrel-keys in a guest fetches the keys and principals it should hold",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "403": {
+            "description": "Not a guest"
+          }
+        }
+      }
+    }
+  }
+}
