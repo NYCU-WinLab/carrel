@@ -493,3 +493,30 @@ def test_reconcile_stores_its_revision_and_a_boot_replay_restores_only_this_node
     # A node that never reconciled has nothing to replay.
     (module.STATE / "desired.json").unlink()
     assert module.replay() == {"replayed": False}
+
+
+def test_a_replay_drops_expired_vpn_clients_and_fails_loudly(tmp_path, monkeypatch):
+    module = script("node-agent.py")
+    key = "A" * 43 + "="
+    state = {
+        "tenants": [{"n": 1, "slug": "alice"}],
+        "vpn_clients": [
+            {"tenant_n": 1, "address": "10.201.1.2", "public_key": key, "expires_at": 1},
+            {"tenant_n": 1, "address": "10.201.1.3", "public_key": key, "expires_at": 4e9},
+            {
+                "tenant_n": 1,
+                "address": "10.201.1.4",
+                "public_key": key,
+                "expires_at": 4e9,
+                "state": "deleting",
+            },
+        ],
+    }
+    assert module.vpn_clients(state) == {1: [(key, "10.201.1.3")]}
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    (tmp_path / "desired.json").write_text(json.dumps(state))
+    monkeypatch.setattr(module, "private_dhcp", lambda s, serve=True: None)
+    monkeypatch.setattr(module, "first_exit_node", lambda: True)
+    monkeypatch.setattr(module, "vpn", lambda s: {"error": "CommandFailure: wg"})
+    with pytest.raises(RuntimeError, match="VPN replay failed"):
+        module.replay()

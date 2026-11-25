@@ -756,6 +756,10 @@ def vpn_clients(state):
     active = {t["n"] for t in state["tenants"] if t.get("status", "active") == "active"}
     out = {}
     for c in state.get("vpn_clients", []):
+        # The control plane sends live clients only; a state replayed at boot
+        # may hold one that expired since, which must not come back (#603).
+        if c.get("state") == "deleting" or ("expires_at" in c and float(c["expires_at"]) <= time.time()):
+            continue
         n = integer(c["tenant_n"], 1, 254)
         address = ipaddress.IPv4Address(c["address"])
         if address not in ipaddress.IPv4Network(f"10.201.{n}.0/24") or not 2 <= int(address) % 256 <= 254:
@@ -1377,6 +1381,9 @@ def replay():
         state = json.loads(saved.read_text())
         private_dhcp(state, serve=first_exit_node())
         tunnels = vpn(state)
+    if "error" in tunnels:
+        # Exit non-zero, so systemd tries again (Restart=on-failure).
+        raise RuntimeError("VPN replay failed: " + str(tunnels["error"]))
     return {"replayed": True, **desired_info(), "vpn_tenants": sorted(tunnels)}
 
 

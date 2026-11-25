@@ -468,8 +468,12 @@ func (e *Execution) Reconcile() D {
 	revision := digest(string(encoded(request["state"])))
 	request["revision"] = revision
 	nodes := e.P.Nodes()
+	// Recorded before sending: a node whose reconcile fails keeps an older
+	// revision and shows as lagging.
+	for _, n := range nodes {
+		e.P.desired.Store(n.Name, revision)
+	}
 	result := D{"node": e.Call(request, nodes[0].Target)}
-	e.P.desired.Store(nodes[0].Name, revision)
 	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.
@@ -518,7 +522,6 @@ func (e *Execution) Reconcile() D {
 				continue
 			}
 			each[n.Name] = results[i+1]
-			e.P.desired.Store(n.Name, revision)
 		}
 		result["nodes"] = each
 		if len(unreachable) > 0 {
