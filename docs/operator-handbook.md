@@ -109,8 +109,12 @@ location and passed SQLite integrity checking; a full infra/tenant disaster rest
 
 A node reaches the control plane over SSH by default. On the agent transport (PLAN 8.6),
 `carrel-agent` on the node connects out to the control plane instead and runs each job through
-the same `node-agent.py`. Today only the first exit node can use it: the other nodes have no route
-to `10.200.0.3`.
+the same `node-agent.py`. Any site node can use it. The other nodes reach `10.200.0.3:8443` by a host
+route through the first exit node (no NAT): `carrel-agent.service` adds it before it starts, from the
+node's own underlay address, so `agent_source` is that address. The infra firewall
+(`bootstrap-platform.py --firewall` rewrites it) admits port 8443 from the site nodes' underlay
+addresses only. Each other node has its own token in `/etc/carrel/agent-tokens/<node>` on the first
+exit node, copied to `/etc/carrel/agent-token` on the node together with the CA certificate.
 
 To move the first exit node to the agent:
 

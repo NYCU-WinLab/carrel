@@ -157,6 +157,15 @@ def peer_ssh(config, node):
     return [f'iifname "vmbr98" ip saddr 10.200.0.3 ip daddr {{ {", ".join(peers)} }} tcp dport 22 accept'] if peers else []
 
 
+def peer_agent(config, node):
+    # The other nodes' carrel-agent reaches the agent listener over the underlay,
+    # routed (not masqueraded) so the control plane sees each node's own address.
+    peers = [str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"] if n["name"] != node]
+    rule = (f'iifname "{config["underlay_interface"]}" oifname "vmbr98" ip saddr {{ {", ".join(peers)} }} '
+            "ip daddr 10.200.0.3 tcp dport 8443 accept")
+    return [rule] if peers else []
+
+
 def caddy(vmid):
     """Install the pinned official Caddy in the gateway CT."""
     with tempfile.TemporaryDirectory() as temp:
@@ -306,6 +315,7 @@ PEER_SSH
   oifname "vmbr98" udp dport 53 ip daddr 10.200.0.2 accept
   oifname "vmbr98" tcp dport 53 ip daddr 10.200.0.2 accept
   oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.3 tcp dport 8080 accept
+PEER_AGENT
   oifname "vmbr98" ct status dnat ip daddr 10.200.0.2 tcp dport { 80, 443 } accept
   oifname "vmbr98" ct status dnat ip daddr 10.200.0.4 tcp dport 22 accept
   oifname "vmbr98" ip saddr 10.200.0.0/16 ip daddr 10.200.0.2 tcp dport { 80, 443 } accept
@@ -324,6 +334,7 @@ PEER_SSH
     rules = rules.replace("MANAGEMENT", config.get("management_interface", config["underlay_interface"]))
     rules = rules.replace("UNDERLAY", "\n".join("  " + rule for rule in underlay(config, host)))
     rules = rules.replace("PEER_SSH\n", "".join("  " + rule + "\n" for rule in peer_ssh(config, host)))
+    rules = rules.replace("PEER_AGENT\n", "".join("  " + rule + "\n" for rule in peer_agent(config, host)))
     write("/etc/carrel/infra.nft", rules)
     run("nft", "-c", "-f", "/etc/carrel/infra.nft")
     run("nft", "-f", "/etc/carrel/infra.nft")
