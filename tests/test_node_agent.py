@@ -2587,3 +2587,12 @@ def test_guest_write_keeps_old_bytes_when_replacing_and_the_write_stalls(monkeyp
     with pytest.raises(OSError):
         module.guest_write(str(root), "/etc/file", "0123456789", 0o644)
     assert target.read_text() == "old-content"
+
+
+def test_inventory_programs_name_the_release_and_the_agent_digest(tmp_path, monkeypatch):
+    agent = load("node-agent.py")
+    monkeypatch.setattr(agent, "RELEASE", tmp_path / "release.json")
+    digest = hashlib.sha256((Path(__file__).parents[1] / "scripts/node-agent.py").read_bytes()).hexdigest()
+    assert agent.programs_info() == {"version": None, "node_agent_sha256": digest}
+    (tmp_path / "release.json").write_text('{"version": "0.11.0"}')
+    assert agent.programs_info()["version"] == "0.11.0"

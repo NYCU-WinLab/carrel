@@ -79,6 +79,16 @@ workstation or a node.
 Existing route/NAT state remains in place. See [rollout record 15.9](b09-rollout-record.md#159-go-control-plane-06-2026-10-02)
 for the reader credential and rollback details. Secrets travel through SSH stdin and protected files.
 
+Deploy a published release with `deploy-go.py --host <first exit node> --release vX.Y.Z`: it
+downloads the release archive, checks it against the release's `SHA256SUMS`, and installs the
+binaries and scripts from the archive. `--artifacts` deploys a development build instead, and
+`/healthz` then reports `"release": false`.
+
+After a deploy, `node_list` shows the control plane's build (`control_plane`), each node's
+`programs` (the release they came from and node-agent's digest) and `stale_nodes`, the nodes whose
+programs came from another release. A failed upgrade restores the programs on the first exit node
+only, so the other nodes show up there until the next successful deploy.
+
 The `carrel-backup.timer` makes a consistent SQLite backup with config, service key and certificates
 each day and sends it off the cluster to the SSH target `carrel-backup`: `scripts/backup-target.py`,
 a forced command on spawner (the old PVE), keeps 14 daily archives under `/var/lib/carrel-backups`,

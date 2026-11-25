@@ -25,12 +25,22 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			// against limits, and how full the node's storage really is.
 			inventory := e.Call(D{"op": "inventory"}, n.Target)
 			reservations, snapshots := e.nodeLoad(n, nil)
-			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory})
+			programs := obj(obj(inventory)["programs"])
+			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
+				"programs": programs, "programs_current": programs["version"] == Version})
+		}
+		// A node whose programs came from another release than the control
+		// plane is listed, so a half finished upgrade or rollback shows (#555).
+		stale := []any{}
+		for _, n := range nodes {
+			if n["programs_current"] != true {
+				stale = append(stale, n["name"])
+			}
 		}
 		if len(nodes) == 1 {
-			return D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"]}
+			return D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale}
 		}
-		return D{"inventory": nodes[0]["inventory"], "nodes": nodes}
+		return D{"inventory": nodes[0]["inventory"], "nodes": nodes, "control_plane": Build(), "stale_nodes": stale}
 	case "machine_migrate":
 		return e.PlanMigration(a)
 	case "node_drain", "node_undrain":

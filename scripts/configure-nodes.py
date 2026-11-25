@@ -249,7 +249,7 @@ def main():
     # 1. Node programs on the other nodes, the same version as here.
     for n in nodes[1:]:
         run("ssh", *peer(n), "root@" + n["address"], "install -d -m 755 /usr/local/lib/carrel /var/lib/carrel")
-        for program in PROGRAMS:
+        for program in PROGRAMS + (["release.json"] if Path("/usr/local/lib/carrel/release.json").exists() else []):
             run("scp", "-q", *peer(n), f"/usr/local/lib/carrel/{program}", f"root@{n['address']}:/usr/local/lib/carrel/{program}")
         run("ssh", *peer(n), "root@" + n["address"], "chmod 755 /usr/local/lib/carrel/node-agent.py")
     # 2. One forced-command line in the cluster-wide authorized_keys.

@@ -213,6 +213,32 @@ def test_a_tampered_transfer_stops_before_anything_changes(tmp_path, monkeypatch
     assert node.calls == []
 
 
+def test_an_upgrade_records_its_release_for_the_node_programs(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    module.host(staged(tmp_path), "1.0.0")
+    release = json.loads((node.lib / "release.json").read_text())
+    assert release["version"] == "1.0.0"
+    assert release["sha256"]["node-agent.py"] == hashlib.sha256(b"new node-agent.py").hexdigest()
+
+
+def test_a_failed_upgrade_puts_the_previous_release_record_back(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path, fail_on=lambda a: "configure-nodes.py" in a[-1])
+    (node.lib / "release.json").write_text('{"version": "0.9.0"}')
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    assert json.loads((node.lib / "release.json").read_text())["version"] == "0.9.0"
+
+
+def test_a_failed_first_recorded_upgrade_leaves_no_release_record(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path, fail_on=lambda a: "configure-nodes.py" in a[-1])
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    assert not (node.lib / "release.json").exists()
+
+
 def test_an_upgrade_backs_up_then_installs_then_activates(tmp_path, monkeypatch):
     module = load("install-control.py")
     node = Node(module, monkeypatch, tmp_path)

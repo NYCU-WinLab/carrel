@@ -146,6 +146,19 @@ def pve_get(resource, **params):
     return data
 
 
+RELEASE = Path("/usr/local/lib/carrel/release.json")
+
+
+def programs_info():
+    """The release these node programs came from, and this file's own digest (#555)."""
+    try:
+        release = json.loads(RELEASE.read_text())
+    except (OSError, ValueError):
+        release = {}
+    return {"version": release.get("version"),
+            "node_agent_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+
+
 def inventory_read(storage):
     # The token sees every volume only with Datastore.Allocate on the storage;
     # PVEAuditor alone silently omits volumes. Refuse incomplete authority.
@@ -3461,6 +3474,7 @@ def main():
                 **observed,
                 "disk_committed_bytes": sum(v["size"] for v in volumes if v.get("content") in ("images", "rootdir")),
                 "snapshot_bytes": snapshot_bytes(storage_definition(storage)["pool"]),
+                "programs": programs_info(),
             }
         elif op == "vmids_present":
             out = vmids_present(req["vmids"])
