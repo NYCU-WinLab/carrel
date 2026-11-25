@@ -3,14 +3,26 @@ package carrel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/netip"
+	"slices"
+	"strings"
 	"time"
 )
 
 // agentPoll is how long one claim waits for a job.
 const agentPoll = 30 * time.Second
+
+// AgentProtocol is the protocol this control plane speaks with node agents.
+// agentProtocols are the ones it serves: the current and the previous one,
+// so a node's agent and the control plane can be upgraded one at a time
+// (#561). An agent speaking anything else is refused with the release to
+// install.
+const AgentProtocol = "v1"
+
+var agentProtocols = []string{AgentProtocol}
 
 // maxAgentClaim bounds a claim's body: a session, a number and the ids the
 // agent holds.
@@ -30,9 +42,11 @@ func (p *Platform) AgentHandler() http.Handler {
 			return
 		}
 		var in struct {
-			Session string   `json:"session"`
-			Seq     uint64   `json:"seq"`
-			Held    []string `json:"held"`
+			Protocol string   `json:"protocol"`
+			Release  string   `json:"release"`
+			Session  string   `json:"session"`
+			Seq      uint64   `json:"seq"`
+			Held     []string `json:"held"`
 			// Drain: the agent is shutting down and takes no job.
 			Drain bool `json:"drain"`
 		}
@@ -40,6 +54,12 @@ func (p *Platform) AgentHandler() http.Handler {
 			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "The body must be JSON with session and seq"}})
 			return
 		}
+		if !slices.Contains(agentProtocols, in.Protocol) {
+			jsonResponse(w, 426, D{"ok": false, "error": D{"code": "protocol_unsupported",
+				"message": fmt.Sprintf("This control plane serves agent protocols %s, not %q. Install carrel-agent from release %s.", strings.Join(agentProtocols, ", "), in.Protocol, Version)}})
+			return
+		}
+		p.Hub.Hello(node, in.Session, in.Protocol, in.Release)
 		if in.Drain {
 			p.Hub.Heartbeat(node, in.Session, in.Seq, in.Held)
 			jsonResponse(w, 200, D{"jobs": []AgentJob{}})
@@ -84,6 +104,16 @@ func (p *Platform) agentAllowed(r *http.Request, node string) bool {
 		}
 		source, serr := netip.ParseAddr(n.AgentSource)
 		return token != "" && err == nil && serr == nil && from.Unmap() == source.Unmap() && secureEqual(digest(token), n.AgentTokenSHA256)
+	}
+	return false
+}
+
+// onAgent reports whether a node uses the agent transport.
+func (p *Platform) onAgent(name string) bool {
+	for _, n := range p.Config.Nodes {
+		if n.Name == name {
+			return n.Transport == "agent"
+		}
 	}
 	return false
 }
