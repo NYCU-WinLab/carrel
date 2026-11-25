@@ -2660,3 +2660,63 @@ def test_a_failed_reconcile_keeps_the_pending_marker_and_a_good_one_clears_it(mo
     )
     assert not marker.exists()
     assert (tmp_path / "desired.json").exists()
+
+
+def _stub_reconcile(module, monkeypatch, tmp_path):
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "PENDING", tmp_path / "reconcile.pending")
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text("{}")
+    monkeypatch.setattr(module, "topology_read", lambda: ({}, {}))
+    monkeypatch.setattr(module, "site_ipv6", lambda: None)
+    monkeypatch.setattr(module, "V6_OWNED", tmp_path / "ipv6-prefixes.json")
+    monkeypatch.setattr(module, "run", lambda *a, **k: "")
+    for name in ("vpn", "ipv6", "guest_sets_prune"):
+        monkeypatch.setattr(module, name, lambda *a, **k: {})
+    monkeypatch.setattr(module, "private_dhcp", lambda *a, **k: None)
+    monkeypatch.setattr(module, "public_ingress", lambda: None)
+    monkeypatch.setattr(module, "public_addresses_release", lambda *a, **k: None)
+    monkeypatch.setattr(module, "vip_targets", lambda state: {})
+    monkeypatch.setattr(module, "first_exit_node", lambda: False)
+    real = module.write
+    monkeypatch.setattr(
+        module,
+        "write",
+        lambda path, data, mode=0o640: (
+            real(path, data, mode) if Path(path).is_relative_to(tmp_path) else True
+        ),
+    )
+
+
+EMPTY_STATE = {"tenants": [], "networks": [], "machines": [], "peers": [], "ports": [], "public_ips": []}
+REVISION = "a" * 64
+
+
+def test_a_reconcile_that_fails_after_the_vpn_step_keeps_the_old_revision(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    _stub_reconcile(module, monkeypatch, tmp_path)
+    (tmp_path / "desired-revision.json").write_text('{"revision": "old"}')
+
+    def boom(*a, **k):
+        raise RuntimeError("after vpn")
+
+    monkeypatch.setattr(module, "ipv6", boom)
+    with pytest.raises(RuntimeError):
+        module.reconcile(EMPTY_STATE, revision=REVISION)
+    assert json.loads((tmp_path / "desired-revision.json").read_text()) == {"revision": "old"}
+
+
+def test_a_good_reconcile_writes_the_revision(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    _stub_reconcile(module, monkeypatch, tmp_path)
+    module.reconcile(EMPTY_STATE, revision=REVISION)
+    assert module.desired_info()["revision"] == REVISION
+
+
+def test_a_reconcile_without_a_revision_removes_the_old_one(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    _stub_reconcile(module, monkeypatch, tmp_path)
+    (tmp_path / "desired-revision.json").write_text('{"revision": "old"}')
+    module.reconcile(EMPTY_STATE)
+    assert not (tmp_path / "desired-revision.json").exists()
+    assert module.desired_info() == {"revision": None}

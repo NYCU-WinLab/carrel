@@ -1629,8 +1629,6 @@ WantedBy=multi-user.target
     run("systemctl", "enable", "--now", "carrel-vip-probe")
     write(STATE / "desired.json", json.dumps(state, sort_keys=True))
     PENDING.unlink(missing_ok=True)
-    if revision is not None:
-        write(STATE / "desired-revision.json", json.dumps({"revision": revision, "applied_at": int(time.time())}))
     if write("/etc/systemd/system/carrel-replay.service", REPLAY_UNIT):
         run("systemctl", "daemon-reload")
     # Enabled, not started: it runs at the next boot.
@@ -1643,6 +1641,13 @@ WantedBy=multi-user.target
         out["vpn"] = tunnels
     if site6:
         out["ipv6"] = site6
+    # Last, so a failure above never leaves the node reporting a revision it
+    # did not finish. Without a revision the old one would be stale.
+    revision_file = STATE / "desired-revision.json"
+    if revision is not None:
+        write(revision_file, json.dumps({"revision": revision, "applied_at": int(time.time())}))
+    else:
+        revision_file.unlink(missing_ok=True)
     return out
 
 
