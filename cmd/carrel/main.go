@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"log/slog"
@@ -88,6 +89,7 @@ func main() {
 		telemetry.Close()
 		return
 	}
+	platform.UseAgents()
 	app := carrel.NewApp(platform, nil)
 	server := &http.Server{Addr: *listen, Handler: app, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -99,6 +101,21 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(shutdown)
 	}()
+	if cfg.AgentListen != "" {
+		// Node agents (PLAN 8.6): their own TLS listener, never the gateway.
+		agents := &http.Server{Addr: cfg.AgentListen, Handler: platform.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16,
+			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
+		go func() {
+			<-ctx.Done()
+			_ = agents.Close()
+		}()
+		go func() {
+			if err := agents.ListenAndServeTLS(cfg.AgentCertFile, cfg.AgentKeyFile); err != nil && err != http.ErrServerClosed {
+				slog.Error("agent_listener_failed", "error", err)
+				stop()
+			}
+		}()
+	}
 	slog.Info("carrel_started", "build", carrel.Build())
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("http_server_failed", "error", err)

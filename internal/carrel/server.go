@@ -328,6 +328,11 @@ func (p *Platform) Start() {
 	p.Operations.Recover()
 	p.startNetBox()
 	p.startTelemetry()
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.sweepAgents(p.ctx)
+	}()
 	// Push the jump state once at start, so a revoke committed around the last
 	// shutdown does not wait for a node to answer the first reconcile.
 	p.execution(p.ctx).syncJumpUntilSynced()

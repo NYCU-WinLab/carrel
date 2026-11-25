@@ -30,6 +30,8 @@ type agentNode struct {
 	session string
 	seq     uint64
 	retired map[string]bool
+	// seen is when the node's agent last polled.
+	seen time.Time
 	// wake is closed and replaced when a job is queued, so a waiting claim
 	// answers at once instead of on its next tick.
 	wake chan struct{}
@@ -41,6 +43,7 @@ type agentJob struct {
 	taken   bool
 	session string
 	seq     uint64
+	at      time.Time
 	done    chan agentOutput
 }
 
@@ -80,7 +83,9 @@ func (h *AgentHub) Call(ctx context.Context, request D, node, target string) (an
 	h.mu.Lock()
 	// Unique per dispatch and across restarts: a job sent again is a new job,
 	// and an agent's held result never matches a job of another run.
-	job := &agentJob{id: rand.Text(), request: request, done: make(chan agentOutput, 1)}
+	// A copy made now: the caller's map may change after Call returns, while
+	// the agent's poll still encodes it.
+	job := &agentJob{id: rand.Text(), request: copyValue(request).(map[string]any), at: time.Now(), done: make(chan agentOutput, 1)}
 	n := h.node(node)
 	n.jobs[job.id] = job
 	close(n.wake)
@@ -114,26 +119,11 @@ func (h *AgentHub) Call(ctx context.Context, request D, node, target string) (an
 // all jobs of a process that was replaced. Only a job nobody took is handed
 // out again.
 func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, held []string, wait time.Duration) []AgentJob {
-	holding := map[string]bool{}
-	for _, id := range held {
-		holding[id] = true
-	}
-	h.mu.Lock()
-	n := h.node(node)
-	if session == "" || n.retired[session] || (session == n.session && seq <= n.seq) {
-		h.mu.Unlock()
+	if !h.accept(node, session, seq, held) {
 		return []AgentJob{}
 	}
-	if session != n.session && n.session != "" {
-		n.retired[n.session] = true
-	}
-	n.session, n.seq = session, seq
-	for id, job := range n.jobs {
-		if job.taken && (job.session != session || !holding[id]) {
-			delete(n.jobs, id)
-			job.done <- agentOutput{failed: errAgentLostJob}
-		}
-	}
+	h.mu.Lock()
+	n := h.node(node) // accept made it; the map is read under the lock
 	h.mu.Unlock()
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
@@ -171,6 +161,39 @@ func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, 
 	}
 }
 
+// accept records a poll: it is from the current process and newer than its
+// last one, or it is refused. It fails what the agent lost and marks the
+// agent alive.
+func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool {
+	holding := map[string]bool{}
+	for _, id := range held {
+		holding[id] = true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.node(node)
+	if session == "" || n.retired[session] || (session == n.session && seq <= n.seq) {
+		return false
+	}
+	if session != n.session && n.session != "" {
+		n.retired[n.session] = true
+	}
+	n.session, n.seq, n.seen = session, seq, time.Now()
+	for id, job := range n.jobs {
+		if job.taken && (job.session != session || !holding[id]) {
+			delete(n.jobs, id)
+			job.done <- agentOutput{failed: errAgentLostJob}
+		}
+	}
+	return true
+}
+
+// Heartbeat is a poll that takes no job: an agent shutting down sends it
+// while its last jobs finish, so they are not swept as lost.
+func (h *AgentHub) Heartbeat(node, session string, seq uint64, held []string) {
+	h.accept(node, session, seq, held)
+}
+
 // Release puts back jobs a poll took but could not deliver (its answer
 // failed to reach the agent), so the next poll hands them out instead of
 // failing them as lost. They never ran.
@@ -196,8 +219,11 @@ func (h *AgentHub) Complete(node, id string, out []byte, exitFailed bool) bool {
 	}
 	h.mu.Lock()
 	n := h.node(node)
+	// A job released after a poll's answer failed may still have reached
+	// the agent and run: its answer counts all the same, so it is never
+	// handed out again.
 	job := n.jobs[id]
-	if job == nil || !job.taken {
+	if job == nil {
 		h.mu.Unlock()
 		return false
 	}
@@ -209,6 +235,28 @@ func (h *AgentHub) Complete(node, id string, out []byte, exitFailed bool) bool {
 	}
 	job.done <- agentOutput{out: out, failed: failed}
 	return true
+}
+
+// agentSilence is how long a node's agent may go without polling before its
+// jobs fail: three missed long polls. SSH gives up on a silent node after
+// about 45 seconds; without this a job would wait its whole timeout, up to
+// 4 hours, while the operation holds the writer.
+const agentSilence = 90 * time.Second
+
+// Sweep fails the jobs no agent will answer: those taken by an agent that
+// stopped polling, and those nobody took within agentSilence.
+func (h *AgentHub) Sweep(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, n := range h.nodes {
+		silent := now.Sub(n.seen) > agentSilence
+		for id, job := range n.jobs {
+			if (job.taken && silent) || (!job.taken && now.Sub(job.at) > agentSilence) {
+				delete(n.jobs, id)
+				job.done <- agentOutput{failed: errAgentLostJob}
+			}
+		}
+	}
 }
 
 // RoutedBackend sends requests for nodes on the agent transport through the
