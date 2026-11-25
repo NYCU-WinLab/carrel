@@ -5137,7 +5137,7 @@
     },
     {
       "name": "operation_get",
-      "description": "Continue waiting for a pending operation with id, up to 55 seconds by default (zero for immediate status). No call is needed after a succeeded mutation. Without id, list the latest 50 tenant operations. Summary preserves next_action, failures, cleanup and pending reservation status; detail=full includes full accounting and identifiers. Follow next_action, and poll no faster than poll_after_seconds.",
+      "description": "Continue waiting for a pending operation with id, up to 55 seconds by default (zero for immediate status). No call is needed after a succeeded mutation. Without id, list the latest 50 tenant operations. Summary preserves next_action, failures, cleanup and pending reservation status; detail=full includes full accounting and identifiers. done is true once the operation has finished, whatever its state. Follow next_action, and poll no faster than poll_after_seconds.",
       "inputSchema": {
         "type": "object",
         "properties": {
