@@ -356,6 +356,25 @@ func TestFunctionLogsLargestAnswerFits(t *testing.T) {
 	}
 }
 
+// A host's read error can name its paths: the member sees a fixed message.
+func TestFunctionLogsHideTheHostError(t *testing.T) {
+	_, a := functionFixture(t)
+	alice := person("alice", false)
+	assertOK(t, a.Call(context.Background(), "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	done := make(chan D, 1)
+	go func() { done <- a.Call(context.Background(), "function_logs", D{"function": "hook"}, alice) }()
+	_, asked := hostCall(t, a, "GET", "/functions/v1/agent/logs", testHostToken, "")
+	body, _ := json.Marshal(D{"id": obj(arr(asked["requests"])[0])["id"], "error": "openat2 /srv/functions/t1-hook/log: permission denied"})
+	if code, out := hostCall(t, a, "POST", "/functions/v1/agent/logs", testHostToken, string(body)); code != 200 {
+		t.Fatalf("answer: %d %v", code, out)
+	}
+	r := <-done
+	assertCode(t, r, "unavailable")
+	if out, _ := json.Marshal(r); strings.Contains(string(out), "/srv/") || strings.Contains(string(out), "openat2") {
+		t.Fatalf("host error reached the member: %s", out)
+	}
+}
+
 const testEnvKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=" // 32 bytes
 
 // putEnv uploads an environment file to a function_env link, from outside.

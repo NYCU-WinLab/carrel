@@ -81,8 +81,10 @@ func (e *Execution) functionRegistry(a, w, t D) D {
 	url := strings.TrimRight(e.P.Config.Origin, "/") + "/functions/v1/registry/" + token
 	return D{
 		"function": f["name"], "registry": registry, "url": url, "expires_at": expires, "single_use": true,
-		"upload":      `printf '{"username":"%s","password":"%s"}' "$REGISTRY_USER" "$REGISTRY_TOKEN" | curl --fail-with-body -X PUT --data-binary @- ` + url,
-		"next_action": "Set REGISTRY_USER and REGISTRY_TOKEN in the shell (for ghcr.io: a GitHub user and a token with read:packages, such as `gh auth token` when it has that scope), then run the upload line. Never paste the token into a tool argument. Then deploy, or deploy again if a build failed to pull.",
+		// jq quotes any password; printf, the fallback, breaks on a quote or a
+		// backslash (the upload then answers 400, nothing leaks).
+		"upload":      `{ if command -v jq >/dev/null; then jq -n --arg u "$REGISTRY_USER" --arg p "$REGISTRY_TOKEN" '{username:$u,password:$p}'; else printf '{"username":"%s","password":"%s"}' "$REGISTRY_USER" "$REGISTRY_TOKEN"; fi; } | curl --fail-with-body -X PUT --data-binary @- ` + url,
+		"next_action": "Check that registry names the registry you mean: without registry it is the current image's, which any member of the tenant can set. Set REGISTRY_USER and REGISTRY_TOKEN in the shell (for ghcr.io: a GitHub user and a token with read:packages, such as `gh auth token` when it has that scope), then run the upload line. Never paste the token into a tool argument. Then deploy, or deploy again if a build failed to pull.",
 	}
 }
 

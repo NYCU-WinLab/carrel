@@ -1586,7 +1586,8 @@ to tenant networks, one instance per `reuse` function.
    registry the same way: a single-use link, sealed on the function and bound to one registry
    host. The desired state marks a version whose image is on that registry (`has_auth`), the host
    fetches the credentials from `GET /functions/v1/agent/auth` to pull it, and an image on any
-   other registry is pulled without them.
+   other registry is pulled without them. The credentials belong to the tenant: any member can
+   deploy any image the stored token can read on that registry.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`.
