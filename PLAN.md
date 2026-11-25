@@ -1648,7 +1648,8 @@ guests.
 A host that cannot meet 8.3 is a separate site with its own cluster. Sites never share a corosync
 ring. One control plane manages every site, and each site runs a site agent: it connects out to
 the control plane, pulls the desired state, applies it to its own Proxmox and reports the actual
-state. With the control plane away, a site keeps running what it last received. Sites come in two
+state. The site agent is one process per node (8.6), because each node applies its own firewall
+and units. With the control plane away, a site keeps running what it last received. Sites come in two
 kinds:
 
 | Kind | Run by | Trust | Who places machines there |
@@ -1712,16 +1713,22 @@ Constraints the agent has to keep, found in the code (2026-11-25):
 **Design.**
 
 1. **Unit.** One `carrel-agent` per node, wrapping `node-agent.py`, so the closed op set and its root
-   checks stay as they are. A site is the set of its nodes' agents plus its gateway; site-wide ops
-   still go to the first exit node.
+   checks stay as they are. The site agent of 8.4 is the set of its nodes' agents; site-wide ops
+   still go to the first exit node. One process per site would have to reach the other nodes
+   itself, which is the SSH path again.
 2. **Transport.** The agent connects out over HTTPS and long-polls for jobs, as `carrel-fnd` does
    (`GET /sites/v1/agent/jobs`). A job carries an id, the op and its request; the agent posts the
    result to `POST /sites/v1/agent/jobs/{id}`. The job id is the `request_id`, so a repeated job
-   returns the journaled result. The control plane waits for the result with the timeouts it uses
-   today, so the writer lock and the operation phases do not change in the first step.
-3. **Identity.** The agent signs in with a short-lived client certificate from the lab step-ca,
-   bound to one node and one site. A node that uses the agent has no `authorized_keys` line for the
-   control plane.
+   returns the journaled result. The agent runs jobs concurrently, as SSH calls run today, so a
+   4 hour `migrate` does not hold up `status` or `inventory` on the same node. The control plane
+   waits for the result with the timeouts it uses today, so the writer lock and the operation
+   phases do not change in the first step.
+3. **Identity.** The agent runs root ops it pulls, so it must know whom it talks to: it speaks
+   HTTPS only, to a control plane certificate under a CA it pins, in every mode. Tenant machines
+   can reach 10.200.0.3, so plain HTTP is never allowed. The agent signs in with a short-lived
+   client certificate from the lab step-ca, bound to one node and one site; until that lands, with
+   a hashed bearer token and a fixed source address, as `carrel-fnd` does. A node that uses the
+   agent has no `authorized_keys` line for the control plane.
 4. **Versions.** The first request carries `protocol: "v1"`, the agent's release and its capabilities
    (#561, #562). The control plane serves the current and the previous protocol version.
 5. **Durable state.** The agent stores each reconcile request with its revision, replays the last one
@@ -1730,8 +1737,9 @@ Constraints the agent has to keep, found in the code (2026-11-25):
    B09 moves one node at a time with no machine change; the SSH path goes after the last node.
    The release archive ships `carrel-agent` with the other node programs (#565).
 
-Console streams, the gateway and the jump host keep their SSH path until a private site needs them
-(#568).
+Console streams, the gateway sync, the jump host sync and the off-site backup also use the
+control plane's SSH key today. They move off it in their own issue (#606) before the key goes
+(#604).
 
 ## 9. Observability
 
