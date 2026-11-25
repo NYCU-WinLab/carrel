@@ -2619,6 +2619,41 @@ def test_replay_does_nothing_while_a_reconcile_is_pending(monkeypatch, tmp_path)
     assert module.replay() == {"replayed": False, "skipped": "pending reconcile"}
 
 
+def _replay_module(monkeypatch, tmp_path, first):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "PENDING", tmp_path / "reconcile.pending")
+    (tmp_path / "desired.json").write_text("{}")
+    monkeypatch.setattr(module, "first_exit_node", lambda: first)
+    monkeypatch.setattr(module, "site_ipv6", lambda: {"prefix": "2001:db8::/48"})
+    return module
+
+
+def test_replay_brings_back_the_site_ipv6_tunnel_and_reports_its_error(monkeypatch, tmp_path):
+    module = _replay_module(monkeypatch, tmp_path, True)
+    seen = []
+    monkeypatch.setattr(module, "private_dhcp", lambda *a, **k: None)
+    monkeypatch.setattr(module, "vpn", lambda state: {})
+    monkeypatch.setattr(module, "ipv6", lambda state, v6: seen.append(v6) or {})
+    assert module.replay()["replayed"] is True
+    assert seen == [{"prefix": "2001:db8::/48"}]
+    monkeypatch.setattr(module, "ipv6", lambda state, v6: {"error": "RuntimeError: nft"})
+    with pytest.raises(RuntimeError, match="IPv6 replay failed"):
+        module.replay()
+
+
+def test_replay_on_a_node_that_is_not_the_first_exit_node_skips_dhcp_and_vpn(monkeypatch, tmp_path):
+    module = _replay_module(monkeypatch, tmp_path, False)
+
+    def called(*a, **k):
+        raise AssertionError("only the first exit node serves DHCP and the VPN")
+
+    monkeypatch.setattr(module, "private_dhcp", called)
+    monkeypatch.setattr(module, "vpn", called)
+    monkeypatch.setattr(module, "ipv6", lambda state, v6: {})
+    assert module.replay()["replayed"] is True
+
+
 def test_a_failed_reconcile_keeps_the_pending_marker_and_a_good_one_clears_it(monkeypatch, tmp_path):
     module = load("node-agent.py")
     marker = tmp_path / "reconcile.pending"

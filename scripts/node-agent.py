@@ -1387,11 +1387,18 @@ def replay():
     with (STATE / "node.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = json.loads(saved.read_text())
-        private_dhcp(state, serve=first_exit_node())
-        tunnels = vpn(state)
+        # The first exit node alone serves private DHCP and the VPN; a node
+        # that site.json still names but is no longer first skips both.
+        tunnels = {}
+        if first_exit_node():
+            private_dhcp(state, serve=True)
+            tunnels = vpn(state)
+        site6 = ipv6(state, site_ipv6())
     if "error" in tunnels:
         # Exit non-zero, so systemd tries again (Restart=on-failure).
         raise RuntimeError("VPN replay failed: " + str(tunnels["error"]))
+    if "error" in site6:
+        raise RuntimeError("IPv6 replay failed: " + str(site6["error"]))
     return {"replayed": True, **desired_info(), "vpn_tenants": sorted(tunnels)}
 
 
