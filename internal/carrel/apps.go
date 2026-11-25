@@ -460,9 +460,9 @@ func (e *Execution) pruneReleases(app D) {
 func (p *Platform) ReleaseStatus(ctx context.Context, slug, name, id string, c CIClaims) D {
 	e := p.execution(ctx)
 	app := e.appBySlug(slug, name)
-	if c.Issuer != linkIssuer(app) || c.Repository != app["repo"] || (app["repo_id"] != nil && str(app["repo_id"]) != c.RepositoryID) {
-		fail("forbidden", "Token repository does not match the linked repository")
-	}
+	// The same checks as the deploy: another branch or event of the linked
+	// repository reads nothing.
+	e.authorizeRelease(app, c)
 	r := e.S.Get("releases", id)
 	if r == nil || r["app"] != app["id"] {
 		fail("not_found", "Release not found")
