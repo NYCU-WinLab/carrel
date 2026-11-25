@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -75,7 +76,13 @@ func main() {
 		return
 	}
 	if *backup {
-		result, err := platform.Backup(context.Background(), filepath.Dir(*configFile))
+		// The serving process reaches the node agents and this run does not,
+		// so it does the backup when it runs (#606).
+		result, err := carrel.RequestBackup(context.Background(), carrel.ControlSocket(cfg))
+		if errors.Is(err, carrel.ErrNoServer) {
+			slog.Warn("backup_without_server", "reason", "the serving process is not running, so files of nodes on the agent transport may be missing")
+			result, err = platform.Backup(context.Background(), filepath.Dir(*configFile))
+		}
 		if err != nil {
 			slog.Error("backup_failed", "error", err)
 			fatal()
@@ -95,6 +102,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	platform.Start()
+	if err := carrel.ServeControl(ctx, carrel.ControlSocket(cfg), platform.ControlHandler(filepath.Dir(*configFile))); err != nil {
+		slog.Error("control_socket_failed", "error", err)
+	}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -1119,6 +1119,20 @@
         }
       }
     },
+    "/backup": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "summary": "Run the nightly backup in the serving process; only on the control socket (a Unix socket beside the database), never on a TCP listener",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/sites/v1/agent/claim": {
       "post": {
         "x-carrel-audience": "internal",
