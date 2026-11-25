@@ -231,21 +231,65 @@ the writes are accepted again. Check with `{"op": "status"}` or the next reconci
 
 ## Telemetry
 
-With `telemetry_url` and `telemetry_token_file` in `config.json`, the control plane sends its WARN
-and ERROR log records and each node's admission view to an OTLP/HTTP collector:
+With `telemetry_url` in `config.json`, the control plane exports to any OTLP/HTTP collector
+(OpenTelemetry Collector 0.166.0 tested). Without it nothing leaves the control plane.
 
 ```json
-"telemetry_url": "https://sensorium.example",
+"telemetry_url": "https://otel.example:4318",
 "telemetry_token_file": "/etc/carrel/telemetry-token"
 ```
 
-The URL is https; the file holds the collector's bearer token, mode 600, and is read on every
-send. Log records go to `/v1/logs` and gauges to `/v1/metrics` as JSON, uncompressed. The gauges
-(`carrel.node.*`, one series per node, listed in PLAN 9.1) are what the Proxmox metric server does
-not export: committed and limit for vCPU, memory and disk, the pool's and the memory's real use,
-what snapshots count for, and what the node's running VMs need of the memory they were given. Sending never blocks a request, and a collector that does not answer costs one
-`telemetry_export_failed` line on stderr a minute. Without these two settings nothing leaves the
-control plane.
+- `telemetry_token_file` is optional. When set, the file holds a bearer token, mode 600, read on
+  every send, and the URL must be https.
+- Without a token the URL may be http, for a collector on the same host or a private network.
+- Requests go to `/v1/logs`, `/v1/metrics` and `/v1/traces` as JSON, uncompressed.
+- Sending never blocks a request. A collector that does not answer costs one
+  `telemetry_export_failed` line on stderr a minute.
+
+A stock collector needs only the OTLP receiver:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+exporters:
+  debug: {}   # replace with your backend
+service:
+  pipelines:
+    logs: {receivers: [otlp], exporters: [debug]}
+    metrics: {receivers: [otlp], exporters: [debug]}
+    traces: {receivers: [otlp], exporters: [debug]}
+```
+
+### Signals
+
+Every record carries the resource attributes `service.name` (`carrel`), `service.version` and
+`service.instance.id` (the host name of `origin`), so one collector can hold several sites.
+
+| Signal | What | Attributes |
+|---|---|---|
+| Logs | every WARN and ERROR record, at most 20 a minute per message | the record's own, such as `code` |
+| Metrics | `carrel.node.*` gauges, once a minute per node (PLAN 9.1 lists them) | `node` |
+| Traces | one span per tool call; arguments and results stay out | `carrel.tool`, `carrel.outcome`, `carrel.tenant` (a number) |
+
+The gauges are what the Proxmox metric server does not export: admission's committed and limit
+for vCPU, memory and disk, the real use of the pool and the memory, snapshots, and the memory the
+running VMs need. Export node and guest metrics with the Proxmox OpenTelemetry metric server.
+
+### Alerts worth having
+
+carrel sends no alerts itself. Point an alerting service at the collector's backend:
+
+| Alert | Rule |
+|---|---|
+| Pool filling | `carrel.node.storage.utilization` above 0.7 warns, above 0.85 is an error |
+| Memory saturated | `carrel.node.memory.utilization` above 0.9 |
+| Node unreadable | `carrel.node.reachable` below 1 |
+| Repair or backup failed | ERROR records such as `reconcile_failed`, `backup_failed`, `certificate_issuance_failed`, `gateway_config_rejected` |
+| Out of room, guest not up | WARN `operation_failed` with `code` `capacity_exhausted` or `guest_not_ready` |
+| Site silent | no new `carrel.node.reachable` point for 10 minutes; run the alerting outside the site |
 
 ## NetBox sync
 

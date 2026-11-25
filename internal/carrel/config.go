@@ -55,10 +55,10 @@ type Config struct {
 	KeycloakClientID         string `json:"keycloak_client_id,omitempty"`
 	KeycloakClientSecretFile string `json:"keycloak_client_secret_file,omitempty"`
 
-	// TelemetryURL is an OTLP/HTTP collector, e.g. https://sensorium.zyx.tw:
-	// WARN and ERROR log records and each node's capacity go to its
-	// /v1/logs and /v1/metrics. TelemetryTokenFile holds the bearer token.
-	// Empty: nothing leaves the control plane.
+	// TelemetryURL is any OTLP/HTTP collector, e.g. https://otel.example:4318:
+	// WARN and ERROR log records, each node's capacity and one span per tool
+	// call go to its /v1/logs, /v1/metrics and /v1/traces. TelemetryTokenFile
+	// holds a bearer token, optional. Empty URL: nothing leaves the control plane.
 	TelemetryURL       string `json:"telemetry_url,omitempty"`
 	TelemetryTokenFile string `json:"telemetry_token_file,omitempty"`
 
@@ -228,12 +228,14 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.TelemetryURL != "" {
-		// https only: every request carries the write token.
-		if u, err := url.Parse(c.TelemetryURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("telemetry_url must be an https URL with no query")
+		u, err := url.Parse(c.TelemetryURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("telemetry_url must be an http or https URL with no query")
 		}
-		if c.TelemetryTokenFile == "" {
-			return errors.New("telemetry_url needs telemetry_token_file")
+		// A token never crosses the network in clear. Without one, http
+		// suits a stock collector beside the control plane.
+		if c.TelemetryTokenFile != "" && u.Scheme != "https" {
+			return errors.New("telemetry_token_file needs an https telemetry_url")
 		}
 	}
 	names, targets := map[string]bool{}, map[string]bool{}
