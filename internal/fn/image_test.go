@@ -78,7 +78,7 @@ func rootOf(t *testing.T, image v1.Image) (map[string]string, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rootTar(image, &out, initPath, guestSpec{Cmd: []string{"/app"}, Port: 8080}); err != nil {
+	if _, err := rootTar(context.Background(), image, &out, initPath, guestSpec{Cmd: []string{"/app"}, Port: 8080}); err != nil {
 		return nil, err
 	}
 	files := map[string]string{}
@@ -300,7 +300,7 @@ func TestRootTarRefusesAHugeFileBeforeWritingIt(t *testing.T) {
 	initPath := filepath.Join(t.TempDir(), "init")
 	os.WriteFile(initPath, []byte("init"), 0o755)
 	out := &countingWriter{}
-	if _, err := rootTar(image, out, initPath, guestSpec{Cmd: []string{"/app"}}); !errors.Is(err, errImageTooLarge) {
+	if _, err := rootTar(context.Background(), image, out, initPath, guestSpec{Cmd: []string{"/app"}}); !errors.Is(err, errImageTooLarge) {
 		t.Fatalf("err = %v, want the size limit", err)
 	}
 	if out.written > 64<<10 {
@@ -539,5 +539,19 @@ func TestPullErrorHidesTheAnswer(t *testing.T) {
 	}
 	if pullError(leaky, nil) != leaky {
 		t.Fatal("an anonymous pull keeps its error")
+	}
+}
+
+// A cancelled build stops the merge, not only its network reads (#234).
+func TestRootTarStopsWhenTheBuildIsCancelled(t *testing.T) {
+	image := imageOf(t, []entry{{name: "app", content: "x", kind: tar.TypeReg, mode: 0o755}})
+	initPath := filepath.Join(t.TempDir(), "init")
+	if err := os.WriteFile(initPath, []byte("init"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := rootTar(ctx, image, io.Discard, initPath, guestSpec{Cmd: []string{"/app"}}); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
