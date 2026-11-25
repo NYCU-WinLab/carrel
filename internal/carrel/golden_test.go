@@ -62,8 +62,12 @@ var (
 // Test certificates are generated per run.
 var pemBlock = regexp.MustCompile(`-----BEGIN ([A-Z ]+)-----[^-]+-----END [A-Z ]+-----(\\n)?`)
 
+// A reconcile's revision digests a state that holds real times.
+var revision = regexp.MustCompile(`"revision":"[0-9a-f]{64}"`)
+
 func normalize(b []byte) string {
 	s := pemBlock.ReplaceAllString(string(b), "<pem $1>")
+	s = revision.ReplaceAllString(s, `"revision":"<digest>"`)
 	s = epoch.ReplaceAllStringFunc(s, func(m string) string {
 		if strings.Contains(m, ".") {
 			return m[:1] + `"<time:float>"`

@@ -463,7 +463,16 @@ func (e *Execution) Reconcile() D {
 		state["fetch"] = true
 	}
 	request := D{"op": "reconcile", "state": without(state, "certificates", "domain_grants", "delegated_names")}
+	// The node stores the state with this revision and replays its own part
+	// at boot (#603); inventory reports it back.
+	revision := digest(string(encoded(request["state"])))
+	request["revision"] = revision
 	nodes := e.P.Nodes()
+	// Recorded before sending: a node whose reconcile fails keeps an older
+	// revision and shows as lagging.
+	for _, n := range nodes {
+		e.P.desired.Store(n.Name, revision)
+	}
 	result := D{"node": e.Call(request, nodes[0].Target)}
 	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
