@@ -173,6 +173,13 @@ its transport, `config.json` loses the listener keys, and the agent stops after 
 check. The CA, the token and the certificate files stay, so moving back needs no new ones. The SSH key line stays in both modes until #604, so either
 transport works at any time.
 
+Consoles (`machine_console_url`) go through the agent too, once the agent says it can stream: its
+claims carry `capabilities: ["stream"]`, and `node_list` shows them under `agent`. The claim hands
+out the console, the agent connects back to `/sites/v1/agent/streams/<id>` with the same token, and
+that connection carries `node-agent.py`'s stdin and stdout. An agent that has not polled in the
+last 90 seconds, or one from before streams, leaves the console on SSH. Restarting the agent cuts
+open consoles, as a dropped SSH session does; the member reloads the page.
+
 The listener serves only `10.200.0.3:8443`, TLS 1.3. The infra firewall drops tenant traffic to
 `10.200.0.3` on any port but 8080; port 8443 is open only to the other site nodes' underlay
 addresses, arriving on the underlay interface. A request needs the node's token and must come from

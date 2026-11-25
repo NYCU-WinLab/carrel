@@ -1,10 +1,14 @@
 package carrel
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"io"
+	"net"
+	"slices"
 	"sync"
 	"time"
 )
@@ -18,6 +22,9 @@ import (
 type AgentHub struct {
 	mu    sync.Mutex
 	nodes map[string]*agentNode
+	// streamWait is how long a console waits for the agent to connect
+	// back, and then for node-agent.py's first line; 0 is 30 seconds.
+	streamWait time.Duration
 }
 
 type agentNode struct {
@@ -32,8 +39,12 @@ type agentNode struct {
 	retired map[string]bool
 	// seen is when the node's agent last polled.
 	seen time.Time
-	// protocol and release are what the agent reported in its latest poll.
+	// protocol, release and capabilities are what the agent reported in its
+	// latest poll.
 	protocol, release string
+	capabilities      []string
+	// streams are console streams waiting for the agent to connect back.
+	streams map[string]*agentStream
 	// wake is closed and replaced when a job is queued, so a waiting claim
 	// answers at once instead of on its next tick.
 	wake chan struct{}
@@ -49,6 +60,17 @@ type agentJob struct {
 	done    chan agentOutput
 }
 
+// agentStream is a console the agent opens with a connection of its own
+// (#606): the claim hands it out, and the agent dials back with its id.
+type agentStream struct {
+	request D
+	taken   bool
+	session string
+	// conn receives the agent's connection, or nil when it could not be
+	// taken over; it holds one, so the sender never waits.
+	conn chan net.Conn
+}
+
 type agentOutput struct {
 	out    []byte
 	failed error
@@ -59,6 +81,9 @@ type agentOutput struct {
 type AgentJob struct {
 	ID      string `json:"id"`
 	Request D      `json:"request"`
+	// Stream: run the request with stdin and stdout on a connection to
+	// /sites/v1/agent/streams/{id}, not as a job with one answer.
+	Stream bool `json:"stream,omitempty"`
 }
 
 var errAgentLostJob = errors.New("the agent no longer holds the job")
@@ -68,7 +93,7 @@ func NewAgentHub() *AgentHub { return &AgentHub{nodes: map[string]*agentNode{}} 
 func (h *AgentHub) node(name string) *agentNode {
 	n := h.nodes[name]
 	if n == nil {
-		n = &agentNode{jobs: map[string]*agentJob{}, wake: make(chan struct{}), retired: map[string]bool{}}
+		n = &agentNode{jobs: map[string]*agentJob{}, wake: make(chan struct{}), retired: map[string]bool{}, streams: map[string]*agentStream{}}
 		h.nodes[name] = n
 	}
 	return n
@@ -143,6 +168,12 @@ func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, 
 				out = append(out, AgentJob{ID: id, Request: job.request})
 			}
 		}
+		for id, s := range n.streams {
+			if !s.taken {
+				s.taken, s.session = true, session
+				out = append(out, AgentJob{ID: id, Request: s.request, Stream: true})
+			}
+		}
 		wake := n.wake
 		h.mu.Unlock()
 		if len(out) > 0 {
@@ -192,13 +223,22 @@ func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool 
 
 // Hello records the protocol and release a node's agent reported. A process
 // already replaced by a newer one does not overwrite them.
-func (h *AgentHub) Hello(node, session, protocol, release string) {
+func (h *AgentHub) Hello(node, session, protocol, release string, capabilities ...string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	n := h.node(node)
 	if !n.retired[session] {
-		n.protocol, n.release = protocol, release
+		n.protocol, n.release, n.capabilities = protocol, release, slices.Clone(capabilities)
 	}
+}
+
+// Capable reports whether a node's agent polls now and said it can do
+// something, such as "stream".
+func (h *AgentHub) Capable(node, capability string, now time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.nodes[node]
+	return n != nil && !n.seen.IsZero() && now.Sub(n.seen) < agentSilence && slices.Contains(n.capabilities, capability)
 }
 
 // Status is what node_list shows for a node on the agent transport: whether
@@ -211,7 +251,7 @@ func (h *AgentHub) Status(node string, now time.Time) D {
 		return D{"connected": false}
 	}
 	return D{"connected": now.Sub(n.seen) < agentSilence, "protocol": n.protocol, "release": n.release,
-		"last_poll": n.seen.UTC().Format(time.RFC3339)}
+		"capabilities": append([]string{}, n.capabilities...), "last_poll": n.seen.UTC().Format(time.RFC3339)}
 }
 
 // Heartbeat is a poll that takes no job: an agent shutting down sends it
@@ -230,6 +270,9 @@ func (h *AgentHub) Release(node, session string, jobs []AgentJob) {
 	for _, j := range jobs {
 		if job := n.jobs[j.ID]; job != nil && job.taken && job.session == session {
 			job.taken, job.session, job.seq = false, "", 0
+		}
+		if s := n.streams[j.ID]; s != nil && s.taken && s.session == session {
+			s.taken, s.session = false, ""
 		}
 	}
 	close(n.wake)
@@ -303,11 +346,90 @@ func (b *RoutedBackend) Call(ctx context.Context, request D, target string) (any
 	return b.SSH.Call(ctx, request, target)
 }
 
-// Stream keeps consoles on SSH.
+// Stream opens a console through the node's agent when it can stream, and
+// over SSH otherwise: an agent from before streams, or a node on SSH.
 func (b *RoutedBackend) Stream(ctx context.Context, request D, target string) (io.ReadWriteCloser, error) {
+	if node, ok := b.Agents[target]; ok && b.Hub.Capable(node, "stream", time.Now()) {
+		return b.Hub.Stream(ctx, request, node)
+	}
 	s, ok := b.SSH.(Streamer)
 	if !ok {
 		return nil, errors.New("console streams are not available")
 	}
 	return s.Stream(ctx, request, target)
+}
+
+// Stream asks a node's agent for a console: the next claim hands it out, the
+// agent connects back to the agent listener, and node-agent.py's stdin and
+// stdout run over that connection, as they do over SSH. The stream ends with
+// ctx. It is not a job: a restart of the agent cuts it, as it would cut an
+// SSH session, and nothing is retried.
+func (h *AgentHub) Stream(ctx context.Context, request D, node string) (io.ReadWriteCloser, error) {
+	id := rand.Text()
+	s := &agentStream{request: copyValue(request).(map[string]any), conn: make(chan net.Conn, 1)}
+	h.mu.Lock()
+	n := h.node(node)
+	n.streams[id] = s
+	close(n.wake)
+	n.wake = make(chan struct{})
+	h.mu.Unlock()
+	limit := h.streamWait
+	if limit == 0 {
+		limit = 30 * time.Second
+	}
+	wait := time.NewTimer(limit)
+	defer wait.Stop()
+	var c net.Conn
+	received := false
+	select {
+	case c = <-s.conn:
+		received = true
+	case <-ctx.Done():
+	case <-wait.C:
+	}
+	if !received {
+		h.mu.Lock()
+		_, waiting := n.streams[id]
+		delete(n.streams, id)
+		h.mu.Unlock()
+		if !waiting {
+			// The agent connected just now: its connection is on its way,
+			// within the 10 seconds the listener gives its answer.
+			if late := <-s.conn; late != nil {
+				late.Close()
+			}
+		}
+	}
+	if c == nil {
+		return nil, errors.New("the node's agent did not open the console")
+	}
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	_ = c.SetReadDeadline(time.Now().Add(limit))
+	reader := bufio.NewReaderSize(c, 4096)
+	line, err := reader.ReadSlice('\n')
+	var reply D
+	if err != nil || json.Unmarshal(line, &reply) != nil || reply["ok"] != true {
+		stop()
+		c.Close()
+		return nil, errors.New("the node did not open the console")
+	}
+	_ = c.SetReadDeadline(time.Time{})
+	return &stream{Reader: reader, Writer: c, stop: func() { stop(); c.Close() }}, nil
+}
+
+// Attach takes the stream an agent connects back for. Only a stream handed
+// to this node's current agent process is taken, and only once.
+func (h *AgentHub) Attach(node, id string) (chan<- net.Conn, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.nodes[node]
+	if n == nil {
+		return nil, false
+	}
+	s := n.streams[id]
+	if s == nil || !s.taken || s.session != n.session {
+		return nil, false
+	}
+	delete(n.streams, id)
+	return s.conn, true
 }

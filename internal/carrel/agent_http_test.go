@@ -166,3 +166,105 @@ func TestAgentHelloIgnoresAReplacedProcess(t *testing.T) {
 		t.Fatalf("status %v", s)
 	}
 }
+
+// A stream is taken only by the node's own agent, with the stream upgrade,
+// for a stream its current process was handed, and once.
+func TestAgentStreamRouteRefusesStrangers(t *testing.T) {
+	p, _, _ := originFixture(t)
+	p.Config.Nodes = []NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
+		{Name: "pve2", Target: "carrel02", Transport: "agent", AgentTokenSHA256: digest("cat_two"), AgentSource: "10.200.0.2"},
+	}
+	open := func(id, node, token, from, upgrade string) int {
+		req := httptest.NewRequest("GET", "https://10.200.0.3:8443/sites/v1/agent/streams/"+id+"?node="+node, nil)
+		req.RemoteAddr = from + ":40000"
+		req.Header.Set("Authorization", "Bearer "+token)
+		if upgrade != "" {
+			req.Header.Set("Upgrade", upgrade)
+		}
+		w := httptest.NewRecorder()
+		p.AgentHandler().ServeHTTP(w, req)
+		return w.Code
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _, _ = p.Hub.Stream(ctx, D{"op": "console"}, "pve1") }()
+	var id string
+	deadline := time.Now().Add(5 * time.Second)
+	for id == "" && time.Now().Before(deadline) {
+		for _, j := range p.Hub.Claim(ctx, "pve1", "s", 1, nil, 100*time.Millisecond) {
+			if j.Stream {
+				id = j.ID
+			}
+		}
+	}
+	if id == "" {
+		t.Fatal("the claim did not hand out the stream")
+	}
+	for _, c := range []struct {
+		node, token, from, upgrade string
+		want                       int
+	}{
+		{"pve1", "cat_bad", "10.200.0.1", "carrel-stream", 403},
+		{"pve1", "cat_good", "10.200.0.9", "carrel-stream", 403},
+		{"pve2", "cat_two", "10.200.0.2", "carrel-stream", 404},
+		{"pve1", "cat_good", "10.200.0.1", "websocket", 400},
+		{"pve1", "cat_good", "10.200.0.1", "", 400},
+	} {
+		if code := open(id, c.node, c.token, c.from, c.upgrade); code != c.want {
+			t.Errorf("%+v: %d", c, code)
+		}
+	}
+	if code := open("nothing", "pve1", "cat_good", "10.200.0.1", "carrel-stream"); code != 404 {
+		t.Errorf("unknown stream: %d", code)
+	}
+	// A connection that cannot be taken over ends the stream; it is taken
+	// once.
+	if code := open(id, "pve1", "cat_good", "10.200.0.1", "carrel-stream"); code != 500 {
+		t.Errorf("recorder: %d", code)
+	}
+	if code := open(id, "pve1", "cat_good", "10.200.0.1", "carrel-stream"); code != 404 {
+		t.Errorf("second attach: %d", code)
+	}
+}
+
+// A stream whose agent never connects back fails within its wait, and leaves
+// nothing behind.
+func TestAgentStreamThatNobodyOpens(t *testing.T) {
+	hub := NewAgentHub()
+	hub.streamWait = 200 * time.Millisecond
+	if _, err := hub.Stream(context.Background(), D{"op": "console"}, "pve1"); err == nil {
+		t.Fatal("a stream nobody opened succeeded")
+	}
+	if len(hub.nodes["pve1"].streams) != 0 {
+		t.Fatal("the stream was left behind")
+	}
+}
+
+// An agent that drains loses its capabilities, so consoles fall back to SSH
+// instead of waiting for a claim that never comes.
+func TestAgentDrainingTakesNoConsole(t *testing.T) {
+	p, _, _ := originFixture(t)
+	p.Config.Nodes = []NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
+	}
+	claim := func(body string) int {
+		req := httptest.NewRequest("POST", "https://10.200.0.3:8443/sites/v1/agent/claim?node=pve1", strings.NewReader(body))
+		req.RemoteAddr = "10.200.0.1:40000"
+		req.Header.Set("Authorization", "Bearer cat_good")
+		w := httptest.NewRecorder()
+		p.AgentHandler().ServeHTTP(w, req)
+		return w.Code
+	}
+	p.Hub.Hello("pve1", "s", "v1", "0.11.0", "stream")
+	p.Hub.Heartbeat("pve1", "s", 1, nil)
+	if !p.Hub.Capable("pve1", "stream", time.Now()) {
+		t.Fatal("the agent cannot stream before it drains")
+	}
+	if claim(`{"protocol":"v1","session":"s","seq":2,"held":[],"drain":true,"capabilities":["stream"]}`) != 200 {
+		t.Fatal("drain refused")
+	}
+	if p.Hub.Capable("pve1", "stream", time.Now()) {
+		t.Fatal("a draining agent takes consoles")
+	}
+}
