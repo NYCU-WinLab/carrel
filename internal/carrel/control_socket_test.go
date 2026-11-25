@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,5 +90,53 @@ func TestControlSocketLeftBehind(t *testing.T) {
 	must(ServeControl(ctx, socket, p.ControlHandler(t.TempDir())))
 	if info, err := os.Stat(socket); err != nil || info.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("not replaced: %v %v", info, err)
+	}
+}
+
+// A second server leaves a live socket alone, and a server that stops removes
+// the file only while it is its own.
+func TestControlSocketBelongsToItsServer(t *testing.T) {
+	dir := t.TempDir()
+	socket := filepath.Join(dir, "control.sock")
+	answer := func(name string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			jsonResponse(w, 200, D{"ok": true, "result": D{"server": name}})
+		})
+	}
+	first, stopFirst := context.WithCancel(context.Background())
+	defer stopFirst()
+	must(ServeControl(first, socket, answer("first")))
+	if err := ServeControl(context.Background(), socket, answer("second")); err == nil {
+		t.Fatal("a second server took a live socket")
+	}
+	if r, err := RequestBackup(context.Background(), socket); err != nil || r["server"] != "first" {
+		t.Fatalf("%v %v", r, err)
+	}
+	// The first server's file is moved away and a new server takes the path;
+	// the first one stopping leaves the new file.
+	must(os.Rename(socket, filepath.Join(dir, "old.sock")))
+	second, stopSecond := context.WithCancel(context.Background())
+	defer stopSecond()
+	must(ServeControl(second, socket, answer("second")))
+	stopFirst()
+	time.Sleep(100 * time.Millisecond)
+	if r, err := RequestBackup(context.Background(), socket); err != nil || r["server"] != "second" {
+		t.Fatalf("%v %v", r, err)
+	}
+}
+
+// A server that stops before it answers counts as no server, so the timer
+// makes the backup itself.
+func TestControlSocketLostAnswer(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "control.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	must(ServeControl(ctx, socket, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		c, _, err := w.(http.Hijacker).Hijack()
+		must(err)
+		c.Close()
+	})))
+	if _, err := RequestBackup(context.Background(), socket); !errors.Is(err, ErrNoServer) {
+		t.Fatalf("lost answer: %v", err)
 	}
 }

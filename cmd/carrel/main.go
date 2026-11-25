@@ -80,7 +80,7 @@ func main() {
 		// so it does the backup when it runs (#606).
 		result, err := carrel.RequestBackup(context.Background(), carrel.ControlSocket(cfg))
 		if errors.Is(err, carrel.ErrNoServer) {
-			slog.Warn("backup_without_server", "reason", "the serving process is not running, so files of nodes on the agent transport may be missing")
+			slog.Warn("backup_without_server", "error", err, "reason", "files of nodes on the agent transport may be missing")
 			result, err = platform.Backup(context.Background(), filepath.Dir(*configFile))
 		}
 		if err != nil {

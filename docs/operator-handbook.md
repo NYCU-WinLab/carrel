@@ -103,7 +103,8 @@ without its `site.json` fails every reconcile). The result lists the SSH target 
 that did not answer, or whose files exceeded 256 KiB, as `missing_nodes`, and the service logs a
 warning. `carrel -backup` asks the running control service to make the backup, over the
 control socket `/var/lib/carrel/control.sock` (mode 0600, user `carrel`), because only the service
-reaches nodes on the agent transport. When the service is not running, the timer makes the backup
+reaches nodes on the agent transport. When the service does not answer (it is stopped, or stops
+midway), the timer makes the backup
 itself and logs `backup_without_server`; an agent node it cannot reach over SSH is listed in
 `missing_nodes`.
 `/var/lib/carrel` is owned by `carrel:carrel`;

@@ -38,9 +38,15 @@ func (p *Platform) ControlHandler(configDir string) http.Handler {
 	return mux
 }
 
-// ServeControl listens on path until ctx ends. A socket left by a process
-// that did not stop cleanly is replaced.
+// ServeControl listens on path until ctx ends. A socket file nobody answers
+// on was left by a process that did not stop cleanly and is replaced; one
+// that answers belongs to another carrel and is left alone. At the end the
+// file is removed only while it is still this server's.
 func ServeControl(ctx context.Context, path string, handler http.Handler) error {
+	if c, err := net.Dial("unix", path); err == nil {
+		c.Close()
+		return errors.New("another carrel serves " + path)
+	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -48,7 +54,13 @@ func ServeControl(ctx context.Context, path string, handler http.Handler) error 
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	unix := listener.(*net.UnixListener)
+	unix.SetUnlinkOnClose(false)
+	mine, err := os.Lstat(path)
+	if err == nil {
+		err = os.Chmod(path, 0o600)
+	}
+	if err != nil {
 		listener.Close()
 		return err
 	}
@@ -56,7 +68,9 @@ func ServeControl(ctx context.Context, path string, handler http.Handler) error 
 	go func() {
 		<-ctx.Done()
 		_ = server.Close()
-		_ = os.Remove(path)
+		if now, err := os.Lstat(path); err == nil && os.SameFile(now, mine) {
+			_ = os.Remove(path)
+		}
 	}()
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -66,9 +80,11 @@ func ServeControl(ctx context.Context, path string, handler http.Handler) error 
 	return nil
 }
 
-// ErrNoServer means nothing listens on the control socket: the caller runs
-// the work itself.
-var ErrNoServer = errors.New("the serving process is not running")
+// ErrNoServer means no serving process answered: none was running, or it
+// stopped before it answered. The caller makes the backup itself. A second
+// archive on the same day replaces the first (backup-target.py), so running
+// again after a lost answer is safe.
+var ErrNoServer = errors.New("the serving process did not answer")
 
 // RequestBackup asks the serving process for a backup and waits for it.
 func RequestBackup(ctx context.Context, path string) (D, error) {
@@ -81,11 +97,7 @@ func RequestBackup(ctx context.Context, path string) (D, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		var dial *net.OpError
-		if errors.As(err, &dial) && dial.Op == "dial" {
-			return nil, ErrNoServer
-		}
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrNoServer, err)
 	}
 	defer resp.Body.Close()
 	var answer struct {
@@ -94,7 +106,7 @@ func RequestBackup(ctx context.Context, path string) (D, error) {
 		Error  string `json:"error"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&answer); err != nil {
-		return nil, fmt.Errorf("control socket answered %s", resp.Status)
+		return nil, fmt.Errorf("%w: %s", ErrNoServer, resp.Status)
 	}
 	if !answer.OK {
 		return nil, errors.New(answer.Error)
