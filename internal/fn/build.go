@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,6 +117,11 @@ func (fc *Firecracker) Build(ctx context.Context, opts BuildOptions) (Function, 
 	if err != nil {
 		return f, err
 	}
+	// function.json marks the version built, so what it names is on disk
+	// first: after a power loss it must not stand beside a cut snapshot (#247).
+	if err := syncTree(f.Dir); err != nil {
+		return f, err
+	}
 	if err := writeFile(filepath.Join(f.Dir, "function.json"), append(content, '\n')); err != nil {
 		return f, err
 	}
@@ -151,13 +157,51 @@ func Activate(root, name, version string) error {
 	return writeFile(filepath.Join(root, name, "function.json"), content)
 }
 
-// writeFile replaces a file in one step, so a reader sees the old or the new one.
+// writeFile replaces a file in one step, so a reader sees the old or the new
+// one, after a power loss too: the content and the rename reach the disk.
 func writeFile(path string, content []byte) error {
 	pending := path + ".new"
-	if err := os.WriteFile(pending, content, 0o600); err != nil {
+	file, err := os.OpenFile(pending, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(pending, path)
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(pending, path); err != nil {
+		return err
+	}
+	return syncPath(filepath.Dir(path))
+}
+
+// syncTree flushes every regular file under dir, then the directories.
+func syncTree(dir string) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || d.Type().IsRegular() {
+			return syncPath(path)
+		}
+		return nil
+	})
+}
+
+func syncPath(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
 }
 
 // makeRootfs writes the image into a new ext4 file system. The image's
