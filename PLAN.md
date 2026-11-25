@@ -1669,7 +1669,27 @@ The core is what every site must run: machines, images, tenant networks and isol
 quota, requests, keys, audit, capacity and reconcile. Every other feature is a plugin that runs next
 to the site agent. A site reports which plugins it runs and what each one needs (a capability), and
 a tool whose plugin a site lacks fails there with a message that names the sites that have it. The
-table of core and plugin features is in issue #550; the plugin contract is in issue #564.
+plugin contract is in issue #564.
+
+| Group | Tools | Core or plugin | Needs from a site | Coupling to the core today |
+|---|---|---|---|---|
+| Machines | `machine_create`, `_list`, `_get`, `_delete`, `_power`, `_resize`, `_rename`, `_access`, `_metrics`, `_media`, `_console_url`, `_nic_attach`, `_nic_detach` | core | Proxmox | not applicable |
+| Images | `image_import`, `_list`, `_delete`, `iso_import` | core | storage for images | not applicable |
+| Tenant networks | `network_create`, `_list`, `_delete`, `deployment_plan`, `deployment_apply` | core | the EVPN and VXLAN zones | not applicable |
+| Tenants and quota | `whoami`, `quota_get`, `quota_request`, `quota_set`, `request_*`, `tenant_*`, `ssh_key_*`, `audit_log`, `usage_report` | core | nothing | not applicable |
+| Operations | `catalog_get`, `capacity_get`, `operation_get`, `operation_retry`, `reconcile_run`, `node_list`, `platform_power` | core | nothing | not applicable |
+| Snapshot | `snapshot_create`, `_list`, `_delete`, `_rollback` | plugin | ZFS or LVM-thin | medium: capacity (`capacity.go`, `nodes.go`) and quota (`snapshot_gb` in `platform.go`) read snapshot sizes, and `migrate.go` checks for snapshots |
+| Freeze | `machine_freeze`, `machine_thaw` | plugin | a Proxmox Backup Server | high: the gateway keeps a frozen machine's names as 503 routes (`gateway_sources.go`), and `execute.go` and `operations.go` hold freeze steps |
+| Migrate and drain | `machine_migrate`, `node_drain`, `node_undrain` | plugin | 2 or more nodes | low: placement skips drained nodes (`nodes.go`), `admin.go` routes the tools |
+| Public entry | `domain_*`, `port_*`, `public_ip_*`, `vip_*`, `zone_*` and IPv6 | plugin, installed on every lab site | a public address | high: `network.go`, `intent.go` (`deployment_apply`) and `freeze.go` all build entries |
+| Connectivity | `vpn_client_*`, `peer_*`, `machine_ca_backfill` and the jump host | plugin | a gateway; the lab SSH CA | high: `platform.go`, `machine_access.go` and `netbox.go` read it |
+| Deploy | `app_*`, `runner_*`, `function_*` | plugin | apps: none; functions: a function host | medium: apps and functions publish through public entry (`domains.go`, `gateway.go`) and have their own config |
+| NetBox sync | none (background) | plugin | a NetBox | low: `public_ips.go` and a few hooks |
+
+Coupling counts how many core files name the feature (grep of `internal/carrel`, 2026-11-25). Low
+coupling moves first. Snapshot is still the first plugin, because its long operation tests the
+operation shape of the contract (issue #564). Freeze goes second: a frozen machine keeps its names
+as public entry state, so the contract must let one plugin ask another to hold state.
 
 ## 9. Observability
 
