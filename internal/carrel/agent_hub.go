@@ -190,12 +190,15 @@ func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool 
 	return true
 }
 
-// Hello records the protocol and release a node's agent reported.
-func (h *AgentHub) Hello(node, protocol, release string) {
+// Hello records the protocol and release a node's agent reported. A process
+// already replaced by a newer one does not overwrite them.
+func (h *AgentHub) Hello(node, session, protocol, release string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	n := h.node(node)
-	n.protocol, n.release = protocol, release
+	if !n.retired[session] {
+		n.protocol, n.release = protocol, release
+	}
 }
 
 // Status is what node_list shows for a node on the agent transport: whether

@@ -139,7 +139,7 @@ func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
 	if obj(nodes[2]["inventory"])["node"] != "carrel03" || nodes[0]["agent"] != nil {
 		t.Fatal(encoded(nodes))
 	}
-	p.Hub.Hello(p.Config.Nodes[1].Name, "v1", "0.11.0")
+	p.Hub.Hello(p.Config.Nodes[1].Name, "s", "v1", "0.11.0")
 	p.Hub.Heartbeat(p.Config.Nodes[1].Name, "s", 1, nil)
 	nodes = dicts(p.execution(context.Background()).Admin("node_list", D{}, admin)["nodes"])
 	if a := obj(nodes[1]["agent"]); a["connected"] != true || a["release"] != "0.11.0" || nodes[1]["inventory"] == nil {
@@ -150,5 +150,19 @@ func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
 	one := p.execution(context.Background()).Admin("node_list", D{}, admin)
 	if obj(one["agent"])["connected"] != false || obj(one["error"])["code"] != "agent_not_connected" {
 		t.Fatal(encoded(one))
+	}
+}
+
+// A replaced agent process's late poll does not overwrite what the new one
+// reported.
+func TestAgentHelloIgnoresAReplacedProcess(t *testing.T) {
+	hub := NewAgentHub()
+	hub.Hello("pve1", "old", "v1", "0.11.0")
+	hub.Heartbeat("pve1", "old", 1, nil)
+	hub.Hello("pve1", "new", "v1", "0.12.0")
+	hub.Heartbeat("pve1", "new", 1, nil)
+	hub.Hello("pve1", "old", "v1", "0.11.0")
+	if s := hub.Status("pve1", time.Now()); s["release"] != "0.12.0" {
+		t.Fatalf("status %v", s)
 	}
 }

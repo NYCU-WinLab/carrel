@@ -59,7 +59,7 @@ func (p *Platform) AgentHandler() http.Handler {
 				"message": fmt.Sprintf("This control plane serves agent protocols %s, not %q. Install carrel-agent from release %s.", strings.Join(agentProtocols, ", "), in.Protocol, Version)}})
 			return
 		}
-		p.Hub.Hello(node, in.Protocol, in.Release)
+		p.Hub.Hello(node, in.Session, in.Protocol, in.Release)
 		if in.Drain {
 			p.Hub.Heartbeat(node, in.Session, in.Seq, in.Held)
 			jsonResponse(w, 200, D{"jobs": []AgentJob{}})
