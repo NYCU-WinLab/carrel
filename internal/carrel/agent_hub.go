@@ -30,6 +30,8 @@ type agentNode struct {
 	session string
 	seq     uint64
 	retired map[string]bool
+	// seen is when the node's agent last polled.
+	seen time.Time
 	// wake is closed and replaced when a job is queued, so a waiting claim
 	// answers at once instead of on its next tick.
 	wake chan struct{}
@@ -41,6 +43,7 @@ type agentJob struct {
 	taken   bool
 	session string
 	seq     uint64
+	at      time.Time
 	done    chan agentOutput
 }
 
@@ -80,7 +83,9 @@ func (h *AgentHub) Call(ctx context.Context, request D, node, target string) (an
 	h.mu.Lock()
 	// Unique per dispatch and across restarts: a job sent again is a new job,
 	// and an agent's held result never matches a job of another run.
-	job := &agentJob{id: rand.Text(), request: request, done: make(chan agentOutput, 1)}
+	// A copy made now: the caller's map may change after Call returns, while
+	// the agent's poll still encodes it.
+	job := &agentJob{id: rand.Text(), request: copyValue(request).(map[string]any), at: time.Now(), done: make(chan agentOutput, 1)}
 	n := h.node(node)
 	n.jobs[job.id] = job
 	close(n.wake)
@@ -127,7 +132,7 @@ func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, 
 	if session != n.session && n.session != "" {
 		n.retired[n.session] = true
 	}
-	n.session, n.seq = session, seq
+	n.session, n.seq, n.seen = session, seq, time.Now()
 	for id, job := range n.jobs {
 		if job.taken && (job.session != session || !holding[id]) {
 			delete(n.jobs, id)
@@ -209,6 +214,28 @@ func (h *AgentHub) Complete(node, id string, out []byte, exitFailed bool) bool {
 	}
 	job.done <- agentOutput{out: out, failed: failed}
 	return true
+}
+
+// agentSilence is how long a node's agent may go without polling before its
+// jobs fail: three missed long polls. SSH gives up on a silent node after
+// about 45 seconds; without this a job would wait its whole timeout, up to
+// 4 hours, while the operation holds the writer.
+const agentSilence = 90 * time.Second
+
+// Sweep fails the jobs no agent will answer: those taken by an agent that
+// stopped polling, and those nobody took within agentSilence.
+func (h *AgentHub) Sweep(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, n := range h.nodes {
+		silent := now.Sub(n.seen) > agentSilence
+		for id, job := range n.jobs {
+			if (job.taken && silent) || (!job.taken && now.Sub(job.at) > agentSilence) {
+				delete(n.jobs, id)
+				job.done <- agentOutput{failed: errAgentLostJob}
+			}
+		}
+	}
 }
 
 // RoutedBackend sends requests for nodes on the agent transport through the

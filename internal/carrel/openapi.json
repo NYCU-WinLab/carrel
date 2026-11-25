@@ -1118,6 +1118,105 @@
           }
         }
       }
+    },
+    "/sites/v1/agent/claim": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "A node agent's long poll for jobs, on the agent TLS listener",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "node",
+                  "session",
+                  "seq"
+                ],
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  },
+                  "seq": {
+                    "type": "integer"
+                  },
+                  "held": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sites/v1/agent/jobs/{id}": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "A node agent's answer to one job: what node-agent.py printed; X-Carrel-Exit is 0 on success",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   }
 }

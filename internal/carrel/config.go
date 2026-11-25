@@ -93,6 +93,12 @@ type Config struct {
 	GitLabIssuers []string `json:"gitlab_issuers,omitempty"`
 
 	FunctionHosts []FunctionHostConfig `json:"function_hosts,omitempty"`
+	// AgentListen is the address of the TLS listener node agents connect
+	// to, such as 10.200.0.3:8443, with the certificate and key it serves.
+	// Agents pin the CA of that certificate.
+	AgentListen   string `json:"agent_listen,omitempty"`
+	AgentCertFile string `json:"agent_cert_file,omitempty"`
+	AgentKeyFile  string `json:"agent_key_file,omitempty"`
 	// FunctionEnvKey encrypts functions' environment values at rest: 32
 	// bytes in standard base64. Without it function_env is unavailable.
 	FunctionEnvKey string `json:"function_env_key,omitempty"`
@@ -109,6 +115,14 @@ type Config struct {
 type NodeConfig struct {
 	Name   string `json:"name"`
 	Target string `json:"target"`
+	// Transport is how the control plane reaches the node: "ssh" (the
+	// default) or "agent", where the node's carrel-agent connects out to
+	// agent_listen and pulls its jobs (PLAN 8.6).
+	Transport string `json:"transport,omitempty"`
+	// AgentTokenSHA256 is the SHA-256 of the agent's token, and AgentSource
+	// the address its connections come from; both must match.
+	AgentTokenSHA256 string `json:"agent_token_sha256,omitempty"`
+	AgentSource      string `json:"agent_source,omitempty"`
 }
 
 // Defaults that the readers used to supply at each call site.
@@ -277,6 +291,30 @@ func (c Config) Validate() error {
 	if c.FunctionEnvKey != "" {
 		if key, err := base64.StdEncoding.DecodeString(c.FunctionEnvKey); err != nil || len(key) != 32 {
 			return fmt.Errorf("function_env_key must be 32 bytes in standard base64")
+		}
+	}
+	agents := false
+	for _, n := range c.Nodes {
+		switch n.Transport {
+		case "", "ssh":
+		case "agent":
+			agents = true
+			if !sha256Hex.MatchString(n.AgentTokenSHA256) {
+				return fmt.Errorf("node %s: agent_token_sha256 must be 64 lower-case hex characters", n.Name)
+			}
+			if _, err := netip.ParseAddr(n.AgentSource); err != nil {
+				return fmt.Errorf("node %s: agent_source must be an IP address", n.Name)
+			}
+		default:
+			return fmt.Errorf("node %s: transport must be ssh or agent", n.Name)
+		}
+	}
+	if agents && (c.AgentListen == "" || c.AgentCertFile == "" || c.AgentKeyFile == "") {
+		return fmt.Errorf("a node on the agent transport needs agent_listen, agent_cert_file and agent_key_file")
+	}
+	if c.AgentListen != "" {
+		if _, err := netip.ParseAddrPort(c.AgentListen); err != nil {
+			return fmt.Errorf("agent_listen must be an address and port, such as 10.200.0.3:8443")
 		}
 	}
 	if len(c.FunctionEnvOldKeys) > 0 && c.FunctionEnvKey == "" {

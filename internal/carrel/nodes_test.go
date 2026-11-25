@@ -12,7 +12,7 @@ import (
 func nodeFixture(t *testing.T) (*Platform, *fakeBackend, *sync.Map) {
 	t.Helper()
 	p, b := fixture(t)
-	p.Config.Nodes = []NodeConfig{{"carrel01", "node-01"}, {"carrel02", "node-02"}, {"carrel03", "node-03"}}
+	p.Config.Nodes = []NodeConfig{{Name: "carrel01", Target: "node-01"}, {Name: "carrel02", Target: "node-02"}, {Name: "carrel03", Target: "node-03"}}
 	used := map[string]float64{"node-01": 100, "node-02": 20, "node-03": 60}
 	targets := &sync.Map{}
 	b.call = func(r D, target string) (any, error) {
@@ -46,11 +46,11 @@ func TestValidateNodes(t *testing.T) {
 	}{
 		{nil, false},
 		{[]NodeConfig{}, false},
-		{[]NodeConfig{{"carrel01", "carrel-node"}, {"carrel02", "node-02"}}, true},
-		{[]NodeConfig{{"carrel01", "a"}, {"carrel01", "b"}}, false},
-		{[]NodeConfig{{"carrel01", "a"}, {"carrel02", "a"}}, false},
-		{[]NodeConfig{{"../x", "a"}}, false},
-		{[]NodeConfig{{"carrel01", ""}}, false},
+		{[]NodeConfig{{Name: "carrel01", Target: "carrel-node"}, {Name: "carrel02", Target: "node-02"}}, true},
+		{[]NodeConfig{{Name: "carrel01", Target: "a"}, {Name: "carrel01", Target: "b"}}, false},
+		{[]NodeConfig{{Name: "carrel01", Target: "a"}, {Name: "carrel02", Target: "a"}}, false},
+		{[]NodeConfig{{Name: "../x", Target: "a"}}, false},
+		{[]NodeConfig{{Name: "carrel01", Target: ""}}, false},
 	} {
 		c := Config{Nodes: tc.nodes, PublicAddress: "140.113.60.184", Origin: "https://carrel.winlab.tw", Database: "x.db"}
 		if err := c.Validate(); (err == nil) != tc.ok {
@@ -286,7 +286,7 @@ func TestReconcileContinuesPastAnUnreachableNode(t *testing.T) {
 }
 
 func TestValidateNodesNeedsTheSiteAddressAndOrigin(t *testing.T) {
-	nodes := []NodeConfig{{"carrel01", "carrel-node"}}
+	nodes := []NodeConfig{{Name: "carrel01", Target: "carrel-node"}}
 	if err := (Config{Nodes: nodes, PublicAddress: "140.113.60.184", Origin: "https://carrel.winlab.tw", Database: "x.db"}).Validate(); err != nil {
 		t.Fatal(err)
 	}
