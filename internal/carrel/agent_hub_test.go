@@ -32,7 +32,7 @@ func TestAgentHubAnswersWhileTheWriterIsHeld(t *testing.T) {
 		}
 		got <- v
 	}()
-	jobs := hub.Claim(context.Background(), "pve1", nil, 5*time.Second)
+	jobs := hub.Claim(context.Background(), "pve1", "a", 1, nil, 5*time.Second)
 	if len(jobs) != 1 || jobs[0].Request["op"] != "status" {
 		t.Fatalf("jobs %v", jobs)
 	}
@@ -50,7 +50,7 @@ func TestAgentHubWakesAWaitingClaim(t *testing.T) {
 	claimed := make(chan time.Duration, 1)
 	go func() {
 		start := time.Now()
-		hub.Claim(context.Background(), "pve1", nil, 30*time.Second)
+		hub.Claim(context.Background(), "pve1", "a", 1, nil, 30*time.Second)
 		claimed <- time.Since(start)
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -75,13 +75,13 @@ func TestAgentHubFailsALostJobAndKeepsAnUntakenOne(t *testing.T) {
 		results <- err
 	}
 	go call("status")
-	first := hub.Claim(context.Background(), "pve1", nil, 5*time.Second)
+	first := hub.Claim(context.Background(), "pve1", "a", 1, nil, 5*time.Second)
 	if len(first) != 1 {
 		t.Fatalf("first claim %v", first)
 	}
 	go call("metrics")
-	// The agent restarted: it holds nothing.
-	second := hub.Claim(context.Background(), "pve1", nil, 5*time.Second)
+	// The agent restarted: a new process that holds nothing.
+	second := hub.Claim(context.Background(), "pve1", "b", 1, nil, 5*time.Second)
 	if len(second) != 1 || second[0].Request["op"] != "metrics" {
 		t.Fatalf("second claim %v", second)
 	}
@@ -99,6 +99,47 @@ func TestAgentHubFailsALostJobAndKeepsAnUntakenOne(t *testing.T) {
 	if hub.Complete("pve1", second[0].ID, []byte(`{"ok":true,"result":{}}`), false) {
 		t.Fatal("a second answer was taken")
 	}
+	// The old process's late poll gets nothing.
+	go call("status")
+	if late := hub.Claim(context.Background(), "pve1", "a", 2, nil, 50*time.Millisecond); len(late) != 0 {
+		t.Fatalf("a replaced process got %v", late)
+	}
+}
+
+// A retry that overlaps a slow poll, or arrives after a newer one, neither
+// takes jobs nor fails the ones the agent holds.
+func TestAgentHubIgnoresAnOverlappingPoll(t *testing.T) {
+	hub := NewAgentHub()
+	results := make(chan error, 1)
+	go func() {
+		_, err := hub.Call(context.Background(), D{"op": "status"}, "pve1", "pve1")
+		results <- err
+	}()
+	taken := hub.Claim(context.Background(), "pve1", "a", 2, nil, 5*time.Second)
+	if len(taken) != 1 {
+		t.Fatalf("claim %v", taken)
+	}
+	// Poll 1 arrives late and poll 2 again: both stale, neither judges.
+	for _, seq := range []uint64{1, 2} {
+		if got := hub.Claim(context.Background(), "pve1", "a", seq, nil, 10*time.Millisecond); len(got) != 0 {
+			t.Fatalf("stale poll %d got %v", seq, got)
+		}
+	}
+	// A slow poll superseded while it waits hands out nothing.
+	slow := make(chan []AgentJob, 1)
+	go func() { slow <- hub.Claim(context.Background(), "pve1", "a", 3, []string{taken[0].ID}, 5*time.Second) }()
+	time.Sleep(50 * time.Millisecond)
+	_ = hub.Claim(context.Background(), "pve1", "a", 4, []string{taken[0].ID}, 10*time.Millisecond)
+	go func() { _, _ = hub.Call(context.Background(), D{"op": "metrics"}, "pve1", "pve1") }()
+	if got := <-slow; len(got) != 0 {
+		t.Fatalf("a superseded poll got %v", got)
+	}
+	if !hub.Complete("pve1", taken[0].ID, []byte(`{"ok":true,"result":{}}`), false) {
+		t.Fatal("the held job was lost")
+	}
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A call that times out leaves nothing behind, and a late answer is ignored.
@@ -113,7 +154,7 @@ func TestAgentHubIgnoresALateAnswer(t *testing.T) {
 		defer wg.Done()
 		_, err = hub.Call(ctx, D{"op": "status"}, "pve1", "pve1")
 	}()
-	jobs := hub.Claim(context.Background(), "pve1", nil, 5*time.Second)
+	jobs := hub.Claim(context.Background(), "pve1", "a", 1, nil, 5*time.Second)
 	wg.Wait()
 	if e := hubFailure(t, err); e["backend_code"] != "adapter_timeout" {
 		t.Fatalf("timeout %v", e)
@@ -121,7 +162,7 @@ func TestAgentHubIgnoresALateAnswer(t *testing.T) {
 	if hub.Complete("pve1", jobs[0].ID, []byte(`{"ok":true,"result":{}}`), false) {
 		t.Fatal("a late answer was taken")
 	}
-	if left := hub.Claim(context.Background(), "pve1", []string{jobs[0].ID}, 10*time.Millisecond); len(left) != 0 {
+	if left := hub.Claim(context.Background(), "pve1", "a", 2, []string{jobs[0].ID}, 10*time.Millisecond); len(left) != 0 {
 		t.Fatalf("left behind %v", left)
 	}
 }
@@ -162,14 +203,16 @@ func fakeAgents(t *testing.T, p *Platform, next Backend) *RoutedBackend {
 			defer wg.Done()
 			var mu sync.Mutex
 			held := map[string]bool{}
+			var seq uint64
 			for ctx.Err() == nil {
+				seq++
 				mu.Lock()
 				ids := []string{}
 				for id := range held {
 					ids = append(ids, id)
 				}
 				mu.Unlock()
-				for _, job := range hub.Claim(ctx, name, ids, time.Second) {
+				for _, job := range hub.Claim(ctx, name, "fake-"+name, seq, ids, time.Second) {
 					mu.Lock()
 					held[job.ID] = true
 					mu.Unlock()

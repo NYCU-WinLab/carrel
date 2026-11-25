@@ -22,6 +22,14 @@ type AgentHub struct {
 
 type agentNode struct {
 	jobs map[string]*agentJob
+	// session is the agent process polling now, and seq the number of its
+	// latest poll. A poll from another process means the agent restarted:
+	// the old one's jobs are lost and its later polls get nothing. A poll
+	// older than the latest (a retry overlapping a slow one) gets nothing
+	// and judges nothing.
+	session string
+	seq     uint64
+	retired map[string]bool
 	// wake is closed and replaced when a job is queued, so a waiting claim
 	// answers at once instead of on its next tick.
 	wake chan struct{}
@@ -31,6 +39,8 @@ type agentJob struct {
 	id      string
 	request D
 	taken   bool
+	session string
+	seq     uint64
 	done    chan agentOutput
 }
 
@@ -53,7 +63,7 @@ func NewAgentHub() *AgentHub { return &AgentHub{nodes: map[string]*agentNode{}} 
 func (h *AgentHub) node(name string) *agentNode {
 	n := h.nodes[name]
 	if n == nil {
-		n = &agentNode{jobs: map[string]*agentJob{}, wake: make(chan struct{})}
+		n = &agentNode{jobs: map[string]*agentJob{}, wake: make(chan struct{}), retired: map[string]bool{}}
 		h.nodes[name] = n
 	}
 	return n
@@ -88,20 +98,31 @@ func (h *AgentHub) Call(ctx context.Context, request D, node, target string) (an
 	return adapterReply(parent, ctx, request, target, started, got.out, got.failed)
 }
 
-// Claim hands a node's agent the jobs it has not taken, waiting up to wait
-// for one. held lists every job the agent took and has not had acknowledged:
-// running, or answered with the POST still in flight. A job it took and no
-// longer holds was lost with the agent (a restart mid-job) and fails, as a
-// dropped SSH session does. Only a job no agent took is handed out again.
-func (h *AgentHub) Claim(ctx context.Context, node string, held []string, wait time.Duration) []AgentJob {
+// Claim hands a node's agent the jobs nobody has taken, waiting up to wait
+// for one. session names the agent process and seq numbers its polls,
+// rising by one each time. held lists every job the agent took and has not
+// had acknowledged: running, or answered with the POST still in flight. A
+// job this session took in an earlier poll and no longer holds was lost (a
+// crash inside the agent) and fails, as a dropped SSH session does; so do
+// all jobs of a process that was replaced. Only a job nobody took is handed
+// out again.
+func (h *AgentHub) Claim(ctx context.Context, node, session string, seq uint64, held []string, wait time.Duration) []AgentJob {
 	holding := map[string]bool{}
 	for _, id := range held {
 		holding[id] = true
 	}
 	h.mu.Lock()
 	n := h.node(node)
+	if session == "" || n.retired[session] || (session == n.session && seq <= n.seq) {
+		h.mu.Unlock()
+		return []AgentJob{}
+	}
+	if session != n.session && n.session != "" {
+		n.retired[n.session] = true
+	}
+	n.session, n.seq = session, seq
 	for id, job := range n.jobs {
-		if job.taken && !holding[id] {
+		if job.taken && (job.session != session || !holding[id]) {
 			delete(n.jobs, id)
 			job.done <- agentOutput{failed: errAgentLostJob}
 		}
@@ -111,11 +132,15 @@ func (h *AgentHub) Claim(ctx context.Context, node string, held []string, wait t
 	defer deadline.Stop()
 	for {
 		h.mu.Lock()
-		n := h.node(node)
 		out := []AgentJob{}
+		if n.session != session || n.seq != seq {
+			// A newer poll took over: this one hands out nothing.
+			h.mu.Unlock()
+			return out
+		}
 		for id, job := range n.jobs {
 			if !job.taken {
-				job.taken = true
+				job.taken, job.session, job.seq = true, session, seq
 				out = append(out, AgentJob{ID: id, Request: job.request})
 			}
 		}
