@@ -324,6 +324,9 @@ func runGolden(t *testing.T, file string, scenario func(*goldenRun), everyTool b
 // with -update.
 func checkGolden(t *testing.T, file, got string) {
 	t.Helper()
+	// The version changes with every release pull request; the golden files
+	// pin behaviour, not the release number.
+	got = strings.ReplaceAll(got, `"version":"`+Version+`"`, `"version":"<version>"`)
 	path := filepath.Join("testdata", "golden", file)
 	if *update {
 		must(os.MkdirAll(filepath.Dir(path), 0o755))
