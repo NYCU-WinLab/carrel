@@ -16,7 +16,9 @@ func publicOperation(o D) D {
 	if o["state"] == "waiting" && o["waiting_for"] != nil {
 		r["waiting_for"] = o["waiting_for"]
 	}
-	if contains(terminal, o["state"]) {
+	// done is the AIP-151 flag: generic client code needs no state list.
+	r["done"] = contains(terminal, o["state"])
+	if r["done"] == true {
 		r["poll_after_seconds"] = nil
 	} else {
 		r["poll_after_seconds"] = max(5, min(60, int(num(o["ready_at"])-now())))

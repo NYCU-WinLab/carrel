@@ -61,7 +61,7 @@ func operationSummary(op D) D {
 	if op["state"] != "succeeded" {
 		return op
 	}
-	r := pick(op, "id", "tool", "state", "next_action", "resource_changes")
+	r := pick(op, "id", "tool", "state", "done", "next_action", "resource_changes")
 	if op["created_at"] != nil && op["updated_at"] != nil {
 		r["duration_seconds"] = math.Round((num(op["updated_at"])-num(op["created_at"]))*1000) / 1000
 	}
