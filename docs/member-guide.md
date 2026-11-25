@@ -79,7 +79,7 @@ Oversized arguments are rejected before queueing or reserving resources, includi
 Use the known machine name directly. Normal member work does not need operator memories,
 infrastructure runbooks, hypervisor access, or a preliminary list/quota/catalog call.
 Choose the tenant only for project resources or an explicitly selected account.
-For feature questions, use `catalog_get`. If tool discovery is necessary, list names first and
+For feature questions, use `catalog_get`. Its `sites` list each site's features (snapshot, machine_freeze, machine_migrate, image_import, functions) with `available` and, where missing, the `reason`; a tool of a missing feature fails with `unsupported` and names the sites that have it. If tool discovery is necessary, list names first and
 inspect only the relevant tool definitions instead of dumping every description and repeated instructions.
 
 | Request | Direct tool call |
@@ -399,7 +399,7 @@ freeze that was never retried stays on PBS with the note above, not protected; a
 A freeze or a thaw copies for minutes to hours without holding carrel's writer lock, so other tenants'
 requests go on. A thaw that is cut off is finished by retrying it (`operation_retry`), on the node where it
 began; `machine_delete` of that machine discards the half-restored one first.
-Without `backup_storage`, `machine_freeze` fails and `catalog_get` reports `machine_freeze: false`.
+Without `backup_storage`, `machine_freeze` fails with `unsupported` and `catalog_get` reports `machine_freeze: false` and the feature's reason under `sites`.
 
 See the [0.3 reliability acceptance](evaluations/2026-10-01-reliability.md) for live recovery,
 networking, snapshot and native Codex test results.

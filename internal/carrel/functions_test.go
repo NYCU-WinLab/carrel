@@ -196,7 +196,7 @@ func TestFunctionDeployLimits(t *testing.T) {
 	assertCode(t, call(D{"name": "x", "image": "a/b"}), "quota_exceeded")
 	p.Config.FunctionHosts = nil
 	p.Store.Exec(`UPDATE tenants SET quota=json_set(quota,'$.functions',5) WHERE n=1`)
-	assertCode(t, call(D{"name": "x", "image": "a/b"}), "capacity_exhausted")
+	assertCode(t, call(D{"name": "x", "image": "a/b"}), "unsupported")
 }
 
 func TestFunctionStateWaitsForAChange(t *testing.T) {

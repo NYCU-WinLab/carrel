@@ -2,6 +2,7 @@
   "origin": "https://carrel.winlab.tw",
   "issuer": "https://auth.winlab.tw/realms/winlab",
   "database": "/var/lib/carrel/carrel.db",
+  "site": "b09",
   "public_address": "140.113.60.184",
   "nodes": [
     {
