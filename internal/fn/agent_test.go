@@ -47,7 +47,15 @@ func version(v string) DesiredVersion {
 	return DesiredVersion{Version: v, Image: "example/" + v, Port: 8080, MemoryMB: 256, Mode: ModeReuse}
 }
 
+// retryPauses sets buildRetryPauses for one test.
+func retryPauses(t *testing.T, pauses ...time.Duration) {
+	saved := buildRetryPauses
+	buildRetryPauses = pauses
+	t.Cleanup(func() { buildRetryPauses = saved })
+}
+
 func TestAgentAppliesTheDesiredState(t *testing.T) {
+	retryPauses(t)
 	root := t.TempDir()
 	var builds, forgotten []string
 	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
@@ -463,5 +471,53 @@ func TestAgentFailsAVersionWhoseEnvironmentCannotBeOpened(t *testing.T) {
 	}
 	if a.failed["t1-api/v3"] != "" || asks["/functions/v1/agent/env v3"] != 2 {
 		t.Fatalf("a 403 failed the version: %v %v", a.failed, asks)
+	}
+}
+
+func TestAgentTriesAFailedBuildAgainAfterAPause(t *testing.T) {
+	root := t.TempDir()
+	tries := 0
+	failFirst := 2
+	var builds []string
+	ok := fakeBuild(root, &builds, nil)
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock, Forget: func(string) {},
+		Build: func(ctx context.Context, f Function, image string, env []string, auth *RegistryAuth) error {
+			tries++
+			if tries <= failFirst {
+				return errors.New("registry hiccup")
+			}
+			return ok(ctx, f, image, env, auth)
+		}}
+	desired := Desired{Revision: 1, Functions: []DesiredFunction{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}}
+
+	// The pause holds the next build back.
+	retryPauses(t, time.Hour)
+	a.apply(context.Background(), desired)
+	a.apply(context.Background(), desired)
+	if tries != 1 || a.failed["t1-api/v1"] != "" {
+		t.Fatalf("during the pause: tries %d failed %v", tries, a.failed)
+	}
+
+	// Two failures and a success: the version is built, never reported failed.
+	tries, a.retries, a.retryAt = 0, nil, nil
+	retryPauses(t, 0, 0)
+	for range 3 {
+		a.apply(context.Background(), desired)
+		if a.failed["t1-api/v1"] != "" {
+			t.Fatalf("failed after %d tries: %v", tries, a.failed)
+		}
+	}
+	if tries != 3 || !Built(root, "t1-api", "v1") || len(a.retries) != 0 {
+		t.Fatalf("tries %d built %v retries %v", tries, Built(root, "t1-api", "v1"), a.retries)
+	}
+
+	// Every try fails: the third failure fails the version.
+	root2 := t.TempDir()
+	tries, failFirst, a.Root, a.retries, a.retryAt = 0, 99, root2, nil, nil
+	for range 4 {
+		a.apply(context.Background(), desired)
+	}
+	if tries != 3 || a.failed["t1-api/v1"] != "registry hiccup" {
+		t.Fatalf("tries %d failed %v", tries, a.failed)
 	}
 }

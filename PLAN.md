@@ -1565,7 +1565,9 @@ to tenant networks, one instance per `reuse` function.
    one at a time, puts each function's current version live, removes the functions and versions
    the state no longer names, and sends its whole inventory after every pass
    (`POST /functions/v1/agent/report`): each version is ready, with its disk use and image
-   digest, or failed, with the error. Both sides are level-triggered, so a lost report or a
+   digest, or failed, with the error. A failed build is tried again after 1 and then 5 minutes,
+   so a registry hiccup does not fail the version; the third failure does. Both sides are
+   level-triggered, so a lost report or a
    restart heals on the next pass. A function is named `t<tenant>-<name>` on a host. The
    control plane decides which version is current; the host never activates a build on its own.
    The functions' directory must be on a file system without `nodev`, or no tap device opens.
