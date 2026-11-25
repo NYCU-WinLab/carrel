@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -17,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,12 +59,15 @@ const (
 type job struct {
 	ID      string          `json:"id"`
 	Request json.RawMessage `json:"request"`
+	// Stream: a console, run on a connection of its own (stream), not a job.
+	Stream bool `json:"stream"`
 }
 
 type agent struct {
 	cfg     config
 	token   string
 	client  *http.Client
+	tls     *tls.Config
 	session string
 	seq     uint64
 	// release is the version in release.json beside node-agent.py: the
@@ -75,6 +80,8 @@ type agent struct {
 	// run runs one request line through node-agent.py; a variable so tests
 	// can stand in for it.
 	run func(ctx context.Context, request []byte) (out []byte, failed bool)
+	// console starts node-agent.py for a stream; a variable for tests.
+	console func(ctx context.Context) *exec.Cmd
 }
 
 func load(path string) (*agent, error) {
@@ -112,11 +119,13 @@ func load(path string) (*agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("token_file: %w", err)
 	}
-	a := &agent{cfg: c, token: strings.TrimSpace(string(token)), held: map[string]bool{},
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}},
+	trust := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}
+	a := &agent{cfg: c, token: strings.TrimSpace(string(token)), held: map[string]bool{}, tls: trust,
+		client: &http.Client{Transport: &http.Transport{TLSClientConfig: trust.Clone()},
 			// A redirect would carry the token elsewhere: never follow one.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	a.run = a.nodeAgent
+	a.console = func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, a.cfg.NodeAgent) }
 	var record struct {
 		Version string `json:"version"`
 	}
@@ -177,6 +186,12 @@ func (a *agent) loop(stop context.Context) {
 			connected = true
 		}
 		for _, j := range jobs {
+			if j.Stream {
+				// A console is cut when the agent stops, as an SSH session
+				// would be, so it is not held.
+				go a.stream(stop, j)
+				continue
+			}
 			a.mu.Lock()
 			if a.held[j.ID] {
 				// Handed out again after a poll's answer failed, though it
@@ -230,7 +245,7 @@ func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
 		held = append(held, id)
 	}
 	a.mu.Unlock()
-	body, _ := json.Marshal(map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain})
+	body, _ := json.Marshal(map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain, "capabilities": []string{"stream"}})
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	target := strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/claim?node=" + url.QueryEscape(a.cfg.Node)
@@ -309,6 +324,82 @@ func (a *agent) answer(ctx context.Context, id string, out []byte, failed bool) 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("answer got %s", resp.Status)
 	}
+	return nil
+}
+
+// stream runs a console: it connects back to the control plane with the
+// stream's id, and node-agent.py's stdin and stdout run over that
+// connection, as they do over SSH. Nothing of the stream is logged.
+func (a *agent) stream(ctx context.Context, j job) {
+	if err := a.streamOnce(ctx, j); err != nil {
+		slog.Warn("stream_failed", "stream", j.ID, "error", err)
+	}
+}
+
+func (a *agent) streamOnce(ctx context.Context, j job) error {
+	u, err := url.Parse(strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/streams/" + url.PathEscape(j.ID) + "?node=" + url.QueryEscape(a.cfg.Node))
+	if err != nil {
+		return err
+	}
+	address := u.Host
+	if u.Port() == "" {
+		address = net.JoinHostPort(u.Hostname(), "443")
+	}
+	dial, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	c, err := (&tls.Dialer{Config: a.tls.Clone()}).DialContext(dial, "tcp", address)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "carrel-stream")
+	if err := req.Write(c); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(c)
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		resp.Body.Close()
+		return fmt.Errorf("stream answered %s", resp.Status)
+	}
+	_ = c.SetDeadline(time.Time{})
+	run, end := context.WithCancel(ctx)
+	defer end()
+	cmd := a.console(run)
+	// A child that keeps stdout open does not hold the stream once the
+	// process is gone.
+	cmd.WaitDelay = 5 * time.Second
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stdout = c
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// The request first, then what the control plane sends. When the
+	// connection ends, so does the console: qm and socat may outlive their
+	// stdin, so the process is stopped.
+	go func() {
+		if _, err := stdin.Write(append(bytes.TrimSpace(j.Request), '\n')); err == nil {
+			_, _ = io.Copy(stdin, reader)
+		}
+		stdin.Close()
+		end()
+	}()
+	_ = cmd.Wait()
 	return nil
 }
 

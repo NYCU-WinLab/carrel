@@ -1,10 +1,12 @@
 package carrel
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -49,6 +51,9 @@ func (p *Platform) AgentHandler() http.Handler {
 			Held     []string `json:"held"`
 			// Drain: the agent is shutting down and takes no job.
 			Drain bool `json:"drain"`
+			// Capabilities: what this agent can do beyond jobs, such as
+			// "stream" for consoles.
+			Capabilities []string `json:"capabilities"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, maxAgentClaim)).Decode(&in) != nil || in.Session == "" || in.Seq == 0 {
 			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "The body must be JSON with session and seq"}})
@@ -59,7 +64,7 @@ func (p *Platform) AgentHandler() http.Handler {
 				"message": fmt.Sprintf("This control plane serves agent protocols %s, not %q. Install carrel-agent from release %s.", strings.Join(agentProtocols, ", "), in.Protocol, Version)}})
 			return
 		}
-		p.Hub.Hello(node, in.Session, in.Protocol, in.Release)
+		p.Hub.Hello(node, in.Session, in.Protocol, in.Release, in.Capabilities...)
 		if in.Drain {
 			p.Hub.Heartbeat(node, in.Session, in.Seq, in.Held)
 			jsonResponse(w, 200, D{"jobs": []AgentJob{}})
@@ -89,8 +94,63 @@ func (p *Platform) AgentHandler() http.Handler {
 		taken := p.Hub.Complete(node, r.PathValue("id"), out, r.Header.Get("X-Carrel-Exit") != "0")
 		jsonResponse(w, 200, D{"ok": true, "taken": taken})
 	})
+	// A console stream: the agent connects back with the id a claim gave it,
+	// and the connection then carries node-agent.py's stdin and stdout.
+	mux.HandleFunc("GET /sites/v1/agent/streams/{id}", func(w http.ResponseWriter, r *http.Request) {
+		node := r.URL.Query().Get("node")
+		if !p.agentAllowed(r, node) {
+			jsonResponse(w, 403, D{"ok": false, "error": D{"code": "forbidden", "message": "Invalid agent token"}})
+			return
+		}
+		if !strings.EqualFold(r.Header.Get("Upgrade"), agentStreamUpgrade) {
+			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "Upgrade must be " + agentStreamUpgrade}})
+			return
+		}
+		to, ok := p.Hub.Attach(node, r.PathValue("id"))
+		if !ok {
+			jsonResponse(w, 404, D{"ok": false, "error": D{"code": "not_found", "message": "No console waits for this stream"}})
+			return
+		}
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			// HTTP/2 cannot be taken over; the agent speaks HTTP/1.1.
+			to <- nil
+			jsonResponse(w, 500, D{"ok": false, "error": D{"code": "internal", "message": "This connection cannot carry a stream"}})
+			return
+		}
+		c, buffered, err := hijacker.Hijack()
+		if err != nil {
+			to <- nil
+			return
+		}
+		// The listener's read and write deadlines are for requests; a console
+		// runs up to an hour.
+		_ = c.SetDeadline(time.Time{})
+		_, err = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + agentStreamUpgrade + "\r\n\r\n")
+		if err == nil {
+			err = buffered.Flush()
+		}
+		if err != nil {
+			c.Close()
+			to <- nil
+			return
+		}
+		to <- &bufferedConn{Conn: c, r: buffered.Reader}
+	})
 	return mux
 }
+
+// agentStreamUpgrade names the protocol of a console stream's connection:
+// raw bytes both ways.
+const agentStreamUpgrade = "carrel-stream"
+
+// bufferedConn reads what the server buffered before the takeover first.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // agentAllowed checks the bearer token and the source address against the
 // node's configuration. A node on the SSH transport has no agent.

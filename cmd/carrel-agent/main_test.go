@@ -11,10 +11,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -277,5 +280,87 @@ func TestAgentReportsItsProtocolAndRelease(t *testing.T) {
 	}
 	if got["protocol"] != protocol || got["release"] != "0.12.0" {
 		t.Fatalf("hello %v", got)
+	}
+}
+
+// A console runs through the agent: the control plane's stream reaches
+// node-agent.py's stdin and its stdout comes back, and stopping the agent
+// cuts it. An agent that does not say it can stream keeps consoles on SSH.
+func TestAgentStreamsAConsole(t *testing.T) {
+	dir := t.TempDir()
+	store, err := carrel.OpenStore(filepath.Join(dir, "carrel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	token := "agent-token"
+	sum := sha256.Sum256([]byte(token))
+	cfg := carrel.Config{Nodes: []carrel.NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: hex.EncodeToString(sum[:]), AgentSource: "127.0.0.1"},
+	}}
+	p := carrel.NewPlatform(store, sshOnly{}, cfg)
+	p.UseAgents()
+	// HTTP/2 on, as ListenAndServeTLS has it: the stream must still be taken over.
+	server := httptest.NewUnstartedServer(p.AgentHandler())
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+	ca := writeFile(t, dir, "ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	conf, _ := json.Marshal(config{Control: server.URL, CAFile: ca, TokenFile: writeFile(t, dir, "token", token+"\n"), Node: "pve1"})
+	a, err := load(writeFile(t, dir, "agent.json", string(conf)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.session = "s1"
+	request := filepath.Join(dir, "request")
+	// node-agent.py's console: the request line, the reply line, then bytes.
+	a.console = func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", `read line; printf '%s' "$line" > "$0"; echo '{"ok":true,"result":{"state":"streaming"}}'; exec cat`, request)
+	}
+	streamer := p.Backend.(carrel.Streamer)
+	call, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// Before the agent polls, the console stays on SSH, which this backend lacks.
+	if _, err := streamer.Stream(call, carrel.D{"op": "console"}, "carrel-node"); err == nil {
+		t.Fatal("a console went to an agent that never polled")
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.loop(ctx); close(done) }()
+	defer func() { stop(); <-done }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !p.Hub.Capable("pve1", "stream", time.Now()) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	s, err := streamer.Stream(call, carrel.D{"op": "console", "mode": "serial"}, "carrel-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 5)
+	if _, err := io.ReadFull(s, got); err != nil || string(got) != "hello" {
+		t.Fatalf("echo %q %v", got, err)
+	}
+	if line, _ := os.ReadFile(request); !strings.Contains(string(line), `"op":"console"`) {
+		t.Fatalf("node-agent got %q", line)
+	}
+	if obj := p.Hub.Status("pve1", time.Now()); !strings.Contains(fmt.Sprint(obj["capabilities"]), "stream") {
+		t.Fatalf("status %v", obj)
+	}
+	// Stopping the agent cuts the console.
+	stop()
+	<-done
+	read := make(chan error, 1)
+	go func() { _, err := s.Read(got); read <- err }()
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Fatal("the stream still reads after the agent stopped")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stream outlived the agent")
 	}
 }

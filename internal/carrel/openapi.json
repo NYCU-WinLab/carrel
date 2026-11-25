@@ -1175,6 +1175,13 @@
                   },
                   "drain": {
                     "type": "boolean"
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "description": "What the agent can do beyond jobs; stream means consoles go through it",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -1199,6 +1206,43 @@
             }
           }
         ]
+      }
+    },
+    "/sites/v1/agent/streams/{id}": {
+      "get": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "A node agent connects back for a console stream a claim handed it; with Upgrade: carrel-stream the connection then carries node-agent.py's stdin and stdout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "The connection now carries the stream"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
       }
     },
     "/sites/v1/agent/jobs/{id}": {
