@@ -80,6 +80,10 @@ func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string) {
 	mux.Handle("/oauth/", oauth)
 	mux.Handle("/console/", console)
 	mux.Handle("/.well-known/", oauth)
+	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(openAPI)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		health := Build()
 		health["status"], health["service"] = "ok", "carrel"

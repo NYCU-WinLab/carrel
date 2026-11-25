@@ -78,6 +78,10 @@ restores the database.
 `internal/carrel/contract.json` is the live MCP contract: tool names, schemas, toolsets. A new or
 renamed tool appears in a client only after the client reconnects.
 
+The HTTP routes outside MCP are described in `internal/carrel/openapi.json`, served at
+`/openapi.json`. A test fails when a route is registered without an entry, so add the entry with
+the route.
+
 ## Writing
 
 Everything in the repository and on GitHub is in English: code comments, docs, issues, pull
