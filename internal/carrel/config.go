@@ -19,12 +19,14 @@ import (
 // an integration reads on its own (netbox, vm_environment) stay maps until
 // that integration moves to its own package.
 type Config struct {
-	Origin        string       `json:"origin"`
-	Issuer        string       `json:"issuer"`
-	Database      string       `json:"database"`
-	PublicAddress string       `json:"public_address"`
-	Nodes         []NodeConfig `json:"nodes"`
-	SSHConfig     string       `json:"ssh_config,omitempty"`
+	Origin        string `json:"origin"`
+	Issuer        string `json:"issuer"`
+	Database      string `json:"database"`
+	PublicAddress string `json:"public_address"`
+	// Site names this control plane's site in catalog_get, such as b09.
+	Site      string       `json:"site,omitempty"`
+	Nodes     []NodeConfig `json:"nodes"`
+	SSHConfig string       `json:"ssh_config,omitempty"`
 
 	CloudflareZone  string `json:"cloudflare_zone,omitempty"`
 	CloudflareToken string `json:"cloudflare_token,omitempty"`

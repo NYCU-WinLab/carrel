@@ -94,7 +94,7 @@ func TestFreezeRefusals(t *testing.T) {
 		{"frozen quota", func(p *Platform, b *fakeBackend) {
 			p.Store.Exec(`UPDATE tenants SET quota='{"frozen_gb":10}' WHERE n=1`)
 		}, "quota_exceeded", "quota"},
-		{"no backup storage", func(p *Platform, b *fakeBackend) { p.Config.BackupStorage = "" }, "backend_unavailable", "not set up"},
+		{"no backup storage", func(p *Platform, b *fakeBackend) { p.Config.BackupStorage = "" }, "unsupported", "no backup storage"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, b, seen := freezeSite(t)
