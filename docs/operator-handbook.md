@@ -303,10 +303,16 @@ carrel sends no alerts itself. Point an alerting service at the collector's back
 1. Generate a new key: `openssl rand -base64 32`.
 2. In `/etc/carrel/config.json`, move the current key into `function_env_old_keys` and put the new
    key in `function_env_key`. Restart carrel.
-3. New uploads are sealed with the new key. Nothing re-encrypts stored values: every kept
-   version, the rollback target included, and every function's registry credentials stay sealed
-   with the key they were sealed with. Carrel has no count of values per key, so keep every old
-   key in `function_env_old_keys`. Drop one only when it leaked, and accept the failures below.
+3. New uploads are sealed with the new key. Values sealed earlier (every kept version, the rollback
+   target included, and every function's registry credentials) stay sealed with their old key
+   until you re-seal them.
+4. Count what each key still opens: `carrel -reseal-function-values -dry-run`. It prints
+   `{"counts":{"current":N,"old:0":N,"none":N},...}`, where `old:i` is the i-th entry of
+   `function_env_old_keys` (from 0). Then re-seal with `carrel -reseal-function-values`, which
+   changes only values an old key opens, in one transaction. Run it with the same config and
+   database as the service, and take a backup first.
+5. When a key's count is zero, remove it from `function_env_old_keys` and restart carrel. A count
+   under `none` is values no key opens; those fail as below until the member uploads them again.
 
 Copy the old key exactly: a wrong old key passes validation, and the versions it should open fail.
 

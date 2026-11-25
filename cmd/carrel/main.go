@@ -20,6 +20,8 @@ func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address")
 	version := flag.Bool("version", false, "Print version")
 	backup := flag.Bool("backup", false, "Create a consistent backup and send it to the backup target")
+	reseal := flag.Bool("reseal-function-values", false, "Seal stored function values again with function_env_key and print how many each key opened")
+	dryRun := flag.Bool("dry-run", false, "With -reseal-function-values: only count, change nothing")
 	flag.Parse()
 	stderr := slog.NewJSONHandler(os.Stderr, nil)
 	slog.SetDefault(slog.New(stderr))
@@ -61,6 +63,16 @@ func main() {
 	}
 	platform := carrel.NewPlatform(store, backend, cfg)
 	platform.Telemetry = telemetry
+	if *reseal {
+		result, err := platform.ResealFunctionValues(*dryRun)
+		if err != nil {
+			slog.Error("reseal_failed", "error", err)
+			fatal()
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(result)
+		telemetry.Close()
+		return
+	}
 	if *backup {
 		result, err := platform.Backup(context.Background(), filepath.Dir(*configFile))
 		if err != nil {
