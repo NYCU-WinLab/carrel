@@ -437,7 +437,9 @@ def test_any_site_node_may_run_the_agent():
 def test_an_agent_node_carries_its_transport_and_the_others_stay_on_ssh():
     module = load("configure-nodes.py")
     nodes = module.targets(SITE, "carrel01")
-    entries = module.node_entries(nodes, {"carrel01", "carrel02"}, {"carrel01": "ab" * 32, "carrel02": "cd" * 32})
+    entries = module.node_entries(
+        nodes, {"carrel01", "carrel02"}, {"carrel01": "ab" * 32, "carrel02": "cd" * 32}
+    )
     assert entries[0] == {
         "name": "carrel01",
         "target": "carrel-node",
@@ -454,7 +456,9 @@ def test_an_agent_node_carries_its_transport_and_the_others_stay_on_ssh():
         "agent_source": nodes[1]["address"],
     }
     assert entries[2] == {"name": "carrel03", "target": "carrel03"}
-    assert module.node_entries(nodes, set(), {}) == [{"name": n["name"], "target": n["target"]} for n in nodes]
+    assert module.node_entries(nodes, set(), {}) == [
+        {"name": n["name"], "target": n["target"]} for n in nodes
+    ]
 
 
 def test_another_node_routes_to_the_listener_through_the_first_node_from_its_own_address():
@@ -468,7 +472,9 @@ def test_another_node_routes_to_the_listener_through_the_first_node_from_its_own
 def test_infra_firewall_admits_the_agent_port_from_the_other_nodes_only():
     module = load("bootstrap-platform.py")
     [rule] = module.peer_agent(SITE, "carrel01")
-    assert rule.startswith(f'iifname "{SITE["underlay_interface"]}" oifname "vmbr98" ip saddr {{ 192.168.19.102,')
+    assert rule.startswith(
+        f'iifname "{SITE["underlay_interface"]}" oifname "vmbr98" ip saddr {{ 192.168.19.102,'
+    )
     assert "192.168.19.101" not in rule and rule.endswith("ip daddr 10.200.0.3 tcp dport 8443 accept")
 
 
