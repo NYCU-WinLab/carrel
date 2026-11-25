@@ -124,7 +124,7 @@ certificate work therefore delays other mutations.
 
 `sites/b09/platform-verification.json` records acceptance facts and limitations. Tests use temporary
 users/guests, never existing members' machines. Their permanent tenant serials are retired after
-cleanup. This release implements the MCP/identity/network core of M1–M5. It does not claim full
+cleanup. This release implements the MCP/identity/network core of M1 to M5. It does not claim full
 milestone acceptance: M0 clean nested CI install, M2 real agent-driven acceptance, M3 console/key
 recovery, M4 special domains/ports, M5 multi-node cases, M6 images/ISOs, M7 skills, M8 PBS/telemetry/
 notifications/alumni lifecycle, M9 import and M10 cluster expansion remain. TLS renewal exists in
