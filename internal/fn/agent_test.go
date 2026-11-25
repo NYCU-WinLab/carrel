@@ -420,3 +420,48 @@ func TestAgentFetchesTheEnvironmentToBuild(t *testing.T) {
 		t.Fatalf("builds %v env %q", builds, got)
 	}
 }
+
+func TestAgentFailsAVersionWhoseEnvironmentCannotBeOpened(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	asks := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		v := r.URL.Query().Get("version")
+		asks[r.URL.Path+" "+v]++
+		switch {
+		case r.URL.Path == "/functions/v1/agent/env" && v == "v1":
+			http.Error(w, `{"error":{"code":"conflict"}}`, 409)
+		case r.URL.Path == "/functions/v1/agent/auth" && v == "v2":
+			http.Error(w, `{"error":{"code":"conflict"}}`, 409)
+		case r.URL.Path == "/functions/v1/agent/env" && v == "v3":
+			http.Error(w, `{"error":{"code":"forbidden"}}`, 403)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	var builds []string
+	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock, Forget: func(string) {}, failed: map[string]string{},
+		Build: fakeBuild(root, &builds, nil)}
+	v1, v2, v3 := version("v1"), version("v2"), version("v3")
+	v1.HasEnv, v2.HasAuth, v3.HasEnv = true, true, true
+	desired := Desired{Revision: 1, Functions: []DesiredFunction{{ID: "t1-api", Current: "v3", Versions: []DesiredVersion{v1, v2, v3}}}}
+	a.apply(context.Background(), desired)
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 {
+		t.Fatalf("built %v", builds)
+	}
+	if !strings.HasPrefix(a.failed["t1-api/v1"], "environment: ") || !strings.HasPrefix(a.failed["t1-api/v2"], "registry credentials: ") {
+		t.Fatalf("a refused value did not fail its version: %v", a.failed)
+	}
+	// A refusal is not asked again; a host the control plane does not know
+	// (403) is, since a fixed token heals it.
+	if asks["/functions/v1/agent/env v1"] != 1 || asks["/functions/v1/agent/auth v2"] != 1 {
+		t.Fatalf("asked again after a refusal: %v", asks)
+	}
+	if a.failed["t1-api/v3"] != "" || asks["/functions/v1/agent/env v3"] != 2 {
+		t.Fatalf("a 403 failed the version: %v %v", a.failed, asks)
+	}
+}

@@ -96,6 +96,10 @@ type Config struct {
 	// FunctionEnvKey encrypts functions' environment values at rest: 32
 	// bytes in standard base64. Without it function_env is unavailable.
 	FunctionEnvKey string `json:"function_env_key,omitempty"`
+	// FunctionEnvOldKeys are earlier function_env_key values, in the same
+	// form. They only open values; new values are sealed with
+	// function_env_key. Keep an old key until nothing sealed with it is left.
+	FunctionEnvOldKeys []string `json:"function_env_old_keys,omitempty"`
 
 	VMEnvironment D `json:"vm_environment,omitempty"`
 	NetBox        D `json:"netbox,omitempty"`
@@ -273,6 +277,14 @@ func (c Config) Validate() error {
 	if c.FunctionEnvKey != "" {
 		if key, err := base64.StdEncoding.DecodeString(c.FunctionEnvKey); err != nil || len(key) != 32 {
 			return fmt.Errorf("function_env_key must be 32 bytes in standard base64")
+		}
+	}
+	if len(c.FunctionEnvOldKeys) > 0 && c.FunctionEnvKey == "" {
+		return fmt.Errorf("function_env_old_keys needs function_env_key")
+	}
+	for _, old := range c.FunctionEnvOldKeys {
+		if key, err := base64.StdEncoding.DecodeString(old); err != nil || len(key) != 32 {
+			return fmt.Errorf("function_env_old_keys: each key must be 32 bytes in standard base64")
 		}
 	}
 	return nil

@@ -296,6 +296,22 @@ carrel sends no alerts itself. Point an alerting service at the collector's back
 | Out of room, guest not up | WARN `operation_failed` with `code` `capacity_exhausted` or `guest_not_ready` |
 | Site silent | no new `carrel.node.reachable` point for 10 minutes; run the alerting outside the site |
 
+## Function environment key
+
+`function_env_key` encrypts function environments and registry credentials. To rotate it:
+
+1. Generate a new key: `openssl rand -base64 32`.
+2. In `/etc/carrel/config.json`, move the current key into `function_env_old_keys` and put the new
+   key in `function_env_key`. Restart carrel.
+3. New uploads are sealed with the new key. Values sealed earlier stay sealed with the old key,
+   so keep it in `function_env_old_keys` until every member has uploaded their environment and
+   registry credentials again.
+
+Dropping an old key too early fails each version that still needs it: the function host reports
+the version failed with `environment: ... cannot be decrypted with any configured key`, and the
+control plane logs `function_value_open_failed`. The member fixes it with `function_env` or
+`function_registry`.
+
 ## NetBox sync
 
 carrel can push machines, networks, addresses, published ports and virtual addresses to NetBox. It
