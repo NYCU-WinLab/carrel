@@ -347,6 +347,15 @@ func (p *Platform) Start() {
 					e.deferJump = true
 					pushJump = true
 					e.Reconcile()
+					// A record left in "deleting" whose VM is gone keeps its
+					// reservation until the sweep removes it (#298).
+					if problem := attemptLogged("sweep_deleted_machines", func() {
+						if gone := e.SweepDeletedMachines(); len(gone) > 0 {
+							slog.Warn("deleted_records_removed", "type", "maintenance", "count", len(gone))
+						}
+					}); problem != nil {
+						slog.Error("sweep_deleted_machines_failed", "type", "maintenance", "error", describe(problem))
+					}
 				}
 				e.S.PurgeOAuth()
 				e.S.PruneOperations()
