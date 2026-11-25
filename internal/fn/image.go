@@ -163,10 +163,20 @@ func pullError(err error, auth *RegistryAuth) error {
 	}
 	var te *transport.Error
 	if errors.As(err, &te) {
-		return fmt.Errorf("pulling with the registry's credentials failed: the registry answered %d", te.StatusCode)
+		return maskedError{fmt.Sprintf("pulling with the registry's credentials failed: the registry answered %d", te.StatusCode), err}
 	}
-	return errors.New("pulling with the registry's credentials failed")
+	return maskedError{"pulling with the registry's credentials failed", err}
 }
+
+// maskedError shows its own message and keeps the cause for errors.As, so the
+// agent can tell a registry hiccup from a refusal without the text.
+type maskedError struct {
+	msg string
+	err error
+}
+
+func (m maskedError) Error() string { return m.msg }
+func (m maskedError) Unwrap() error { return m.err }
 
 // openImage reads an image from a registry, or from a tarball made by
 // `docker save`. No Docker daemon is involved.

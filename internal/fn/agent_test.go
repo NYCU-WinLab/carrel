@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,8 +16,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 // fakeBuild writes what a real build leaves: a version directory with its
@@ -484,7 +490,7 @@ func TestAgentTriesAFailedBuildAgainAfterAPause(t *testing.T) {
 		Build: func(ctx context.Context, f Function, image string, env []string, auth *RegistryAuth) error {
 			tries++
 			if tries <= failFirst {
-				return errors.New("registry hiccup")
+				return &transport.Error{StatusCode: 503}
 			}
 			return ok(ctx, f, image, env, auth)
 		}}
@@ -517,7 +523,30 @@ func TestAgentTriesAFailedBuildAgainAfterAPause(t *testing.T) {
 	for range 4 {
 		a.apply(context.Background(), desired)
 	}
-	if tries != 3 || a.failed["t1-api/v1"] != "registry hiccup" {
+	if tries != 3 || !strings.Contains(a.failed["t1-api/v1"], "503") {
 		t.Fatalf("tries %d failed %v", tries, a.failed)
+	}
+}
+
+func TestOnlyATransientBuildErrorIsTriedAgain(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{&transport.Error{StatusCode: 503}, true},
+		{&transport.Error{StatusCode: 429}, true},
+		{&transport.Error{StatusCode: 404}, false},
+		{&transport.Error{StatusCode: 401}, false},
+		{pullError(&transport.Error{StatusCode: 502}, &RegistryAuth{Registry: "ghcr.io"}), true},
+		{pullError(&transport.Error{StatusCode: 403}, &RegistryAuth{Registry: "ghcr.io"}), false},
+		{fmt.Errorf("read the image: %w", io.ErrUnexpectedEOF), true},
+		{&net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}, true},
+		{fmt.Errorf("write: %w", syscall.ENOSPC), true},
+		{errImageTooLarge, false},
+		{errors.New("the image has no entrypoint or command"), false},
+	} {
+		if got := transient(c.err); got != c.want {
+			t.Errorf("transient(%v) = %v, want %v", c.err, got, c.want)
+		}
 	}
 }

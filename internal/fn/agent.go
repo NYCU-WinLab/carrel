@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 // The host agent keeps a function host at the control plane's desired state
@@ -112,9 +115,24 @@ type Agent struct {
 	retryAt map[string]time.Time
 }
 
+// transient says a failed build may work when tried again: the network or the
+// registry failed, or the disk was full. A wrong name, a refused pull or a bad
+// image fails the version at once.
+func transient(err error) bool {
+	var te *transport.Error
+	if errors.As(err, &te) {
+		return te.StatusCode >= 500 || te.StatusCode == http.StatusTooManyRequests
+	}
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOSPC)
+}
+
 // buildRetryPauses are the pauses before building a version again after a
 // failed build; the build after the last pause that fails, fails the version.
-var buildRetryPauses = []time.Duration{time.Minute, 5 * time.Minute}
+// They add up to 2.5 minutes, inside the deploy action's default 300 second
+// wait.
+var buildRetryPauses = []time.Duration{30 * time.Second, 2 * time.Minute}
 
 const (
 	// agentPoll is how long one request for the state may wait for a change.
@@ -443,7 +461,7 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 			if ctx.Err() != nil {
 				return // a stop is not a failed build
 			}
-			if n := a.retries[key]; n < len(buildRetryPauses) {
+			if n := a.retries[key]; n < len(buildRetryPauses) && transient(err) {
 				if a.retries == nil {
 					a.retries, a.retryAt = map[string]int{}, map[string]time.Time{}
 				}
