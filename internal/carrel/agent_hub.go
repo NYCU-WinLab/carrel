@@ -393,7 +393,8 @@ func (h *AgentHub) Stream(ctx context.Context, request D, node string) (io.ReadW
 		delete(n.streams, id)
 		h.mu.Unlock()
 		if !waiting {
-			// The agent connected just now: its connection is on its way.
+			// The agent connected just now: its connection is on its way,
+			// within the 10 seconds the listener gives its answer.
 			if late := <-s.conn; late != nil {
 				late.Close()
 			}

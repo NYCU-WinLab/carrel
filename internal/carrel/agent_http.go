@@ -123,12 +123,16 @@ func (p *Platform) AgentHandler() http.Handler {
 			to <- nil
 			return
 		}
-		// The listener's read and write deadlines are for requests; a console
-		// runs up to an hour.
-		_ = c.SetDeadline(time.Time{})
+		// The answer has 10 seconds, so the console waiting on it always hears
+		// back; then the listener's request deadlines go, as a console runs up
+		// to an hour.
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 		_, err = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + agentStreamUpgrade + "\r\n\r\n")
 		if err == nil {
 			err = buffered.Flush()
+		}
+		if err == nil {
+			err = c.SetDeadline(time.Time{})
 		}
 		if err != nil {
 			c.Close()

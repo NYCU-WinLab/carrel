@@ -82,6 +82,9 @@ type agent struct {
 	run func(ctx context.Context, request []byte) (out []byte, failed bool)
 	// console starts node-agent.py for a stream; a variable for tests.
 	console func(ctx context.Context) *exec.Cmd
+	// stall is how long a console may leave its stdin full before it is
+	// stopped; 0 is 30 seconds.
+	stall time.Duration
 }
 
 func load(path string) (*agent, error) {
@@ -381,23 +384,62 @@ func (a *agent) streamOnce(ctx context.Context, j job) error {
 	// A child that keeps stdout open does not hold the stream once the
 	// process is gone.
 	cmd.WaitDelay = 5 * time.Second
-	stdin, err := cmd.StdinPipe()
+	// A pipe of our own: its writes can have a deadline.
+	in, stdin, err := os.Pipe()
 	if err != nil {
 		return err
 	}
+	cmd.Stdin = in
 	cmd.Stdout = c
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	in.Close()
+	if err != nil {
+		stdin.Close()
 		return err
 	}
 	// The request first, then what the control plane sends. When the
-	// connection ends, so does the console: qm and socat may outlive their
-	// stdin, so the process is stopped.
+	// connection ends, the process is stopped: qm and socat may outlive their
+	// stdin. A console that leaves its stdin full for longer than stall is
+	// stopped too, so it cannot hold the serial port for a closed stream.
+	stall := a.stall
+	if stall == 0 {
+		stall = 30 * time.Second
+	}
+	input := make(chan []byte)
 	go func() {
-		if _, err := stdin.Write(append(bytes.TrimSpace(j.Request), '\n')); err == nil {
-			_, _ = io.Copy(stdin, reader)
+		defer close(input)
+		defer end()
+		for {
+			buf := make([]byte, 32<<10)
+			n, err := reader.Read(buf)
+			if n > 0 {
+				select {
+				case input <- buf[:n]:
+				case <-run.Done():
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
 		}
-		stdin.Close()
-		end()
+	}()
+	go func() {
+		defer stdin.Close()
+		defer end()
+		write := func(b []byte) error {
+			_ = stdin.SetWriteDeadline(time.Now().Add(stall))
+			_, err := stdin.Write(b)
+			return err
+		}
+		if write(append(bytes.TrimSpace(j.Request), '\n')) != nil {
+			return
+		}
+		for b := range input {
+			if write(b) != nil {
+				return
+			}
+		}
 	}()
 	_ = cmd.Wait()
 	return nil

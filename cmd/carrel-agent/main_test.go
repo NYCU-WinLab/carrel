@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -362,5 +363,64 @@ func TestAgentStreamsAConsole(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the stream outlived the agent")
+	}
+}
+
+// A console that stops reading its stdin is still stopped when the control
+// plane closes the stream, even with its stdin pipe full.
+func TestAgentStopsAConsoleThatStoppedReading(t *testing.T) {
+	dir := t.TempDir()
+	store, err := carrel.OpenStore(filepath.Join(dir, "carrel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	sum := sha256.Sum256([]byte("agent-token"))
+	p := carrel.NewPlatform(store, sshOnly{}, carrel.Config{Nodes: []carrel.NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: hex.EncodeToString(sum[:]), AgentSource: "127.0.0.1"},
+	}})
+	p.UseAgents()
+	server := httptest.NewTLSServer(p.AgentHandler())
+	defer server.Close()
+	ca := writeFile(t, dir, "ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	conf, _ := json.Marshal(config{Control: server.URL, CAFile: ca, TokenFile: writeFile(t, dir, "token", "agent-token\n"), Node: "pve1"})
+	a, err := load(writeFile(t, dir, "agent.json", string(conf)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.session = "s1"
+	a.stall = 500 * time.Millisecond
+	pidFile := filepath.Join(dir, "pid")
+	a.console = func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", `read line; echo $$ > "$0"; echo '{"ok":true}'; exec sleep 300`, pidFile)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.loop(ctx); close(done) }()
+	defer func() { stop(); <-done }()
+	for !p.Hub.Capable("pve1", "stream", time.Now()) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	call, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	s, err := p.Backend.(carrel.Streamer).Stream(call, carrel.D{"op": "console"}, "carrel-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := os.ReadFile(pidFile)
+	var pid int
+	if _, err := fmt.Sscan(string(content), &pid); err != nil {
+		t.Fatalf("pid %q", content)
+	}
+	// Far more than a pipe holds; the write blocks, so it runs aside.
+	go func() { _, _ = s.Write(make([]byte, 4<<20)) }()
+	time.Sleep(300 * time.Millisecond)
+	s.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the console outlived its stream")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
