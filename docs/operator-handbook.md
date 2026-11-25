@@ -101,7 +101,13 @@ then start the service and run `reconcile_run`. The archive also holds
 on each node, mode 0644 root, before the control service starts (it reconciles at once, and a node
 without its `site.json` fails every reconcile). The result lists the SSH target of a node
 that did not answer, or whose files exceeded 256 KiB, as `missing_nodes`, and the service logs a
-warning. `/var/lib/carrel` is owned by `carrel:carrel`;
+warning. `carrel -backup` asks the running control service to make the backup, over the
+control socket `/var/lib/carrel/control.sock` (mode 0600, user `carrel`), because only the service
+reaches nodes on the agent transport. When the service does not answer (it is stopped, or stops
+midway), the timer makes the backup
+itself and logs `backup_without_server`; an agent node it cannot reach over SSH is listed in
+`missing_nodes`.
+`/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
 
