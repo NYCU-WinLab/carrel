@@ -436,7 +436,7 @@ GPU allocation is unsupported; hardware GPU inventory is unknown.
 
 Implemented: VM/CT lifecycle, stable image templates, public SSH/port grants, tenant HTTPS domains,
 private L2 networks and NICs, explicit cross-tenant TCP grants, snapshots, quota requests/approval,
-audit records, and reconciliation. [PLAN.md](../PLAN.md#154-member-platform-deployment) records the
+audit records, and reconciliation. [The rollout record](b09-rollout-record.md#154-member-platform-deployment) records the
 implementation and remaining milestones. Custom images/imports, console/access recovery, special
 names, skills, PBS/observability and alumni scheduling remain to be implemented.
 

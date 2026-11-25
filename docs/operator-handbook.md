@@ -76,7 +76,7 @@ upgrades the control plane service and its backup timer. An upgrade waits for id
 database, configuration, OAuth and certificates, and saves a private rollback archive; a failed
 health check puts the previous binary, units and the first exit node's programs back. Nothing is compiled on the
 workstation or a node.
-Existing route/NAT state remains in place. See [PLAN 15.9](../PLAN.md#159-go-control-plane-06-2026-10-02)
+Existing route/NAT state remains in place. See [rollout record 15.9](b09-rollout-record.md#159-go-control-plane-06-2026-10-02)
 for the reader credential and rollback details. Secrets travel through SSH stdin and protected files.
 
 The `carrel-backup.timer` makes a consistent SQLite backup with config, service key and certificates
