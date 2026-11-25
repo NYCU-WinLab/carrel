@@ -34,16 +34,7 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	if target == "" {
 		target = "carrel-node"
 	}
-	timeout := adapterTimeout(str(request["op"]))
-	if target == jumpTarget {
-		// The jump helper only writes two small files; a hung jump host must
-		// not hold jumpMu for the node-sized timeouts.
-		timeout = jumpTimeout
-	}
-	if request["op"] == "create" && obj(request["machine"])["import_volume"] != nil {
-		// Hashing and importing up to 20 GB over NFS (PLAN 7.8).
-		timeout = 3 * time.Hour
-	}
+	timeout := callTimeout(request, target)
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -57,12 +48,20 @@ func (b *SSHBackend) Call(ctx context.Context, request D, target string) (any, e
 	out := cappedBuffer{max: maxAdapterReply}
 	cmd.Stdout = &out
 	err := cmd.Run()
+	return adapterReply(parent, ctx, request, target, started, out.buf.Bytes(), err)
+}
+
+// adapterReply turns what node-agent.py printed into a result or a Failure,
+// the same way for every transport. ctx is the call's own context: once it
+// is done the call timed out. failed is the transport's error, such as a
+// process that exited non-zero or an agent that lost the job.
+func adapterReply(parent, ctx context.Context, request D, target string, started time.Time, out []byte, failed error) (any, error) {
 	var result D
-	if json.Unmarshal(out.buf.Bytes(), &result) != nil || err != nil || !boolean(result["ok"]) {
+	if json.Unmarshal(out, &result) != nil || failed != nil || !boolean(result["ok"]) {
 		code := "adapter_rejected"
 		if ctx.Err() != nil {
 			code = "adapter_timeout"
-		} else if err != nil {
+		} else if failed != nil {
 			code = "adapter_process_failed"
 		}
 		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal", "storage_unavailable"}, result["error_code"]) {
@@ -100,6 +99,20 @@ const jumpTarget = "carrel-jump"
 
 // jumpTimeout bounds every request to the jump host. A variable so tests can shorten it.
 var jumpTimeout = 30 * time.Second
+
+// callTimeout bounds one call, whatever carries it.
+func callTimeout(request D, target string) time.Duration {
+	if target == jumpTarget {
+		// The jump helper only writes two small files; a hung jump host must
+		// not hold jumpMu for the node-sized timeouts.
+		return jumpTimeout
+	}
+	if request["op"] == "create" && obj(request["machine"])["import_volume"] != nil {
+		// Hashing and importing up to 20 GB over NFS (PLAN 7.8).
+		return 3 * time.Hour
+	}
+	return adapterTimeout(str(request["op"]))
+}
 
 // adapterTimeout bounds one adapter request. Reads and the backup's node files
 // are quick; a reconcile can wait for an SDN reload; creation clones disks.
