@@ -277,6 +277,8 @@ def host(stage, version):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], capture_output=True, check=False)
     before = {"node-agent.py": LIB / "node-agent.py", "templates.json": TEMPLATES,
               "release.json": LIB / "release.json", **{h: LIB / h for h in HELPERS}}
+    # Read before anything can fail: only a record this run created may be removed.
+    had_release = (LIB / "release.json").exists()
     configured = activated = False
     try:
         ct_command("preflight")
@@ -326,7 +328,7 @@ def host(stage, version):
             saved = stage / ("before-" + name)
             if saved.exists():
                 shutil.copy2(saved, path)
-            elif name == "release.json" and path.exists():
+            elif name == "release.json" and not had_release and path.exists():
                 # An install before #555 had no release record: none is truer than the new one.
                 path.unlink()
         # The restored binary may send no "gen", which jump-sync.py refuses once a

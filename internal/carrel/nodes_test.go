@@ -419,12 +419,14 @@ func TestNodeListNamesNodesOnAnotherRelease(t *testing.T) {
 	b.call = func(r D, target string) (any, error) {
 		out, err := inner(r, target)
 		if r["op"] == "inventory" && target != "node-03" {
-			out = merge(obj(out), D{"programs": D{"version": Version, "node_agent_sha256": "x"}})
+			// node-02 runs this release's version but programs that do not
+			// match its record, as after a copy cut off part way.
+			out = merge(obj(out), D{"programs": D{"version": Version, "node_agent_sha256": "x", "intact": target != "node-02"}})
 		}
 		return out, err
 	}
 	result := p.execution(context.Background()).Admin("node_list", D{}, person("admin", true))
-	if stale := arr(result["stale_nodes"]); len(stale) != 1 || stale[0] != "carrel03" {
+	if stale := arr(result["stale_nodes"]); len(stale) != 2 || stale[0] != "carrel02" || stale[1] != "carrel03" {
 		t.Fatal(encoded(result["stale_nodes"]))
 	}
 	if obj(result["control_plane"])["version"] != Version || dicts(result["nodes"])[0]["programs_current"] != true {

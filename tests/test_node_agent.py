@@ -2593,6 +2593,12 @@ def test_inventory_programs_name_the_release_and_the_agent_digest(tmp_path, monk
     agent = load("node-agent.py")
     monkeypatch.setattr(agent, "RELEASE", tmp_path / "release.json")
     digest = hashlib.sha256((Path(__file__).parents[1] / "scripts/node-agent.py").read_bytes()).hexdigest()
-    assert agent.programs_info() == {"version": None, "node_agent_sha256": digest}
-    (tmp_path / "release.json").write_text('{"version": "0.11.0"}')
-    assert agent.programs_info()["version"] == "0.11.0"
+    assert agent.programs_info() == {"version": None, "node_agent_sha256": digest, "intact": False}
+    (tmp_path / "release.json").write_text('{"version": "0.11.0", "sha256": {"node-agent.py": "0"}}')
+    assert agent.programs_info()["version"] == "0.11.0" and agent.programs_info()["intact"] is False
+    (tmp_path / "release.json").write_text(
+        json.dumps({"version": "0.11.0", "sha256": {"node-agent.py": digest}})
+    )
+    assert agent.programs_info()["intact"] is True
+    (tmp_path / "release.json").write_text("null")
+    assert agent.programs_info()["version"] is None

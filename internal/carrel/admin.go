@@ -27,7 +27,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			reservations, snapshots := e.nodeLoad(n, nil)
 			programs := obj(obj(inventory)["programs"])
 			nodes = append(nodes, D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
-				"programs": programs, "programs_current": programs["version"] == Version})
+				"programs": programs, "programs_current": programs["version"] == Version && programs["intact"] == true})
 		}
 		// A node whose programs came from another release than the control
 		// plane is listed, so a half finished upgrade or rollback shows (#555).

@@ -155,8 +155,14 @@ def programs_info():
         release = json.loads(RELEASE.read_text())
     except (OSError, ValueError):
         release = {}
-    return {"version": release.get("version"),
-            "node_agent_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    if not isinstance(release, dict):
+        release = {}
+    digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    # A copy cut off between this file and the record leaves new programs
+    # under an old record; the digest shows it.
+    recorded = release.get("sha256") if isinstance(release.get("sha256"), dict) else {}
+    return {"version": release.get("version"), "node_agent_sha256": digest,
+            "intact": recorded.get("node-agent.py") == digest}
 
 
 def inventory_read(storage):

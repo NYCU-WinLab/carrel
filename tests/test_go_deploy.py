@@ -239,6 +239,15 @@ def test_a_failed_first_recorded_upgrade_leaves_no_release_record(tmp_path, monk
     assert not (node.lib / "release.json").exists()
 
 
+def test_a_failed_backup_keeps_the_existing_release_record(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path, fail_on=lambda a: a[-2:-1] == ("backup",))
+    (node.lib / "release.json").write_text('{"version": "0.9.0"}')
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    assert json.loads((node.lib / "release.json").read_text())["version"] == "0.9.0"
+
+
 def test_an_upgrade_backs_up_then_installs_then_activates(tmp_path, monkeypatch):
     module = load("install-control.py")
     node = Node(module, monkeypatch, tmp_path)
