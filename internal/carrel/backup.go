@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -89,8 +90,15 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 	if e = add(database, "carrel.db"); e != nil {
 		return nil, e
 	}
-	for _, name := range []string{"config.json", "node_key", "node_key.pub", "ssh_config", "known_hosts"} {
-		if e = add(filepath.Join(configDir, name), "etc/carrel/"+name); e != nil {
+	for _, name := range []string{"config.json", "node_key", "node_key.pub", "service_key", "service_key.pub", "ssh_config", "known_hosts"} {
+		path := filepath.Join(configDir, name)
+		// The keys come and go with configure-nodes.py: the service key before
+		// its first run, the node key after the last node uses the agent
+		// (#606). Any other missing file fails the backup.
+		if _, err := os.Lstat(path); strings.Contains(name, "_key") && errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if e = add(path, "etc/carrel/"+name); e != nil {
 			return nil, e
 		}
 	}

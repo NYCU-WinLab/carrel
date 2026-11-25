@@ -89,7 +89,7 @@ After a deploy, `node_list` shows the control plane's build (`control_plane`), e
 programs came from another release. A failed upgrade restores the programs on the first exit node
 only, so the other nodes show up there until the next successful deploy.
 
-The `carrel-backup.timer` makes a consistent SQLite backup with config, service key and certificates
+The `carrel-backup.timer` makes a consistent SQLite backup with config, SSH keys and certificates
 each day and sends it off the cluster to the SSH target `carrel-backup`: `scripts/backup-target.py`,
 a forced command on spawner (the old PVE), keeps 14 daily archives under `/var/lib/carrel-backups`,
 mode 0600.
@@ -108,7 +108,22 @@ midway), the timer makes the backup
 itself and logs `backup_without_server`; an agent node it cannot reach over SSH is listed in
 `missing_nodes`.
 `/var/lib/carrel` is owned by `carrel:carrel`;
-`/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
+`/etc/carrel/config.json` is `root:carrel` mode 0640; `node_key` and `service_key` are owned by `carrel`, mode 0600.
+
+CT 100 has 2 SSH keys. `node_key` reaches `node-agent.py` on nodes that still use SSH.
+`service_key` reaches the 3 forced commands outside the nodes: `gateway-sync.py` in CT 101,
+`jump-sync.py` in CT 102 and `backup-target.py` on the backup host. `configure-nodes.py` makes
+`service_key` and installs it in CT 101 and CT 102 beside `node_key`, so a failed deploy that puts
+back the older `ssh_config` still reaches them; the `node_key` lines go with #604. It does not reach
+the backup host. There, ssh offers `node_key` first, so a backup that lands does not prove the
+`service_key` line works. Move the backup host in this order:
+
+1. Add a line for `/etc/carrel/service_key.pub` with the same forced command as the `node_key` line.
+2. Remove the `node_key` line.
+3. In CT 100, run `systemctl start carrel-backup.service` and check that the journal says
+   `backup_complete`. If it fails, put the `node_key` line back and check the new line.
+
+The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
 
 ## Node agent
