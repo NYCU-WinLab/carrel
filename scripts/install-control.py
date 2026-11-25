@@ -385,6 +385,20 @@ def host(stage, version):
         # The control plane is up, but this node's jobs wait for its agent.
         raise SystemExit("carrel-agent did not reach the control plane within 60 s: see journalctl -u "
                          "carrel-agent. To go back to SSH, remove this node from agent_nodes and deploy again.")
+    # The other nodes' agents reach the listener only through the infra firewall's
+    # 8443 rule: a node that never connects must fail the deploy, not wait silently.
+    try:
+        peers = json.loads(agent.stdout or "{}").get("peers") or {}
+    except ValueError:
+        peers = {}
+    if "pushed" in peers.values():
+        check = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-check", str(since)],
+                               check=False, capture_output=True, text=True)
+        if check.returncode:
+            raise SystemExit(f"carrel-agent on another node did not reach the control plane within 60 s "
+                             f"({(check.stdout or '').strip()}): see journalctl -u carrel-agent on that node. "
+                             "Run bootstrap-platform.py --firewall on the first exit node, or remove the node "
+                             "from agent_nodes and deploy again.")
     for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
         shutil.rmtree(old)
 

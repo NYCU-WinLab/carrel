@@ -33,6 +33,7 @@ import re
 import secrets
 import socket
 import subprocess
+import time
 from pathlib import Path
 
 SITE = Path("/etc/carrel/site.json")
@@ -67,9 +68,13 @@ AGENT_ROTATE = Path("/etc/carrel/agent-token.rotate")
 AGENT_JSON = Path("/etc/carrel/agent.json")
 AGENT_UNIT = Path("/etc/systemd/system/carrel-agent.service")
 AGENT_LISTEN = "10.200.0.3:8443"
-# Only the first exit node reaches 10.200.0.3, from its infra address; the
-# other nodes need a route there first.
+# The first exit node reaches 10.200.0.3 from its infra address. Every other
+# node reaches it through a host route via the first exit node (no NAT), so the
+# control plane sees that node's own underlay address; bootstrap-platform.py
+# opens port 8443 for those addresses only.
 AGENT_SOURCE = "10.200.0.1"
+# Tokens of the other nodes, one file each (the first node's stays in AGENT_TOKEN).
+AGENT_TOKENS = Path("/etc/carrel/agent-tokens")
 AGENT_TLS = "/etc/carrel/agent"
 # A CA for 10 years, the listener's certificate for 825 days, renewed by any
 # run with less than 90 days left. The agent pins the CA, so a renewal needs
@@ -175,17 +180,29 @@ def agent_nodes(site, nodes):
     for name in names:
         if name not in {n["name"] for n in nodes}:
             raise SystemExit(f"agent_nodes names {name}, which is not a site node")
-        if name != nodes[0]["name"]:
-            raise SystemExit(f"agent_nodes: only the first exit node reaches {AGENT_LISTEN} for now, not {name}")
     return set(names)
 
 
-def agent_token():
-    """This node's agent token: made once, kept across runs. Returns its digest."""
-    if AGENT_ROTATE.exists() or not AGENT_TOKEN.exists() or not AGENT_TOKEN.read_text().strip():
-        replace_file(AGENT_TOKEN, secrets.token_urlsafe(32), 0o600)
-        AGENT_ROTATE.unlink(missing_ok=True)
-    return hashlib.sha256(AGENT_TOKEN.read_text().strip().encode()).hexdigest()
+def token_files(n, first):
+    """The token file and the rotate file of a node: the first node's keep their old paths."""
+    if first:
+        return AGENT_TOKEN, AGENT_ROTATE
+    AGENT_TOKENS.mkdir(mode=0o700, exist_ok=True)
+    return AGENT_TOKENS / n["name"], AGENT_TOKENS / (n["name"] + ".rotate")
+
+
+def agent_token(token=None, rotate=None):
+    """A node's agent token: made once, kept across runs. Returns its digest."""
+    token, rotate = token or AGENT_TOKEN, rotate or AGENT_ROTATE
+    if rotate.exists() or not token.exists() or not token.read_text().strip():
+        replace_file(token, secrets.token_urlsafe(32), 0o600)
+        rotate.unlink(missing_ok=True)
+    return hashlib.sha256(token.read_text().strip().encode()).hexdigest()
+
+
+def agent_digests(nodes, agents):
+    """Every agent node's token digest, by name."""
+    return {n["name"]: agent_token(*token_files(n, n is nodes[0])) for n in nodes if n["name"] in agents}
 
 
 def agent_listener():
@@ -223,13 +240,81 @@ def agent_service():
     return "absent"
 
 
-def node_entries(nodes, agents, digest):
+def peer_unit(me, n):
+    """The agent unit of another node, with the route to the listener through the first node."""
+    route = f"ExecStartPre=/usr/sbin/ip route replace 10.200.0.3/32 via {me['address']} src {n['address']}\n"
+    return AGENT_SERVICE.replace("ExecStart=", route + "ExecStart=", 1)
+
+
+def peer_write(n, path, text, mode):
+    run("ssh", *peer(n), "root@" + n["address"],
+        f"umask 077 && mkdir -p {Path(path).parent} && cat > {path}.carrel-next && chmod {mode} {path}.carrel-next"
+        f" && mv {path}.carrel-next {path}", input=text)
+
+
+def agent_peers():
+    """Start the agent on each other node the site file lists, stop it on the rest.
+
+    Returns each node's state: pushed, removed or absent (never "started", which
+    install-control.py reads as this node's agent)."""
+    site = json.loads(SITE.read_text())
+    nodes = targets(site, socket.gethostname().split(".")[0])
+    agents = agent_nodes(site, nodes)
+    out = {}
+    for n in nodes[1:]:
+        ssh = ("ssh", *peer(n), "root@" + n["address"])
+        if n["name"] in agents:
+            token, _ = token_files(n, False)
+            peer_write(n, AGENT_TOKEN, token.read_text(), "600")
+            peer_write(n, AGENT_CA / "ca.pem", (AGENT_CA / "ca.pem").read_text(), "644")
+            peer_write(n, AGENT_JSON, json.dumps({"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
+                                                   "token_file": str(AGENT_TOKEN), "node": n["name"]}, indent=2) + "\n", "644")
+            peer_write(n, AGENT_UNIT, peer_unit(nodes[0], n), "644")
+            run(*ssh, "systemctl daemon-reload && systemctl enable carrel-agent.service"
+                " && systemctl restart --no-block carrel-agent.service")
+            out[n["name"]] = "pushed"
+        elif run(*ssh, f"test -e {AGENT_UNIT} && echo yes || true").strip():
+            run(*ssh, "systemctl disable --now --no-block carrel-agent.service")
+            out[n["name"]] = "removed"
+        else:
+            out[n["name"]] = "absent"
+    return out
+
+
+def peers_connected(since, wait=60):
+    """The other agent nodes whose agent logged agent_connected after since, within wait seconds.
+
+    Returns the names that never did: their jobs wait on an agent that cannot
+    reach the listener (for example an infra firewall without the 8443 rule)."""
+    site = json.loads(SITE.read_text())
+    nodes = targets(site, socket.gethostname().split(".")[0])
+    agents = agent_nodes(site, nodes)
+    pending = [n for n in nodes[1:] if n["name"] in agents]
+    for _ in range(wait):
+        for n in list(pending):
+            # A stalled peer costs at most 10 s a round and does not block the others.
+            try:
+                log = subprocess.run(["ssh", "-o", "ConnectTimeout=5", *peer(n), "root@" + n["address"],
+                                      f"journalctl -u carrel-agent --since @{int(since)} -o cat"],
+                                     text=True, capture_output=True, check=False, timeout=10).stdout
+            except subprocess.TimeoutExpired:
+                log = ""
+            if '"agent_connected"' in (log or ""):
+                pending.remove(n)
+        if not pending:
+            break
+        time.sleep(1)
+    return [n["name"] for n in pending]
+
+
+def node_entries(nodes, agents, digests):
     """config.json "nodes": an agent node carries its transport, token digest and source."""
     out = []
     for n in nodes:
         entry = {"name": n["name"], "target": n["target"]}
         if n["name"] in agents:
-            entry.update({"transport": "agent", "agent_token_sha256": digest, "agent_source": AGENT_SOURCE})
+            entry.update({"transport": "agent", "agent_token_sha256": digests[n["name"]],
+                          "agent_source": AGENT_SOURCE if n["target"] == "carrel-node" else n["address"]})
         out.append(entry)
     return out
 
@@ -387,6 +472,11 @@ def main():
         for program in PROGRAMS + (["release.json"] if Path("/usr/local/lib/carrel/release.json").exists() else []):
             run("scp", "-q", *peer(n), f"/usr/local/lib/carrel/{program}", f"root@{n['address']}:/usr/local/lib/carrel/{program}")
         run("ssh", *peer(n), "root@" + n["address"], "chmod 755 /usr/local/lib/carrel/node-agent.py")
+    for n in nodes[1:]:
+        if n["name"] in agents:
+            run("scp", "-q", *peer(n), "/usr/local/lib/carrel/carrel-agent", f"root@{n['address']}:/usr/local/lib/carrel/carrel-agent.carrel-next")
+            run("ssh", *peer(n), "root@" + n["address"], "chmod 755 /usr/local/lib/carrel/carrel-agent.carrel-next"
+                " && mv /usr/local/lib/carrel/carrel-agent.carrel-next /usr/local/lib/carrel/carrel-agent")
     # 2. One forced-command line in the cluster-wide authorized_keys.
     ct("sh", "-c", 'mkdir -p /etc/carrel && { test -f /etc/carrel/node_key || ssh-keygen -q -t ed25519 -N "" -f /etc/carrel/node_key; }')
     ct("sh", "-c", "id carrel >/dev/null 2>&1 && chown carrel:carrel /etc/carrel/node_key || true; chmod 600 /etc/carrel/node_key")
@@ -412,7 +502,7 @@ def main():
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
     # The agent listener's keys are in config.json only while a node uses it.
     listener = agent_listener() if agents else {k: None for k in ("agent_listen", "agent_cert_file", "agent_key_file")}
-    listed = json.dumps({"nodes": node_entries(nodes, agents, agent_token() if agents else ""), **listener})
+    listed = json.dumps({"nodes": node_entries(nodes, agents, agent_digests(nodes, agents)), **listener})
     # Edited in place inside CT 100 so no other key leaves it.
     ct("python3", "-c", (
         "import json,os,sys;from pathlib import Path;p=Path('/etc/carrel/config.json');"
@@ -456,6 +546,10 @@ if __name__ == "__main__":
     import sys
 
     if sys.argv[1:] == ["--agent-service"]:
-        print(json.dumps({"agent": agent_service()}))
+        print(json.dumps({"agent": agent_service(), "peers": agent_peers()}))
+    elif sys.argv[1:2] == ["--agent-check"] and len(sys.argv) == 3:
+        missing = peers_connected(int(sys.argv[2]))
+        print(json.dumps({"not_connected": missing}))
+        sys.exit(1 if missing else 0)
     else:
         main()

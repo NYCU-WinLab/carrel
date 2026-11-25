@@ -421,24 +421,25 @@ def test_the_ksm_command_succeeds_on_a_second_run_and_when_the_unit_is_absent(tm
     assert done.returncode == 0, done.stderr
 
 
-def test_only_the_first_exit_node_may_run_the_agent_for_now():
+def test_any_site_node_may_run_the_agent():
     module = load("configure-nodes.py")
     nodes = module.targets(SITE, "carrel01")
     assert module.agent_nodes({}, nodes) == set()
-    assert module.agent_nodes({"agent_nodes": ["carrel01"]}, nodes) == {"carrel01"}
-    for names, message in ((["carrel02"], "only the first exit node"), (["pve9"], "not a site node")):
-        try:
-            module.agent_nodes({"agent_nodes": names}, nodes)
-        except SystemExit as e:
-            assert message in str(e)
-        else:
-            raise AssertionError(names)
+    assert module.agent_nodes({"agent_nodes": ["carrel01", "carrel02"]}, nodes) == {"carrel01", "carrel02"}
+    try:
+        module.agent_nodes({"agent_nodes": ["pve9"]}, nodes)
+    except SystemExit as e:
+        assert "not a site node" in str(e)
+    else:
+        raise AssertionError("pve9")
 
 
 def test_an_agent_node_carries_its_transport_and_the_others_stay_on_ssh():
     module = load("configure-nodes.py")
     nodes = module.targets(SITE, "carrel01")
-    entries = module.node_entries(nodes, {"carrel01"}, "ab" * 32)
+    entries = module.node_entries(
+        nodes, {"carrel01", "carrel02"}, {"carrel01": "ab" * 32, "carrel02": "cd" * 32}
+    )
     assert entries[0] == {
         "name": "carrel01",
         "target": "carrel-node",
@@ -446,10 +447,35 @@ def test_an_agent_node_carries_its_transport_and_the_others_stay_on_ssh():
         "agent_token_sha256": "ab" * 32,
         "agent_source": "10.200.0.1",
     }
-    assert entries[1] == {"name": "carrel02", "target": "carrel02"}
-    assert module.node_entries(nodes, set(), "") == [
+    # Another node is seen at its own underlay address, with its own token.
+    assert entries[1] == {
+        "name": "carrel02",
+        "target": "carrel02",
+        "transport": "agent",
+        "agent_token_sha256": "cd" * 32,
+        "agent_source": nodes[1]["address"],
+    }
+    assert entries[2] == {"name": "carrel03", "target": "carrel03"}
+    assert module.node_entries(nodes, set(), {}) == [
         {"name": n["name"], "target": n["target"]} for n in nodes
     ]
+
+
+def test_another_node_routes_to_the_listener_through_the_first_node_from_its_own_address():
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    unit = module.peer_unit(nodes[0], nodes[1])
+    route = f"ExecStartPre=/usr/sbin/ip route replace 10.200.0.3/32 via {nodes[0]['address']} src {nodes[1]['address']}"
+    assert route in unit and unit.index(route) < unit.index("ExecStart=/usr/local")
+
+
+def test_infra_firewall_admits_the_agent_port_from_the_other_nodes_only():
+    module = load("bootstrap-platform.py")
+    [rule] = module.peer_agent(SITE, "carrel01")
+    assert rule.startswith(
+        f'iifname "{SITE["underlay_interface"]}" oifname "vmbr98" ip saddr {{ 192.168.19.102,'
+    )
+    assert "192.168.19.101" not in rule and rule.endswith("ip daddr 10.200.0.3 tcp dport 8443 accept")
 
 
 def test_the_agent_token_is_made_once_and_its_digest_matches(tmp_path, monkeypatch):
@@ -532,3 +558,36 @@ def test_a_token_rotates_only_when_asked_and_the_old_one_stays_until_then(tmp_pa
     second = module.agent_token()
     assert second != first and not (tmp_path / "agent-token.rotate").exists()
     assert (tmp_path / "agent-token").stat().st_mode & 0o777 == 0o600
+
+
+def test_a_peer_agent_that_never_connects_is_named(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    site = {**SITE, "agent_nodes": ["carrel02", "carrel03"]}
+    (tmp_path / "site.json").write_text(json.dumps(site))
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    monkeypatch.setattr(module.socket, "gethostname", lambda: "carrel01")
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    nodes = module.targets(SITE, "carrel01")
+    seen = []
+
+    def fake(args, **kw):
+        seen.append(args)
+        connected = args[-2] == "root@" + nodes[1]["address"]
+        assert (
+            "ConnectTimeout=5" in args and args[-1] == "journalctl -u carrel-agent --since @1700000000 -o cat"
+        )
+        return subprocess.CompletedProcess(args, 0, '{"msg":"agent_connected"}' if connected else "", "")
+
+    monkeypatch.setattr(module.subprocess, "run", fake)
+    assert module.peers_connected(1700000000, wait=3) == ["carrel03"]
+    # carrel02 is asked once, carrel03 on every round.
+    assert sum(a[-2].endswith(nodes[1]["address"]) for a in seen) == 1
+    assert sum(a[-2].endswith(nodes[2]["address"]) for a in seen) == 3
+
+
+def test_the_handbook_names_the_rotate_files_the_code_reads():
+    module = load("configure-nodes.py")
+    handbook = (ROOT / "docs/operator-handbook.md").read_text()
+    assert f"`{module.AGENT_ROTATE}`" in handbook
+    assert f"`{module.AGENT_TOKENS}/<node>.rotate`" in handbook
+    assert "bootstrap-platform.py --firewall" in handbook and "8443" in handbook
