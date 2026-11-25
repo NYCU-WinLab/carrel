@@ -79,6 +79,13 @@ func (p *Platform) agentAllowed(r *http.Request, node string) bool {
 	return false
 }
 
+// UseAgents sends calls for nodes on the agent transport through the hub.
+// Only the serving process calls it, before Start: a one-shot run such as
+// -backup has no agent listener, so its calls stay on SSH (#606).
+func (p *Platform) UseAgents() {
+	p.Backend = agentBackend(p.Backend, p.Hub, p.Config.Nodes)
+}
+
 // agentBackend wraps b so nodes on the agent transport go through the hub.
 func agentBackend(b Backend, hub *AgentHub, nodes []NodeConfig) Backend {
 	agents := map[string]string{}

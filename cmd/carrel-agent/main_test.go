@@ -12,10 +12,13 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +57,7 @@ func TestAgentRunsANodeCallEndToEnd(t *testing.T) {
 		{Name: "pve2", Target: "carrel02"},
 	}}
 	p := carrel.NewPlatform(store, sshOnly{}, cfg)
+	p.UseAgents()
 	server := httptest.NewTLSServer(p.AgentHandler())
 	defer server.Close()
 	ca := writeFile(t, dir, "ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
@@ -121,5 +125,63 @@ func TestAgentRefusesPlainHTTPAndOtherCAs(t *testing.T) {
 	a.session = "s1"
 	if _, err := a.claim(context.Background()); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Fatalf("a certificate under another CA was trusted: %v", err)
+	}
+}
+
+// The same job handed out twice (its first poll's answer failed after it
+// arrived) runs once.
+func TestAgentRunsAJobHandedOutTwiceOnce(t *testing.T) {
+	dir := t.TempDir()
+	var mu sync.Mutex
+	claims, answers := 0, 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/claim") {
+			claims++
+			if claims <= 2 {
+				_, _ = w.Write([]byte(`{"jobs":[{"id":"j1","request":{"op":"freeze"}}]}`))
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"jobs":[]}`))
+			return
+		}
+		answers++
+		_, _ = w.Write([]byte(`{"ok":true,"taken":true}`))
+	}))
+	defer server.Close()
+	ca := writeFile(t, dir, "ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	conf, _ := json.Marshal(config{Control: server.URL, CAFile: ca, TokenFile: writeFile(t, dir, "token", "x"), Node: "pve1"})
+	a, err := load(writeFile(t, dir, "agent.json", string(conf)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.session = "s1"
+	release := make(chan struct{})
+	var runs atomic.Int32
+	a.run = func(context.Context, []byte) ([]byte, bool) {
+		runs.Add(1)
+		<-release // still running when the second copy arrives
+		return []byte(`{"ok":true,"result":{}}`), false
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.loop(ctx); close(done) }()
+	for {
+		mu.Lock()
+		c := claims
+		mu.Unlock()
+		if c >= 3 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	stop()
+	<-done
+	if runs.Load() != 1 || answers != 1 {
+		t.Fatalf("runs %d answers %d", runs.Load(), answers)
 	}
 }

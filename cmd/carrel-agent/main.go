@@ -154,6 +154,12 @@ func (a *agent) loop(ctx context.Context) {
 		}
 		for _, j := range jobs {
 			a.mu.Lock()
+			if a.held[j.ID] {
+				// Handed out again after a poll's answer failed, though it
+				// reached us: it runs once.
+				a.mu.Unlock()
+				continue
+			}
 			a.held[j.ID] = true
 			a.mu.Unlock()
 			wg.Add(1)

@@ -143,7 +143,6 @@ func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)
 	p.Hub = NewAgentHub()
-	p.Backend = agentBackend(b, p.Hub, c.Nodes)
 	return p
 }
 func (p *Platform) execution(ctx context.Context) *Execution {

@@ -89,6 +89,7 @@ func main() {
 		telemetry.Close()
 		return
 	}
+	platform.UseAgents()
 	app := carrel.NewApp(platform, nil)
 	server := &http.Server{Addr: *listen, Handler: app, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

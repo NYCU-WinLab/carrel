@@ -271,3 +271,25 @@ func TestAgentHubReleasesUndeliveredJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A job released after its poll's answer failed may still have run: its
+// answer is taken, and it is not handed out again.
+func TestAgentHubTakesTheAnswerOfAReleasedJob(t *testing.T) {
+	hub := NewAgentHub()
+	results := make(chan error, 1)
+	go func() {
+		_, err := hub.Call(context.Background(), D{"op": "status"}, "pve1", "pve1")
+		results <- err
+	}()
+	jobs := hub.Claim(context.Background(), "pve1", "a", 1, nil, 5*time.Second)
+	hub.Release("pve1", "a", jobs)
+	if !hub.Complete("pve1", jobs[0].ID, []byte(`{"ok":true,"result":{}}`), false) {
+		t.Fatal("the answer of a released job was refused")
+	}
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
+	if again := hub.Claim(context.Background(), "pve1", "a", 2, nil, 10*time.Millisecond); len(again) != 0 {
+		t.Fatalf("handed out again: %v", again)
+	}
+}

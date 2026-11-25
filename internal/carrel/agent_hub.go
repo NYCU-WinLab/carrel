@@ -201,8 +201,11 @@ func (h *AgentHub) Complete(node, id string, out []byte, exitFailed bool) bool {
 	}
 	h.mu.Lock()
 	n := h.node(node)
+	// A job released after a poll's answer failed may still have reached
+	// the agent and run: its answer counts all the same, so it is never
+	// handed out again.
 	job := n.jobs[id]
-	if job == nil || !job.taken {
+	if job == nil {
 		h.mu.Unlock()
 		return false
 	}
