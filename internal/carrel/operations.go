@@ -195,6 +195,11 @@ var cancelPhases = []string{"waiting_for_priority_operation", "waiting_for_machi
 // holds the job, and a worker that picks it up later finds it finished.
 func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
 	op := o.Find(t, id)
+	// A member must not stop an admin job, such as a drain's move, that only
+	// an admin can retry.
+	if named("admin_tools", str(op["tool"])) && !boolean(w["admin"]) {
+		fail("forbidden", "Only an admin can cancel an admin operation")
+	}
 	// Any kind of object can hold a reservation for the job: images too.
 	reserved := len(o.p.Store.Rows("SELECT 1 FROM objects WHERE kind != 'operations' AND json_extract(data,'$.operation_id') = ? LIMIT 1", id)) > 0
 	fresh := op["state"] == "queued" && integer(op["attempts"]) == 0
@@ -236,6 +241,11 @@ func (o *Operations) apply(id string) {
 	var result D
 	complete := false
 	err := attemptLogged("operation", func() {
+		// Stored as running, the job was cut off by a restart, perhaps inside
+		// its tool: what it wrote is unknown, so it can no longer be cancelled.
+		if op["state"] == "running" {
+			op["dispatched"] = true
+		}
 		if op["tool"] != "tenant_suspend" && find(e.S.ActiveOperations(), func(v D) bool { return v["tool"] == "tenant_suspend" }) != nil {
 			panic(Waiting{"waiting_for_priority_operation", now() + 0.05})
 		}

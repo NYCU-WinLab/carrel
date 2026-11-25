@@ -125,3 +125,34 @@ func TestDispatchedMarksAJobThatReachedItsTool(t *testing.T) {
 		t.Fatal(encoded(op))
 	}
 }
+
+// A restart inside the tool leaves the job stored as running with the flag
+// still false. Recovered, it must not become cancellable when it waits.
+func TestAJobCutOffByARestartCannotBeCancelled(t *testing.T) {
+	p, _ := fixture(t)
+	seedMachine(p, "dev", 10100)
+	alice := person("alice", false)
+	p.Store.Put("operations", "job", 1, D{"id": "job", "tenant_n": 1, "tool": "machine_power", "args": D{"machine": "dev", "action": "reboot"}, "who": alice, "state": "running", "phase": "applying", "attempts": 1, "dispatched": false, "resource_changes": false})
+	p.Store.Put("operations", "suspend", 2, D{"id": "suspend", "tenant_n": 2, "tool": "tenant_suspend", "state": "running", "phase": "applying"})
+	runQueue(p)
+	op := awaitState(t, p, "job", "waiting_for_priority_operation")
+	if op["dispatched"] != true {
+		t.Fatal(encoded(op))
+	}
+	assertCode(t, p.Execute(context.Background(), "operation_cancel", D{"id": "job"}, alice), "conflict")
+}
+
+// A drain's move runs in the machine's tenant. Its member must not stop it,
+// since only an admin can retry it; the admin can, from any tenant.
+func TestOnlyAnAdminCancelsAnAdminJob(t *testing.T) {
+	p, _ := fixture(t)
+	p.Store.Put("operations", "move", 1, D{"id": "move", "tenant_n": 1, "tool": "machine_migrate", "args": D{"machine": "dev"}, "who": person("admin", true), "state": "queued", "phase": "awaiting_capacity_check", "attempts": 0, "dispatched": false, "resource_changes": false})
+	assertCode(t, p.Execute(context.Background(), "operation_cancel", D{"id": "move"}, person("alice", false)), "forbidden")
+	if p.Store.Get("operations", "move")["state"] != "queued" {
+		t.Fatal("a member cancelled an admin job")
+	}
+	assertOK(t, p.Execute(context.Background(), "operation_cancel", D{"id": "move"}, person("admin", true)))
+	if p.Store.Get("operations", "move")["state"] != "failed" {
+		t.Fatal(encoded(p.Store.Get("operations", "move")))
+	}
+}

@@ -112,6 +112,13 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 			return D{"operations": []D{publicOperation(e.P.Operations.Find(t, str(a["id"])))}}, t["n"]
 		}
 	}
+	if tool == "operation_cancel" && boolean(w["admin"]) && a["tenant"] == nil {
+		// The same for cancelling one of them.
+		if op := e.S.Get("operations", str(a["id"])); op != nil && named("admin_tools", str(op["tool"])) {
+			t := e.S.TenantN(integer(op["tenant_n"]))
+			return e.P.Operations.Cancel(t, str(a["id"]), w, dry), t["n"]
+		}
+	}
 	// A read-only endpoint must not write: a fresh identity is registered
 	// by its first call on /mcp, not by a read.
 	var onboarding []D
