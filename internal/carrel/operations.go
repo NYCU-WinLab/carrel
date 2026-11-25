@@ -202,7 +202,8 @@ func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
 	}
 	// Any kind of object can hold a reservation for the job: images too.
 	reserved := len(o.p.Store.Rows("SELECT 1 FROM objects WHERE kind != 'operations' AND json_extract(data,'$.operation_id') = ? LIMIT 1", id)) > 0
-	fresh := op["state"] == "queued" && integer(op["attempts"]) == 0
+	// tenant_suspend marks the tenant suspending when it is submitted.
+	fresh := op["state"] == "queued" && integer(op["attempts"]) == 0 && op["tool"] != "tenant_suspend"
 	// dispatched is false only while no attempt has reached the tool's
 	// writes; a job from before the flag has none and stays uncancellable.
 	waiting := op["state"] == "waiting" && contains(cancelPhases, op["phase"]) && op["dispatched"] == false && op["resource_changes"] == false && op["prepared_result"] == nil && !reserved

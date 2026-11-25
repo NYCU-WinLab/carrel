@@ -155,4 +155,8 @@ func TestOnlyAnAdminCancelsAnAdminJob(t *testing.T) {
 	if p.Store.Get("operations", "move")["state"] != "failed" {
 		t.Fatal(encoded(p.Store.Get("operations", "move")))
 	}
+	// A suspend marks the tenant when it is submitted: cancelling it would
+	// leave the tenant suspending.
+	p.Store.Put("operations", "suspend", 1, D{"id": "suspend", "tenant_n": 1, "tool": "tenant_suspend", "args": D{}, "who": person("admin", true), "state": "queued", "phase": "awaiting_capacity_check", "attempts": 0, "dispatched": false, "resource_changes": false})
+	assertCode(t, p.Execute(context.Background(), "operation_cancel", D{"id": "suspend"}, person("admin", true)), "conflict")
 }
