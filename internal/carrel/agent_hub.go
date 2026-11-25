@@ -218,6 +218,14 @@ func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool 
 			job.done <- agentOutput{failed: errAgentLostJob}
 		}
 	}
+	for id, s := range n.streams {
+		if s.taken && s.session != session {
+			// The id is bound to the replaced process, which will never
+			// connect back: end the wait now instead of at streamWait.
+			delete(n.streams, id)
+			s.conn <- nil
+		}
+	}
 	return true
 }
 
