@@ -1354,7 +1354,6 @@ def sdn_owed(links_missing, first, wait=30):
 REPLAY_UNIT = """[Unit]
 Description=Carrel node replay of its last desired state (issue #603)
 After=pve-cluster.service networking.service
-Wants=pve-cluster.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/carrel/node-agent.py replay
