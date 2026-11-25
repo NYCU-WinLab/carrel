@@ -256,7 +256,12 @@ func TestAgentDrainingTakesNoConsole(t *testing.T) {
 		p.AgentHandler().ServeHTTP(w, req)
 		return w.Code
 	}
-	if claim(`{"protocol":"v1","session":"s","seq":1,"held":[],"drain":true,"capabilities":["stream"]}`) != 200 {
+	p.Hub.Hello("pve1", "s", "v1", "0.11.0", "stream")
+	p.Hub.Heartbeat("pve1", "s", 1, nil)
+	if !p.Hub.Capable("pve1", "stream", time.Now()) {
+		t.Fatal("the agent cannot stream before it drains")
+	}
+	if claim(`{"protocol":"v1","session":"s","seq":2,"held":[],"drain":true,"capabilities":["stream"]}`) != 200 {
 		t.Fatal("drain refused")
 	}
 	if p.Hub.Capable("pve1", "stream", time.Now()) {
