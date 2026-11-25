@@ -505,6 +505,8 @@ func goldenScenario(g *goldenRun) {
 	call("operations", "operation_get", D{"id": id}, alice)
 	call("operations", "operation_get", D{"id": id, "detail": "full"}, alice)
 	call("operations", "operation_retry", D{"id": id}, alice)
+	// A finished operation cannot be cancelled (#584).
+	call("operations", "operation_cancel", D{"id": id}, alice)
 
 	call("audit", "audit_log", D{}, alice)
 	call("keys", "ssh_key_remove", D{"id": added["id"]}, alice)

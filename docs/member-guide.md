@@ -270,6 +270,8 @@ Set `wait_seconds=0` for immediate submission. Other member infrastructure mutat
 (set `wait_seconds=0` for an immediate status). Poll at the returned interval, inspect the terminal state,
 and follow `next_action`. Certificate-budget waits return `waiting` and `ready_at`, release the
 infrastructure writer and resume automatically. Use `operation_retry` to resume a failure.
+`done` is true once an operation has finished. `operation_cancel` ends an operation that has changed
+nothing yet (still queued, or waiting its turn); `operation_retry` runs it again later.
 An invalid request with no remaining reservations returns `next_action=revise_request` instead:
 correct the input, preview it and submit a new request. Retrying the old operation repeats its original arguments.
 Supply a stable `idempotency_key` when submitting;
