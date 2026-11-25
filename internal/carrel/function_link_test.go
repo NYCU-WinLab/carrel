@@ -70,8 +70,11 @@ func TestFunctionLinkDeploysFromGitHub(t *testing.T) {
 	if code, s := status("good", "v2"); code != 200 || s["state"] != "building" {
 		t.Fatalf("status: %d %v", code, s)
 	}
-	if code, _ := status("other", "v2"); code != 403 {
-		t.Fatalf("status by another repository: %d", code)
+	// Another repository, branch or event reads nothing (#263).
+	for _, token := range []string{"other", "branch", "pr"} {
+		if code, _ := status(token, "v2"); code != 403 {
+			t.Fatalf("status by %q: %d", token, code)
+		}
 	}
 	// Ready but not yet served stays building; live once the host serves it.
 	report(t, a, `{"revision":2,"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"},{"version":"v2","state":"ready"}]}]}`)

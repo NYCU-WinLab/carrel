@@ -122,8 +122,11 @@ func TestReleaseUploadChecksRepositoryBranchAndEvent(t *testing.T) {
 	if code, out := do(t, a, "GET", "/apps/v1/alice/site/releases/"+id, "good", nil); code != 200 || obj(out["release"])["agent"] != "not_installed" {
 		t.Fatalf("status failed: %d %s", code, encoded(out))
 	}
-	if code, _ := do(t, a, "GET", "/apps/v1/alice/site/releases/"+id, "other", nil); code != 403 {
-		t.Fatal("another repository read release status")
+	// Another repository, branch or event reads nothing (#263).
+	for _, token := range []string{"other", "branch", "pr"} {
+		if code, _ := do(t, a, "GET", "/apps/v1/alice/site/releases/"+id, token, nil); code != 403 {
+			t.Fatalf("status by %q: %d", token, code)
+		}
 	}
 }
 

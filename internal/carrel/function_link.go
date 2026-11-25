@@ -176,9 +176,9 @@ func functionRelease(f, v D, version string) D {
 func (p *Platform) FunctionImageStatus(ctx context.Context, slug, name, version string, c CIClaims) D {
 	e := p.execution(ctx)
 	_, f := e.functionBySlug(slug, name)
-	if c.Issuer != linkIssuer(f) || c.Repository != f["repo"] || (f["repo_id"] != nil && str(f["repo_id"]) != c.RepositoryID) {
-		fail("forbidden", "Token repository does not match the linked repository")
-	}
+	// The same checks as the deploy: another branch or event of the linked
+	// repository reads nothing.
+	e.authorizeRelease(f, c)
 	if !functionVersionRE.MatchString(version) {
 		fail("not_found", "Version not found")
 	}
