@@ -22,7 +22,7 @@ def load(name):
 
 def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, monkeypatch):
     deploy = load("deploy-go.py")
-    for name in ("carrel", "carrel-deployd", "carrel-fetch"):
+    for name in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     calls = []
     monkeypatch.setattr(
@@ -36,6 +36,7 @@ def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, 
     names = {Path(p).name for p in copied[1:-1]}
     assert {
         "carrel",
+        "carrel-agent",
         "carrel-deployd",
         "carrel-fetch",
         "install-control.py",
@@ -82,7 +83,10 @@ def release_archive(work, tag, extra=None, sums=None):
     with tarfile.open(archive, "w:gz") as tar:
         files = {f"{name}/REVISION": b"abc123\n"}
         files.update(
-            {f"{name}/dist/{b}": b"release binary" for b in ("carrel", "carrel-deployd", "carrel-fetch")}
+            {
+                f"{name}/dist/{b}": b"release binary"
+                for b in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch")
+            }
         )
         files.update({f"{name}/scripts/{s.name}": s.read_bytes() for s in (ROOT / "scripts").glob("*.py")})
         files.update(extra or {})
@@ -143,6 +147,7 @@ class Node:
 
     def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False):
         self.calls, self.fail_on = [], fail_on
+        self.agent_stdout, self.journal = '{"agent": "absent"}', ""
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
         for name in ("node-agent.py", "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py"):
@@ -166,7 +171,14 @@ class Node:
     def subprocess_run(self, args, clear_fails):
         self.calls.append(tuple(args))
         failed = clear_fails and tuple(args[:5]) == ("pct", "exec", "102", "--", "rm")
-        return SimpleNamespace(returncode=1 if failed else 0)
+        stdout = (
+            self.agent_stdout
+            if "--agent-service" in args
+            else self.journal
+            if args[0] == "journalctl"
+            else ""
+        )
+        return SimpleNamespace(returncode=1 if failed else 0, stdout=stdout)
 
     def run(self, *args, **kwargs):
         args = tuple(str(a) for a in args)
@@ -186,6 +198,7 @@ def staged(tmp_path, tamper=False):
     hashes = {}
     for name in (
         "carrel",
+        "carrel-agent",
         "carrel-deployd",
         "carrel-fetch",
         "install-control.py",
@@ -387,3 +400,58 @@ def test_a_binary_of_another_version_stops_the_install(monkeypatch, tmp_path):
     with pytest.raises(SystemExit, match="0.9.0"):
         module.host(tmp_path, "0.10.0")
     assert asked == [(tmp_path / "carrel", "-version")]
+
+
+def test_a_failed_upgrade_restores_programs_beside_them_and_leaves_the_agent_alone(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    token = tmp_path / "agent-token"
+    token.write_text("old token")
+    monkeypatch.setattr(module, "AGENT_TOKEN", token)
+
+    def fail_on(args):
+        if "configure-nodes.py" in args[-1]:
+            token.write_text("new token")  # configure-nodes.py rotated it
+        return args[-1] == "activate"
+
+    node = Node(module, monkeypatch, tmp_path, fail_on=fail_on)
+    (node.lib / "carrel-agent").write_text("old carrel-agent")
+    copies = []
+    real = module.shutil.copy2
+    monkeypatch.setattr(module.shutil, "copy2", lambda a, b: copies.append(str(b)) or real(a, b))
+    with pytest.raises(RuntimeError):
+        module.host(staged(tmp_path), "1.0.0")
+    assert (node.lib / "carrel-agent").read_text() == "old carrel-agent"
+    assert str(node.lib / "carrel-agent") not in copies, "copied in place over a running binary"
+    assert token.read_text() == "old token"
+    assert not any("--agent-service" in c for c in node.calls), "the agent was touched by a failed upgrade"
+
+
+def test_the_agent_starts_or_stops_only_after_the_health_check(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    order = []
+    monkeypatch.setattr(
+        module, "healthy", lambda version, host: order.append("health") or {"version": version}
+    )
+    real = node.subprocess_run
+
+    def record(args, clear_fails):
+        if "--agent-service" in args:
+            order.append("agent")
+        return real(args, clear_fails)
+
+    monkeypatch.setattr(module.subprocess, "run", lambda args, **kw: record(args, False))
+    module.host(staged(tmp_path), "1.0.0")
+    assert order == ["health", "agent"]
+
+
+def test_a_started_agent_must_reach_the_control_plane(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    node.agent_stdout = '{"agent": "started"}'
+    with pytest.raises(SystemExit, match="did not reach the control plane"):
+        module.host(staged(tmp_path), "1.0.0")
+    node.journal = '{"level":"INFO","msg":"agent_connected","node":"carrel01"}'
+    (tmp_path / "again").mkdir()
+    module.host(staged(tmp_path / "again"), "1.0.0")

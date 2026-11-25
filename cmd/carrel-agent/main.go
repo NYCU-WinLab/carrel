@@ -147,14 +147,21 @@ func (l *limited) Write(p []byte) (int, error) {
 // that finishes during a restart is reported, not swept as lost.
 func (a *agent) loop(stop context.Context) {
 	var wg sync.WaitGroup
+	connected := false
 	for stop.Err() == nil {
 		jobs, err := a.claim(stop, false)
 		if err != nil {
+			connected = false
 			if stop.Err() == nil {
 				slog.Warn("claim_failed", "error", err)
 				sleep(stop, retry)
 			}
 			continue
+		}
+		if !connected {
+			// The control plane took a claim: the installer waits for this.
+			slog.Info("agent_connected", "node", a.cfg.Node)
+			connected = true
 		}
 		for _, j := range jobs {
 			a.mu.Lock()

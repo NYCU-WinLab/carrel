@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "NYCU-WinLab/carrel"
 BINARIES = ("carrel", "carrel-deployd", "carrel-fetch")
+# Shipped since the agent (PLAN 8.6); an older release has none.
+OPTIONAL = ("carrel-agent",)
 # install-control.py runs the release; the rest are the node programs it installs.
 SCRIPTS = ("install-control.py", "node-agent.py", "configure-reader.py", "configure-nodes.py",
            "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py")
@@ -78,7 +80,9 @@ def main():
         artifacts, scripts = args.artifacts.resolve(), ROOT / "scripts"
         revision = run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True).stdout.strip()
     sources = [artifacts / name for name in BINARIES] + [scripts / name for name in SCRIPTS]
-    for path in sources[: len(BINARIES)]:
+    # A development build is this checkout, which has the agent.
+    sources += [artifacts / name for name in OPTIONAL if args.artifacts or (artifacts / name).is_file()]
+    for path in [p for p in sources if p.parent == artifacts]:
         if not path.is_file():
             raise SystemExit("Missing binary: " + path.name)
     if args.templates:

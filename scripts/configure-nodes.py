@@ -13,15 +13,24 @@ and bootstrap-platform.py and after the node programs are installed there. It:
    10.200.0.3 only;
 4. writes CT 100's SSH targets, pinned host keys and config.json "nodes";
 5. asks every node's adapter for its inventory, and the gateway for its
-   status, through CT 100.
+   status, through CT 100;
+6. prepares carrel-agent for the nodes the site file lists in "agent_nodes"
+   (PLAN 8.6): a CA and the listener's certificate, a token per node, and the
+   node's transport set to agent. Every other node keeps the SSH transport.
+
+`--agent-service` starts or stops the agent itself. install-control.py runs it
+only once the new control plane is healthy, so a failed upgrade never touches
+a running agent, and an agent that stops can still hand in its last answers.
 
 It never prints a key or a secret, and keeps every config.json key it does not own.
 """
 
+import hashlib
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 from pathlib import Path
@@ -47,6 +56,64 @@ Match User ca
 AUTHORIZED = Path("/root/.ssh/authorized_keys")
 COMMAND = 'restrict,command="/usr/local/lib/carrel/node-agent.py"'
 BEGIN, END = "# carrel nodes begin", "# carrel nodes end"
+
+# carrel-agent (PLAN 8.6). The CA stays on the first exit node, root only; CT 100
+# gets the listener's certificate and key, the node the CA to pin and its token.
+AGENT_CA = Path("/etc/carrel/agent-ca")
+AGENT_TOKEN = Path("/etc/carrel/agent-token")
+# An operator asks for a new token by creating this file. The old token stays
+# until the new one is written, so a failed deploy puts the old one back.
+AGENT_ROTATE = Path("/etc/carrel/agent-token.rotate")
+AGENT_JSON = Path("/etc/carrel/agent.json")
+AGENT_UNIT = Path("/etc/systemd/system/carrel-agent.service")
+AGENT_LISTEN = "10.200.0.3:8443"
+# Only the first exit node reaches 10.200.0.3, from its infra address; the
+# other nodes need a route there first.
+AGENT_SOURCE = "10.200.0.1"
+AGENT_TLS = "/etc/carrel/agent"
+# A CA for 10 years, the listener's certificate for 825 days, renewed by any
+# run with less than 90 days left. The agent pins the CA, so a renewal needs
+# nothing on the node.
+AGENT_CERTIFICATES = f"""set -e
+umask 077
+d={AGENT_CA}
+mkdir -p $d
+if ! [ -s $d/ca.key ] || ! [ -s $d/ca.pem ]; then
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+    -subj "/CN=carrel agent CA" -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout $d/ca.key.next -out $d/ca.pem.next
+  mv $d/ca.key.next $d/ca.key
+  mv $d/ca.pem.next $d/ca.pem
+  rm -f $d/server.pem
+fi
+if ! [ -s $d/server.pem ] || ! openssl x509 -in $d/server.pem -noout -checkend 7776000 >/dev/null \
+    || ! openssl verify -CAfile $d/ca.pem $d/server.pem >/dev/null; then
+  printf 'subjectAltName=IP:{AGENT_LISTEN.split(":")[0]}\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n' > $d/server.ext
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN={AGENT_LISTEN.split(":")[0]}" \
+    -keyout $d/server.key.next -out $d/server.csr
+  openssl x509 -req -in $d/server.csr -CA $d/ca.pem -CAkey $d/ca.key -set_serial "0x$(openssl rand -hex 16)" \
+    -days 825 -extfile $d/server.ext -out $d/server.pem.next
+  mv $d/server.key.next $d/server.key
+  mv $d/server.pem.next $d/server.pem
+  rm -f $d/server.csr $d/server.ext
+fi
+"""
+# SIGTERM reaches the agent alone: it takes no new job, answers the ones that
+# run, then exits. Root ops run up to 4 hours (migrate, freeze), so systemd
+# waits that long before it kills what is left.
+AGENT_SERVICE = f"""[Unit]
+Description=Carrel node agent (PLAN 8.6)
+After=network-online.target
+Wants=network-online.target
+[Service]
+ExecStart=/usr/local/lib/carrel/carrel-agent -config {AGENT_JSON}
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=4h30min
+[Install]
+WantedBy=multi-user.target
+"""
 
 
 def run(*args, input=None):
@@ -100,6 +167,71 @@ def replace_file(path, text, mode):
     with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w") as stream:
         stream.write(text)
     os.replace(pending, target)
+
+
+def agent_nodes(site, nodes):
+    """The names in the site file's agent_nodes, checked against the site."""
+    names = site.get("agent_nodes", [])
+    for name in names:
+        if name not in {n["name"] for n in nodes}:
+            raise SystemExit(f"agent_nodes names {name}, which is not a site node")
+        if name != nodes[0]["name"]:
+            raise SystemExit(f"agent_nodes: only the first exit node reaches {AGENT_LISTEN} for now, not {name}")
+    return set(names)
+
+
+def agent_token():
+    """This node's agent token: made once, kept across runs. Returns its digest."""
+    if AGENT_ROTATE.exists() or not AGENT_TOKEN.exists() or not AGENT_TOKEN.read_text().strip():
+        replace_file(AGENT_TOKEN, secrets.token_urlsafe(32), 0o600)
+        AGENT_ROTATE.unlink(missing_ok=True)
+    return hashlib.sha256(AGENT_TOKEN.read_text().strip().encode()).hexdigest()
+
+
+def agent_listener():
+    """Make the CA and the listener's certificate here, then give CT 100 the certificate."""
+    run("sh", "-c", AGENT_CERTIFICATES)
+    ct("install", "-d", "-m", "755", AGENT_TLS)
+    for name, mode in (("server.pem", "644"), ("server.key", "600")):
+        run("pct", "push", "100", AGENT_CA / name, f"{AGENT_TLS}/{name}.next", "--perms", mode)
+    # The service reads its key as carrel; the rename keeps a running one's files whole.
+    ct("sh", "-c", f"cd {AGENT_TLS} && chown carrel:carrel server.key.next && mv server.pem.next server.pem"
+       " && mv server.key.next server.key")
+    return {"agent_listen": AGENT_LISTEN, "agent_cert_file": f"{AGENT_TLS}/server.pem",
+            "agent_key_file": f"{AGENT_TLS}/server.key"}
+
+
+def agent_service():
+    """Start the agent on this node when the site file lists it, else stop it.
+
+    --no-block: an agent finishing a long job keeps its old process until the
+    job is answered, and the deploy does not wait for it."""
+    site = json.loads(SITE.read_text())
+    me = targets(site, socket.gethostname().split(".")[0])[0]
+    if me["name"] in agent_nodes(site, targets(site, me["name"])):
+        replace_file(AGENT_JSON, json.dumps({"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
+                                             "token_file": str(AGENT_TOKEN), "node": me["name"]}, indent=2) + "\n", 0o644)
+        replace_file(AGENT_UNIT, AGENT_SERVICE, 0o644)
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "carrel-agent.service")
+        # A new binary or token takes effect.
+        run("systemctl", "restart", "--no-block", "carrel-agent.service")
+        return "started"
+    if AGENT_UNIT.exists():
+        run("systemctl", "disable", "--now", "--no-block", "carrel-agent.service")
+        return "stopped"
+    return "absent"
+
+
+def node_entries(nodes, agents, digest):
+    """config.json "nodes": an agent node carries its transport, token digest and source."""
+    out = []
+    for n in nodes:
+        entry = {"name": n["name"], "target": n["target"]}
+        if n["name"] in agents:
+            entry.update({"transport": "agent", "agent_token_sha256": digest, "agent_source": AGENT_SOURCE})
+        out.append(entry)
+    return out
 
 
 def gateway(key):
@@ -242,6 +374,9 @@ def main():
         raise SystemExit("run on the first exit node, which holds CT 100")
     nodes = targets(site, node)
     me = nodes[0]
+    agents = agent_nodes(site, nodes)
+    if agents and not Path("/usr/local/lib/carrel/carrel-agent").exists():
+        raise SystemExit("install the node programs here first (carrel-agent missing)")
     infra = [GATEWAY, JUMP] if site.get("ssh_jump") else [GATEWAY]
     for program in [*PROGRAMS, "gateway-sync.py", *(["jump-sync.py", "jump-cert.py"] if site.get("ssh_jump") else [])]:
         if not Path("/usr/local/lib/carrel", program).exists():
@@ -275,11 +410,14 @@ def main():
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/ssh_config.next && chmod 644 /etc/carrel/ssh_config.next && mv /etc/carrel/ssh_config.next /etc/carrel/ssh_config", input=ssh_config(current, [*nodes, *infra]))
     current = ct("sh", "-c", "cat /etc/carrel/known_hosts 2>/dev/null || true")
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
-    listed = json.dumps([{"name": n["name"], "target": n["target"]} for n in nodes])
+    # The agent listener's keys are in config.json only while a node uses it.
+    listener = agent_listener() if agents else {k: None for k in ("agent_listen", "agent_cert_file", "agent_key_file")}
+    listed = json.dumps({"nodes": node_entries(nodes, agents, agent_token() if agents else ""), **listener})
     # Edited in place inside CT 100 so no other key leaves it.
     ct("python3", "-c", (
         "import json,os,sys;from pathlib import Path;p=Path('/etc/carrel/config.json');"
-        "c=json.loads(p.read_text()) if p.exists() else {};c['nodes']=json.loads(sys.stdin.read());"
+        "c=json.loads(p.read_text()) if p.exists() else {};u=json.loads(sys.stdin.read());"
+        "[c.pop(k,None) if v is None else c.__setitem__(k,v) for k,v in u.items()];"
         "n=p.with_name('config.json.next');n.write_text(json.dumps(c,indent=2)+'\\n');"
         "s=p.stat() if p.exists() else None;"
         "s and os.chown(n,s.st_uid,s.st_gid);os.chmod(n,s.st_mode&0o777 if s else 0o640);os.replace(n,p)"
@@ -310,8 +448,14 @@ def main():
         for n in nodes:
             # A new login by key still works after the reload, here too.
             run("ssh", *peer(n), "root@" + n["address"], "true")
-    print(json.dumps({"nodes": report, "gateway": GATEWAY["target"], **({"jump": JUMP["target"]} if jump_key else {})}))
+    print(json.dumps({"nodes": report, "gateway": GATEWAY["target"], "agent_nodes": sorted(agents),
+                      **({"jump": JUMP["target"]} if jump_key else {})}))
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if sys.argv[1:] == ["--agent-service"]:
+        print(json.dumps({"agent": agent_service()}))
+    else:
+        main()

@@ -105,6 +105,44 @@ warning. `/var/lib/carrel` is owned by `carrel:carrel`;
 `/etc/carrel/config.json` is `root:carrel` mode 0640 and `node_key` is owned by `carrel`, mode 0600. The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
 
+## Node agent
+
+A node reaches the control plane over SSH by default. On the agent transport (PLAN 8.6),
+`carrel-agent` on the node connects out to the control plane instead and runs each job through
+the same `node-agent.py`. Today only the first exit node can use it: the other nodes have no route
+to `10.200.0.3`.
+
+To move the first exit node to the agent:
+
+1. Add `"agent_nodes": ["<first exit node>"]` to `sites/<site>/cluster.json` and copy it to
+   `/etc/carrel/site.json` on that node.
+2. Deploy as usual with `deploy-go.py`. `configure-nodes.py` then:
+   - makes a CA in `/etc/carrel/agent-ca/` on the node (root only, 10 years) and a listener
+     certificate for `10.200.0.3` (825 days; any deploy with less than 90 days left renews it);
+   - copies the listener certificate and key to CT 100 under `/etc/carrel/agent/` and sets
+     `agent_listen`, `agent_cert_file` and `agent_key_file` in `config.json`;
+   - makes the node's token in `/etc/carrel/agent-token` (mode 0600, kept across deploys) and
+     writes `transport`, `agent_token_sha256` and `agent_source` into the node's `config.json` entry;
+   - once the new control plane answers its health check, writes `/etc/carrel/agent.json` and
+     starts `carrel-agent.service`. A failed deploy never touches a running agent. The deploy
+     then waits up to 60 seconds for the agent's `agent_connected` log line and fails loudly
+     without it.
+3. Check it: `node_list` shows the node, and `journalctl -u carrel-agent` on the node shows
+   `agent_started` and no `claim_failed`.
+
+To go back to SSH, remove the node from `agent_nodes` and deploy again: the node's entry loses
+its transport, `config.json` loses the listener keys, and the agent stops after the health
+check. The CA, the token and the certificate files stay, so moving back needs no new ones. The SSH key line stays in both modes until #604, so either
+transport works at any time.
+
+The listener serves only `10.200.0.3:8443`, TLS 1.3. The infra firewall already drops tenant
+traffic to `10.200.0.3` on any port but 8080. A request needs the node's token and must come from
+`10.200.0.1`. Stopping the agent lets running jobs finish: systemd waits up to 4 hours 30 minutes
+(`TimeoutStopSec`), the longest a root op runs. To rotate the token, create
+`/etc/carrel/agent-token.rotate` on the node and deploy again; a failed deploy keeps the old
+token. Do not delete the token file: the restored configuration would then name a token no file
+holds.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

@@ -9,7 +9,7 @@ The runtime is Go (1.26 or newer; CI uses 1.27.1). Run builds and tests in a dev
 ```sh
 go test -race ./... -count=1
 go vet ./...
-CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
+for cmd in carrel carrel-agent carrel-deployd carrel-fetch; do CGO_ENABLED=0 go build -trimpath -o dist/$cmd ./cmd/$cmd; done
 uv sync --locked
 uv run pytest -q
 uv run ruff check tests

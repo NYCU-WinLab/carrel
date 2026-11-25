@@ -34,6 +34,12 @@ SITE = Path("/etc/carrel/site.json")
 JUMP_GENS = ["/var/lib/carrel-jump/keys.gen", "/var/lib/carrel-jump/certs.gen"]
 TEMPLATES = Path("/etc/carrel/templates.json")
 HELPERS = {"guest-report.py": "644", "gateway-sync.py": "644", "jump-sync.py": "644", "jump-cert.py": "644"}
+# Node programs that run: node-agent.py behind SSH, carrel-agent on a node whose
+# transport is agent (PLAN 8.6; configure-nodes.py starts it).
+EXECUTABLES = {"node-agent.py": "755", "carrel-agent": "755"}
+# configure-nodes.py makes it once; a run that rotates it and then fails puts
+# the old one back with the old digest in config.json.
+AGENT_TOKEN = Path("/etc/carrel/agent-token")
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
 KEEP = 5
 DATABASE = Path("/var/lib/carrel/carrel.db")
@@ -252,6 +258,17 @@ def healthy(version, host_name):
     raise SystemExit("Health check failed: the new version did not answer")
 
 
+def agent_connected(since, wait=60):
+    """True once the agent logs a claim the control plane took, after since."""
+    for _ in range(wait):
+        log = subprocess.run(["journalctl", "-u", "carrel-agent", "--since", f"@{since}", "-o", "cat"],
+                             capture_output=True, text=True, check=False)
+        if '"agent_connected"' in (log.stdout or ""):
+            return True
+        time.sleep(1)
+    return False
+
+
 def host(stage, version):
     stamp = stage.name.removeprefix("go-upgrade-")
     for name, expected in json.loads((stage / "hashes.json").read_text()).items():
@@ -275,8 +292,8 @@ def host(stage, version):
     # A first install has no units yet; stopping them is then a no-op.
     for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], capture_output=True, check=False)
-    before = {"node-agent.py": LIB / "node-agent.py", "templates.json": TEMPLATES,
-              "release.json": LIB / "release.json", **{h: LIB / h for h in HELPERS}}
+    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json", "agent-token": AGENT_TOKEN,
+              **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
     # Read before anything can fail: only a record this run created may be removed.
     had_release = (LIB / "release.json").exists()
     configured = activated = False
@@ -290,7 +307,7 @@ def host(stage, version):
         merged.write_text(json.dumps(templates, indent=2) + "\n")
         run("install", "-m", "600", merged, TEMPLATES)
         push(merged, "/etc/carrel/templates.next.json", "600")
-        for name, mode in {**HELPERS, "node-agent.py": "755"}.items():
+        for name, mode in {**HELPERS, **EXECUTABLES}.items():
             run("install", "-m", mode, stage / name, str(LIB / name) + ".next")
             os.replace(str(LIB / name) + ".next", LIB / name)
         # The release the node programs came from, which node-agent reports in
@@ -326,11 +343,22 @@ def host(stage, version):
                             "restore", stamp, names], check=False)
         for name, path in before.items():
             saved = stage / ("before-" + name)
-            if saved.exists():
-                shutil.copy2(saved, path)
-            elif name == "release.json" and not had_release and path.exists():
-                # An install before #555 had no release record: none is truer than the new one.
-                path.unlink()
+            try:
+                if saved.exists():
+                    # Beside the target, then renamed: a running carrel-agent
+                    # keeps its file busy (ETXTBSY) against a copy in place.
+                    # Created 0600, so the token is never readable on the way.
+                    pending = Path(str(path) + ".restore")
+                    pending.unlink(missing_ok=True)
+                    with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                        stream.write(saved.read_bytes())
+                    shutil.copystat(saved, pending)
+                    os.replace(pending, path)
+                elif name == "release.json" and not had_release and path.exists():
+                    # An install before #555 had no release record: none is truer than the new one.
+                    path.unlink()
+            except OSError as error:
+                print(f"WARNING: could not restore {path}: {error}", file=sys.stderr)
         # The restored binary may send no "gen", which jump-sync.py refuses once a
         # generation is recorded; carrel is stopped, so no write races this.
         if (configured or activated) and jump_site():
@@ -345,6 +373,18 @@ def host(stage, version):
     finally:
         # Absent only when a first install failed before its units existed.
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
+    # The node's agent starts or stops only now, against a healthy control
+    # plane: a failed upgrade above never touched it.
+    since = int(time.time())
+    agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False,
+                           capture_output=True, text=True)
+    if agent.returncode:
+        raise SystemExit("carrel-agent was not started or stopped; run "
+                         f"python3 {stage}/configure-nodes.py --agent-service on this node")
+    if '"started"' in (agent.stdout or "") and not agent_connected(since):
+        # The control plane is up, but this node's jobs wait for its agent.
+        raise SystemExit("carrel-agent did not reach the control plane within 60 s: see journalctl -u "
+                         "carrel-agent. To go back to SSH, remove this node from agent_nodes and deploy again.")
     for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
         shutil.rmtree(old)
 
