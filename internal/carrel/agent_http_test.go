@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"context"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -122,5 +123,32 @@ func TestAgentProtocolIsChecked(t *testing.T) {
 	}
 	if s := p.Hub.Status("pve1", time.Now().Add(agentSilence)); s["connected"] != false {
 		t.Fatalf("a silent agent still connected: %v", s)
+	}
+}
+
+// node_list shows an agent node that cannot answer, with its agent status,
+// and still lists the other nodes; one node alone keeps the status too.
+func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
+	p, _, _ := nodeFixture(t)
+	p.Config.Nodes[1].Transport = "agent"
+	admin := person("admin", true)
+	nodes := dicts(p.execution(context.Background()).Admin("node_list", D{}, admin)["nodes"])
+	if len(nodes) != 3 || obj(nodes[1]["error"])["code"] != "agent_not_connected" || obj(nodes[1]["agent"])["connected"] != false {
+		t.Fatal(encoded(nodes))
+	}
+	if obj(nodes[2]["inventory"])["node"] != "carrel03" || nodes[0]["agent"] != nil {
+		t.Fatal(encoded(nodes))
+	}
+	p.Hub.Hello(p.Config.Nodes[1].Name, "v1", "0.11.0")
+	p.Hub.Heartbeat(p.Config.Nodes[1].Name, "s", 1, nil)
+	nodes = dicts(p.execution(context.Background()).Admin("node_list", D{}, admin)["nodes"])
+	if a := obj(nodes[1]["agent"]); a["connected"] != true || a["release"] != "0.11.0" || nodes[1]["inventory"] == nil {
+		t.Fatal(encoded(nodes[1]))
+	}
+	p.Config.Nodes = p.Config.Nodes[1:2]
+	p.Hub = NewAgentHub()
+	one := p.execution(context.Background()).Admin("node_list", D{}, admin)
+	if obj(one["agent"])["connected"] != false || obj(one["error"])["code"] != "agent_not_connected" {
+		t.Fatal(encoded(one))
 	}
 }

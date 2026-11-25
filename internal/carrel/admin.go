@@ -21,18 +21,38 @@ func (e *Execution) Admin(tool string, a, w D) D {
 	case "node_list":
 		nodes := []D{}
 		for _, n := range e.P.Nodes() {
-			// capacity is what admission makes of the inventory: committed
-			// against limits, and how full the node's storage really is.
-			inventory := e.Call(D{"op": "inventory"}, n.Target)
-			reservations, snapshots := e.nodeLoad(n, nil)
-			programs := obj(obj(inventory)["programs"])
-			entry := D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name), "capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
-				"programs": programs, "programs_current": programs["version"] == Version && programs["intact"] == true}
+			entry := D{"name": n.Name, "target": n.Target, "drained": e.drained(n.Name)}
 			if e.P.onAgent(n.Name) {
 				// The agent's own report: a node left on another protocol or
-				// release shows here (#561).
-				entry["agent"] = e.P.Hub.Status(n.Name, time.Now())
+				// release shows here (#561), also when it cannot run inventory.
+				status := e.P.Hub.Status(n.Name, time.Now())
+				entry["agent"] = status
+				if status["connected"] != true {
+					entry["error"] = D{"code": "agent_not_connected", "message": "The node's agent is not polling; see agent.protocol and agent.last_poll"}
+					nodes = append(nodes, entry)
+					continue
+				}
 			}
+			// capacity is what admission makes of the inventory: committed
+			// against limits, and how full the node's storage really is.
+			var inventory any
+			if r := attempt(func() { inventory = e.Call(D{"op": "inventory"}, n.Target) }); r != nil {
+				if !e.P.onAgent(n.Name) {
+					panic(r)
+				}
+				// An agent node that stops answering does not hide the others.
+				code := "backend_unavailable"
+				if f, ok := r.(Failure); ok {
+					code, _ = obj(f.Result["error"])["code"].(string)
+				}
+				entry["error"] = D{"code": code, "message": "The node's agent did not answer inventory"}
+				nodes = append(nodes, entry)
+				continue
+			}
+			reservations, snapshots := e.nodeLoad(n, nil)
+			programs := obj(obj(inventory)["programs"])
+			entry = merge(entry, D{"capacity": summarize(obj(inventory), reservations, snapshots, time.Now()), "inventory": inventory,
+				"programs": programs, "programs_current": programs["version"] == Version && programs["intact"] == true})
 			nodes = append(nodes, entry)
 		}
 		// A node whose programs came from another release than the control
@@ -44,7 +64,13 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			}
 		}
 		if len(nodes) == 1 {
-			return D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale}
+			out := D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale}
+			for _, k := range []string{"agent", "error"} {
+				if v, ok := nodes[0][k]; ok {
+					out[k] = v
+				}
+			}
+			return out
 		}
 		return D{"inventory": nodes[0]["inventory"], "nodes": nodes, "control_plane": Build(), "stale_nodes": stale}
 	case "machine_migrate":
