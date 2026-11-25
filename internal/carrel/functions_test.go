@@ -1,7 +1,9 @@
 package carrel
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -489,6 +491,52 @@ func TestFunctionEnvNeedsAKeyAndStaysWithItsFunction(t *testing.T) {
 	}
 	if err := attempt(func() { p.openFunctionEnv("2-hook", sealed) }); err == nil {
 		t.Fatal("an environment opened for another function")
+	}
+}
+
+func TestFunctionEnvOpensWithAnOldKeyAndSealsWithTheNewOne(t *testing.T) {
+	p, _ := functionFixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	before := p.sealFunctionEnv("1-hook", []string{"A=1"})
+	fresh := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	// Rotated without keeping the old key: the value cannot be opened, and
+	// the host is told not to ask again.
+	p.Config.FunctionEnvKey = fresh
+	err := attempt(func() { p.openFunctionEnv("1-hook", before) })
+	if f, ok := err.(Failure); !ok || obj(f.Result["error"])["code"] != "conflict" {
+		t.Fatalf("open with the wrong key: %v", err)
+	}
+	p.Config.FunctionEnvOldKeys = []string{testEnvKey}
+	if got := p.openFunctionEnv("1-hook", before); len(got) != 1 || got[0] != "A=1" {
+		t.Fatalf("open with the old key %v", got)
+	}
+	after := p.sealFunctionEnv("1-hook", []string{"B=2"})
+	p.Config.FunctionEnvOldKeys = nil
+	if got := p.openFunctionEnv("1-hook", after); len(got) != 1 || got[0] != "B=2" {
+		t.Fatalf("a new value was not sealed with the new key: %v", got)
+	}
+	// An old key does not let a value move to another function.
+	p.Config.FunctionEnvOldKeys = []string{testEnvKey}
+	if err := attempt(func() { p.openFunctionEnv("2-hook", before) }); err == nil {
+		t.Fatal("an old key opened a value for another function")
+	}
+}
+
+func TestFunctionEnvOldKeysNeedTheCurrentKey(t *testing.T) {
+	for _, c := range []struct {
+		key  string
+		old  []string
+		want string
+	}{
+		{"", []string{testEnvKey}, "needs function_env_key"},
+		{testEnvKey, []string{"short"}, "32 bytes"},
+		{testEnvKey, []string{testEnvKey}, ""},
+	} {
+		cfg := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}, FunctionEnvKey: c.key, FunctionEnvOldKeys: c.old}
+		err := cfg.WithDefaults().Validate()
+		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
+			t.Fatalf("%+v: %v", c, err)
+		}
 	}
 }
 

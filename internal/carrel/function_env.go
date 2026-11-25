@@ -104,9 +104,19 @@ func envKeys(pairs []string) []string {
 }
 
 func (p *Platform) functionEnvAEAD() cipher.AEAD {
-	key, err := base64.StdEncoding.DecodeString(p.Config.FunctionEnvKey)
-	if p.Config.FunctionEnvKey == "" || err != nil || len(key) != 32 {
+	aead := envAEAD(p.Config.FunctionEnvKey)
+	if aead == nil {
 		fail("unavailable", "Function environments are not configured on this platform")
+	}
+	return aead
+}
+
+// envAEAD is the cipher for one key, or nil for a key that is not 32 bytes
+// in standard base64.
+func envAEAD(encoded string) cipher.AEAD {
+	key, err := base64.StdEncoding.DecodeString(encoded)
+	if encoded == "" || err != nil || len(key) != 32 {
+		return nil
 	}
 	block, err := aes.NewCipher(key)
 	must(err)
@@ -127,19 +137,31 @@ func (p *Platform) sealValue(aad string, v any) string {
 	return base64.StdEncoding.EncodeToString(aead.Seal(nonce, nonce, plain, []byte(aad)))
 }
 
+// openValue decrypts a value sealed by sealValue, with function_env_key or
+// one of function_env_old_keys. A value no key opens fails with conflict:
+// asking again does not help, so the function host gives up on the version.
 func (p *Platform) openValue(aad, sealed string, out any) {
 	aead := p.functionEnvAEAD()
 	raw, err := base64.StdEncoding.DecodeString(sealed)
 	if err != nil || len(raw) < aead.NonceSize() {
-		fail("internal", "A sealed function value is damaged")
+		fail("conflict", "A sealed function value is damaged; upload it again")
 	}
-	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], []byte(aad))
+	nonce, box := raw[:aead.NonceSize()], raw[aead.NonceSize():]
+	plain, err := aead.Open(nil, nonce, box, []byte(aad))
+	for _, old := range p.Config.FunctionEnvOldKeys {
+		if err == nil {
+			break
+		}
+		if o := envAEAD(old); o != nil {
+			plain, err = o.Open(nil, nonce, box, []byte(aad))
+		}
+	}
 	if err != nil {
 		slog.Error("function_value_open_failed", "aad", aad)
-		fail("internal", "A sealed function value cannot be decrypted")
+		fail("conflict", "A sealed function value cannot be decrypted with any configured key; upload it again")
 	}
 	if json.Unmarshal(plain, out) != nil {
-		fail("internal", "A sealed function value is damaged")
+		fail("conflict", "A sealed function value is damaged; upload it again")
 	}
 }
 

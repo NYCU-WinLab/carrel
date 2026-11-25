@@ -1472,7 +1472,9 @@ values, and a deploy keeps the function's environment. `clear` builds a version 
 The desired state only marks a version that has an environment (`has_env`); the host
 fetches its values from `GET /functions/v1/agent/env` when it builds that version, and writes
 them into the version's root file system, never into `function.json`. `function_get` shows the names only. Snapshots stay on
-function hosts and are deleted with their version.
+function hosts and are deleted with their version. `function_env_old_keys` lists earlier keys that
+still open values; new values are sealed with `function_env_key` only. A value no key opens
+answers 409, and the host fails that version instead of asking again.
 
 **Limits and quota**
 

@@ -265,6 +265,22 @@ func (a *Agent) report(ctx context.Context, inventory Inventory) error {
 	return a.call(ctx, http.MethodPost, "/functions/v1/agent/report", inventory, nil)
 }
 
+// statusError is an answer from the control plane other than 200.
+type statusError struct {
+	code    int
+	message string
+}
+
+func (e *statusError) Error() string { return e.message }
+
+// settled says the control plane answered that asking again will not help:
+// a sealed value no configured key opens (409). Anything else, an outage or
+// a host token the control plane does not know, is asked again next pass.
+func settled(err error) bool {
+	var s *statusError
+	return errors.As(err, &s) && s.code == http.StatusConflict
+}
+
 func (a *Agent) call(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -296,7 +312,7 @@ func (a *Agent) call(ctx context.Context, method, path string, in, out any) erro
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, bytes.TrimSpace(content[:min(len(content), 500)]))
+		return &statusError{code: resp.StatusCode, message: fmt.Sprintf("%s %s: %s: %s", method, path, resp.Status, bytes.TrimSpace(content[:min(len(content), 500)]))}
 	}
 	if len(content) > maxState {
 		return fmt.Errorf("%s %s: answer larger than %d bytes", method, path, maxState)
@@ -355,6 +371,14 @@ func (a *Agent) apply(ctx context.Context, desired Desired) {
 	}
 }
 
+// clip keeps a failure message within what the report carries.
+func clip(message string) string {
+	if len(message) > maxError {
+		return message[:maxError]
+	}
+	return message
+}
+
 // applyFunction runs with the function's lock held.
 func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[string]bool) {
 	for _, v := range f.Versions {
@@ -375,8 +399,12 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 		if v.HasEnv {
 			var err error
 			if env, err = a.fetchEnv(ctx, f.ID, v.Version); err != nil {
-				// Not a failed build: the next pass asks again.
 				slog.Warn("environment not fetched", "function", f.ID, "version", v.Version, "error", err)
+				// A refusal fails the version; anything else is asked
+				// again next pass.
+				if settled(err) {
+					a.failed[key] = clip("environment: " + err.Error())
+				}
 				continue
 			}
 		}
@@ -385,6 +413,9 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 			var err error
 			if auth, err = a.fetchAuth(ctx, f.ID, v.Version); err != nil {
 				slog.Warn("registry credentials not fetched", "function", f.ID, "version", v.Version, "error", err)
+				if settled(err) {
+					a.failed[key] = clip("registry credentials: " + err.Error())
+				}
 				continue
 			}
 		}
@@ -398,11 +429,7 @@ func (a *Agent) applyFunction(ctx context.Context, f DesiredFunction, keep map[s
 			if ctx.Err() != nil {
 				return // a stop is not a failed build
 			}
-			message := err.Error()
-			if len(message) > maxError {
-				message = message[:maxError]
-			}
-			a.failed[key] = message
+			a.failed[key] = clip(err.Error())
 			slog.Warn("version not built", "function", f.ID, "version", v.Version, "error", err)
 			continue
 		}
