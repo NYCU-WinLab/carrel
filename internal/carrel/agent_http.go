@@ -3,6 +3,7 @@ package carrel
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -129,6 +130,9 @@ func (p *Platform) AgentHandler() http.Handler {
 			to <- nil
 			return
 		}
+		// A node that drops off the network ends the stream in about 30
+		// seconds, not the 2.5 minutes of the system's keepalive.
+		_ = SetStreamKeepAlive(c)
 		// The answer has 10 seconds, so the console waiting on it always hears
 		// back; then the listener's request deadlines go, as a console runs up
 		// to an hour.
@@ -153,6 +157,24 @@ func (p *Platform) AgentHandler() http.Handler {
 // agentStreamUpgrade names the protocol of a console stream's connection:
 // raw bytes both ways.
 const agentStreamUpgrade = "carrel-stream"
+
+// StreamKeepAlive bounds how long a console stream holds on to a peer that
+// vanished: idle 15s, then 3 probes 5s apart, so about 30 seconds. The stream
+// carries raw bytes with no framing, so there is no in-band ping.
+var StreamKeepAlive = net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 3}
+
+// SetStreamKeepAlive applies StreamKeepAlive to the TCP connection under c,
+// looking through TLS.
+func SetStreamKeepAlive(c net.Conn) error {
+	if t, ok := c.(*tls.Conn); ok {
+		c = t.NetConn()
+	}
+	t, ok := c.(*net.TCPConn)
+	if !ok {
+		return fmt.Errorf("keepalive: %T is not a TCP connection", c)
+	}
+	return t.SetKeepAliveConfig(StreamKeepAlive)
+}
 
 // bufferedConn reads what the server buffered before the takeover first.
 type bufferedConn struct {

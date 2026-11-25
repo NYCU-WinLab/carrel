@@ -2,9 +2,12 @@ package carrel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -266,5 +269,47 @@ func TestAgentDrainingTakesNoConsole(t *testing.T) {
 	}
 	if p.Hub.Capable("pve1", "stream", time.Now()) {
 		t.Fatal("a draining agent takes consoles")
+	}
+}
+
+// The control plane's end of a stream gets the short keepalive, through TLS.
+func TestStreamKeepAliveIsShort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, _ := ln.Accept()
+		accepted <- c
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s := <-accepted
+	defer s.Close()
+	if err := SetStreamKeepAlive(&tls.Conn{}); err == nil {
+		t.Error("a TLS conn without TCP under it was accepted")
+	}
+	if err := SetStreamKeepAlive(s); err != nil {
+		t.Fatal(err)
+	}
+	sock := func(opt int) int {
+		raw, err := s.(*net.TCPConn).SyscallConn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v int
+		_ = raw.Control(func(fd uintptr) { v, err = syscall.GetsockoptInt(int(fd), syscall.IPPROTO_TCP, opt) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if got := [3]int{sock(syscall.TCP_KEEPIDLE), sock(syscall.TCP_KEEPINTVL), sock(syscall.TCP_KEEPCNT)}; got != [3]int{15, 5, 3} {
+		t.Errorf("idle, interval, count = %v", got)
 	}
 }

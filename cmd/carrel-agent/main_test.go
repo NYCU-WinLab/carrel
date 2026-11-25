@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -422,5 +423,32 @@ func TestAgentStopsAConsoleThatStoppedReading(t *testing.T) {
 			t.Fatal("the console outlived its stream")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// The agent's end of a stream dials with the short keepalive.
+func TestAgentStreamDialUsesShortKeepAlive(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	c, err := (&net.Dialer{KeepAliveConfig: streamKeepAlive}).Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	raw, err := c.(*net.TCPConn).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got [3]int
+	_ = raw.Control(func(fd uintptr) {
+		for i, opt := range []int{syscall.TCP_KEEPIDLE, syscall.TCP_KEEPINTVL, syscall.TCP_KEEPCNT} {
+			got[i], err = syscall.GetsockoptInt(int(fd), syscall.IPPROTO_TCP, opt)
+		}
+	})
+	if err != nil || got != [3]int{15, 5, 3} {
+		t.Errorf("idle, interval, count = %v %v", got, err)
 	}
 }

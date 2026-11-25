@@ -293,3 +293,27 @@ func TestAgentHubTakesTheAnswerOfAReleasedJob(t *testing.T) {
 		t.Fatalf("handed out again: %v", again)
 	}
 }
+
+func TestAgentHubFailsAStreamWhenItsAgentIsReplaced(t *testing.T) {
+	h := NewAgentHub()
+	h.streamWait = 10 * time.Second
+	ctx := context.Background()
+	failed := make(chan error, 1)
+	go func() {
+		_, err := h.Stream(ctx, D{"op": "console"}, "n1")
+		failed <- err
+	}()
+	got := h.Claim(ctx, "n1", "s1", 1, nil, time.Second)
+	if len(got) != 1 || !got[0].Stream {
+		t.Fatalf("claim = %v, want the stream", got)
+	}
+	h.Claim(ctx, "n1", "s2", 1, nil, 0)
+	select {
+	case err := <-failed:
+		if err == nil {
+			t.Fatal("Stream succeeded for a replaced agent")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream still waiting after its agent was replaced")
+	}
+}
