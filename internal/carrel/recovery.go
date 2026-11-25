@@ -34,6 +34,8 @@ func recoveryAction(op D) (string, string) {
 		return kind, "Use the retained machine's SSH details to repair initialization or the failed application checks, then operation_retry. Bootstrap commands are not automatically rerun on an existing guest."
 	case "resolve_prerequisite":
 		return kind, str(err["message"]) + ". Resolve this prerequisite only with the required authorization, then retry this operation."
+	case "retry":
+		return "operation_retry", "Cancelled before it changed anything. Retry this operation to run it as submitted, or leave it."
 	case "finish_cleanup":
 		return kind, "Finish the earlier resource removal operation, then retry this request."
 	default:

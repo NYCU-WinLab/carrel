@@ -85,7 +85,7 @@ func (o *Operations) Submit(tool string, a, w, t D) D {
 	if key != "" {
 		k = key
 	}
-	op := D{"id": randomID(), "tenant_n": t["n"], "tool": tool, "args": args, "who": clone(w), "fingerprint": fingerprint, "idempotency_key": k, "state": "queued", "phase": "awaiting_capacity_check", "reserved": false, "resource_changes": false, "created_at": now(), "queued_at": now(), "attempts": 0, "generation": 0}
+	op := D{"id": randomID(), "tenant_n": t["n"], "tool": tool, "args": args, "who": clone(w), "fingerprint": fingerprint, "idempotency_key": k, "state": "queued", "phase": "awaiting_capacity_check", "reserved": false, "resource_changes": false, "dispatched": false, "created_at": now(), "queued_at": now(), "attempts": 0, "generation": 0}
 	o.Save(op)
 	o.start(str(op["id"]))
 	return publicOperation(op)
@@ -186,6 +186,42 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	return D{"operation": publicOperation(op)}
 }
 
+// cancelPhases are the waits a job reaches before it changes anything: each
+// one is raised ahead of the tool's first write (#584).
+var cancelPhases = []string{"waiting_for_priority_operation", "waiting_for_machine_operation", "waiting_for_import_slot", "waiting_for_migration_slot"}
+
+// Cancel ends an operation that has not changed anything yet: one never
+// started, or one waiting its turn. It runs under the writer, so no worker
+// holds the job, and a worker that picks it up later finds it finished.
+func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
+	op := o.Find(t, id)
+	// A member must not stop an admin job, such as a drain's move, that only
+	// an admin can retry.
+	if named("admin_tools", str(op["tool"])) && !boolean(w["admin"]) {
+		fail("forbidden", "Only an admin can cancel an admin operation")
+	}
+	// Any kind of object can hold a reservation for the job: images too.
+	reserved := len(o.p.Store.Rows("SELECT 1 FROM objects WHERE kind != 'operations' AND json_extract(data,'$.operation_id') = ? LIMIT 1", id)) > 0
+	// tenant_suspend marks the tenant suspending when it is submitted.
+	fresh := op["state"] == "queued" && integer(op["attempts"]) == 0 && op["tool"] != "tenant_suspend"
+	// dispatched is false only while no attempt has reached the tool's
+	// writes; a job from before the flag has none and stays uncancellable.
+	waiting := op["state"] == "waiting" && contains(cancelPhases, op["phase"]) && op["dispatched"] == false && op["resource_changes"] == false && op["prepared_result"] == nil && !reserved
+	if !fresh && !waiting {
+		fail("conflict", fmt.Sprintf("Only an operation that has changed nothing can be cancelled; this one is %s (%s)", op["state"], op["phase"]), D{"state": op["state"], "phase": op["phase"]})
+	}
+	if dry {
+		return D{"operation": publicOperation(op)}
+	}
+	op = merge(op, D{"state": "failed", "phase": "cancelled", "cancelled_by": w["sub"],
+		"error": D{"code": "cancelled", "message": "Cancelled before it changed anything", "recovery": "retry"}})
+	for _, k := range []string{"ready_at", "waiting_for"} {
+		delete(op, k)
+	}
+	o.Save(op)
+	return D{"operation": publicOperation(op)}
+}
+
 // The FIFO writer applies durable changes. Guest readiness runs outside this writer.
 // A restarted job resumes from its persisted result, without repeating PVE actions.
 func (o *Operations) apply(id string) {
@@ -206,6 +242,11 @@ func (o *Operations) apply(id string) {
 	var result D
 	complete := false
 	err := attemptLogged("operation", func() {
+		// Stored as running, the job was cut off by a restart, perhaps inside
+		// its tool: what it wrote is unknown, so it can no longer be cancelled.
+		if op["state"] == "running" {
+			op["dispatched"] = true
+		}
 		if op["tool"] != "tenant_suspend" && find(e.S.ActiveOperations(), func(v D) bool { return v["tool"] == "tenant_suspend" }) != nil {
 			panic(Waiting{"waiting_for_priority_operation", now() + 0.05})
 		}
@@ -236,7 +277,21 @@ func (o *Operations) apply(id string) {
 		if saved, ok := op["prepared_result"]; ok {
 			result = obj(saved)
 		} else {
-			result, _ = e.Dispatch(str(op["tool"]), obj(op["args"]), obj(op["who"]))
+			// Past this point the tool may have written, whatever the attempt
+			// ends with; only a wait it raises before its writes leaves the
+			// job cancellable (#584). Retries keep the flag.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						if _, wait := r.(Waiting); !wait {
+							op["dispatched"] = true
+						}
+						panic(r)
+					}
+				}()
+				result, _ = e.Dispatch(str(op["tool"]), obj(op["args"]), obj(op["who"]))
+			}()
+			op["dispatched"] = true
 			op["prepared_result"] = result
 		}
 		op["phase"] = "waiting_for_guest"
