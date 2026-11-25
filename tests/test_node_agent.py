@@ -2602,3 +2602,61 @@ def test_inventory_programs_name_the_release_and_the_agent_digest(tmp_path, monk
     assert agent.programs_info()["intact"] is True
     (tmp_path / "release.json").write_text("null")
     assert agent.programs_info()["version"] is None
+
+
+def test_replay_does_nothing_while_a_reconcile_is_pending(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "PENDING", tmp_path / "reconcile.pending")
+    (tmp_path / "desired.json").write_text("{}")
+    (tmp_path / "reconcile.pending").write_text("")
+
+    def called(*a, **k):
+        raise AssertionError("replay must not touch node files")
+
+    monkeypatch.setattr(module, "private_dhcp", called)
+    monkeypatch.setattr(module, "vpn", called)
+    assert module.replay() == {"replayed": False, "skipped": "pending reconcile"}
+
+
+def test_a_failed_reconcile_keeps_the_pending_marker_and_a_good_one_clears_it(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    marker = tmp_path / "reconcile.pending"
+    monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "PENDING", marker)
+    monkeypatch.setattr(module, "CONFIG", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text("{}")
+    monkeypatch.setattr(module, "topology_read", lambda: ({}, {}))
+    monkeypatch.setattr(module, "site_ipv6", lambda: None)
+    monkeypatch.setattr(module, "V6_OWNED", tmp_path / "ipv6-prefixes.json")
+    monkeypatch.setattr(module, "run", lambda *a, **k: "")
+
+    def boom(*a, **k):
+        raise RuntimeError("mid-way")
+
+    with monkeypatch.context() as m:
+        m.setattr(module, "ensure", boom)
+        with pytest.raises(RuntimeError):
+            module.reconcile({"tenants": [{"n": 1, "slug": "a"}]})
+    assert marker.exists()
+    assert not (tmp_path / "desired.json").exists()
+    for name in ("vpn", "ipv6", "guest_sets_prune"):
+        monkeypatch.setattr(module, name, lambda *a, **k: {})
+    monkeypatch.setattr(module, "public_ingress", lambda: "140.113.60.184")
+    monkeypatch.setattr(module, "vip_targets", lambda state: {})
+    monkeypatch.setattr(module, "first_exit_node", lambda: False)
+    monkeypatch.setattr(module, "public_addresses", lambda *a, **k: {})
+    real = module.write
+    monkeypatch.setattr(
+        module,
+        "write",
+        lambda path, data, mode=0o640: (
+            real(path, data, mode) if Path(path).is_relative_to(tmp_path) else True
+        ),
+    )
+    marker.write_text("")
+    module.reconcile(
+        {"tenants": [], "networks": [], "machines": [], "peers": [], "ports": [], "public_ips": []}
+    )
+    assert not marker.exists()
+    assert (tmp_path / "desired.json").exists()
