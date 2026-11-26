@@ -539,7 +539,8 @@ def test_the_agent_service_follows_the_site_file_without_blocking(tmp_path, monk
     monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
     monkeypatch.setattr(module, "AGENT_JSON", tmp_path / "agent.json")
     monkeypatch.setattr(module, "AGENT_UNIT", tmp_path / "carrel-agent.service")
-    assert module.SITE.write_text(json.dumps(SITE)) and module.agent_service() == "absent"
+    ssh_only = {k: v for k, v in SITE.items() if k != "agent_nodes"}
+    assert module.SITE.write_text(json.dumps(ssh_only)) and module.agent_service() == "absent"
     assert calls == []
     module.SITE.write_text(json.dumps({**SITE, "agent_nodes": ["carrel01"]}))
     assert module.agent_service() == "started"
@@ -551,7 +552,7 @@ def test_the_agent_service_follows_the_site_file_without_blocking(tmp_path, monk
     }
     assert ("systemctl", "restart", "--no-block", "carrel-agent.service") in calls
     calls.clear()
-    module.SITE.write_text(json.dumps(SITE))
+    module.SITE.write_text(json.dumps(ssh_only))
     assert module.agent_service() == "stopped"
     assert calls == [("systemctl", "disable", "--now", "--no-block", "carrel-agent.service")]
 
