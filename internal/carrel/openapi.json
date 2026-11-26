@@ -98,6 +98,8 @@
                   "conflict",
                   "quota_exceeded",
                   "capacity_exhausted",
+                  "unsupported",
+                  "backend_unavailable",
                   "internal"
                 ]
               },
@@ -130,12 +132,7 @@
         }
       },
       "Error": {
-        "description": "Refused or failed; the status follows the error code (403",
-        "404": null,
-        "400": null,
-        "409": null,
-        "507": null,
-        "500)": null,
+        "description": "Refused or failed; the status follows the error code: 400 invalid, 403 forbidden, 404 not_found, 409 conflict, quota_exceeded or unsupported, 503 backend_unavailable, 507 capacity_exhausted, otherwise 500. A missing or bad token is 401 and an unreachable identity issuer is 503, both with a body of the form {\"error\": \"invalid_token\"}.",
         "content": {
           "application/json": {
             "schema": {
@@ -1322,7 +1319,7 @@
           }
         ],
         "summary": "Call a plugin tool (#661)",
-        "description": "The body is the tool's arguments as in tools/call. The call is checked, gated and run as on /mcp, and returns an operation. Send the same arguments with the same idempotency_key to poll it. 404 when no node reports the tool now.",
+        "description": "The body is the tool's arguments as in tools/call, and must carry an idempotency_key. The call is checked, gated and run as on /mcp, and returns an operation. Send the same arguments with the same idempotency_key to poll it. 404 when no node reports the tool now.",
         "parameters": [
           {
             "name": "tool",

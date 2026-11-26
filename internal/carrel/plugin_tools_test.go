@@ -459,9 +459,12 @@ func TestPluginToolsOverHTTP(t *testing.T) {
 		h          map[string]string
 		status     int
 	}{
-		{"/plugins/v1/tools/backup_prune", `{"keep":1}`, headers, 403},
-		{"/plugins/v1/tools/backup_take", `{"machine":"web","label":"much-too-long"}`, headers, 400},
+		{"/plugins/v1/tools/backup_prune", `{"keep":1,"idempotency_key":"http-call-2"}`, headers, 403},
+		{"/plugins/v1/tools/backup_take", `{"machine":"web","label":"much-too-long","idempotency_key":"http-call-3"}`, headers, 400},
 		{"/plugins/v1/tools/backup_take", `[1]`, headers, 400},
+		{"/plugins/v1/tools/backup_take", `{"machine":"web","idempotency_key":"http-call-4"} junk`, headers, 400},
+		{"/plugins/v1/tools/backup_take", `{"machine":"web"}`, headers, 400},
+		{"/plugins/v1/tools/backup_take", `null`, headers, 400},
 		{"/plugins/v1/tools/machine_create", `{"name":"x"}`, headers, 404},
 		{"/plugins/v1/tools/backup_gone", `{}`, headers, 404},
 		{"/plugins/v1/tools/backup_take", `{"machine":"web"}`, map[string]string{"Content-Type": "application/json"}, 401},
@@ -469,5 +472,11 @@ func TestPluginToolsOverHTTP(t *testing.T) {
 		if code, v := do("POST", tc.path, tc.body, tc.h); code != tc.status {
 			t.Fatalf("%s %s: %d %v", tc.path, tc.body, code, v)
 		}
+	}
+	if w := requestApp(alice, "POST", "/plugins/v1/tools/backup_take", "{}", map[string]string{}); !strings.Contains(w.Header().Get("WWW-Authenticate"), "resource_metadata") {
+		t.Fatalf("401 without a sign-in hint: %v", w.Header())
+	}
+	if len(p.Store.Objects("operations")) != 1 {
+		t.Fatalf("a refused request queued work: %d operations", len(p.Store.Objects("operations")))
 	}
 }
