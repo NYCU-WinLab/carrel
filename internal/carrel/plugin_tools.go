@@ -333,7 +333,7 @@ func pluginRefusal(code, name, node string) {
 // pluginReserved are carrel's keys in an answer, which a plugin's result
 // never sets: a result cannot claim a failure, or an error code, of carrel's.
 var pluginReserved = []string{"ok", "error", "operation", "dry_run", "reserved", "resource_changes", "state",
-	"plugin", "node", "task"}
+	"plugin", "node", "task", "suggestions", "next_action"}
 
 // pluginResult is what a plugin's result adds to carrel's answer: the keys
 // of a JSON object but carrel's own, or the value under "result".
@@ -370,7 +370,13 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 		fail("unsupported", fmt.Sprintf("No node that could run it reports plugin %s with operation %s", pt.Plugin, pt.Operation),
 			D{"recovery": "retry_infrastructure"})
 	}
-	op, _ := e.P.pluginOperation(node, pt.Plugin, pt.Operation)
+	op, ok := e.P.pluginOperation(node, pt.Plugin, pt.Operation)
+	// The node that runs it decides: one that no longer reports it, or now
+	// reports it as a change, does not answer it inline.
+	if !ok || pt.ReadOnly && !op.ReadOnly && !boolean(a["dry_run"]) {
+		fail("unsupported", fmt.Sprintf("Node %s no longer reports plugin %s with operation %s as it was listed", node, pt.Plugin, pt.Operation),
+			D{"recovery": "retry_infrastructure"})
+	}
 	sel, _ := e.Ctx.Value(selectionKey{}).(selection)
 	if !op.Member && !boolean(w["admin"]) {
 		fail("forbidden", "winlab-admin membership required")
@@ -406,7 +412,11 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 		fail("plugin_failed", fmt.Sprintf("Plugin %s did not answer %s at once", pt.Plugin, map[bool]string{true: "a dry run", false: "a read"}[dry]),
 			D{"recovery": "retry_infrastructure"})
 	}
-	if r["state"] != "succeeded" {
+	switch r["state"] {
+	case "succeeded":
+	case "cancelled":
+		fail("cancelled", fmt.Sprintf("Plugin %s cancelled the call", pt.Plugin), D{"recovery": "retry"})
+	default:
 		pluginFailure(pt.Plugin, r)
 	}
 	out := merge(pluginResult(r["result"]), D{"ok": true})

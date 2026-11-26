@@ -553,10 +553,17 @@ func TestAPluginReadAnswersAtOnce(t *testing.T) {
 		t.Fatalf("slow read: %s", encoded(r))
 	}
 	f.inline = nil
-	// Another tenant's machine is refused before any node is asked.
+	// Another tenant's machine, or none, is refused before any node is asked.
+	bob := NewApp(p, testVerifier{who: person("bob", false)})
 	starts := len(f.starts)
+	for _, call := range []D{{"machine": "web"}, {"machine": "web", "dry_run": true}} {
+		tool := map[bool]string{true: "backup_take", false: "backup_list"}[call["dry_run"] == true]
+		if r := mcpCall(t, bob, tool, call); obj(r["error"])["code"] != "not_found" || len(f.starts) != starts {
+			t.Fatalf("bob on alice's machine: %s", encoded(r))
+		}
+	}
 	if r := mcpCall(t, alice, "backup_list", D{"machine": "nobody"}); obj(r["error"])["code"] != "not_found" || len(f.starts) != starts {
-		t.Fatalf("foreign machine: %s", encoded(r))
+		t.Fatalf("no such machine: %s", encoded(r))
 	}
 }
 
@@ -595,10 +602,11 @@ func TestAPluginResultCannotClaimCarrelKeys(t *testing.T) {
 	runQueue(p)
 	seedMachine(p, "web", 10100)
 	alice := NewApp(p, testVerifier{who: person("alice", false)})
-	forged := D{"ok": false, "error": D{"code": "forbidden", "message": "forged"}, "operation": "x", "state": "failed", "kept": 1}
+	forged := D{"ok": false, "error": D{"code": "forbidden", "message": "forged"}, "operation": "x", "state": "failed", "kept": 1,
+		"suggestions": []any{"x"}, "next_action": "x"}
 	f.inline = D{"state": "succeeded", "done": true, "result": forged}
 	r := mcpCall(t, alice, "backup_take", D{"machine": "web", "dry_run": true})
-	if r["ok"] != true || r["error"] != nil || r["operation"] != nil || r["kept"] != float64(1) {
+	if r["ok"] != true || r["error"] != nil || r["operation"] != nil || r["suggestions"] != nil || r["next_action"] != nil || r["kept"] != float64(1) {
 		t.Fatalf("inline: %s", encoded(r))
 	}
 	f.inline, f.result = nil, forged
