@@ -20,13 +20,20 @@ def load(name):
     return module
 
 
+def site_file(args, plugins=()):
+    """What `ssh host cat /etc/carrel/site.json` prints, for the plugin list."""
+    if args[0] == "ssh" and args[-1] == "cat /etc/carrel/site.json":
+        return json.dumps({"plugins": list(plugins)})
+    return None
+
+
 def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, monkeypatch):
     deploy = load("deploy-go.py")
     for name in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     calls = []
     monkeypatch.setattr(
-        deploy, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(stdout="rev\n")
+        deploy, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(stdout=site_file(args) or "rev\n")
     )
     monkeypatch.setattr(
         sys, "argv", ["deploy-go.py", "--host", "root@192.168.19.101", "--artifacts", str(tmp_path)]
@@ -106,7 +113,7 @@ def deploy_release(tmp_path, monkeypatch, **archive):
         calls.append(args)
         if args[:3] == ["gh", "release", "download"]:
             release_archive(Path(args[args.index("-D") + 1]), args[3], **archive)
-        return SimpleNamespace(stdout="")
+        return SimpleNamespace(stdout=site_file(args) or "")
 
     monkeypatch.setattr(deploy, "run", run)
     monkeypatch.setattr(deploy.tempfile, "mkdtemp", lambda prefix: str(tmp_path))
@@ -482,3 +489,29 @@ def test_no_peer_check_without_a_pushed_peer(tmp_path, monkeypatch):
     node.agent_stdout = '{"agent": "absent", "peers": {"carrel02": "removed"}}'
     module.host(staged(tmp_path), "1.0.0")
     assert not any("--agent-check" in c for c in node.calls)
+
+
+def test_deploy_stages_each_plugin_the_site_lists_after_checking_it(tmp_path, monkeypatch):
+    import io as _io
+
+    deploy = load("deploy-go.py")
+    for name in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch"):
+        (tmp_path / name).write_bytes(b"static binary fixture")
+    blob = b"plugin artifact"
+    entry = {"name": "snap", "version": "1.0.0", "url": "https://example.org/snap.tar.gz",
+             "sha256": hashlib.sha256(blob).hexdigest()}
+    calls, served = [], {"body": blob}
+    monkeypatch.setattr(deploy, "run", lambda args, **kw: calls.append(args)
+                        or SimpleNamespace(stdout=site_file(args, [entry]) or "rev\n"))
+    monkeypatch.setattr(deploy.urllib.request, "urlopen", lambda url, timeout: _io.BytesIO(served["body"]))
+    monkeypatch.setattr(sys, "argv", ["deploy-go.py", "--host", "root@carrel01", "--artifacts", str(tmp_path)])
+    deploy.main()
+    copied = next(c for c in calls if c[0] == "scp")
+    assert "plugin-snap-1.0.0.tar.gz" in {Path(p).name for p in copied[1:-1]}
+    assert json.loads((tmp_path / "hashes.json").read_text())["plugin-snap-1.0.0.tar.gz"] == entry["sha256"]
+
+    calls.clear()
+    served["body"] = b"something else"
+    with pytest.raises(SystemExit, match="does not match"):
+        deploy.main()
+    assert not [c for c in calls if c[0] == "scp"]

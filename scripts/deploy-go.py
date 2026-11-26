@@ -13,8 +13,10 @@ import hashlib
 import json
 import re
 import subprocess
+import importlib.util
 import tarfile
 import tempfile
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,6 +59,28 @@ def fetch_release(tag):
     return work / name
 
 
+def fetch_plugins(host, scripts, into):
+    """Download the plugins the site file lists, each checked against its sha256.
+
+    The site file is read from the node; the release's own configure-nodes.py
+    checks the list, so a release from before plugins (#662) fetches none."""
+    spec = importlib.util.spec_from_file_location("configure_nodes", scripts / "configure-nodes.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "plugin_list"):
+        return []
+    site = json.loads(run(["ssh", host, "cat /etc/carrel/site.json"], capture_output=True).stdout or "{}")
+    paths = []
+    for p in module.plugin_list(site):
+        path = into / module.plugin_artifact(p)
+        with urllib.request.urlopen(p["url"], timeout=120) as response:
+            path.write_bytes(response.read())
+        if hashlib.sha256(path.read_bytes()).hexdigest() != p["sha256"]:
+            raise SystemExit(f"plugin {p['name']} {p['version']}: {p['url']} does not match its sha256 in the site file")
+        paths.append(path)
+    return paths
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True,
@@ -89,6 +113,7 @@ def main():
         if args.templates.name != "templates.json":
             parser.error("candidate manifest must be named templates.json")
         sources.append(args.templates.resolve())
+    sources += fetch_plugins(args.host, scripts, artifacts)
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")  # noqa: UP017 (macOS Python 3.9)
     stage = "/var/lib/carrel/go-upgrade-" + stamp

@@ -1,6 +1,11 @@
 // The plugin contract (#564, #660). A plugin is a service on a unix socket
 // on each node (#563); carrel-agent calls it and relays operations for the
 // control plane. Regenerate internal/pluginpb with internal/pluginpb/gen.sh.
+//
+// Installed by carrel (#662), a plugin does not open its socket: systemd
+// passes the listening socket as fd 3 (LISTEN_FDS=1), and the plugin serves
+// this service on it. It runs as a dynamic user and keeps its state in
+// $STATE_DIRECTORY. See "Installing plugins" in docs/operator-handbook.md.
 syntax = "proto3";
 
 package carrel.plugin.v1;
