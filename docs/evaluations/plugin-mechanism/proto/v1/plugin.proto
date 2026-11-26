@@ -1,0 +1,67 @@
+// Contract 1 of the #563 spike: the same calls, before Operation.message.
+syntax = "proto3";
+
+package carrel.plugin.v1;
+
+option go_package = "github.com/NYCU-WinLab/carrel/docs/evaluations/plugin-mechanism/gen/pluginpbv1";
+
+service Plugin {
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
+  rpc StartOperation(StartRequest) returns (Operation);
+  rpc GetOperation(GetRequest) returns (Operation);
+  rpc Cancel(CancelRequest) returns (Operation);
+}
+
+message DescribeRequest {}
+
+message OperationType {
+  string name = 1;
+  // JSON Schema of the parameters.
+  string params_schema = 2;
+}
+
+message DescribeResponse {
+  string name = 1;
+  string version = 2;
+  // The contract revision the plugin was built against.
+  uint32 contract = 3;
+  repeated OperationType operations = 4;
+}
+
+message ProbeRequest {}
+
+message ProbeResponse {
+  bool supported = 1;
+  string reason = 2;
+}
+
+message StartRequest {
+  // The same key returns the same operation, started once.
+  string idempotency_key = 1;
+  string operation = 2;
+  // JSON object.
+  string params = 3;
+}
+
+message GetRequest {
+  string idempotency_key = 1;
+}
+
+message CancelRequest {
+  string idempotency_key = 1;
+}
+
+message Operation {
+  string idempotency_key = 1;
+  // running, succeeded, failed, cancelled.
+  string state = 2;
+  bool done = 3;
+  // 0 to 100.
+  uint32 progress = 4;
+  // JSON object, set when succeeded.
+  string result = 5;
+  string error = 6;
+  // The backend's own handle, such as a Proxmox UPID.
+  string task = 7;
+}
