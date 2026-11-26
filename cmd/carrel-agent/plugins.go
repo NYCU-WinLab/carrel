@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -33,15 +34,19 @@ const (
 	defaultPluginDir = "/run/carrel/plugins"
 	// pluginTimeout bounds one call to a plugin; long work is an operation
 	// the plugin runs on its own, never a long call.
-	pluginTimeout = 10 * time.Second
+	pluginTimeout = 5 * time.Second
+	// maxPluginMessage bounds one answer from a plugin.
+	maxPluginMessage = 1 << 20
+	// maxPluginResult bounds an operation's result: a few ids, not data.
+	maxPluginResult = 256 << 10
 	// pluginRefresh is how old the plugin report in a claim may be.
 	pluginRefresh = 30 * time.Second
 )
 
-// checkPluginDir refuses a directory another user could place a socket in:
-// a socket there is trusted with root operations.
+// checkPluginDir refuses a directory another user could place a socket in,
+// or a symlink to one: a socket there is trusted with root operations.
 func checkPluginDir(dir string) error {
-	info, err := os.Stat(dir)
+	info, err := os.Lstat(dir)
 	if err != nil {
 		return err
 	}
@@ -55,9 +60,31 @@ func checkPluginDir(dir string) error {
 	return nil
 }
 
+// checkSocket refuses anything but a socket the agent's user owns.
+func checkSocket(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if info.Mode().Type() != os.ModeSocket || !ok || int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("%s must be a socket owned by the agent's user", filepath.Base(path))
+	}
+	return nil
+}
+
+// dialPlugin connects to a plugin after checking the directory and the
+// socket, on every connection: discovery and jobs alike.
 func dialPlugin(dir, name string) (*grpc.ClientConn, pluginpb.PluginClient, error) {
-	conn, err := grpc.NewClient("unix://"+filepath.Join(dir, name+".sock"),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	path := filepath.Join(dir, name+".sock")
+	if err := checkPluginDir(dir); err != nil {
+		return nil, nil, err
+	}
+	if err := checkSocket(path); err != nil {
+		return nil, nil, err
+	}
+	conn, err := grpc.NewClient("unix://"+path, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxPluginMessage)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -72,8 +99,26 @@ func contracts() string {
 	return strings.Join(s, ", ")
 }
 
+func clip(s string) string {
+	if len(s) > carrel.MaxPluginText {
+		return s[:carrel.MaxPluginText]
+	}
+	return s
+}
+
 // describe asks one plugin what it is and whether this node can run it.
+// Whatever the plugin answers, the result passes CheckPlugins: a bad plugin
+// is reported by name and reason alone.
 func describe(ctx context.Context, dir, name string) carrel.PluginInfo {
+	info := describeRaw(ctx, dir, name)
+	info.Version, info.Reason = clip(info.Version), clip(info.Reason)
+	if msg := carrel.CheckPlugins([]carrel.PluginInfo{info}); msg != "" {
+		return carrel.PluginInfo{Name: name, Contract: info.Contract, Reason: clip(msg)}
+	}
+	return info
+}
+
+func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 	info := carrel.PluginInfo{Name: name}
 	conn, c, err := dialPlugin(dir, name)
 	if err != nil {
@@ -90,12 +135,12 @@ func describe(ctx context.Context, dir, name string) carrel.PluginInfo {
 	}
 	info.Version, info.Contract = d.Version, d.Contract
 	if d.Name != name {
-		info.Reason = fmt.Sprintf("the plugin on %s.sock calls itself %q", name, d.Name)
+		info.Reason = fmt.Sprintf("the plugin on %s.sock calls itself %q", name, clip(d.Name))
 		return info
 	}
 	if !slices.Contains(carrel.PluginContracts, d.Contract) {
 		info.Reason = fmt.Sprintf("plugin %s %s speaks contract %d; this agent serves contracts %s: install a plugin release built for one of them",
-			name, d.Version, d.Contract, contracts())
+			name, clip(d.Version), d.Contract, contracts())
 		return info
 	}
 	for _, op := range d.Operations {
@@ -108,50 +153,67 @@ func describe(ctx context.Context, dir, name string) carrel.PluginInfo {
 		return info
 	}
 	info.Supported, info.Reason = p.Supported, p.Reason
-	// A report the control plane would refuse is refused here, for this
-	// plugin alone, so one bad plugin does not stop the agent's claims.
-	if msg := carrel.CheckPlugins([]carrel.PluginInfo{info}); msg != "" {
-		return carrel.PluginInfo{Name: name, Version: d.Version, Contract: d.Contract, Reason: msg}
-	}
 	return info
 }
 
-// discover reports every plugin socket in dir, sorted by name.
+// discover reports every plugin socket in dir, sorted by name. Plugins are
+// asked at once, each within pluginTimeout, so a hung one costs no more.
+// A report past MaxPluginReport keeps the first plugins whole and the rest
+// by name and reason.
 func discover(ctx context.Context, dir string) []carrel.PluginInfo {
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err := checkPluginDir(dir); err != nil {
-		return []carrel.PluginInfo{{Name: "plugin-dir", Reason: err.Error()}}
+		return []carrel.PluginInfo{{Name: "plugin-dir", Reason: clip(err.Error())}}
 	}
 	sockets, _ := filepath.Glob(filepath.Join(dir, "*.sock"))
 	sort.Strings(sockets)
-	var out []carrel.PluginInfo
+	var names []string
 	for _, s := range sockets {
-		name := strings.TrimSuffix(filepath.Base(s), ".sock")
-		if !carrel.PluginName(name) || len(out) == carrel.MaxPlugins {
-			continue
+		if name := strings.TrimSuffix(filepath.Base(s), ".sock"); carrel.PluginName(name) && len(names) < carrel.MaxPlugins {
+			names = append(names, name)
 		}
-		out = append(out, describe(ctx, dir, name))
+	}
+	out := make([]carrel.PluginInfo, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = describe(ctx, dir, name)
+		}()
+	}
+	wg.Wait()
+	size := 0
+	for i := range out {
+		b, _ := json.Marshal(out[i])
+		if size+len(b) > carrel.MaxPluginReport-carrel.MaxPlugins*2*carrel.MaxPluginText {
+			out[i] = carrel.PluginInfo{Name: out[i].Name, Contract: out[i].Contract, Reason: "left out: the plugin report is full"}
+			b, _ = json.Marshal(out[i])
+		}
+		size += len(b)
 	}
 	return out
 }
 
-// pluginReport is the report for the next claim, refreshed when it is
-// older than pluginRefresh.
-func (a *agent) pluginReport(ctx context.Context) []carrel.PluginInfo {
+// pluginReport is the latest report, never waited for: refreshPlugins makes
+// it in the background, so a slow plugin cannot hold up a claim.
+func (a *agent) pluginReport() []carrel.PluginInfo {
 	a.mu.Lock()
-	fresh := time.Since(a.pluginsAt) < pluginRefresh
-	report := a.plugins
-	a.mu.Unlock()
-	if fresh {
-		return report
+	defer a.mu.Unlock()
+	return a.plugins
+}
+
+// refreshPlugins remakes the report every pluginRefresh until stop.
+func (a *agent) refreshPlugins(stop context.Context) {
+	for stop.Err() == nil {
+		report := discover(stop, a.cfg.PluginDir)
+		a.mu.Lock()
+		a.plugins, a.pluginsAt = report, time.Now()
+		a.mu.Unlock()
+		sleep(stop, pluginRefresh)
 	}
-	report = discover(ctx, a.cfg.PluginDir)
-	a.mu.Lock()
-	a.plugins, a.pluginsAt = report, time.Now()
-	a.mu.Unlock()
-	return report
 }
 
 // pluginJob is a job with op "plugin".
@@ -223,6 +285,9 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 			code = "plugin_error"
 		}
 		return refuse(code, fmt.Sprintf("plugin %s: %s", j.Plugin, s.Message()))
+	}
+	if len(op.Result) > maxPluginResult {
+		return refuse("plugin_error", fmt.Sprintf("plugin %s returned a result over %d bytes", j.Plugin, maxPluginResult))
 	}
 	var result any
 	if op.Result != "" && json.Unmarshal([]byte(op.Result), &result) != nil {

@@ -205,6 +205,7 @@ func (l *limited) Write(p []byte) (int, error) {
 func (a *agent) loop(stop context.Context) {
 	var wg sync.WaitGroup
 	connected := false
+	go a.refreshPlugins(stop)
 	for stop.Err() == nil {
 		jobs, err := a.claim(stop, false)
 		if err != nil {
@@ -272,7 +273,7 @@ func (a *agent) wait(d time.Duration) {
 
 // claim polls for jobs; with drain it only reports what the agent holds.
 func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
-	plugins := a.pluginReport(ctx)
+	plugins := a.pluginReport()
 	a.mu.Lock()
 	a.seq++
 	seq := a.seq
@@ -281,7 +282,13 @@ func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
 		held = append(held, id)
 	}
 	a.mu.Unlock()
-	body, _ := json.Marshal(map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain, "capabilities": []string{"stream"}, "plugins": plugins})
+	claim := map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain, "capabilities": []string{"stream"}, "plugins": plugins}
+	body, err := json.Marshal(claim)
+	if err != nil {
+		// No plugin report may cost the node its jobs.
+		delete(claim, "plugins")
+		body, _ = json.Marshal(claim)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	target := strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/claim?node=" + url.QueryEscape(a.cfg.Node)

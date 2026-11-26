@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,11 @@ type fakePlugin struct {
 	mu        *sync.Mutex
 	ops       map[string]*pluginpb.Operation
 	started   *atomic.Int32
+	// types replaces the one snapshot operation; brokenProbe and hang make
+	// a plugin misbehave.
+	types       []*pluginpb.OperationType
+	brokenProbe bool
+	hang        bool
 }
 
 func newFake(name string, contract uint32) *fakePlugin {
@@ -41,12 +47,22 @@ func newFake(name string, contract uint32) *fakePlugin {
 		ops: map[string]*pluginpb.Operation{}, started: &atomic.Int32{}}
 }
 
-func (f *fakePlugin) Describe(context.Context, *pluginpb.DescribeRequest) (*pluginpb.DescribeResponse, error) {
-	return &pluginpb.DescribeResponse{Name: f.name, Version: "1.0.0", Contract: f.contract,
-		Operations: []*pluginpb.OperationType{{Name: "snapshot", ParamsSchema: `{"type":"object"}`}}}, nil
+func (f *fakePlugin) Describe(ctx context.Context, _ *pluginpb.DescribeRequest) (*pluginpb.DescribeResponse, error) {
+	if f.hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	types := f.types
+	if types == nil {
+		types = []*pluginpb.OperationType{{Name: "snapshot", ParamsSchema: `{"type":"object"}`}}
+	}
+	return &pluginpb.DescribeResponse{Name: f.name, Version: "1.0.0", Contract: f.contract, Operations: types}, nil
 }
 
 func (f *fakePlugin) Probe(context.Context, *pluginpb.ProbeRequest) (*pluginpb.ProbeResponse, error) {
+	if f.brokenProbe {
+		return nil, status.Error(codes.Internal, "probe broke")
+	}
 	if !f.supported {
 		return &pluginpb.ProbeResponse{Reason: "no backup storage"}, nil
 	}
@@ -161,7 +177,7 @@ func TestTheAgentReportsItsPlugins(t *testing.T) {
 	if f := byName["freeze"]; f.Supported || f.Reason != "no backup storage" {
 		t.Fatalf("freeze: %+v", f)
 	}
-	if d := byName["dead"]; d.Supported || !strings.Contains(d.Reason, "not answering") {
+	if d := byName["dead"]; d.Supported || !strings.Contains(d.Reason, "must be a socket") {
 		t.Fatalf("dead: %+v", d)
 	}
 	if msg := carrel.CheckPlugins(report); msg != "" {
@@ -292,5 +308,86 @@ func TestAPluginJobRunsThroughTheAgentEndToEnd(t *testing.T) {
 	}
 	if s := p.Hub.Status("pve1", time.Now()); s["plugins"] == nil {
 		t.Fatalf("node_list status has no plugins: %v", s)
+	}
+}
+
+// A plugin's answer can never break the claim: a bad schema behind a broken
+// Probe, or an oversized report, still yields a report the control plane
+// takes.
+func TestABadPluginCannotBreakTheReport(t *testing.T) {
+	dir := pluginDir(t)
+	bad := newFake("bad", 1)
+	bad.types = []*pluginpb.OperationType{{Name: "snapshot", ParamsSchema: "{"}}
+	bad.brokenProbe = true
+	serve(t, dir, bad)
+	big := strings.Repeat("x", carrel.MaxPluginSchema-64)
+	var types []*pluginpb.OperationType
+	for i := 0; i < carrel.MaxPluginOperations; i++ {
+		types = append(types, &pluginpb.OperationType{Name: fmt.Sprintf("op%d", i), ParamsSchema: `{"description":"` + big + `"}`})
+	}
+	for _, name := range []string{"big1", "big2", "big3"} {
+		f := newFake(name, 1)
+		f.types = types
+		serve(t, dir, f)
+	}
+	report := discover(context.Background(), dir)
+	if msg := carrel.CheckPlugins(report); msg != "" {
+		t.Fatalf("the control plane would refuse the report: %s", msg)
+	}
+	byName := map[string]carrel.PluginInfo{}
+	for _, p := range report {
+		byName[p.Name] = p
+	}
+	if b := byName["bad"]; b.Supported || len(b.Operations) != 0 || !strings.Contains(b.Reason, "JSON object schema") {
+		t.Fatalf("bad: %+v", b)
+	}
+	if b := byName["big1"]; !b.Supported || len(b.Operations) != carrel.MaxPluginOperations {
+		t.Fatalf("big1 should be whole: %+v", b.Reason)
+	}
+	if b := byName["big3"]; len(b.Operations) != 0 || !strings.Contains(b.Reason, "report is full") {
+		t.Fatalf("big3 should be left out: %+v", b.Reason)
+	}
+	if _, err := json.Marshal(report); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Hung plugins are asked at once, so discovery takes one timeout, not one
+// per plugin; and the claim never waits for discovery at all.
+func TestHungPluginsDoNotHoldUpTheClaim(t *testing.T) {
+	dir := pluginDir(t)
+	for _, name := range []string{"h1", "h2", "h3", "h4"} {
+		f := newFake(name, 1)
+		f.hang = true
+		serve(t, dir, f)
+	}
+	start := time.Now()
+	report := discover(context.Background(), dir)
+	if took := time.Since(start); took > pluginTimeout+2*time.Second || len(report) != 4 {
+		t.Fatalf("discover took %s for %d plugins", took, len(report))
+	}
+	a := &agent{cfg: config{PluginDir: dir}}
+	stop, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.refreshPlugins(stop)
+	start = time.Now()
+	_ = a.pluginReport()
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Fatalf("pluginReport waited %s", took)
+	}
+}
+
+// Every connection checks the socket, jobs as well as discovery: a symlink
+// in place of a socket is refused.
+func TestAJobRefusesASymlinkedSocket(t *testing.T) {
+	dir, other := pluginDir(t), pluginDir(t)
+	serve(t, other, newFake("snapshot", 1))
+	if err := os.Symlink(filepath.Join(other, "snapshot.sock"), filepath.Join(dir, "snapshot.sock")); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{cfg: config{PluginDir: dir}}
+	v := call(t, a, `{"op":"plugin","plugin":"snapshot","call":"get","idempotency_key":"k1"}`)
+	if v["ok"] != false || v["error_code"] != "plugin_unavailable" || !strings.Contains(v["error"].(string), "must be a socket") {
+		t.Fatalf("%v", v)
 	}
 }

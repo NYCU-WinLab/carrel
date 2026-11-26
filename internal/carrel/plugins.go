@@ -18,8 +18,13 @@ var PluginContracts = []uint32{1}
 // Bounds on what an agent may report, so a bad plugin cannot grow a claim.
 const (
 	MaxPlugins          = 32
-	MaxPluginOperations = 32
-	MaxPluginSchema     = 64 << 10
+	MaxPluginOperations = 16
+	MaxPluginSchema     = 8 << 10
+	// MaxPluginText bounds a version, a description or a reason.
+	MaxPluginText = 1 << 10
+	// MaxPluginReport bounds the whole report as JSON, well inside a claim
+	// (maxAgentClaim) beside the ids the agent holds.
+	MaxPluginReport = 256 << 10
 )
 
 type PluginOperation struct {
@@ -61,12 +66,21 @@ func CheckPlugins(plugins []PluginInfo) string {
 		if len(pl.Operations) > MaxPluginOperations {
 			return fmt.Sprintf("Plugin %s declares more than %d operations", pl.Name, MaxPluginOperations)
 		}
+		if len(pl.Version) > MaxPluginText || len(pl.Reason) > MaxPluginText {
+			return fmt.Sprintf("Plugin %s reports a version or reason over %d bytes", pl.Name, MaxPluginText)
+		}
 		for _, op := range pl.Operations {
+			if len(op.Description) > MaxPluginText {
+				return fmt.Sprintf("Plugin %s operation %s has a description over %d bytes", pl.Name, op.Name, MaxPluginText)
+			}
 			var schema map[string]any
 			if !pluginName.MatchString(op.Name) || len(op.Params) > MaxPluginSchema || json.Unmarshal(op.Params, &schema) != nil {
 				return fmt.Sprintf("Plugin %s operation %q needs a name of a-z, 0-9 and - and a JSON object schema", pl.Name, op.Name)
 			}
 		}
+	}
+	if b, _ := json.Marshal(plugins); len(b) > MaxPluginReport {
+		return fmt.Sprintf("The plugin report is over %d bytes", MaxPluginReport)
 	}
 	return ""
 }

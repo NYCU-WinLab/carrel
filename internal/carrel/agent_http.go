@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -68,8 +69,9 @@ func (p *Platform) AgentHandler() http.Handler {
 			return
 		}
 		if msg := CheckPlugins(in.Plugins); msg != "" {
-			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": msg}})
-			return
+			// A bad plugin report costs the node its plugins, never its jobs.
+			slog.Warn("agent plugin report refused", "node", node, "reason", msg)
+			in.Plugins = nil
 		}
 		capabilities := in.Capabilities
 		if in.Drain {
