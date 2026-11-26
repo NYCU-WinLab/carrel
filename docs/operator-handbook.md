@@ -269,6 +269,10 @@ to every node with no CA, then either enrol the nodes once the CA is back or rem
 A console stream that is already open is not cut when the certificate expires; the next request
 is refused.
 
+The CA keeps no revocation list for these certificates: a stolen agent key works until its
+certificate expires, at most 7 days. To cut one node off at once, remove it from `agent_nodes`
+and deploy, then enrol it again with a new key before adding it back.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

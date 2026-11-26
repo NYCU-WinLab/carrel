@@ -805,6 +805,7 @@ def test_agent_identity_is_checked_before_anything_changes():
         ({**IDENTITY, "lab_root": IDENTITY["lab_root"] * 2}, "PEM"),
         ({**IDENTITY, "certificate_nodes": ["carrel03"]}, "not in agent_nodes"),
         ({**IDENTITY, "token": "x"}, "takes ca_url"),
+        ({**IDENTITY, "certificate_nodes": "carrel02"}, "must be a list"),
     ]:
         try:
             module.agent_identity({**SITE, "agent_identity": bad}, nodes, agents)

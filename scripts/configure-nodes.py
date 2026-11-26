@@ -221,6 +221,8 @@ def agent_identity(site, nodes, agents):
         raise SystemExit("agent_identity.lab_root must be the lab root certificate, in PEM")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", site.get("site", "")):
         raise SystemExit('agent_identity needs "site", a lower-case DNS label')
+    if not isinstance(identity.get("certificate_nodes", []), list):
+        raise SystemExit("agent_identity.certificate_nodes must be a list of node names")
     for name in identity.get("certificate_nodes", []):
         if name not in agents:
             raise SystemExit(f"agent_identity.certificate_nodes names {name}, which is not in agent_nodes")

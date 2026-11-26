@@ -397,8 +397,9 @@ def host(stage, version):
         if check.returncode:
             raise SystemExit(f"carrel-agent on another node did not reach the control plane within 60 s "
                              f"({(check.stdout or '').strip()}): see journalctl -u carrel-agent on that node. "
-                             "Run bootstrap-platform.py --firewall on the first exit node, or remove the node "
-                             "from agent_nodes and deploy again.")
+                             "Run bootstrap-platform.py --firewall on the first exit node. A node in "
+                             "agent_identity.certificate_nodes also needs a valid certificate: enrol it, or "
+                             "remove it from certificate_nodes. Or remove the node from agent_nodes and deploy again.")
     for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
         shutil.rmtree(old)
 
