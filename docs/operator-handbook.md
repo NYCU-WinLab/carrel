@@ -79,6 +79,21 @@ workstation or a node.
 Existing route/NAT state remains in place. See [rollout record 15.9](b09-rollout-record.md#159-go-control-plane-06-2026-10-02)
 for the reader credential and rollback details. Secrets travel through SSH stdin and protected files.
 
+With `"node_ssh_ca"` in the site file, root on every node also takes a lab SSH certificate whose
+principal is listed there. Keys keep working beside certificates.
+
+```json
+"node_ssh_ca": {"key": "<the lab user CA public key>", "principals": ["<member>", "svc:<portal service>"]}
+```
+
+A principal is a member name, or `svc:<slug>` for everyone a portal service grants. To add or
+remove someone, change `principals` in `/etc/carrel/site.json` on the first exit node, then run
+`python3 configure-nodes.py` from the newest `/var/lib/carrel/go-upgrade-*` directory there, or
+deploy again. Removing `node_ssh_ca` removes the CA files while `ssh_keys_only` stays on; the
+node sshd step does not run without it. A certificate already issued keeps working until it
+expires (at most 24 hours). A run that fails on a node puts that node's previous drop-in and CA
+files back.
+
 Deploy a published release with `deploy-go.py --host <first exit node> --release vX.Y.Z`: it
 downloads the release archive, checks it against the release's `SHA256SUMS`, and installs the
 binaries and scripts from the archive. `--artifacts` deploys a development build instead, and

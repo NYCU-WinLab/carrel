@@ -31,6 +31,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import socket
 import subprocess
 import time
@@ -401,21 +402,82 @@ KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
 """
 NODE_SSHD_PATH = "/etc/ssh/sshd_config.d/10-carrel-keys.conf"
-# sshd -t first: a bad file never reaches a running sshd. A reload keeps
-# open sessions; sshd -T then shows what new logins get.
-NODE_SSHD_APPLY = (
-    f"umask 022 && cat > {NODE_SSHD_PATH}.next && mv {NODE_SSHD_PATH}.next {NODE_SSHD_PATH}"
-    f" && {{ sshd -t || {{ rm -f {NODE_SSHD_PATH}; exit 1; }}; }}"
-    f" && {{ systemctl reload ssh.service || {{ rm -f {NODE_SSHD_PATH}; systemctl reload ssh.service; exit 1; }}; }}"
-    " && sshd -T | grep -qx 'passwordauthentication no'"
-)
+# Lab SSH certificates for root on every node: the site file's "node_ssh_ca"
+# names the user CA key and the certificate principals (member names, or
+# svc:<portal service>) that may log in. Keys keep working beside them.
+NODE_CA_KEY = "/etc/ssh/carrel-user-ca.pub"
+NODE_PRINCIPALS = "/etc/ssh/carrel-principals"
+CA_KEY = re.compile(r"(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|rsa-sha2-(256|512)|ssh-rsa) [A-Za-z0-9+/]+={0,2}")
+PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}|svc:[a-z0-9][a-z0-9-]{0,62}")
 
 
-def node_sshd(n, local):
-    if local:
-        run("sh", "-c", NODE_SSHD_APPLY, input=NODE_SSHD)
+def node_ssh_ca(site):
+    """The CA key and root's principals, or None when the site sets none."""
+    ca = site.get("node_ssh_ca")
+    if not ca:
+        return None
+    if not isinstance(ca, dict):
+        raise SystemExit("node_ssh_ca must be an object with key and principals")
+    key = " ".join(str(ca.get("key", "")).split()[:2])
+    principals = ca.get("principals")
+    if not CA_KEY.fullmatch(key):
+        raise SystemExit("node_ssh_ca.key must be one SSH public key")
+    if not isinstance(principals, list) or not principals or not all(
+            isinstance(p, str) and PRINCIPAL.fullmatch(p) for p in principals):
+        raise SystemExit("node_ssh_ca.principals must list member names or svc:<service> names")
+    return key, sorted(set(principals))
+
+
+def node_sshd_apply(site, drop_in=NODE_SSHD_PATH, ca_key=None, principals_dir=None):
+    """The drop-in for stdin and the script that applies it with the CA files.
+
+    The script keeps the drop-in, the CA key and the principals directory as
+    they were; when a write, sshd -t, the reload or the check after it fails,
+    it puts all 3 back and reloads, so a failed run leaves the policy that
+    let operators in. Every value is checked above, so quoting is enough."""
+    ca_key = ca_key or NODE_CA_KEY
+    principals_dir = principals_dir or NODE_PRINCIPALS
+    ca = node_ssh_ca(site)
+    conf = NODE_SSHD
+    check = "sshd -T | grep -qx 'passwordauthentication no'"
+    if ca is None:
+        write = f"rm -rf {ca_key} {principals_dir}"
     else:
-        run("ssh", *peer(n), "root@" + n["address"], NODE_SSHD_APPLY, input=NODE_SSHD)
+        key, principals = ca
+        conf += f"TrustedUserCAKeys {ca_key}\nAuthorizedPrincipalsFile {principals_dir}/%u\n"
+        write = (f"printf '%s\\n' {shlex.quote(key)} > {ca_key}"
+                 f" && rm -rf {principals_dir} && mkdir -p {principals_dir}"
+                 f" && printf '%s\\n' {' '.join(map(shlex.quote, principals))} > {principals_dir}/root")
+        # sshd takes the first value of an option, so an earlier drop-in
+        # would win: check that this one is in force.
+        check += f" && sshd -T | grep -qx 'trustedusercakeys {ca_key}'"
+    return conf, f"""umask 022
+set -u
+D={drop_in} K={ca_key} P={principals_dir}
+rm -rf "$D.prev" "$K.prev" "$P.prev" "$D.next"
+cat > "$D.next" || exit 1
+{{ ! test -e "$D" || cp -p "$D" "$D.prev"; }} && {{ ! test -e "$K" || cp -p "$K" "$K.prev"; }} && {{ ! test -e "$P" || cp -a "$P" "$P.prev"; }} || exit 1
+restore() {{
+  for f in "$D" "$K" "$P"; do rm -rf "$f"; if test -e "$f.prev"; then mv "$f.prev" "$f"; fi; done
+  rm -f "$D.next"
+  sshd -t && systemctl reload ssh.service
+  exit 1
+}}
+{{ {write}; }} || restore
+mv "$D.next" "$D" || restore
+sshd -t || restore
+systemctl reload ssh.service || restore
+{check} || restore
+rm -rf "$D.prev" "$K.prev" "$P.prev"
+"""
+
+
+def node_sshd(n, local, site=None):
+    conf, script = node_sshd_apply(site or {})
+    if local:
+        run("sh", "-c", script, input=conf)
+    else:
+        run("ssh", *peer(n), "root@" + n["address"], script, input=conf)
 
 
 # No cross-tenant page merging (issue #397): ksmtuned stays off and masked, KSM stays at 0.
@@ -474,6 +536,9 @@ def main():
     node = socket.gethostname().split(".")[0]
     if site["exit_nodes"][0] != node:
         raise SystemExit("run on the first exit node, which holds CT 100")
+    # A wrong CA setting stops the run before anything changes.
+    if node_ssh_ca(site) and not site.get("ssh_keys_only"):
+        raise SystemExit("node_ssh_ca needs ssh_keys_only, which writes the node sshd drop-in")
     nodes = targets(site, node)
     me = nodes[0]
     agents = agent_nodes(site, nodes)
@@ -555,7 +620,7 @@ def main():
     # key. The site turns it on once nobody logs in to a node by password.
     if site.get("ssh_keys_only"):
         for n in nodes:
-            node_sshd(n, n is me)
+            node_sshd(n, n is me, site)
         for n in nodes:
             # A new login by key still works after the reload, here too.
             run("ssh", *peer(n), "root@" + n["address"], "true")

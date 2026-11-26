@@ -13,6 +13,7 @@
   "exit_nodes": ["carrel01"],
   "ssh_jump": true,
   "ssh_keys_only": true,
+  "node_ssh_ca": {"key": "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2eUS00sJeJA9ebfrquCmA8reWrgdWSL4yGkfm4bKEuRyPmVJoM72JdUwzhH/v3VWkAkfPQ6sxMtzgruck=", "principals": ["zyx1121"]},
   "apt_mirrors": {"debian": "https://debian.cs.nycu.edu.tw/debian", "ubuntu": "https://ubuntu.cs.nycu.edu.tw/ubuntu"},
   "fetch": true,
   "public": {
