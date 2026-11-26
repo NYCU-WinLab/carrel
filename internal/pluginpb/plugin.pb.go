@@ -79,7 +79,18 @@ type OperationType struct {
 	Member bool `protobuf:"varint,4,opt,name=member,proto3" json:"member,omitempty"`
 	// read_only: the operation changes nothing, so it is listed on the
 	// read-only endpoint too.
-	ReadOnly      bool `protobuf:"varint,5,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	ReadOnly bool `protobuf:"varint,5,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// Hints for clients, as in MCP tool annotations: the operation may
+	// destroy data, or a repeat with the same arguments does nothing more.
+	Destructive bool `protobuf:"varint,6,opt,name=destructive,proto3" json:"destructive,omitempty"`
+	Idempotent  bool `protobuf:"varint,7,opt,name=idempotent,proto3" json:"idempotent,omitempty"`
+	// A toolset of the tool contract the tool is also listed under, such as
+	// "machines"; it is always listed under "plugins".
+	Toolset string `protobuf:"bytes,8,opt,name=toolset,proto3" json:"toolset,omitempty"`
+	// dry_run: the plugin honours StartRequest.dry_run for this operation.
+	// Without it, carrel never sends a dry run to the plugin: a plugin built
+	// before the field would run the operation for real.
+	DryRun        bool `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -145,6 +156,34 @@ func (x *OperationType) GetMember() bool {
 func (x *OperationType) GetReadOnly() bool {
 	if x != nil {
 		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *OperationType) GetDestructive() bool {
+	if x != nil {
+		return x.Destructive
+	}
+	return false
+}
+
+func (x *OperationType) GetIdempotent() bool {
+	if x != nil {
+		return x.Idempotent
+	}
+	return false
+}
+
+func (x *OperationType) GetToolset() string {
+	if x != nil {
+		return x.Toolset
+	}
+	return ""
+}
+
+func (x *OperationType) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
 	}
 	return false
 }
@@ -311,7 +350,11 @@ type StartRequest struct {
 	IdempotencyKey string                 `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	Operation      string                 `protobuf:"bytes,2,opt,name=operation,proto3" json:"operation,omitempty"`
 	// JSON object, valid against the operation's params_schema.
-	Params        string `protobuf:"bytes,3,opt,name=params,proto3" json:"params,omitempty"`
+	Params string `protobuf:"bytes,3,opt,name=params,proto3" json:"params,omitempty"`
+	// dry_run: report what the operation would do and change nothing. A
+	// dry run, and any start of a read_only operation, must answer done in
+	// its first reply; carrel does not ask after its key again.
+	DryRun        bool `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -365,6 +408,13 @@ func (x *StartRequest) GetParams() string {
 		return x.Params
 	}
 	return ""
+}
+
+func (x *StartRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
 }
 
 type GetRequest struct {
@@ -469,7 +519,15 @@ type Operation struct {
 	// The backend's own handle, such as a Proxmox UPID.
 	Task string `protobuf:"bytes,7,opt,name=task,proto3" json:"task,omitempty"`
 	// What the operation is doing now, for people.
-	Message       string `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`
+	Message string `protobuf:"bytes,8,opt,name=message,proto3" json:"message,omitempty"`
+	// When failed: a carrel error code the caller acts on, one of invalid,
+	// conflict, not_found, quota_exceeded, capacity_exhausted or unsupported,
+	// with error as its message. Any other code, or none, fails the call as
+	// plugin_failed.
+	ErrorCode string `protobuf:"bytes,9,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	// When failed: a JSON object of further facts, such as {"recovery":
+	// "revise_request"}. Its keys are added to the error carrel returns.
+	ErrorDetails  string `protobuf:"bytes,10,opt,name=error_details,json=errorDetails,proto3" json:"error_details,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -560,18 +618,38 @@ func (x *Operation) GetMessage() string {
 	return ""
 }
 
+func (x *Operation) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *Operation) GetErrorDetails() string {
+	if x != nil {
+		return x.ErrorDetails
+	}
+	return ""
+}
+
 var File_plugin_proto protoreflect.FileDescriptor
 
 const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"\fplugin.proto\x12\x10carrel.plugin.v1\"\x11\n" +
-	"\x0fDescribeRequest\"\x9f\x01\n" +
+	"\x0fDescribeRequest\"\x94\x02\n" +
 	"\rOperationType\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rparams_schema\x18\x02 \x01(\tR\fparamsSchema\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x16\n" +
 	"\x06member\x18\x04 \x01(\bR\x06member\x12\x1b\n" +
-	"\tread_only\x18\x05 \x01(\bR\breadOnly\"\x9d\x01\n" +
+	"\tread_only\x18\x05 \x01(\bR\breadOnly\x12 \n" +
+	"\vdestructive\x18\x06 \x01(\bR\vdestructive\x12\x1e\n" +
+	"\n" +
+	"idempotent\x18\a \x01(\bR\n" +
+	"idempotent\x12\x18\n" +
+	"\atoolset\x18\b \x01(\tR\atoolset\x12\x17\n" +
+	"\adry_run\x18\t \x01(\bR\x06dryRun\"\x9d\x01\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
@@ -582,16 +660,17 @@ const file_plugin_proto_rawDesc = "" +
 	"\fProbeRequest\"E\n" +
 	"\rProbeResponse\x12\x1c\n" +
 	"\tsupported\x18\x01 \x01(\bR\tsupported\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"m\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x86\x01\n" +
 	"\fStartRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1c\n" +
 	"\toperation\x18\x02 \x01(\tR\toperation\x12\x16\n" +
-	"\x06params\x18\x03 \x01(\tR\x06params\"5\n" +
+	"\x06params\x18\x03 \x01(\tR\x06params\x12\x17\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"5\n" +
 	"\n" +
 	"GetRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"8\n" +
 	"\rCancelRequest\x12'\n" +
-	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"\xd6\x01\n" +
+	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"\x9a\x02\n" +
 	"\tOperation\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x12\n" +
@@ -600,7 +679,11 @@ const file_plugin_proto_rawDesc = "" +
 	"\x06result\x18\x05 \x01(\tR\x06result\x12\x14\n" +
 	"\x05error\x18\x06 \x01(\tR\x05error\x12\x12\n" +
 	"\x04task\x18\a \x01(\tR\x04task\x12\x18\n" +
-	"\amessage\x18\b \x01(\tR\amessage2\x87\x03\n" +
+	"\amessage\x18\b \x01(\tR\amessage\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\t \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_details\x18\n" +
+	" \x01(\tR\ferrorDetails2\x87\x03\n" +
 	"\x06Plugin\x12Q\n" +
 	"\bDescribe\x12!.carrel.plugin.v1.DescribeRequest\x1a\".carrel.plugin.v1.DescribeResponse\x12H\n" +
 	"\x05Probe\x12\x1e.carrel.plugin.v1.ProbeRequest\x1a\x1f.carrel.plugin.v1.ProbeResponse\x12M\n" +

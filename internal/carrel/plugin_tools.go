@@ -14,6 +14,7 @@ package carrel
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +49,9 @@ type pluginTool struct {
 	// of the node that runs it.
 	Schema           json.RawMessage
 	Member, ReadOnly bool
+	// Hints for clients and the toolset it is also listed under.
+	Destructive, Idempotent bool
+	Toolset                 string
 	// Nodes report the plugin supported with this operation, in
 	// configuration order.
 	Nodes []string
@@ -111,10 +115,13 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 					left[name] = "a core tool has this name"
 				} else if problem := pluginSchemaProblem(op); problem != "" {
 					left[name] = problem
+				} else if op.Toolset != "" && obj(Contract["toolsets"])[op.Toolset] == nil {
+					left[name] = fmt.Sprintf("toolset %s is not one of the tool contract", op.Toolset)
 				} else {
 					delete(left, name)
 					tools[name] = &pluginTool{Name: name, Plugin: pl.Name, Operation: op.Name, Description: op.Description,
-						Schema: op.Params, Member: op.Member, ReadOnly: op.ReadOnly, Nodes: []string{n.Name}}
+						Schema: op.Params, Member: op.Member, ReadOnly: op.ReadOnly, Destructive: op.Destructive,
+						Idempotent: op.Idempotent, Toolset: op.Toolset, Nodes: []string{n.Name}}
 				}
 			}
 		}
@@ -262,8 +269,8 @@ func (e *Execution) submitPlugin(pt *pluginTool, a, w D) D {
 	if a["machine"] != nil {
 		e.Machine(t, a["machine"])
 	}
-	if boolean(a["dry_run"]) {
-		return D{"ok": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation, "nodes": pt.Nodes, "reserved": false, "resource_changes": false}
+	if pt.ReadOnly || boolean(a["dry_run"]) {
+		return e.pluginInline(pt, a, w, t)
 	}
 	p.writer.Lock()
 	var op D
@@ -276,6 +283,148 @@ func (e *Execution) submitPlugin(pt *pluginTool, a, w D) D {
 		panic(err)
 	}
 	return D{"ok": true, "operation": p.Operations.Wait(e.Ctx, t, str(op["id"]), intAt(a, "wait_seconds", 55))}
+}
+
+// pluginErrorCodes are the codes a plugin may fail an operation with; the
+// caller acts on them as on a core tool's.
+var pluginErrorCodes = map[string]bool{"invalid": true, "conflict": true, "not_found": true,
+	"quota_exceeded": true, "capacity_exhausted": true, "unsupported": true}
+
+var pluginDetailKey = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// pluginFailure fails a plugin operation that ended in state failed. A
+// plugin that names one of pluginErrorCodes is passed through with its own
+// message and details; any other failure is plugin_failed.
+func pluginFailure(name string, r D) {
+	message := textAt(r, "error", "")
+	if len(message) > MaxPluginText {
+		message = strings.ToValidUTF8(message[:MaxPluginText], "")
+	}
+	code := str(r["error_code"])
+	if !pluginErrorCodes[code] {
+		fail("plugin_failed", fmt.Sprintf("Plugin %s failed: %s", name, message), D{"recovery": "retry_infrastructure"})
+	}
+	if message == "" {
+		message = fmt.Sprintf("Plugin %s refused the operation", name)
+	}
+	details := D{}
+	for k, v := range obj(r["error_details"]) {
+		if k != "code" && k != "message" && pluginDetailKey.MatchString(k) {
+			details[k] = v
+		}
+	}
+	fail(code, message, details)
+}
+
+// pluginRefusal fails a call the agent or the plugin refused before it ran.
+func pluginRefusal(code, name, node string) {
+	switch code {
+	case "invalid":
+		fail("invalid", fmt.Sprintf("Plugin %s refused the arguments", name), D{"recovery": "revise_request"})
+	case "conflict":
+		fail("conflict", fmt.Sprintf("Plugin %s refused the operation in its current state", name), D{"recovery": "revise_request"})
+	case "plugin_refused":
+		fail("unsupported", fmt.Sprintf("Plugin %s does not run on node %s now", name, node), D{"recovery": "retry_infrastructure"})
+	case "not_found", "plugin_error":
+		fail("plugin_failed", fmt.Sprintf("Plugin %s failed", name), D{"recovery": "retry_infrastructure"})
+	}
+}
+
+// pluginReserved are carrel's keys in an answer, which a plugin's result
+// never sets: a result cannot claim a failure, or an error code, of carrel's.
+var pluginReserved = []string{"ok", "error", "operation", "dry_run", "reserved", "resource_changes", "state",
+	"plugin", "node", "task", "suggestions", "next_action"}
+
+// pluginResult is what a plugin's result adds to carrel's answer: the keys
+// of a JSON object but carrel's own, or the value under "result".
+func pluginResult(v any) D {
+	if m, ok := v.(map[string]any); ok {
+		return without(D(m), pluginReserved...)
+	}
+	if v == nil {
+		return D{}
+	}
+	return D{"result": v}
+}
+
+// pluginInline answers a read_only operation or a dry run at once on one
+// node, as a core read does: no operation, no queue, an audit row.
+func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
+	node := ""
+	var vmid any
+	if a["machine"] != nil {
+		m := e.Machine(t, a["machine"])
+		vmid = m["vmid"]
+		if n := e.P.nodeOf(m).Name; contains(pt.Nodes, n) {
+			node = n
+		}
+	} else {
+		for _, n := range pt.Nodes {
+			if !e.drained(n) {
+				node = n
+				break
+			}
+		}
+	}
+	if node == "" {
+		fail("unsupported", fmt.Sprintf("No node that could run it reports plugin %s with operation %s", pt.Plugin, pt.Operation),
+			D{"recovery": "retry_infrastructure"})
+	}
+	op, ok := e.P.pluginOperation(node, pt.Plugin, pt.Operation)
+	// The node that runs it decides: one that no longer reports it, or now
+	// reports it as a change, does not answer it inline.
+	if !ok || pt.ReadOnly && !op.ReadOnly && !boolean(a["dry_run"]) {
+		fail("unsupported", fmt.Sprintf("Node %s no longer reports plugin %s with operation %s as it was listed", node, pt.Plugin, pt.Operation),
+			D{"recovery": "retry_infrastructure"})
+	}
+	sel, _ := e.Ctx.Value(selectionKey{}).(selection)
+	if !op.Member && !boolean(w["admin"]) {
+		fail("forbidden", "winlab-admin membership required")
+	}
+	if sel.readOnly && !op.ReadOnly {
+		fail("forbidden", "This tool changes state; call it on /mcp")
+	}
+	if op.Member && vmid == nil {
+		fail("invalid", "machine must name one of your machines")
+	}
+	checkPluginArgs(op.Params, a)
+	params := without(a, pluginEnvelope...)
+	if vmid != nil {
+		params["machine"] = str(vmid)
+	}
+	dry := boolean(a["dry_run"])
+	// A plugin that does not say it honours dry_run is never sent one: it
+	// would run the operation. carrel plans it without the plugin.
+	if dry && !op.DryRun {
+		e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "ok")
+		return D{"ok": true, "dry_run": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation,
+			"node": node, "reserved": false, "resource_changes": false}
+	}
+	job := D{"op": "plugin", "plugin": pt.Plugin, "operation": pt.Operation, "call": "start",
+		"idempotency_key": "inline-" + randomID(), "params": params, "dry_run": dry}
+	v, err := e.P.Backend.Call(e.Ctx, job, e.P.nodeTarget(node))
+	if err != nil {
+		pluginRefusal(str(obj(failureResult(err)["error"])["backend_code"]), pt.Plugin, node)
+		fail("backend_unavailable", fmt.Sprintf("Plugin %s on node %s did not answer", pt.Plugin, node), D{"recovery": "retry_infrastructure"})
+	}
+	r := obj(v)
+	if !boolean(r["done"]) {
+		fail("plugin_failed", fmt.Sprintf("Plugin %s did not answer %s at once", pt.Plugin, map[bool]string{true: "a dry run", false: "a read"}[dry]),
+			D{"recovery": "retry_infrastructure"})
+	}
+	switch r["state"] {
+	case "succeeded":
+	case "cancelled":
+		fail("cancelled", fmt.Sprintf("Plugin %s cancelled the call", pt.Plugin), D{"recovery": "retry"})
+	default:
+		pluginFailure(pt.Plugin, r)
+	}
+	out := merge(pluginResult(r["result"]), D{"ok": true})
+	if dry {
+		out = merge(out, D{"dry_run": true, "reserved": false, "resource_changes": false})
+	}
+	e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "ok")
+	return out
 }
 
 // dispatchPlugin runs under the writer when the worker takes the operation:
@@ -396,16 +545,7 @@ func (e *Execution) PerformPlugin() {
 				plug["ended"] = true
 			}
 			first = false
-			switch code {
-			case "invalid":
-				fail("invalid", fmt.Sprintf("Plugin %s refused the arguments", name), D{"recovery": "revise_request"})
-			case "conflict":
-				fail("conflict", fmt.Sprintf("Plugin %s refused the operation in its current state", name), D{"recovery": "revise_request"})
-			case "plugin_refused":
-				fail("unsupported", fmt.Sprintf("Plugin %s does not run on node %s now", name, plug["node"]), D{"recovery": "retry_infrastructure"})
-			case "not_found", "plugin_error":
-				fail("plugin_failed", fmt.Sprintf("Plugin %s failed", name), D{"recovery": "retry_infrastructure"})
-			}
+			pluginRefusal(code, name, str(plug["node"]))
 			// Unreachable: the plugin, its agent or the node. Ask again.
 			if unreachable.IsZero() {
 				unreachable = time.Now()
@@ -440,11 +580,7 @@ func (e *Execution) PerformPlugin() {
 	case "cancelled":
 		fail("cancelled", fmt.Sprintf("Plugin %s cancelled the operation", name), D{"recovery": "retry"})
 	default:
-		message := textAt(r, "error", "")
-		if len(message) > MaxPluginText {
-			message = strings.ToValidUTF8(message[:MaxPluginText], "")
-		}
-		fail("plugin_failed", fmt.Sprintf("Plugin %s failed: %s", name, message), D{"recovery": "retry_infrastructure"})
+		pluginFailure(name, r)
 	}
 }
 
@@ -452,8 +588,9 @@ func (e *Execution) PerformPlugin() {
 func (e *Execution) FinishPlugin() D {
 	plug := obj(e.Op["plugin"])
 	out := obj(e.Op["plugin_outcome"])
-	return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
-		"result": out["result"], "task": out["task"], "resource_changes": !boolean(plug["read_only"])}
+	// The plugin's result keys at the top, as a core tool's; carrel's own win.
+	return merge(pluginResult(out["result"]), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
+		"task": out["task"], "resource_changes": !boolean(plug["read_only"])})
 }
 
 var pluginPhases = Phases{Perform: (*Execution).PerformPlugin, Finish: func(e *Execution, _ D) D { return e.FinishPlugin() }}
@@ -470,8 +607,14 @@ func pluginListing(tools map[string]*pluginTool, shows func(*pluginTool) bool) [
 		if description == "" {
 			description = fmt.Sprintf("Operation %s of plugin %s.", pt.Operation, pt.Plugin)
 		}
-		out = append(out, &mcp.Tool{Name: pt.Name, Description: description + " Runs as an operation: poll operation_get until done.",
-			InputSchema: pluginInputSchema(pt.Schema), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: pt.ReadOnly}})
+		if pt.ReadOnly {
+			description += " Answers at once."
+		} else {
+			description += " Runs as an operation: poll operation_get until done; dry_run answers at once."
+		}
+		destructive := pt.Destructive
+		out = append(out, &mcp.Tool{Name: pt.Name, Description: description, InputSchema: pluginInputSchema(pt.Schema),
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: pt.ReadOnly, DestructiveHint: &destructive, IdempotentHint: pt.Idempotent}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

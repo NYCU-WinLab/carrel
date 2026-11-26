@@ -33,6 +33,11 @@ type PluginOperation struct {
 	Params      json.RawMessage `json:"params_schema"`
 	Member      bool            `json:"member,omitempty"`
 	ReadOnly    bool            `json:"read_only,omitempty"`
+	Destructive bool            `json:"destructive,omitempty"`
+	Idempotent  bool            `json:"idempotent,omitempty"`
+	Toolset     string          `json:"toolset,omitempty"`
+	// DryRun: the plugin honours dry_run on a start of this operation.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // PluginInfo is one plugin as an agent found it. A plugin that does not
@@ -80,6 +85,9 @@ func CheckPlugins(plugins []PluginInfo) string {
 			return fmt.Sprintf("Plugin %s reports a version or reason over %d bytes", pl.Name, MaxPluginText)
 		}
 		for _, op := range pl.Operations {
+			if op.Toolset != "" && !pluginName.MatchString(op.Toolset) {
+				return fmt.Sprintf("Plugin %s operation %s names toolset %q, not of a-z, 0-9 and -", pl.Name, op.Name, op.Toolset)
+			}
 			if WireLen(op.Description) > MaxPluginText {
 				return fmt.Sprintf("Plugin %s operation %s has a description over %d bytes", pl.Name, op.Name, MaxPluginText)
 			}
