@@ -155,7 +155,7 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 	for _, op := range d.Operations {
 		info.Operations = append(info.Operations, carrel.PluginOperation{Name: op.Name, Description: op.Description,
 			Params: json.RawMessage(op.ParamsSchema), Member: op.Member, ReadOnly: op.ReadOnly,
-			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset)})
+			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset), DryRun: op.DryRun})
 	}
 	p, err := c.Probe(ctx, &pluginpb.ProbeRequest{})
 	if err != nil {

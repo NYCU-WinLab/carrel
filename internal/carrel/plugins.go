@@ -36,6 +36,8 @@ type PluginOperation struct {
 	Destructive bool            `json:"destructive,omitempty"`
 	Idempotent  bool            `json:"idempotent,omitempty"`
 	Toolset     string          `json:"toolset,omitempty"`
+	// DryRun: the plugin honours dry_run on a start of this operation.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // PluginInfo is one plugin as an agent found it. A plugin that does not

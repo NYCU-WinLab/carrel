@@ -330,11 +330,16 @@ func pluginRefusal(code, name, node string) {
 	}
 }
 
+// pluginReserved are carrel's keys in an answer, which a plugin's result
+// never sets: a result cannot claim a failure, or an error code, of carrel's.
+var pluginReserved = []string{"ok", "error", "operation", "dry_run", "reserved", "resource_changes", "state",
+	"plugin", "node", "task"}
+
 // pluginResult is what a plugin's result adds to carrel's answer: the keys
-// of a JSON object, or the value under "result".
+// of a JSON object but carrel's own, or the value under "result".
 func pluginResult(v any) D {
 	if m, ok := v.(map[string]any); ok {
-		return D(m)
+		return without(D(m), pluginReserved...)
 	}
 	if v == nil {
 		return D{}
@@ -382,6 +387,13 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 		params["machine"] = str(vmid)
 	}
 	dry := boolean(a["dry_run"])
+	// A plugin that does not say it honours dry_run is never sent one: it
+	// would run the operation. carrel plans it without the plugin.
+	if dry && !op.DryRun {
+		e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "ok")
+		return D{"ok": true, "dry_run": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation,
+			"node": node, "reserved": false, "resource_changes": false}
+	}
 	job := D{"op": "plugin", "plugin": pt.Plugin, "operation": pt.Operation, "call": "start",
 		"idempotency_key": "inline-" + randomID(), "params": params, "dry_run": dry}
 	v, err := e.P.Backend.Call(e.Ctx, job, e.P.nodeTarget(node))

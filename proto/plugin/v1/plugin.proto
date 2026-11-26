@@ -49,6 +49,10 @@ message OperationType {
   // A toolset of the tool contract the tool is also listed under, such as
   // "machines"; it is always listed under "plugins".
   string toolset = 8;
+  // dry_run: the plugin honours StartRequest.dry_run for this operation.
+  // Without it, carrel never sends a dry run to the plugin: a plugin built
+  // before the field would run the operation for real.
+  bool dry_run = 9;
 }
 
 message DescribeResponse {

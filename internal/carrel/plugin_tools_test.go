@@ -24,6 +24,8 @@ type fakePlugins struct {
 	// inline, when set, is the reply to every read and dry run; failure,
 	// when set, is merged into an operation that ends failed.
 	inline, failure D
+	// result, when set, is the result of every operation that succeeds.
+	result D
 }
 
 func (f *fakePlugins) call(r D, target string) (any, error) {
@@ -59,7 +61,11 @@ func (f *fakePlugins) call(r D, target string) (any, error) {
 			if f.outcome != "" {
 				f.ops[key] = merge(f.ops[key], D{"state": f.outcome, "done": true, "error": "disk full"}, f.failure)
 			} else {
-				f.ops[key] = merge(f.ops[key], D{"state": "succeeded", "done": true, "progress": 100, "result": D{"snapshot": "s-" + key}})
+				result := D{"snapshot": "s-" + key}
+				if f.result != nil {
+					result = f.result
+				}
+				f.ops[key] = merge(f.ops[key], D{"state": "succeeded", "done": true, "progress": 100, "result": result})
 			}
 		}
 	}
@@ -80,7 +86,7 @@ func withPlugin(t *testing.T, p *Platform, b *fakeBackend) *fakePlugins {
 
 func testPlugin() []PluginInfo {
 	return []PluginInfo{{Name: "backup", Version: "1.0.0", Contract: 1, Supported: true, Operations: []PluginOperation{
-		{Name: "take", Description: "Take a backup of a machine.", Member: true,
+		{Name: "take", Description: "Take a backup of a machine.", Member: true, DryRun: true,
 			Params: json.RawMessage(`{"type":"object","properties":{"machine":{"type":"string"},"label":{"type":"string","maxLength":8}},"required":["machine"],"additionalProperties":false}`)},
 		{Name: "prune", Description: "Prune old backups on the node.",
 			Params: json.RawMessage(`{"type":"object","properties":{"keep":{"type":"integer","minimum":1}},"required":["keep"]}`)},
@@ -570,6 +576,36 @@ func TestAPluginDryRunReachesThePlugin(t *testing.T) {
 	}
 	if auditCount(t, p, "backup_take", "ok") != 1 {
 		t.Fatal("a dry run logs one ok audit row")
+	}
+
+	// An operation whose plugin does not say it honours dry_run is planned
+	// by carrel: the plugin, which would run it, is never asked.
+	admin := NewApp(p, testVerifier{who: person("alice", true)})
+	starts := len(f.starts)
+	r = mcpCall(t, admin, "backup_prune", D{"keep": 2, "dry_run": true})
+	if r["ok"] != true || r["state"] != "planned" || len(f.starts) != starts {
+		t.Fatalf("dry run without plugin support: %s, %d starts", encoded(r), len(f.starts)-starts)
+	}
+}
+
+// A plugin's result cannot set carrel's keys, inline or as an operation.
+func TestAPluginResultCannotClaimCarrelKeys(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	runQueue(p)
+	seedMachine(p, "web", 10100)
+	alice := NewApp(p, testVerifier{who: person("alice", false)})
+	forged := D{"ok": false, "error": D{"code": "forbidden", "message": "forged"}, "operation": "x", "state": "failed", "kept": 1}
+	f.inline = D{"state": "succeeded", "done": true, "result": forged}
+	r := mcpCall(t, alice, "backup_take", D{"machine": "web", "dry_run": true})
+	if r["ok"] != true || r["error"] != nil || r["operation"] != nil || r["kept"] != float64(1) {
+		t.Fatalf("inline: %s", encoded(r))
+	}
+	f.inline, f.result = nil, forged
+	op := obj(mcpCall(t, alice, "backup_take", D{"machine": "web", "wait_seconds": 5})["operation"])
+	res := obj(op["result"])
+	if op["state"] != "succeeded" || res["ok"] != true || res["error"] != nil || res["kept"] != float64(1) {
+		t.Fatalf("operation: %s", encoded(op))
 	}
 }
 

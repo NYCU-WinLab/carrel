@@ -299,9 +299,12 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
   top-level `machine`. carrel checks that machine against the caller's tenant and passes the
   plugin its VMID, never the name.
 - `read_only` operations are also listed on `/mcp/read-only`. A read, and a call with `dry_run`,
-  answers at once on one node, as a core read does: no operation, one audit row. The plugin gets
-  `dry_run` on the start and must answer `done` in its first reply.
-- A plugin's result keys are added to the answer, as a core tool's result. carrel's own keys win.
+  answers at once on one node, as a core read does: no operation, one audit row. An operation
+  that sets `dry_run` in its description gets `dry_run` on the start, and must answer `done` in
+  its first reply. For any other operation carrel answers a dry run itself, `state` planned: a
+  plugin built before the field would run the operation for real.
+- A plugin's result keys are added to the answer, as a core tool's result. carrel's own keys
+  (`ok`, `error`, `operation`, `state` and the like) are never taken from a result.
 - A plugin that fails an operation with `error_code` `invalid`, `conflict`, `not_found`,
   `quota_exceeded`, `capacity_exhausted` or `unsupported` gives the caller that code, its own
   message and the keys of `error_details`. Any other failure is `plugin_failed`.

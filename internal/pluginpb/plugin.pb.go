@@ -86,7 +86,11 @@ type OperationType struct {
 	Idempotent  bool `protobuf:"varint,7,opt,name=idempotent,proto3" json:"idempotent,omitempty"`
 	// A toolset of the tool contract the tool is also listed under, such as
 	// "machines"; it is always listed under "plugins".
-	Toolset       string `protobuf:"bytes,8,opt,name=toolset,proto3" json:"toolset,omitempty"`
+	Toolset string `protobuf:"bytes,8,opt,name=toolset,proto3" json:"toolset,omitempty"`
+	// dry_run: the plugin honours StartRequest.dry_run for this operation.
+	// Without it, carrel never sends a dry run to the plugin: a plugin built
+	// before the field would run the operation for real.
+	DryRun        bool `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -175,6 +179,13 @@ func (x *OperationType) GetToolset() string {
 		return x.Toolset
 	}
 	return ""
+}
+
+func (x *OperationType) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
 }
 
 type DescribeResponse struct {
@@ -626,7 +637,7 @@ var File_plugin_proto protoreflect.FileDescriptor
 const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"\fplugin.proto\x12\x10carrel.plugin.v1\"\x11\n" +
-	"\x0fDescribeRequest\"\xfb\x01\n" +
+	"\x0fDescribeRequest\"\x94\x02\n" +
 	"\rOperationType\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rparams_schema\x18\x02 \x01(\tR\fparamsSchema\x12 \n" +
@@ -637,7 +648,8 @@ const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"idempotent\x18\a \x01(\bR\n" +
 	"idempotent\x12\x18\n" +
-	"\atoolset\x18\b \x01(\tR\atoolset\"\x9d\x01\n" +
+	"\atoolset\x18\b \x01(\tR\atoolset\x12\x17\n" +
+	"\adry_run\x18\t \x01(\bR\x06dryRun\"\x9d\x01\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
