@@ -20,6 +20,15 @@ jobs:
       - run: go test ${{ github.event_name == 'push' && '-race' || '' }} ./... -count=1
       # The agent runs goroutines as root on members' machines: race-check it on every pull request.
       - run: go test -race -count=1 ./cmd/carrel-deployd/
+      # The latest release's agent against this control plane (#561).
+      - run: |
+          mkdir -p /tmp/previous
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'carrel-*-linux-amd64.tar.gz' --dir /tmp/previous
+          tar -xzf /tmp/previous/carrel-*-linux-amd64.tar.gz -C /tmp/previous --strip-components=2 --wildcards '*/dist/carrel-agent'
+          CARREL_PREVIOUS_AGENT=/tmp/previous/carrel-agent go test -count=1 -v -run TestThePreviousReleaseAgent ./cmd/carrel-agent/ | tee /tmp/previous/test.log
+          grep -q -- '--- PASS: TestThePreviousReleaseAgentRunsANodeCall' /tmp/previous/test.log
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel ./cmd/carrel
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-deployd ./cmd/carrel-deployd
       - run: CGO_ENABLED=0 go build -trimpath -o dist/carrel-fetch ./cmd/carrel-fetch
