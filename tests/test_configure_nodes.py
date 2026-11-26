@@ -974,3 +974,214 @@ def test_the_listener_gets_the_lab_root_and_drops_it_without_agent_identity(monk
 
 def test_a_failed_deploy_puts_the_listeners_lab_root_back():
     assert "etc/carrel/agent/lab-root.pem" in load("install-control.py").CONFIGURED
+
+
+def plugin(name="snap", version="1.0.0", body=b"#!/bin/sh\necho hi\n", **flags):
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as tar:
+        info = tarfile.TarInfo("plugin")
+        info.size, info.mode = len(body), 0o777
+        tar.addfile(info, io.BytesIO(body))
+    blob = data.getvalue()
+    return {
+        "name": name,
+        "version": version,
+        "url": f"https://example.org/{name}.tar.gz",
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        **flags,
+    }, blob
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"name": "Snap"},
+        {"name": "a b"},
+        {"name": "../x"},
+        {"version": "1.0"},
+        {"version": "1.0.0;rm"},
+        {"sha256": "ABC"},
+        {"url": "http://example.org/x"},
+        {"url": "https://x/'a"},
+        {"network": "yes"},
+        {"extra": 1},
+    ],
+)
+def test_a_bad_plugin_entry_stops_the_deploy(bad):
+    module = load("configure-nodes.py")
+    p, _ = plugin()
+    with pytest.raises(SystemExit):
+        module.plugin_list({"plugins": [{**p, **bad}]})
+
+
+def test_plugin_names_are_unique():
+    module = load("configure-nodes.py")
+    p, _ = plugin()
+    with pytest.raises(SystemExit):
+        module.plugin_list({"plugins": [p, p]})
+    assert module.plugin_list({}) == []
+
+
+def test_the_stage_must_hold_each_artifact_with_its_checksum(tmp_path):
+    module = load("configure-nodes.py")
+    p, blob = plugin()
+    with pytest.raises(SystemExit, match="not in the stage"):
+        module.plugin_check_stage([p], tmp_path)
+    (tmp_path / module.plugin_artifact(p)).write_bytes(blob + b"x")
+    with pytest.raises(SystemExit, match="does not match"):
+        module.plugin_check_stage([p], tmp_path)
+    (tmp_path / module.plugin_artifact(p)).write_bytes(blob)
+    module.plugin_check_stage([p], tmp_path)
+
+
+def test_the_units_keep_the_sandbox_and_open_only_what_a_plugin_asks_for():
+    module = load("configure-nodes.py")
+    sock, service = module.plugin_units(plugin()[0])
+    assert "SocketMode=0600" in sock and "SocketUser=root" in sock and "RemoveOnStop=yes" in sock
+    assert "DynamicUser=yes" in service and "IPAddressDeny=any" in service
+    assert "RestrictAddressFamilies=AF_UNIX\n" in service and "EnvironmentFile" not in service
+    _, service = module.plugin_units(plugin(network=True, env_file=True)[0])
+    assert "IPAddressDeny" not in service and "AF_INET6" in service
+    assert "EnvironmentFile=/etc/carrel/plugins/snap.env" in service
+
+
+def apply(module, tmp_path, plugins):
+    units, lib, artifacts = (tmp_path / d for d in ("units", "lib", "artifacts"))
+    for d in (units, lib, artifacts):
+        d.mkdir(exist_ok=True)
+    for p, blob in plugins:
+        (artifacts / module.plugin_artifact(p)).write_bytes(blob)
+    log = tmp_path / "systemctl.log"
+    systemctl = tmp_path / "systemctl"
+    systemctl.write_text(f'#!/bin/sh\necho "$*" >> {log}\n')
+    systemctl.chmod(0o755)
+    log.write_text("")
+    script = module.plugin_apply(
+        [p for p, _ in plugins], str(units), str(lib), str(artifacts), str(systemctl)
+    )
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
+    return result, log.read_text().splitlines(), units, lib, artifacts
+
+
+def test_apply_installs_upgrades_and_removes_plugins(tmp_path):
+    module = load("configure-nodes.py")
+    snap, freeze = plugin(), plugin("freeze")
+    result, calls, units, lib, artifacts = apply(module, tmp_path, [snap, freeze])
+    assert result.returncode == 0, result.stderr
+    assert (lib / "snap/current").resolve() == lib / "snap/1.0.0"
+    assert oct((lib / "snap/1.0.0/plugin").stat().st_mode & 0o777) == "0o755"
+    assert (units / "carrel-plugin-freeze.socket").read_text() == module.plugin_units(freeze[0])[0]
+    assert (
+        "enable --now carrel-plugin-snap.socket" in calls
+        and "try-restart carrel-plugin-snap.service" in calls
+    )
+
+    # The same list again changes nothing and restarts nothing.
+    result, calls, *_ = apply(module, tmp_path, [snap, freeze])
+    assert result.returncode == 0 and not [c for c in calls if "restart" in c]
+
+    # A new version of one plugin, the other dropped.
+    snap2 = plugin(version="1.1.0", body=b"#!/bin/sh\necho two\n")
+    result, calls, units, lib, artifacts = apply(module, tmp_path, [snap2])
+    assert result.returncode == 0, result.stderr
+    assert (lib / "snap/current").resolve() == lib / "snap/1.1.0"
+    assert not (lib / "snap/1.0.0").exists() and not (lib / "freeze").exists()
+    assert not (units / "carrel-plugin-freeze.socket").exists()
+    assert sorted(f.name for f in artifacts.iterdir()) == ["plugin-snap-1.1.0.tar.gz"]
+    assert "disable --now carrel-plugin-freeze.socket carrel-plugin-freeze.service" in calls
+    assert "try-restart carrel-plugin-snap.service" in calls
+
+    # An empty list removes everything carrel installed.
+    result, calls, units, lib, _ = apply(module, tmp_path, [])
+    assert result.returncode == 0 and not list(units.iterdir()) and not list(lib.iterdir())
+
+
+def test_apply_changes_nothing_when_an_artifact_is_wrong(tmp_path):
+    module = load("configure-nodes.py")
+    snap = plugin()
+    apply(module, tmp_path, [snap])
+    bad = ({**plugin("freeze")[0]}, b"not the artifact")
+    result, calls, units, *_ = apply(module, tmp_path, [snap, bad])
+    assert result.returncode != 0 and "does not match" in result.stderr
+    assert calls == [] and not (units / "carrel-plugin-freeze.socket").exists()
+
+
+def test_apply_refuses_an_artifact_without_a_top_level_program(tmp_path):
+    module = load("configure-nodes.py")
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as tar:
+        info = tarfile.TarInfo("bin/plugin")
+        info.size = 2
+        tar.addfile(info, io.BytesIO(b"hi"))
+    blob = data.getvalue()
+    p = {**plugin()[0], "sha256": hashlib.sha256(blob).hexdigest()}
+    result, _, units, *_ = apply(module, tmp_path, [(p, blob)])
+    assert result.returncode != 0 and "no plugin program" in result.stderr
+    assert not (units / "carrel-plugin-snap.socket").exists()
+
+
+def test_apply_leaves_units_whose_name_is_not_a_plugin_name(tmp_path):
+    module = load("configure-nodes.py")
+    apply(module, tmp_path, [plugin()])
+    (tmp_path / "units/carrel-plugin-.socket").write_text("x")
+    (tmp_path / "units/carrel-plugin-A_b.socket").write_text("x")
+    result, _, units, lib, _ = apply(module, tmp_path, [])
+    assert result.returncode == 0 and lib.exists() and not (lib / "snap").exists()
+    assert sorted(f.name for f in units.iterdir()) == ["carrel-plugin-.socket", "carrel-plugin-A_b.socket"]
+
+
+def artifact(members):
+    """A .tar.gz of (name, type, data or link target) members."""
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as tar:
+        for name, kind, value in members:
+            info = tarfile.TarInfo(name)
+            if kind == "link":
+                info.type, info.linkname = tarfile.SYMTYPE, value
+                tar.addfile(info)
+            else:
+                info.size = len(value)
+                tar.addfile(info, io.BytesIO(value))
+    blob = data.getvalue()
+    return {**plugin()[0], "sha256": hashlib.sha256(blob).hexdigest()}, blob
+
+
+def test_apply_refuses_a_link_in_the_artifact_and_touches_nothing_outside(tmp_path):
+    module = load("configure-nodes.py")
+    secret = tmp_path / "secret"
+    secret.write_text("key")
+    secret.chmod(0o600)
+    for members in (
+        [("plugin", "link", str(secret))],
+        [("plugin", "file", b"#!/bin/sh\n"), ("lib", "link", "/etc")],
+    ):
+        result, calls, units, *_ = apply(module, tmp_path, [artifact(members)])
+        assert result.returncode != 0 and "only files and directories" in result.stderr
+        assert oct(secret.stat().st_mode & 0o777) == "0o600" and calls == []
+        assert not (units / "carrel-plugin-snap.socket").exists()
+
+
+def test_a_run_that_fails_halfway_still_restarts_the_next_time(tmp_path):
+    module = load("configure-nodes.py")
+    snap, freeze = plugin(), plugin("freeze")
+    apply(module, tmp_path, [snap, freeze])
+    snap2 = plugin(version="1.1.0", body=b"#!/bin/sh\necho two\n")
+    broken = artifact([("bin/plugin", "file", b"x")])
+    broken = ({**broken[0], "name": "freeze", "version": "2.0.0"}, broken[1])
+    result, calls, *_ = apply(module, tmp_path, [snap2, broken])
+    assert result.returncode != 0 and calls == []
+    # The broken plugin is fixed: snap, unpacked last time, still restarts.
+    result, calls, _, lib, _ = apply(module, tmp_path, [snap2, freeze])
+    assert result.returncode == 0, result.stderr
+    assert "try-restart carrel-plugin-snap.service" in calls
+    assert not (lib / "snap/.restart").exists()
+
+
+def test_a_release_replaced_under_the_same_version_is_installed(tmp_path):
+    module = load("configure-nodes.py")
+    apply(module, tmp_path, [plugin()])
+    again = plugin(body=b"#!/bin/sh\necho fixed\n")
+    result, calls, _, lib, _ = apply(module, tmp_path, [again])
+    assert result.returncode == 0, result.stderr
+    assert (lib / "snap/1.0.0/plugin").read_bytes() == b"#!/bin/sh\necho fixed\n"
+    assert "try-restart carrel-plugin-snap.service" in calls

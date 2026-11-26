@@ -319,6 +319,38 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
   as after a control plane restart. A plugin that cannot be reached for 10 minutes fails the
   call with `backend_unavailable`.
 
+#### Installing plugins
+
+The site file lists the plugins a site runs (#662). carrel installs them on every agent node and
+removes every plugin the list no longer names:
+
+```json
+"plugins": [
+  {"name": "snapshot", "version": "1.0.0", "url": "https://github.com/<org>/<repo>/releases/download/v1.0.0/snapshot.tar.gz",
+   "sha256": "<64 lowercase hex digits>"}
+]
+```
+
+- `deploy-go.py` reads the list from `/etc/carrel/site.json` on the host, downloads each `url` and
+  checks its `sha256`. The nodes need no outbound access. A bad entry or a wrong checksum stops the
+  deploy before anything changes.
+- After the control plane is healthy, `configure-nodes.py --agent-service` unpacks each artifact to
+  `/usr/local/lib/carrel/plugins/<name>/<version>` and points `current` at it. A plugin restarts
+  only when its version or its unit changed. Older versions and their artifacts are removed.
+- carrel writes the units, not the artifact. `carrel-plugin-<name>.socket` holds
+  `/run/carrel/plugins/<name>.sock`, owned by root with mode 0600. systemd starts
+  `carrel-plugin-<name>.service` on the first connection, as a dynamic user that can write only
+  its state directory. A plugin that keeps failing is restarted every 5 s, and its socket stays.
+- `network: true` lets the plugin open network sockets; without it, it has unix sockets only.
+  `env_file: true` reads `/etc/carrel/plugins/<name>.env`, which the operator writes, for
+  credentials such as an API token. Make it root's, mode 0600: other plugins can read
+  `/etc/carrel`.
+- A plugin removed from the list loses its units and program. Its state directory stays, so a
+  plugin listed again keeps its operations.
+
+The artifact is a `.tar.gz` with an executable `plugin` at its top. It serves the contract on the
+socket systemd passes it as fd 3 (`LISTEN_FDS=1`), and keeps its state in `$STATE_DIRECTORY`.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

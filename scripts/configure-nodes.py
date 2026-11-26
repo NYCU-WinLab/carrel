@@ -350,6 +350,233 @@ def agent_peers():
     return out
 
 
+# Plugins (#564, #662). The site file's "plugins" lists each plugin a site runs:
+# name, version, the release artifact's url and its SHA-256. deploy-go.py
+# downloads each artifact, checks it and puts it in the stage directory beside
+# this script; --agent-service installs it on every agent node and removes
+# every plugin the list no longer names. carrel writes the units, not the
+# artifact, so no release can loosen its own sandbox: systemd owns the socket,
+# mode 0600 and root's like the agent (which trusts no other), and hands it to
+# the plugin, which runs as a dynamic user with only its state directory to
+# write. A plugin serves gRPC on that inherited socket (fd 3, LISTEN_FDS).
+PLUGIN_NAME = re.compile(r"[a-z][a-z0-9-]{0,31}")
+PLUGIN_VERSION = re.compile(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]{1,32})?")
+PLUGIN_DIR = "/run/carrel/plugins"
+PLUGIN_LIB = "/usr/local/lib/carrel/plugins"
+PLUGIN_ARTIFACTS = "/var/lib/carrel/plugin-artifacts"
+PLUGIN_ENV = "/etc/carrel/plugins"
+PLUGIN_UNITS = "/etc/systemd/system"
+PLUGIN_STAGE = Path(__file__).resolve().parent
+
+
+def plugin_list(site):
+    """The site's plugins, checked: every value becomes a path, a unit name or
+    a shell word, so a bad one stops the deploy before anything changes."""
+    plugins = site.get("plugins") or []
+    if not isinstance(plugins, list):
+        raise SystemExit("plugins must be a list")
+    seen = set()
+    for p in plugins:
+        if not isinstance(p, dict) or set(p) - {"name", "version", "url", "sha256", "network", "env_file"}:
+            raise SystemExit("a plugin has name, version, url, sha256 and optionally network and env_file")
+        if not PLUGIN_NAME.fullmatch(str(p.get("name"))) or p["name"] in seen:
+            raise SystemExit(f"plugin name {p.get('name')!r} must be unique, of a-z, 0-9 and -")
+        seen.add(p["name"])
+        if not PLUGIN_VERSION.fullmatch(str(p.get("version"))):
+            raise SystemExit(f"plugin {p['name']}: version must be SemVer, such as 1.2.0")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(p.get("sha256"))):
+            raise SystemExit(f"plugin {p['name']}: sha256 must be 64 lowercase hex digits")
+        if not re.fullmatch(r"https://[^\s'\"\\]+", str(p.get("url"))):
+            raise SystemExit(f"plugin {p['name']}: url must be https")
+        for flag in ("network", "env_file"):
+            if not isinstance(p.get(flag, False), bool):
+                raise SystemExit(f"plugin {p['name']}: {flag} is true or false")
+    return plugins
+
+
+def plugin_artifact(p):
+    return f"plugin-{p['name']}-{p['version']}.tar.gz"
+
+
+def plugin_check_stage(plugins, stage=None):
+    """Every listed artifact is in the stage with its checksum, before any node changes."""
+    stage = stage or PLUGIN_STAGE
+    for p in plugins:
+        path = Path(stage, plugin_artifact(p))
+        if not path.exists():
+            raise SystemExit(f"plugin {p['name']} {p['version']}: {path.name} is not in the stage; deploy with deploy-go.py")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != p["sha256"]:
+            raise SystemExit(f"plugin {p['name']} {p['version']}: {path.name} does not match its sha256 in the site file")
+
+
+def plugin_units(p):
+    """The socket and service units of one plugin."""
+    name = p["name"]
+    families = "AF_UNIX AF_INET AF_INET6" if p.get("network") else "AF_UNIX"
+    env = f"EnvironmentFile={PLUGIN_ENV}/{name}.env\n" if p.get("env_file") else ""
+    ip = "" if p.get("network") else "IPAddressDeny=any\n"
+    socket_unit = f"""# Managed by carrel configure-nodes.py: plugin {name}.
+[Unit]
+Description=Carrel plugin {name} socket
+[Socket]
+ListenStream={PLUGIN_DIR}/{name}.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+[Install]
+WantedBy=sockets.target
+"""
+    # No start limit: a plugin that keeps failing is retried every 5 s and
+    # never takes its socket down with it.
+    service_unit = f"""# Managed by carrel configure-nodes.py: plugin {name} {p['version']}.
+[Unit]
+Description=Carrel plugin {name} {p['version']}
+Requires=carrel-plugin-{name}.socket
+After=carrel-plugin-{name}.socket
+StartLimitIntervalSec=0
+[Service]
+ExecStart={PLUGIN_LIB}/{name}/current/plugin
+{env}Restart=always
+RestartSec=5
+DynamicUser=yes
+StateDirectory=carrel-plugin-{name}
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies={families}
+{ip}"""
+    return socket_unit, service_unit
+
+
+def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl"):
+    """The script that makes one node run exactly these plugins.
+
+    The artifacts are in <artifacts> already. It checks every checksum and
+    unpacks every artifact before it switches any plugin, so a bad artifact
+    changes nothing. A version directory records the checksum it came from: a
+    release replaced under the same version is unpacked again. A plugin whose
+    program or unit changed gets a .restart mark, cleared only once it is
+    restarted, so a run that fails halfway still restarts it the next time. A
+    plugin installed here and no longer listed loses its units and files; its
+    state directory stays, so a plugin listed again keeps its operations.
+    Every value is checked in plugin_list, so quoting is enough."""
+    q = shlex.quote
+    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}"]
+    for p in plugins:
+        lines.append(f'echo {q(p["sha256"] + "  " + artifacts + "/" + plugin_artifact(p))} | sha256sum -c --quiet - '
+                     f'|| {{ echo "plugin {p["name"]}: the artifact does not match its sha256" >&2; exit 1; }}')
+    keep = " ".join(q(p["name"]) for p in plugins)
+    lines.append(f"keep=' {keep} '")
+    # Unpack and check every version first.
+    for p in plugins:
+        name, version, sha = p["name"], p["version"], p["sha256"]
+        lines += [
+            f"d=$L/{name}/{version}",
+            f'if [ "$(cat "$d/.sha256" 2>/dev/null || true)" != {sha} ]; then',
+            '  rm -rf "$d.next" && mkdir -p "$d.next"',
+            f'  tar -xzf "$A/{plugin_artifact(p)}" -C "$d.next" --no-same-owner --no-same-permissions',
+            # A link could point root's chmod below, or the plugin, outside its directory.
+            '  if [ -n "$(find "$d.next" ! -type f ! -type d | head -n 1)" ]; then',
+            f'    echo "plugin {name}: the artifact may hold only files and directories" >&2; exit 1',
+            "  fi",
+            f'  test -f "$d.next/plugin" || {{ echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
+            '  chmod -R go-w "$d.next" && chmod 755 "$d.next/plugin"',
+            f'  echo {sha} > "$d.next/.sha256"',
+            f'  rm -rf "$d" && mv "$d.next" "$d" && touch $L/{name}/.restart',
+            "fi",
+        ]
+    # Then switch each plugin to its version and units.
+    for p in plugins:
+        name, version = p["name"], p["version"]
+        socket_unit, service_unit = plugin_units(p)
+        unit = f"$U/carrel-plugin-{name}"
+        lines += [
+            f"printf '%s' {q(service_unit)} > {unit}.service.next",
+            f"cmp -s {unit}.service.next {unit}.service || touch $L/{name}/.restart",
+            f"printf '%s' {q(socket_unit)} > {unit}.socket.next && mv {unit}.socket.next {unit}.socket",
+            f"ln -sfn {version} $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
+            f"mv {unit}.service.next {unit}.service",
+        ]
+    lines += [
+        # Plugins installed here that the list no longer names.
+        'for f in "$U"/carrel-plugin-*.socket; do',
+        '  test -e "$f" || continue',
+        '  n=${f##*/carrel-plugin-}; n=${n%.socket}',
+        # Only a name plugin_list would accept: never an empty one, which would name $L itself.
+        '  case "$n" in ""|[!a-z]*|*[!a-z0-9-]*) continue;; esac',
+        '  case "$keep" in *" $n "*) continue;; esac',
+        '  $S disable --now "carrel-plugin-$n.socket" "carrel-plugin-$n.service" || true',
+        '  rm -f "$U/carrel-plugin-$n.socket" "$U/carrel-plugin-$n.service"',
+        '  rm -rf "$L/$n"',
+        "done",
+        # Artifacts of versions no longer listed.
+        'for f in "$A"/plugin-*.tar.gz; do',
+        '  test -e "$f" || continue',
+        f'  case " {" ".join(plugin_artifact(p) for p in plugins)} " in *" ${{f##*/}} "*) ;; *) rm -f "$f";; esac',
+        "done",
+        "$S daemon-reload",
+    ]
+    for p in plugins:
+        name = p["name"]
+        lines += [
+            f"$S enable --now carrel-plugin-{name}.socket",
+            f"if [ -e $L/{name}/.restart ]; then $S try-restart carrel-plugin-{name}.service && rm -f $L/{name}/.restart; fi",
+            # Older versions go once the new one is in place.
+            f'for v in $L/{name}/*; do case "${{v##*/}}" in current|{p["version"]}) ;; *) rm -rf "$v";; esac; done',
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def plugins_on_nodes():
+    """Install the listed plugins on every agent node and remove them elsewhere."""
+    site = json.loads(SITE.read_text())
+    plugins = plugin_list(site)
+    plugin_check_stage(plugins)
+    nodes = targets(site, socket.gethostname().split(".")[0])
+    agents = agent_nodes(site, nodes)
+    out = {}
+    for n in nodes:
+        mine = plugins if n["name"] in agents else []
+        script = plugin_apply(mine)
+        if n is nodes[0]:
+            Path(PLUGIN_ARTIFACTS).mkdir(mode=0o700, parents=True, exist_ok=True)
+            for p in mine:
+                run("install", "-m", "600", str(PLUGIN_STAGE / plugin_artifact(p)), f"{PLUGIN_ARTIFACTS}/{plugin_artifact(p)}")
+            run("sh", "-c", script)
+        else:
+            ssh = ("ssh", *peer(n), "root@" + n["address"])
+            run(*ssh, f"install -d -m 700 {PLUGIN_ARTIFACTS}")
+            for p in mine:
+                run("scp", "-q", *peer(n), str(PLUGIN_STAGE / plugin_artifact(p)), f"root@{n['address']}:{PLUGIN_ARTIFACTS}/{plugin_artifact(p)}")
+            run(*ssh, "sh", "-c", shlex.quote(script))
+        out[n["name"]] = [f"{p['name']} {p['version']}" for p in mine]
+    return out
+
+
 def peers_connected(since, wait=60):
     """The other agent nodes whose agent logged agent_connected after since, within wait seconds.
 
@@ -735,7 +962,17 @@ if __name__ == "__main__":
     import sys
 
     if sys.argv[1:] == ["--agent-service"]:
-        print(json.dumps({"agent": agent_service(), "peers": agent_peers()}))
+        # A bad plugin list stops here, before the agent changes.
+        plugin_check_stage(plugin_list(json.loads(SITE.read_text())))
+        report = {"agent": agent_service(), "peers": agent_peers()}
+        # The agents are in place either way: a plugin that fails to install
+        # is reported beside them, and install-control.py still checks them.
+        try:
+            report["plugins"] = plugins_on_nodes()
+        except SystemExit as e:
+            report["plugins_error"] = str(e)
+        print(json.dumps(report))
+        sys.exit(1 if "plugins_error" in report else 0)
     elif sys.argv[1:2] == ["--agent-check"] and len(sys.argv) == 3:
         missing = peers_connected(int(sys.argv[2]))
         print(json.dumps({"not_connected": missing}))
