@@ -416,3 +416,24 @@ func TestThePluginReportSurvivesTheWire(t *testing.T) {
 		t.Fatalf("the control plane would refuse it: %s", msg)
 	}
 }
+
+// A dry run reaches only an operation the plugin on the socket now says
+// takes one: a plugin downgraded since the last report would run it.
+func TestADryRunReachesOnlyAPluginThatTakesOne(t *testing.T) {
+	dir := pluginDir(t)
+	old := newFake("snapshot", 1)
+	serve(t, dir, old)
+	a := &agent{cfg: config{PluginDir: dir}}
+	job := `{"op":"plugin","plugin":"snapshot","call":"start","operation":"snapshot","idempotency_key":"k1","dry_run":true}`
+	if r := call(t, a, job); r["ok"] != false || old.started.Load() != 0 || !strings.Contains(fmt.Sprint(r), "does not take a dry run") {
+		t.Fatalf("undeclared dry run: %v, %d started", r, old.started.Load())
+	}
+	dir2 := pluginDir(t)
+	current := newFake("snapshot", 1)
+	current.types = []*pluginpb.OperationType{{Name: "snapshot", ParamsSchema: `{"type":"object"}`, DryRun: true}}
+	serve(t, dir2, current)
+	b := &agent{cfg: config{PluginDir: dir2}}
+	if r := call(t, b, job); r["ok"] != true || current.started.Load() != 1 {
+		t.Fatalf("declared dry run: %v", r)
+	}
+}

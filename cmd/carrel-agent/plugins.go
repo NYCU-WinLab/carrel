@@ -282,6 +282,12 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 		if !info.Supported {
 			return refuse("plugin_refused", fmt.Sprintf("plugin %s does not run on this node: %s", j.Plugin, info.Reason))
 		}
+		// The report the control plane sent this on may be older than the
+		// plugin now on the socket: a dry run goes only to an operation that
+		// says, now, that it honours one. Any other would run for real.
+		if j.DryRun && !slices.ContainsFunc(info.Operations, func(op carrel.PluginOperation) bool { return op.Name == j.Operation && op.DryRun }) {
+			return refuse("plugin_refused", fmt.Sprintf("plugin %s operation %s does not take a dry run", j.Plugin, j.Operation))
+		}
 		params := string(j.Params)
 		if params == "" {
 			params = "{}"
