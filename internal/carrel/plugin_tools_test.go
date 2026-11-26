@@ -425,3 +425,49 @@ func TestARefusalAfterALostStartKeepsTheKey(t *testing.T) {
 		t.Fatalf("the work ran under %v", keys)
 	}
 }
+
+// The HTTP routes serve the same plugin tools as /mcp, with the same gates,
+// and a status that matches the error.
+func TestPluginToolsOverHTTP(t *testing.T) {
+	p, b := fixture(t)
+	withPlugin(t, p, b)
+	runQueue(p)
+	seedMachine(p, "web", 10100)
+	alice := NewApp(p, testVerifier{who: person("alice", false)})
+	headers := map[string]string{"Authorization": "Bearer test", "Content-Type": "application/json"}
+	do := func(method, path, body string, h map[string]string) (int, D) {
+		w := requestApp(alice, method, path, body, h)
+		var v D
+		_ = json.Unmarshal(w.Body.Bytes(), &v)
+		return w.Code, v
+	}
+	code, v := do("GET", "/plugins/v1/tools", "", headers)
+	if tools := dicts(v["tools"]); code != 200 || len(tools) != 1 || tools[0]["name"] != "backup_take" || obj(tools[0]["input_schema"])["type"] != "object" {
+		t.Fatalf("list: %d %v", code, v)
+	}
+	code, v = do("POST", "/plugins/v1/tools/backup_take", `{"machine":"web","idempotency_key":"http-call-1","wait_seconds":5}`, headers)
+	if code != 200 || obj(v["operation"])["state"] != "succeeded" {
+		t.Fatalf("call: %d %v", code, v)
+	}
+	// The same key and arguments return the same operation: that is the poll.
+	_, again := do("POST", "/plugins/v1/tools/backup_take", `{"machine":"web","idempotency_key":"http-call-1","wait_seconds":0}`, headers)
+	if obj(again["operation"])["id"] != obj(v["operation"])["id"] {
+		t.Fatalf("poll: %v", again)
+	}
+	for _, tc := range []struct {
+		path, body string
+		h          map[string]string
+		status     int
+	}{
+		{"/plugins/v1/tools/backup_prune", `{"keep":1}`, headers, 403},
+		{"/plugins/v1/tools/backup_take", `{"machine":"web","label":"much-too-long"}`, headers, 400},
+		{"/plugins/v1/tools/backup_take", `[1]`, headers, 400},
+		{"/plugins/v1/tools/machine_create", `{"name":"x"}`, headers, 404},
+		{"/plugins/v1/tools/backup_gone", `{}`, headers, 404},
+		{"/plugins/v1/tools/backup_take", `{"machine":"web"}`, map[string]string{"Content-Type": "application/json"}, 401},
+	} {
+		if code, v := do("POST", tc.path, tc.body, tc.h); code != tc.status {
+			t.Fatalf("%s %s: %d %v", tc.path, tc.body, code, v)
+		}
+	}
+}

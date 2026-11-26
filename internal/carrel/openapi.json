@@ -1292,6 +1292,67 @@
           }
         }
       }
+    },
+    "/plugins/v1/tools": {
+      "get": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "List the plugin tools the caller may call now (#661)",
+        "description": "The same tools as /mcp lists from the plugins toolset: name, description, input_schema and read_only. A tool is listed while some node reports its plugin.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/plugins/v1/tools/{tool}": {
+      "post": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "Call a plugin tool (#661)",
+        "description": "The body is the tool's arguments as in tools/call. The call is checked, gated and run as on /mcp, and returns an operation. Send the same arguments with the same idempotency_key to poll it. 404 when no node reports the tool now.",
+        "parameters": [
+          {
+            "name": "tool",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,31}_[a-z][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   }
 }
