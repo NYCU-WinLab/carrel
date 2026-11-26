@@ -541,12 +541,14 @@ D={drop_in} K={ca_key} P={principals_dir} B={drop_in}.apply
 exec 9>{lock} || exit 1
 flock -w 300 9 || {{ echo "another run holds {lock}" >&2; exit 1; }}
 put_back() {{ rm -rf "$2" && {{ ! test -e "$B/$1" || cp -a "$B/$1" "$2"; }}; }}
+# The marker goes first: a copy cut short by a kill is never put back.
+drop_copy() {{ rm -f "$B/complete" && rm -rf "$B"; }}
 restore() {{
   trap '' INT TERM HUP
   if test -e "$B/complete"; then
     put_back drop-in "$D" && put_back ca-key "$K" && put_back principals "$P" || exit 1
   fi
-  rm -rf "$B" "$D.next"
+  drop_copy && rm -f "$D.next"
   sshd -t && systemctl reload ssh.service
 }}
 fail() {{ restore; exit 1; }}
@@ -563,7 +565,7 @@ sshd -t || fail
 systemctl reload ssh.service || fail
 {check} || fail
 trap '' INT TERM HUP
-rm -rf "$B"
+drop_copy
 """
 
 

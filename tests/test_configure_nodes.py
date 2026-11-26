@@ -796,6 +796,17 @@ def test_a_killed_node_sshd_apply_is_put_back_by_the_next_run(tmp_path):
     assert_previous(tmp_path)
 
 
+def test_a_copy_without_its_marker_is_never_put_back(tmp_path):
+    # A kill while the copy is removed leaves part of it with no marker.
+    seed_previous(tmp_path)
+    (tmp_path / "drop.conf.apply").mkdir()
+    (tmp_path / "drop.conf.apply/drop-in").write_text("part of a copy\n")
+    site = {"node_ssh_ca": {"key": CA, "principals": ["zyx1121"]}}
+    code, _, _ = apply_node_sshd(tmp_path, site, in_force=False)
+    assert code == 1
+    assert_previous(tmp_path)
+
+
 def test_a_node_sshd_apply_waits_for_the_one_before_it(tmp_path):
     seed_previous(tmp_path)
     site = {"node_ssh_ca": {"key": CA, "principals": ["zyx1121"]}}
