@@ -485,6 +485,8 @@ NODE_SSHD_PATH = "/etc/ssh/sshd_config.d/10-carrel-keys.conf"
 # svc:<portal service>) that may log in. Keys keep working beside them.
 NODE_CA_KEY = "/etc/ssh/carrel-user-ca.pub"
 NODE_PRINCIPALS = "/etc/ssh/carrel-principals"
+# One node sshd apply at a time (#648).
+NODE_SSHD_LOCK = "/run/carrel-sshd.lock"
 CA_KEY = re.compile(r"(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|rsa-sha2-(256|512)|ssh-rsa) [A-Za-z0-9+/]+={0,2}")
 PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}|svc:[a-z0-9][a-z0-9-]{0,62}")
 
@@ -506,13 +508,17 @@ def node_ssh_ca(site):
     return key, sorted(set(principals))
 
 
-def node_sshd_apply(site, drop_in=NODE_SSHD_PATH, ca_key=None, principals_dir=None):
+def node_sshd_apply(site, drop_in=NODE_SSHD_PATH, ca_key=None, principals_dir=None, lock=NODE_SSHD_LOCK):
     """The drop-in for stdin and the script that applies it with the CA files.
 
-    The script keeps the drop-in, the CA key and the principals directory as
-    they were; when a write, sshd -t, the reload or the check after it fails,
-    it puts all 3 back and reloads, so a failed run leaves the policy that
-    let operators in. Every value is checked above, so quoting is enough."""
+    The script copies the drop-in, the CA key and the principals directory
+    into <drop-in>.apply, and marks the copy complete, before it changes
+    anything. When a write, sshd -t, the reload or the check after it fails,
+    or INT, TERM or HUP arrives, it puts all 3 back and reloads, so a failed
+    run leaves the policy that let operators in. A run killed before it ends
+    leaves the copy, and the next run puts it back first. One run at a time
+    holds the lock from the first step to the last (#648). Every value is
+    checked above, so quoting is enough."""
     ca_key = ca_key or NODE_CA_KEY
     principals_dir = principals_dir or NODE_PRINCIPALS
     ca = node_ssh_ca(site)
@@ -531,22 +537,35 @@ def node_sshd_apply(site, drop_in=NODE_SSHD_PATH, ca_key=None, principals_dir=No
         check += f" && sshd -T | grep -qx 'trustedusercakeys {ca_key}'"
     return conf, f"""umask 022
 set -u
-D={drop_in} K={ca_key} P={principals_dir}
-rm -rf "$D.prev" "$K.prev" "$P.prev" "$D.next"
-cat > "$D.next" || exit 1
-{{ ! test -e "$D" || cp -p "$D" "$D.prev"; }} && {{ ! test -e "$K" || cp -p "$K" "$K.prev"; }} && {{ ! test -e "$P" || cp -a "$P" "$P.prev"; }} || exit 1
+D={drop_in} K={ca_key} P={principals_dir} B={drop_in}.apply
+exec 9>{lock} || exit 1
+flock -w 300 9 || {{ echo "another run holds {lock}" >&2; exit 1; }}
+put_back() {{ rm -rf "$2" && {{ ! test -e "$B/$1" || cp -a "$B/$1" "$2"; }}; }}
+# The marker goes first: a copy cut short by a kill is never put back.
+drop_copy() {{ rm -f "$B/complete" && rm -rf "$B"; }}
 restore() {{
-  for f in "$D" "$K" "$P"; do rm -rf "$f"; if test -e "$f.prev"; then mv "$f.prev" "$f"; fi; done
-  rm -f "$D.next"
+  trap '' INT TERM HUP
+  if test -e "$B/complete"; then
+    put_back drop-in "$D" && put_back ca-key "$K" && put_back principals "$P" || exit 1
+  fi
+  drop_copy && rm -f "$D.next"
   sshd -t && systemctl reload ssh.service
-  exit 1
 }}
-{{ {write}; }} || restore
-mv "$D.next" "$D" || restore
-sshd -t || restore
-systemctl reload ssh.service || restore
-{check} || restore
-rm -rf "$D.prev" "$K.prev" "$P.prev"
+fail() {{ restore; exit 1; }}
+# A run killed midway left its copy: put the policy back before this run.
+! test -e "$B" || restore
+trap fail INT TERM HUP
+cat > "$D.next" || fail
+mkdir "$B" || fail
+{{ ! test -e "$D" || cp -p "$D" "$B/drop-in"; }} && {{ ! test -e "$K" || cp -p "$K" "$B/ca-key"; }} && {{ ! test -e "$P" || cp -a "$P" "$B/principals"; }} || fail
+touch "$B/complete" || fail
+{{ {write}; }} || fail
+mv "$D.next" "$D" || fail
+sshd -t || fail
+systemctl reload ssh.service || fail
+{check} || fail
+trap '' INT TERM HUP
+drop_copy
 """
 
 
