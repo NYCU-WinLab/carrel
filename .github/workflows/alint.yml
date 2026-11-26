@@ -6,3 +6,5 @@ on:
 jobs:
   alint:
     uses: zyx1121/.github/.github/workflows/alint.yml@main
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
