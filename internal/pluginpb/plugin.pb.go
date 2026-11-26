@@ -90,7 +90,17 @@ type OperationType struct {
 	// dry_run: the plugin honours StartRequest.dry_run for this operation.
 	// Without it, carrel never sends a dry run to the plugin: a plugin built
 	// before the field would run the operation for real.
-	DryRun        bool `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	DryRun bool `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// An operation on an object carrel keeps a record of (#663): object_kind
+	// names one of DescribeResponse.objects, object_effect is create, delete
+	// or use, and object_param names the required string parameter that
+	// names the object. The schema must also require a top-level "machine":
+	// an object belongs to one machine. carrel charges the tenant's quota and
+	// reserves the record before the start, and sends its id as
+	// StartRequest.reservation.
+	ObjectKind    string `protobuf:"bytes,10,opt,name=object_kind,json=objectKind,proto3" json:"object_kind,omitempty"`
+	ObjectEffect  string `protobuf:"bytes,11,opt,name=object_effect,json=objectEffect,proto3" json:"object_effect,omitempty"`
+	ObjectParam   string `protobuf:"bytes,12,opt,name=object_param,json=objectParam,proto3" json:"object_param,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -188,20 +198,245 @@ func (x *OperationType) GetDryRun() bool {
 	return false
 }
 
+func (x *OperationType) GetObjectKind() string {
+	if x != nil {
+		return x.ObjectKind
+	}
+	return ""
+}
+
+func (x *OperationType) GetObjectEffect() string {
+	if x != nil {
+		return x.ObjectEffect
+	}
+	return ""
+}
+
+func (x *OperationType) GetObjectParam() string {
+	if x != nil {
+		return x.ObjectParam
+	}
+	return ""
+}
+
+// A quota dimension the plugin's objects are charged to. Tenants' quota
+// holds it as any other; an admin sets it with quota_set.
+type QuotaDimension struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// a-z, 0-9 and _, and not a dimension carrel counts itself.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The limit of a tenant whose quota does not set it.
+	DefaultLimit  float64 `protobuf:"fixed64,2,opt,name=default_limit,json=defaultLimit,proto3" json:"default_limit,omitempty"`
+	Unit          string  `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuotaDimension) Reset() {
+	*x = QuotaDimension{}
+	mi := &file_plugin_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuotaDimension) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuotaDimension) ProtoMessage() {}
+
+func (x *QuotaDimension) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuotaDimension.ProtoReflect.Descriptor instead.
+func (*QuotaDimension) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *QuotaDimension) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *QuotaDimension) GetDefaultLimit() float64 {
+	if x != nil {
+		return x.DefaultLimit
+	}
+	return 0
+}
+
+func (x *QuotaDimension) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+// What one object charges: amount of a dimension the plugin declares, per
+// object, or times a fact of the object's machine (per is cpu, memory_mb or
+// disk_gb).
+type Charge struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dimension     string                 `protobuf:"bytes,1,opt,name=dimension,proto3" json:"dimension,omitempty"`
+	Amount        float64                `protobuf:"fixed64,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	Per           string                 `protobuf:"bytes,3,opt,name=per,proto3" json:"per,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Charge) Reset() {
+	*x = Charge{}
+	mi := &file_plugin_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Charge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Charge) ProtoMessage() {}
+
+func (x *Charge) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Charge.ProtoReflect.Descriptor instead.
+func (*Charge) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Charge) GetDimension() string {
+	if x != nil {
+		return x.Dimension
+	}
+	return ""
+}
+
+func (x *Charge) GetAmount() float64 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *Charge) GetPer() string {
+	if x != nil {
+		return x.Per
+	}
+	return ""
+}
+
+// A kind of object an operation can create. carrel keeps a record of each
+// object, charges it to the tenant and refuses the actions in holds while
+// the object's machine has one.
+type ObjectKind struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Name    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Charges []*Charge              `protobuf:"bytes,2,rep,name=charges,proto3" json:"charges,omitempty"`
+	// holds: any of freeze, migrate (also drain), backfill and delete. A kind
+	// without delete dies with its machine: machine_delete forgets it.
+	Holds []string `protobuf:"bytes,3,rep,name=holds,proto3" json:"holds,omitempty"`
+	// disk: an object may hold up to its machine's disk on the node's
+	// storage, as a disk snapshot does; admission checks the node for it.
+	Disk          bool `protobuf:"varint,4,opt,name=disk,proto3" json:"disk,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ObjectKind) Reset() {
+	*x = ObjectKind{}
+	mi := &file_plugin_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ObjectKind) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ObjectKind) ProtoMessage() {}
+
+func (x *ObjectKind) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ObjectKind.ProtoReflect.Descriptor instead.
+func (*ObjectKind) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ObjectKind) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ObjectKind) GetCharges() []*Charge {
+	if x != nil {
+		return x.Charges
+	}
+	return nil
+}
+
+func (x *ObjectKind) GetHolds() []string {
+	if x != nil {
+		return x.Holds
+	}
+	return nil
+}
+
+func (x *ObjectKind) GetDisk() bool {
+	if x != nil {
+		return x.Disk
+	}
+	return false
+}
+
 type DescribeResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Name    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Version string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
 	// The contract revision the plugin was built against.
-	Contract      uint32           `protobuf:"varint,3,opt,name=contract,proto3" json:"contract,omitempty"`
-	Operations    []*OperationType `protobuf:"bytes,4,rep,name=operations,proto3" json:"operations,omitempty"`
+	Contract      uint32            `protobuf:"varint,3,opt,name=contract,proto3" json:"contract,omitempty"`
+	Operations    []*OperationType  `protobuf:"bytes,4,rep,name=operations,proto3" json:"operations,omitempty"`
+	Quota         []*QuotaDimension `protobuf:"bytes,5,rep,name=quota,proto3" json:"quota,omitempty"`
+	Objects       []*ObjectKind     `protobuf:"bytes,6,rep,name=objects,proto3" json:"objects,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DescribeResponse) Reset() {
 	*x = DescribeResponse{}
-	mi := &file_plugin_proto_msgTypes[2]
+	mi := &file_plugin_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -213,7 +448,7 @@ func (x *DescribeResponse) String() string {
 func (*DescribeResponse) ProtoMessage() {}
 
 func (x *DescribeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[2]
+	mi := &file_plugin_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -226,7 +461,7 @@ func (x *DescribeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DescribeResponse.ProtoReflect.Descriptor instead.
 func (*DescribeResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{2}
+	return file_plugin_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DescribeResponse) GetName() string {
@@ -257,6 +492,20 @@ func (x *DescribeResponse) GetOperations() []*OperationType {
 	return nil
 }
 
+func (x *DescribeResponse) GetQuota() []*QuotaDimension {
+	if x != nil {
+		return x.Quota
+	}
+	return nil
+}
+
+func (x *DescribeResponse) GetObjects() []*ObjectKind {
+	if x != nil {
+		return x.Objects
+	}
+	return nil
+}
+
 type ProbeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -265,7 +514,7 @@ type ProbeRequest struct {
 
 func (x *ProbeRequest) Reset() {
 	*x = ProbeRequest{}
-	mi := &file_plugin_proto_msgTypes[3]
+	mi := &file_plugin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -277,7 +526,7 @@ func (x *ProbeRequest) String() string {
 func (*ProbeRequest) ProtoMessage() {}
 
 func (x *ProbeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[3]
+	mi := &file_plugin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -290,7 +539,7 @@ func (x *ProbeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRequest.ProtoReflect.Descriptor instead.
 func (*ProbeRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{3}
+	return file_plugin_proto_rawDescGZIP(), []int{6}
 }
 
 type ProbeResponse struct {
@@ -303,7 +552,7 @@ type ProbeResponse struct {
 
 func (x *ProbeResponse) Reset() {
 	*x = ProbeResponse{}
-	mi := &file_plugin_proto_msgTypes[4]
+	mi := &file_plugin_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -315,7 +564,7 @@ func (x *ProbeResponse) String() string {
 func (*ProbeResponse) ProtoMessage() {}
 
 func (x *ProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[4]
+	mi := &file_plugin_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -328,7 +577,7 @@ func (x *ProbeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeResponse.ProtoReflect.Descriptor instead.
 func (*ProbeResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{4}
+	return file_plugin_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProbeResponse) GetSupported() bool {
@@ -354,14 +603,19 @@ type StartRequest struct {
 	// dry_run: report what the operation would do and change nothing. A
 	// dry run, and any start of a read_only operation, must answer done in
 	// its first reply; carrel does not ask after its key again.
-	DryRun        bool `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	DryRun bool `protobuf:"varint,4,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// reservation: the id of the record carrel holds for an operation with an
+	// object_kind. A plugin must refuse such a start without one, as
+	// INVALID_ARGUMENT: an agent built before the field drops it, and carrel
+	// would then not have counted the object.
+	Reservation   string `protobuf:"bytes,5,opt,name=reservation,proto3" json:"reservation,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StartRequest) Reset() {
 	*x = StartRequest{}
-	mi := &file_plugin_proto_msgTypes[5]
+	mi := &file_plugin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -373,7 +627,7 @@ func (x *StartRequest) String() string {
 func (*StartRequest) ProtoMessage() {}
 
 func (x *StartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[5]
+	mi := &file_plugin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -386,7 +640,7 @@ func (x *StartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRequest.ProtoReflect.Descriptor instead.
 func (*StartRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{5}
+	return file_plugin_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *StartRequest) GetIdempotencyKey() string {
@@ -417,6 +671,13 @@ func (x *StartRequest) GetDryRun() bool {
 	return false
 }
 
+func (x *StartRequest) GetReservation() string {
+	if x != nil {
+		return x.Reservation
+	}
+	return ""
+}
+
 type GetRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	IdempotencyKey string                 `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
@@ -426,7 +687,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_plugin_proto_msgTypes[6]
+	mi := &file_plugin_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -438,7 +699,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[6]
+	mi := &file_plugin_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -451,7 +712,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{6}
+	return file_plugin_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetRequest) GetIdempotencyKey() string {
@@ -470,7 +731,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_plugin_proto_msgTypes[7]
+	mi := &file_plugin_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -482,7 +743,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[7]
+	mi := &file_plugin_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -495,7 +756,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{7}
+	return file_plugin_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CancelRequest) GetIdempotencyKey() string {
@@ -534,7 +795,7 @@ type Operation struct {
 
 func (x *Operation) Reset() {
 	*x = Operation{}
-	mi := &file_plugin_proto_msgTypes[8]
+	mi := &file_plugin_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -546,7 +807,7 @@ func (x *Operation) String() string {
 func (*Operation) ProtoMessage() {}
 
 func (x *Operation) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[8]
+	mi := &file_plugin_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -559,7 +820,7 @@ func (x *Operation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Operation.ProtoReflect.Descriptor instead.
 func (*Operation) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{8}
+	return file_plugin_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Operation) GetIdempotencyKey() string {
@@ -637,7 +898,7 @@ var File_plugin_proto protoreflect.FileDescriptor
 const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"\fplugin.proto\x12\x10carrel.plugin.v1\"\x11\n" +
-	"\x0fDescribeRequest\"\x94\x02\n" +
+	"\x0fDescribeRequest\"\xfd\x02\n" +
 	"\rOperationType\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rparams_schema\x18\x02 \x01(\tR\fparamsSchema\x12 \n" +
@@ -649,23 +910,45 @@ const file_plugin_proto_rawDesc = "" +
 	"idempotent\x18\a \x01(\bR\n" +
 	"idempotent\x12\x18\n" +
 	"\atoolset\x18\b \x01(\tR\atoolset\x12\x17\n" +
-	"\adry_run\x18\t \x01(\bR\x06dryRun\"\x9d\x01\n" +
+	"\adry_run\x18\t \x01(\bR\x06dryRun\x12\x1f\n" +
+	"\vobject_kind\x18\n" +
+	" \x01(\tR\n" +
+	"objectKind\x12#\n" +
+	"\robject_effect\x18\v \x01(\tR\fobjectEffect\x12!\n" +
+	"\fobject_param\x18\f \x01(\tR\vobjectParam\"]\n" +
+	"\x0eQuotaDimension\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
+	"\rdefault_limit\x18\x02 \x01(\x01R\fdefaultLimit\x12\x12\n" +
+	"\x04unit\x18\x03 \x01(\tR\x04unit\"P\n" +
+	"\x06Charge\x12\x1c\n" +
+	"\tdimension\x18\x01 \x01(\tR\tdimension\x12\x16\n" +
+	"\x06amount\x18\x02 \x01(\x01R\x06amount\x12\x10\n" +
+	"\x03per\x18\x03 \x01(\tR\x03per\"~\n" +
+	"\n" +
+	"ObjectKind\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x122\n" +
+	"\acharges\x18\x02 \x03(\v2\x18.carrel.plugin.v1.ChargeR\acharges\x12\x14\n" +
+	"\x05holds\x18\x03 \x03(\tR\x05holds\x12\x12\n" +
+	"\x04disk\x18\x04 \x01(\bR\x04disk\"\x8d\x02\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
 	"\bcontract\x18\x03 \x01(\rR\bcontract\x12?\n" +
 	"\n" +
 	"operations\x18\x04 \x03(\v2\x1f.carrel.plugin.v1.OperationTypeR\n" +
-	"operations\"\x0e\n" +
+	"operations\x126\n" +
+	"\x05quota\x18\x05 \x03(\v2 .carrel.plugin.v1.QuotaDimensionR\x05quota\x126\n" +
+	"\aobjects\x18\x06 \x03(\v2\x1c.carrel.plugin.v1.ObjectKindR\aobjects\"\x0e\n" +
 	"\fProbeRequest\"E\n" +
 	"\rProbeResponse\x12\x1c\n" +
 	"\tsupported\x18\x01 \x01(\bR\tsupported\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x86\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xa8\x01\n" +
 	"\fStartRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1c\n" +
 	"\toperation\x18\x02 \x01(\tR\toperation\x12\x16\n" +
 	"\x06params\x18\x03 \x01(\tR\x06params\x12\x17\n" +
-	"\adry_run\x18\x04 \x01(\bR\x06dryRun\"5\n" +
+	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x12 \n" +
+	"\vreservation\x18\x05 \x01(\tR\vreservation\"5\n" +
 	"\n" +
 	"GetRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"8\n" +
@@ -703,35 +986,41 @@ func file_plugin_proto_rawDescGZIP() []byte {
 	return file_plugin_proto_rawDescData
 }
 
-var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_plugin_proto_goTypes = []any{
 	(*DescribeRequest)(nil),  // 0: carrel.plugin.v1.DescribeRequest
 	(*OperationType)(nil),    // 1: carrel.plugin.v1.OperationType
-	(*DescribeResponse)(nil), // 2: carrel.plugin.v1.DescribeResponse
-	(*ProbeRequest)(nil),     // 3: carrel.plugin.v1.ProbeRequest
-	(*ProbeResponse)(nil),    // 4: carrel.plugin.v1.ProbeResponse
-	(*StartRequest)(nil),     // 5: carrel.plugin.v1.StartRequest
-	(*GetRequest)(nil),       // 6: carrel.plugin.v1.GetRequest
-	(*CancelRequest)(nil),    // 7: carrel.plugin.v1.CancelRequest
-	(*Operation)(nil),        // 8: carrel.plugin.v1.Operation
+	(*QuotaDimension)(nil),   // 2: carrel.plugin.v1.QuotaDimension
+	(*Charge)(nil),           // 3: carrel.plugin.v1.Charge
+	(*ObjectKind)(nil),       // 4: carrel.plugin.v1.ObjectKind
+	(*DescribeResponse)(nil), // 5: carrel.plugin.v1.DescribeResponse
+	(*ProbeRequest)(nil),     // 6: carrel.plugin.v1.ProbeRequest
+	(*ProbeResponse)(nil),    // 7: carrel.plugin.v1.ProbeResponse
+	(*StartRequest)(nil),     // 8: carrel.plugin.v1.StartRequest
+	(*GetRequest)(nil),       // 9: carrel.plugin.v1.GetRequest
+	(*CancelRequest)(nil),    // 10: carrel.plugin.v1.CancelRequest
+	(*Operation)(nil),        // 11: carrel.plugin.v1.Operation
 }
 var file_plugin_proto_depIdxs = []int32{
-	1, // 0: carrel.plugin.v1.DescribeResponse.operations:type_name -> carrel.plugin.v1.OperationType
-	0, // 1: carrel.plugin.v1.Plugin.Describe:input_type -> carrel.plugin.v1.DescribeRequest
-	3, // 2: carrel.plugin.v1.Plugin.Probe:input_type -> carrel.plugin.v1.ProbeRequest
-	5, // 3: carrel.plugin.v1.Plugin.StartOperation:input_type -> carrel.plugin.v1.StartRequest
-	6, // 4: carrel.plugin.v1.Plugin.GetOperation:input_type -> carrel.plugin.v1.GetRequest
-	7, // 5: carrel.plugin.v1.Plugin.Cancel:input_type -> carrel.plugin.v1.CancelRequest
-	2, // 6: carrel.plugin.v1.Plugin.Describe:output_type -> carrel.plugin.v1.DescribeResponse
-	4, // 7: carrel.plugin.v1.Plugin.Probe:output_type -> carrel.plugin.v1.ProbeResponse
-	8, // 8: carrel.plugin.v1.Plugin.StartOperation:output_type -> carrel.plugin.v1.Operation
-	8, // 9: carrel.plugin.v1.Plugin.GetOperation:output_type -> carrel.plugin.v1.Operation
-	8, // 10: carrel.plugin.v1.Plugin.Cancel:output_type -> carrel.plugin.v1.Operation
-	6, // [6:11] is the sub-list for method output_type
-	1, // [1:6] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3,  // 0: carrel.plugin.v1.ObjectKind.charges:type_name -> carrel.plugin.v1.Charge
+	1,  // 1: carrel.plugin.v1.DescribeResponse.operations:type_name -> carrel.plugin.v1.OperationType
+	2,  // 2: carrel.plugin.v1.DescribeResponse.quota:type_name -> carrel.plugin.v1.QuotaDimension
+	4,  // 3: carrel.plugin.v1.DescribeResponse.objects:type_name -> carrel.plugin.v1.ObjectKind
+	0,  // 4: carrel.plugin.v1.Plugin.Describe:input_type -> carrel.plugin.v1.DescribeRequest
+	6,  // 5: carrel.plugin.v1.Plugin.Probe:input_type -> carrel.plugin.v1.ProbeRequest
+	8,  // 6: carrel.plugin.v1.Plugin.StartOperation:input_type -> carrel.plugin.v1.StartRequest
+	9,  // 7: carrel.plugin.v1.Plugin.GetOperation:input_type -> carrel.plugin.v1.GetRequest
+	10, // 8: carrel.plugin.v1.Plugin.Cancel:input_type -> carrel.plugin.v1.CancelRequest
+	5,  // 9: carrel.plugin.v1.Plugin.Describe:output_type -> carrel.plugin.v1.DescribeResponse
+	7,  // 10: carrel.plugin.v1.Plugin.Probe:output_type -> carrel.plugin.v1.ProbeResponse
+	11, // 11: carrel.plugin.v1.Plugin.StartOperation:output_type -> carrel.plugin.v1.Operation
+	11, // 12: carrel.plugin.v1.Plugin.GetOperation:output_type -> carrel.plugin.v1.Operation
+	11, // 13: carrel.plugin.v1.Plugin.Cancel:output_type -> carrel.plugin.v1.Operation
+	9,  // [9:14] is the sub-list for method output_type
+	4,  // [4:9] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_plugin_proto_init() }
@@ -745,7 +1034,7 @@ func file_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_proto_rawDesc), len(file_plugin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -395,6 +395,11 @@ func (o *Operations) handleError(e *Execution, err any) {
 	op["state"] = "failed"
 	op["phase"] = "failed"
 	op["error"] = failureResult(err)["error"]
+	if op["plugin"] != nil {
+		if problem := attemptLogged("plugin_object_settle", func() { e.settlePluginObject(false) }); problem != nil {
+			op["error"] = merge(obj(op["error"]), D{"plugin_object": "not_settled"})
+		}
+	}
 	slog.Log(context.Background(), failureLevel(err), "operation_failed", "operation", op["id"], "tool", op["tool"], "code", obj(op["error"])["code"], "error_type", fmt.Sprintf("%T", err))
 	if op["tool"] == "deployment_apply" && textAt(obj(op["args"]), "on_failure", "rollback") == "rollback" {
 		op["state"] = "cleaning_up"
@@ -432,7 +437,7 @@ func (o *Operations) saveOutcome(e *Execution) {
 	}
 	op := e.Op
 	reserved := false
-	for _, kind := range []string{"machines", "networks", "snapshots", "ports", "domains", "peers", "vips", "vpn_clients"} {
+	for _, kind := range []string{"machines", "networks", "snapshots", "ports", "domains", "peers", "vips", "vpn_clients", pluginObjectRows} {
 		for _, v := range e.S.Objects(kind, integer(op["tenant_n"])) {
 			reserved = reserved || v["operation_id"] == op["id"]
 		}

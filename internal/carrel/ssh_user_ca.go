@@ -182,6 +182,9 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, looku
 			return "skipped", "Has snapshots: delete them first, a rollback would undo the backfill"
 		}
 	}
+	if held := e.pluginHeld(n, vmid, "backfill"); len(held) > 0 {
+		return "skipped", "Has a " + str(held[0]["kind"]) + ", " + str(held[0]["name"]) + ": delete it first"
+	}
 	principal := tenantPrincipal(t, owner)
 	if principal == "" {
 		return "skipped", "Personal tenant: name the owner's portal username in owner"

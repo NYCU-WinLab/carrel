@@ -3,6 +3,7 @@ package carrel
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 )
 
@@ -19,7 +20,10 @@ var PluginContracts = []uint32{1}
 const (
 	MaxPlugins          = 32
 	MaxPluginOperations = 16
-	MaxPluginSchema     = 8 << 10
+	// MaxPluginKinds bounds a plugin's quota dimensions and object kinds,
+	// and a kind's charges.
+	MaxPluginKinds  = 8
+	MaxPluginSchema = 8 << 10
 	// MaxPluginText bounds a version, a description or a reason.
 	MaxPluginText = 1 << 10
 	// MaxPluginReport bounds the whole report as JSON, well inside a claim
@@ -38,23 +42,59 @@ type PluginOperation struct {
 	Toolset     string          `json:"toolset,omitempty"`
 	// DryRun: the plugin honours dry_run on a start of this operation.
 	DryRun bool `json:"dry_run,omitempty"`
+	// The object the operation acts on (#663): a kind of the plugin's
+	// Objects, the effect (create, delete or use) and the parameter that
+	// names the object.
+	ObjectKind   string `json:"object_kind,omitempty"`
+	ObjectEffect string `json:"object_effect,omitempty"`
+	ObjectParam  string `json:"object_param,omitempty"`
+}
+
+// PluginQuota is a quota dimension a plugin's objects are charged to.
+type PluginQuota struct {
+	Name         string  `json:"name"`
+	DefaultLimit float64 `json:"default_limit"`
+	Unit         string  `json:"unit,omitempty"`
+}
+
+// PluginCharge is what one object charges to a dimension: Amount, or
+// Amount times the machine's Per (cpu, memory_mb or disk_gb).
+type PluginCharge struct {
+	Dimension string  `json:"dimension"`
+	Amount    float64 `json:"amount"`
+	Per       string  `json:"per,omitempty"`
+}
+
+// PluginObjectKind is a kind of object carrel keeps a record of.
+type PluginObjectKind struct {
+	Name    string         `json:"name"`
+	Charges []PluginCharge `json:"charges,omitempty"`
+	Holds   []string       `json:"holds,omitempty"`
+	Disk    bool           `json:"disk,omitempty"`
 }
 
 // PluginInfo is one plugin as an agent found it. A plugin that does not
 // answer, or speaks a contract the agent does not serve, is reported with
 // Supported false and the reason.
 type PluginInfo struct {
-	Name       string            `json:"name"`
-	Version    string            `json:"version,omitempty"`
-	Contract   uint32            `json:"contract,omitempty"`
-	Operations []PluginOperation `json:"operations,omitempty"`
-	Supported  bool              `json:"supported"`
-	Reason     string            `json:"reason,omitempty"`
+	Name       string             `json:"name"`
+	Version    string             `json:"version,omitempty"`
+	Contract   uint32             `json:"contract,omitempty"`
+	Operations []PluginOperation  `json:"operations,omitempty"`
+	Quota      []PluginQuota      `json:"quota,omitempty"`
+	Objects    []PluginObjectKind `json:"objects,omitempty"`
+	Supported  bool               `json:"supported"`
+	Reason     string             `json:"reason,omitempty"`
 }
 
 // pluginName is a plugin's name: its socket is <name>.sock and its tools
 // will carry the name.
 var pluginName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// pluginDimension is a quota dimension's name, as carrel's own are.
+var pluginDimension = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 }
 
 // PluginName reports whether s is a valid plugin name.
 func PluginName(s string) bool { return pluginName.MatchString(s) }
@@ -84,7 +124,33 @@ func CheckPlugins(plugins []PluginInfo) string {
 		if WireLen(pl.Version) > MaxPluginText || WireLen(pl.Reason) > MaxPluginText {
 			return fmt.Sprintf("Plugin %s reports a version or reason over %d bytes", pl.Name, MaxPluginText)
 		}
+		if len(pl.Quota) > MaxPluginKinds || len(pl.Objects) > MaxPluginKinds {
+			return fmt.Sprintf("Plugin %s declares more than %d quota dimensions or object kinds", pl.Name, MaxPluginKinds)
+		}
+		for _, q := range pl.Quota {
+			if !pluginDimension.MatchString(q.Name) || !finite(q.DefaultLimit) || WireLen(q.Unit) > 16 {
+				return fmt.Sprintf("Plugin %s quota dimension %q needs a name of a-z, 0-9 and _, a finite limit of 0 or more and a short unit", pl.Name, q.Name)
+			}
+		}
+		for _, k := range pl.Objects {
+			if !pluginName.MatchString(k.Name) || len(k.Charges) > MaxPluginKinds || len(k.Holds) > len(pluginHolds) {
+				return fmt.Sprintf("Plugin %s object kind %q needs a name of a-z, 0-9 and - and at most %d charges", pl.Name, k.Name, MaxPluginKinds)
+			}
+			for _, c := range k.Charges {
+				if !pluginDimension.MatchString(c.Dimension) || !finite(c.Amount) || WireLen(c.Per) > 16 {
+					return fmt.Sprintf("Plugin %s object kind %s charges %q with an amount that is not finite and 0 or more", pl.Name, k.Name, c.Dimension)
+				}
+			}
+			for _, h := range k.Holds {
+				if WireLen(h) > 16 {
+					return fmt.Sprintf("Plugin %s object kind %s names a hold over 16 bytes", pl.Name, k.Name)
+				}
+			}
+		}
 		for _, op := range pl.Operations {
+			if WireLen(op.ObjectKind) > 32 || WireLen(op.ObjectEffect) > 16 || WireLen(op.ObjectParam) > 32 {
+				return fmt.Sprintf("Plugin %s operation %s names an object kind, effect or parameter too long", pl.Name, op.Name)
+			}
 			if op.Toolset != "" && !pluginName.MatchString(op.Toolset) {
 				return fmt.Sprintf("Plugin %s operation %s names toolset %q, not of a-z, 0-9 and -", pl.Name, op.Name, op.Toolset)
 			}

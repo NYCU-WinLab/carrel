@@ -331,11 +331,14 @@ func (e *Execution) Usage(t D) D {
 	used["snapshot_gb"], _ = e.snapshotGB(n)
 	used["functions"] = len(e.S.Objects("functions", n))
 	used["function_gb"] = math.Round(e.functionBytes(n)/GiB*100) / 100
+	e.pluginUsage(n, used)
 	return used
 }
 func (e *Execution) Quota(t D, delta ...D) D {
 	used := without(e.Usage(t), "images_gb")
 	limit := without(obj(t["quota"]), "images_gb")
+	units := clone(Units)
+	e.pluginLimits(limit, units)
 	d := D{}
 	if len(delta) > 0 && delta[0] != nil {
 		d = delta[0]
@@ -359,7 +362,7 @@ func (e *Execution) Quota(t D, delta ...D) D {
 			}
 		}
 	}
-	result := D{"used": used, "limit": limit, "remaining": remaining, "units": Units, "over_limit": over}
+	result := D{"used": used, "limit": limit, "remaining": remaining, "units": units, "over_limit": over}
 	if len(violations) > 0 {
 		fail("quota_exceeded", "Tenant quota would be exceeded", merge(violations[0], D{"violations": violations, "quota_after": result}))
 	}

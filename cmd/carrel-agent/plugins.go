@@ -155,7 +155,21 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 	for _, op := range d.Operations {
 		info.Operations = append(info.Operations, carrel.PluginOperation{Name: op.Name, Description: op.Description,
 			Params: json.RawMessage(op.ParamsSchema), Member: op.Member, ReadOnly: op.ReadOnly,
-			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset), DryRun: op.DryRun})
+			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset), DryRun: op.DryRun,
+			ObjectKind: clip(op.ObjectKind), ObjectEffect: clip(op.ObjectEffect), ObjectParam: clip(op.ObjectParam)})
+	}
+	for _, q := range d.Quota {
+		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit)})
+	}
+	for _, k := range d.Objects {
+		kind := carrel.PluginObjectKind{Name: clip(k.Name), Disk: k.Disk}
+		for _, c := range k.Charges {
+			kind.Charges = append(kind.Charges, carrel.PluginCharge{Dimension: clip(c.Dimension), Amount: c.Amount, Per: clip(c.Per)})
+		}
+		for _, h := range k.Holds {
+			kind.Holds = append(kind.Holds, clip(h))
+		}
+		info.Objects = append(info.Objects, kind)
 	}
 	p, err := c.Probe(ctx, &pluginpb.ProbeRequest{})
 	if err != nil {
@@ -241,6 +255,9 @@ type pluginJob struct {
 	Operation      string          `json:"operation"`
 	Params         json.RawMessage `json:"params"`
 	DryRun         bool            `json:"dry_run"`
+	// Reservation is the record the control plane holds for an object
+	// operation (#663).
+	Reservation string `json:"reservation"`
 }
 
 func reply(v any) ([]byte, bool) {
@@ -288,11 +305,19 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 		if j.DryRun && !slices.ContainsFunc(info.Operations, func(op carrel.PluginOperation) bool { return op.Name == j.Operation && op.DryRun }) {
 			return refuse("plugin_refused", fmt.Sprintf("plugin %s operation %s does not take a dry run", j.Plugin, j.Operation))
 		}
+		// An object operation runs only on the record the control plane
+		// reserved for it, and a reserved one only on a plugin that, now,
+		// says it acts on an object: either way round the count would be
+		// wrong.
+		if !j.DryRun && slices.ContainsFunc(info.Operations, func(op carrel.PluginOperation) bool { return op.Name == j.Operation && op.ObjectKind != "" }) != (j.Reservation != "") {
+			return refuse("plugin_refused", fmt.Sprintf("plugin %s operation %s and the control plane disagree on its object record", j.Plugin, j.Operation))
+		}
 		params := string(j.Params)
 		if params == "" {
 			params = "{}"
 		}
-		op, err = c.StartOperation(ctx, &pluginpb.StartRequest{IdempotencyKey: j.IdempotencyKey, Operation: j.Operation, Params: params, DryRun: j.DryRun})
+		op, err = c.StartOperation(ctx, &pluginpb.StartRequest{IdempotencyKey: j.IdempotencyKey, Operation: j.Operation, Params: params,
+			DryRun: j.DryRun, Reservation: j.Reservation})
 	case "get":
 		op, err = c.GetOperation(ctx, &pluginpb.GetRequest{IdempotencyKey: j.IdempotencyKey})
 	case "cancel":

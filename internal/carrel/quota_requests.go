@@ -2,8 +2,10 @@ package carrel
 
 import "time"
 
-func validateQuotaLimit(t D, dim string, amount any, increase bool) {
-	validateDimension(dim)
+func (e *Execution) validateQuotaLimit(t D, dim string, amount any, increase bool) {
+	if _, plugin := e.pluginDims()[dim]; !plugin {
+		validateDimension(dim)
+	}
 	hard := D{"public_ports": 10, "networks": 99, "machines": 100, "ips": 100}
 	maximum := num(fallback(hard, dim, 1000000))
 	if num(amount) < 0 || num(amount) > maximum {
@@ -25,7 +27,7 @@ var quotaRequestKind = requestKind{
 	name: "quota", quotaAfter: true,
 	fingerprint: func(a D) D { return pick(a, "dimension", "amount", "reason", "until") },
 	check: func(e *Execution, a, t D) D {
-		validateQuotaLimit(t, str(a["dimension"]), a["amount"], true)
+		e.validateQuotaLimit(t, str(a["dimension"]), a["amount"], true)
 		validateGrantExpiry(a["until"])
 		return D{"dimension": a["dimension"], "amount": a["amount"], "until": a["until"]}
 	},

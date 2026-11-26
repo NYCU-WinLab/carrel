@@ -52,6 +52,9 @@ type pluginTool struct {
 	// Hints for clients and the toolset it is also listed under.
 	Destructive, Idempotent bool
 	Toolset                 string
+	// The object the operation acts on, and its declaration as the first
+	// node reports it (pluginObjectSpec).
+	ObjectKind, ObjectEffect, ObjectSpec string
 	// Nodes report the plugin supported with this operation, in
 	// configuration order.
 	Nodes []string
@@ -104,9 +107,10 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 			for _, op := range pl.Operations {
 				name := pluginToolName(pl.Name, op.Name)
 				if t := tools[name]; t != nil {
-					// A node that grants other access is not one this tool
-					// runs on, as during a rolling update of the plugin.
-					if op.Member == t.Member && op.ReadOnly == t.ReadOnly {
+					// A node that grants other access, or declares the
+					// object otherwise, is not one this tool runs on, as
+					// during a rolling update of the plugin.
+					if op.Member == t.Member && op.ReadOnly == t.ReadOnly && pluginObjectSpec(pl, op) == t.ObjectSpec {
 						t.Nodes = append(t.Nodes, n.Name)
 					}
 					continue
@@ -115,13 +119,16 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 					left[name] = "a core tool has this name"
 				} else if problem := pluginSchemaProblem(op); problem != "" {
 					left[name] = problem
+				} else if problem := pluginObjectProblem(pl, op); problem != "" {
+					left[name] = problem
 				} else if op.Toolset != "" && obj(Contract["toolsets"])[op.Toolset] == nil {
 					left[name] = fmt.Sprintf("toolset %s is not one of the tool contract", op.Toolset)
 				} else {
 					delete(left, name)
 					tools[name] = &pluginTool{Name: name, Plugin: pl.Name, Operation: op.Name, Description: op.Description,
 						Schema: op.Params, Member: op.Member, ReadOnly: op.ReadOnly, Destructive: op.Destructive,
-						Idempotent: op.Idempotent, Toolset: op.Toolset, Nodes: []string{n.Name}}
+						Idempotent: op.Idempotent, Toolset: op.Toolset, ObjectKind: op.ObjectKind, ObjectEffect: op.ObjectEffect,
+						ObjectSpec: pluginObjectSpec(pl, op), Nodes: []string{n.Name}}
 				}
 			}
 		}
@@ -159,7 +166,11 @@ func (p *Platform) pluginCatalog() D {
 		if t.Member {
 			access = "member"
 		}
-		list = append(list, D{"tool": t.Name, "plugin": t.Plugin, "operation": t.Operation, "access": access, "read_only": t.ReadOnly, "nodes": t.Nodes})
+		entry := D{"tool": t.Name, "plugin": t.Plugin, "operation": t.Operation, "access": access, "read_only": t.ReadOnly, "nodes": t.Nodes}
+		if t.ObjectKind != "" {
+			entry["object"] = D{"kind": t.ObjectKind, "effect": t.ObjectEffect}
+		}
+		list = append(list, entry)
 	}
 	sort.Slice(list, func(i, j int) bool { return str(list[i]["tool"]) < str(list[j]["tool"]) })
 	out := D{"tools": list}
@@ -333,7 +344,7 @@ func pluginRefusal(code, name, node string) {
 // pluginReserved are carrel's keys in an answer, which a plugin's result
 // never sets: a result cannot claim a failure, or an error code, of carrel's.
 var pluginReserved = []string{"ok", "error", "operation", "dry_run", "reserved", "resource_changes", "state",
-	"plugin", "node", "task", "suggestions", "next_action"}
+	"plugin", "node", "task", "suggestions", "next_action", "object", "quota_after"}
 
 // pluginResult is what a plugin's result adds to carrel's answer: the keys
 // of a JSON object but carrel's own, or the value under "result".
@@ -352,8 +363,9 @@ func pluginResult(v any) D {
 func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 	node := ""
 	var vmid any
+	var m D
 	if a["machine"] != nil {
-		m := e.Machine(t, a["machine"])
+		m = e.Machine(t, a["machine"])
 		vmid = m["vmid"]
 		if n := e.P.nodeOf(m).Name; contains(pt.Nodes, n) {
 			node = n
@@ -393,12 +405,32 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 		params["machine"] = str(vmid)
 	}
 	dry := boolean(a["dry_run"])
+	// An object operation is checked against the record, the quota and the
+	// node first, as a core dry run is; nothing is reserved.
+	planned := D{}
+	if op.ObjectKind != "" {
+		pl, _ := e.P.pluginInfo(node, pt.Plugin)
+		if pluginObjectProblem(pl, op) != "" || m == nil {
+			fail("unsupported", fmt.Sprintf("Node %s no longer reports plugin %s with operation %s as it was listed", node, pt.Plugin, pt.Operation),
+				D{"recovery": "retry_infrastructure"})
+		}
+		_, row, charge := e.planPluginObject(pl, op, a, t, m)
+		object := D{"kind": op.ObjectKind, "name": a[op.ObjectParam], "state": "planned"}
+		if row != nil {
+			object["state"] = row.State
+		}
+		if charge != nil {
+			object["charge"] = charge
+			planned["quota_after"] = e.Quota(t, charge)
+		}
+		planned["object"] = object
+	}
 	// A plugin that does not say it honours dry_run is never sent one: it
 	// would run the operation. carrel plans it without the plugin.
 	if dry && !op.DryRun {
 		e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "ok")
-		return D{"ok": true, "dry_run": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation,
-			"node": node, "reserved": false, "resource_changes": false}
+		return merge(planned, D{"ok": true, "dry_run": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation,
+			"node": node, "reserved": false, "resource_changes": false})
 	}
 	job := D{"op": "plugin", "plugin": pt.Plugin, "operation": pt.Operation, "call": "start",
 		"idempotency_key": "inline-" + randomID(), "params": params, "dry_run": dry}
@@ -419,7 +451,7 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 	default:
 		pluginFailure(pt.Plugin, r)
 	}
-	out := merge(pluginResult(r["result"]), D{"ok": true})
+	out := merge(pluginResult(r["result"]), merge(planned, D{"ok": true}))
 	if dry {
 		out = merge(out, D{"dry_run": true, "reserved": false, "resource_changes": false})
 	}
@@ -481,11 +513,34 @@ func (e *Execution) dispatchPlugin(a, w D) D {
 			fail("unsupported", fmt.Sprintf("Node %s, which ran this operation, no longer reports plugin %s", plug["node"], plug["plugin"]),
 				D{"recovery": "retry_infrastructure"})
 		}
+		e.reserveIfObject(node, op, a)
 		return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
 	}
 	runs := integer(plug["runs"]) + 1
 	plug["node"], plug["runs"], plug["key"], plug["read_only"], plug["ended"], plug["start_sent"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly, false, false
+	delete(plug, "refused")
+	delete(plug, "plugin_code")
+	e.reserveIfObject(node, op, a)
 	return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
+}
+
+// reserveIfObject reserves the record of an object operation, after the
+// last wait: a waiting operation holds no reservation.
+func (e *Execution) reserveIfObject(node string, op PluginOperation, a D) {
+	if op.ObjectKind == "" {
+		return
+	}
+	plug := obj(e.Op["plugin"])
+	pl, _ := e.P.pluginInfo(node, str(plug["plugin"]))
+	if problem := pluginObjectProblem(pl, op); problem != "" {
+		fail("unsupported", fmt.Sprintf("Plugin %s on node %s: %s", plug["plugin"], node, problem), D{"recovery": "retry_infrastructure"})
+	}
+	t := e.S.TenantN(integer(e.Op["tenant_n"]))
+	m := e.S.Get("machines", str(obj(e.Op["machine_target"])["vmid"]))
+	if m == nil {
+		fail("not_found", "The operation's original machine no longer exists")
+	}
+	e.reservePluginObject(pl, op, a, t, m)
 }
 
 func (p *Platform) nodeTarget(name string) string {
@@ -528,6 +583,9 @@ func (e *Execution) PerformPlugin() {
 					params["machine"] = str(id)
 				}
 				r["params"] = params
+				if plug["object"] != nil {
+					r["reservation"] = plug["object"]
+				}
 			}
 			v, err := e.P.Backend.Call(e.Ctx, r, target)
 			if e.Ctx.Err() != nil {
@@ -542,7 +600,7 @@ func (e *Execution) PerformPlugin() {
 			// other failure leaves its fate unknown, so a retry asks after
 			// the same key.
 			if call == "start" && first && (code == "invalid" || code == "conflict" || code == "plugin_refused") {
-				plug["ended"] = true
+				plug["ended"], plug["refused"] = true, true
 			}
 			first = false
 			pluginRefusal(code, name, str(plug["node"]))
@@ -580,6 +638,9 @@ func (e *Execution) PerformPlugin() {
 	case "cancelled":
 		fail("cancelled", fmt.Sprintf("Plugin %s cancelled the operation", name), D{"recovery": "retry"})
 	default:
+		// Kept for the record: a delete the plugin answers not_found has
+		// nothing left to delete.
+		plug["plugin_code"] = r["error_code"]
 		pluginFailure(name, r)
 	}
 }
@@ -588,9 +649,18 @@ func (e *Execution) PerformPlugin() {
 func (e *Execution) FinishPlugin() D {
 	plug := obj(e.Op["plugin"])
 	out := obj(e.Op["plugin_outcome"])
+	e.settlePluginObject(true)
 	// The plugin's result keys at the top, as a core tool's; carrel's own win.
-	return merge(pluginResult(out["result"]), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
+	r := merge(pluginResult(out["result"]), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
 		"task": out["task"], "resource_changes": !boolean(plug["read_only"])})
+	if plug["object"] != nil {
+		state := "deleted"
+		if row, ok := rowOf[pluginObject](e.S, pluginObjectRows, str(plug["object"])); ok {
+			state = row.State
+		}
+		r["object"] = D{"kind": plug["object_kind"], "name": plug["object_name"], "state": state}
+	}
+	return r
 }
 
 var pluginPhases = Phases{Perform: (*Execution).PerformPlugin, Finish: func(e *Execution, _ D) D { return e.FinishPlugin() }}
