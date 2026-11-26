@@ -59,3 +59,17 @@ func TestAHungJumpHostCallReturnsAfterTheShortJumpTimeout(t *testing.T) {
 		t.Fatalf("jump call took %s", time.Since(started))
 	}
 }
+
+// A plugin job's error code reaches the caller, so it can tell ask again
+// (plugin_unavailable) from no.
+func TestPluginErrorCodesReachTheCaller(t *testing.T) {
+	for _, code := range []string{"plugin_unavailable", "plugin_refused", "plugin_error", "not_found", "invalid", "conflict"} {
+		dir := t.TempDir()
+		must(os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nprintf '%s' '{\"ok\":false,\"error_code\":\""+code+"\",\"error\":\"x\"}'\nexit 1\n"), 0700))
+		t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+		_, err := (&SSHBackend{Config: "unused"}).Call(context.Background(), D{"op": "plugin", "plugin": "snapshot"}, "carrel-node")
+		if detail := obj(failureResult(err)["error"]); detail["backend_code"] != code {
+			t.Fatalf("%s: %v", code, detail)
+		}
+	}
+}

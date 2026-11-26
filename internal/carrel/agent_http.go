@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -55,6 +56,8 @@ func (p *Platform) AgentHandler() http.Handler {
 			// Capabilities: what this agent can do beyond jobs, such as
 			// "stream" for consoles.
 			Capabilities []string `json:"capabilities"`
+			// Plugins: the plugins the agent found on the node (#660).
+			Plugins []PluginInfo `json:"plugins"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, maxAgentClaim)).Decode(&in) != nil || in.Session == "" || in.Seq == 0 {
 			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "The body must be JSON with session and seq"}})
@@ -65,13 +68,18 @@ func (p *Platform) AgentHandler() http.Handler {
 				"message": fmt.Sprintf("This control plane serves agent protocols %s, not %q. Install carrel-agent from release %s.", strings.Join(agentProtocols, ", "), in.Protocol, Version)}})
 			return
 		}
+		if msg := CheckPlugins(in.Plugins); msg != "" {
+			// A bad plugin report costs the node its plugins, never its jobs.
+			slog.Warn("agent plugin report refused", "node", node, "reason", msg)
+			in.Plugins = nil
+		}
 		capabilities := in.Capabilities
 		if in.Drain {
 			// An agent shutting down claims nothing, so it takes no console:
 			// consoles go back to SSH until its successor polls.
 			capabilities = nil
 		}
-		p.Hub.Hello(node, in.Session, in.Protocol, in.Release, capabilities...)
+		p.Hub.Hello(node, in.Session, in.Protocol, in.Release, in.Plugins, capabilities...)
 		if in.Drain {
 			p.Hub.Heartbeat(node, in.Session, in.Seq, in.Held)
 			jsonResponse(w, 200, D{"jobs": []AgentJob{}})

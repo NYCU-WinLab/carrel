@@ -64,7 +64,9 @@ func adapterReply(parent, ctx context.Context, request D, target string, started
 		} else if failed != nil {
 			code = "adapter_process_failed"
 		}
-		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal", "storage_unavailable"}, result["error_code"]) {
+		if contains([]string{"invalid_request", "command_failed", "command_timeout", "adapter_internal", "storage_unavailable",
+			// Plugin jobs (#660): kept, so a caller can tell ask again from no.
+			"plugin_unavailable", "plugin_refused", "plugin_error", "not_found", "invalid", "conflict"}, result["error_code"]) {
 			code = str(result["error_code"])
 		}
 		details := D{"code": "backend_unavailable", "message": "Infrastructure action failed; use the operation ID for operator diagnostics", "component": "node_adapter", "backend_code": code, "action": fallback(request, "action", request["op"]), "operation": ctx.Value(operationLogKey{}), "request_id": request["request_id"], "recovery": "retry_infrastructure"}

@@ -142,7 +142,7 @@ func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
 	if obj(nodes[2]["inventory"])["node"] != "carrel03" || nodes[0]["agent"] != nil {
 		t.Fatal(encoded(nodes))
 	}
-	p.Hub.Hello(p.Config.Nodes[1].Name, "s", "v1", "0.11.0")
+	p.Hub.Hello(p.Config.Nodes[1].Name, "s", "v1", "0.11.0", nil)
 	p.Hub.Heartbeat(p.Config.Nodes[1].Name, "s", 1, nil)
 	nodes = dicts(p.execution(context.Background()).Admin("node_list", D{}, admin)["nodes"])
 	if a := obj(nodes[1]["agent"]); a["connected"] != true || a["release"] != "0.11.0" || nodes[1]["inventory"] == nil {
@@ -160,11 +160,11 @@ func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
 // reported.
 func TestAgentHelloIgnoresAReplacedProcess(t *testing.T) {
 	hub := NewAgentHub()
-	hub.Hello("pve1", "old", "v1", "0.11.0")
+	hub.Hello("pve1", "old", "v1", "0.11.0", nil)
 	hub.Heartbeat("pve1", "old", 1, nil)
-	hub.Hello("pve1", "new", "v1", "0.12.0")
+	hub.Hello("pve1", "new", "v1", "0.12.0", nil)
 	hub.Heartbeat("pve1", "new", 1, nil)
-	hub.Hello("pve1", "old", "v1", "0.11.0")
+	hub.Hello("pve1", "old", "v1", "0.11.0", nil)
 	if s := hub.Status("pve1", time.Now()); s["release"] != "0.12.0" {
 		t.Fatalf("status %v", s)
 	}
@@ -259,7 +259,7 @@ func TestAgentDrainingTakesNoConsole(t *testing.T) {
 		p.AgentHandler().ServeHTTP(w, req)
 		return w.Code
 	}
-	p.Hub.Hello("pve1", "s", "v1", "0.11.0", "stream")
+	p.Hub.Hello("pve1", "s", "v1", "0.11.0", nil, "stream")
 	p.Hub.Heartbeat("pve1", "s", 1, nil)
 	if !p.Hub.Capable("pve1", "stream", time.Now()) {
 		t.Fatal("the agent cannot stream before it drains")
@@ -311,5 +311,25 @@ func TestStreamKeepAliveIsShort(t *testing.T) {
 	}
 	if got := [3]int{sock(syscall.TCP_KEEPIDLE), sock(syscall.TCP_KEEPINTVL), sock(syscall.TCP_KEEPCNT)}; got != [3]int{15, 5, 3} {
 		t.Errorf("idle, interval, count = %v", got)
+	}
+}
+
+// A plugin report the control plane refuses costs the node its plugins,
+// never its jobs: the claim is still taken.
+func TestABadPluginReportStillConnectsTheNode(t *testing.T) {
+	p, _, _ := originFixture(t)
+	p.Config.Nodes = []NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentTokenSHA256: digest("cat_good"), AgentSource: "10.200.0.1"},
+	}
+	bad := `[{"name":"snapshot","contract":1,"operations":[{"name":"x","params_schema":"not an object"}]}]`
+	body := fmt.Sprintf(`{"protocol":%q,"release":"0.15.0","session":"s","seq":1,"held":[],"drain":true,"plugins":%s}`, AgentProtocol, bad)
+	if code := agentRequest(t, p, "/sites/v1/agent/claim?node=pve1", "cat_good", "10.200.0.1", body); code != 200 {
+		t.Fatalf("claim: %d", code)
+	}
+	if s := p.Hub.Status("pve1", time.Now()); s["connected"] != true {
+		t.Fatalf("status %v", s)
+	}
+	if got := p.Hub.Plugins("pve1", time.Now()); len(got) != 0 {
+		t.Fatalf("a refused report was kept: %+v", got)
 	}
 }

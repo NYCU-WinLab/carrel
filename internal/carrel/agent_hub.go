@@ -44,6 +44,8 @@ type agentNode struct {
 	// latest poll.
 	protocol, release string
 	capabilities      []string
+	// plugins are the plugins the agent found on the node (#660).
+	plugins []PluginInfo
 	// certificate is when the client certificate of the agent's latest
 	// request expires (#601); zero on token sign-in.
 	certificate time.Time
@@ -238,13 +240,25 @@ func (h *AgentHub) accept(node, session string, seq uint64, held []string) bool 
 
 // Hello records the protocol and release a node's agent reported. A process
 // already replaced by a newer one does not overwrite them.
-func (h *AgentHub) Hello(node, session, protocol, release string, capabilities ...string) {
+func (h *AgentHub) Hello(node, session, protocol, release string, plugins []PluginInfo, capabilities ...string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	n := h.node(node)
 	if !n.retired[session] {
 		n.protocol, n.release, n.capabilities = protocol, release, slices.Clone(capabilities)
+		n.plugins = slices.Clone(plugins)
 	}
+}
+
+// Plugins are the plugins a node's agent reported, while it polls.
+func (h *AgentHub) Plugins(node string, now time.Time) []PluginInfo {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.nodes[node]
+	if n == nil || n.seen.IsZero() || now.Sub(n.seen) >= agentSilence {
+		return nil
+	}
+	return slices.Clone(n.plugins)
 }
 
 // Certificate records when the client certificate a node's agent signed in
@@ -287,6 +301,17 @@ func (h *AgentHub) Status(node string, now time.Time) D {
 	}
 	out := D{"connected": now.Sub(n.seen) < agentSilence, "protocol": n.protocol, "release": n.release,
 		"capabilities": append([]string{}, n.capabilities...), "last_poll": n.seen.UTC().Format(time.RFC3339)}
+	if len(n.plugins) > 0 {
+		plugins := make([]D, 0, len(n.plugins))
+		for _, pl := range n.plugins {
+			d := D{"name": pl.Name, "version": pl.Version, "contract": pl.Contract, "supported": pl.Supported}
+			if pl.Reason != "" {
+				d["reason"] = pl.Reason
+			}
+			plugins = append(plugins, d)
+		}
+		out["plugins"] = plugins
+	}
 	if !n.certificate.IsZero() {
 		out["certificate_expires"] = n.certificate.UTC().Format(time.RFC3339)
 		out["certificate_expiring"] = n.certificate.Sub(now) < agentCertificateWarn
