@@ -25,6 +25,11 @@ var backupVolume = regexp.MustCompile(`^[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+
 func (tx *Execution) forgetMachine(n int, m D) {
 	for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports", "cloud_init", pluginObjectRows} {
 		for _, o := range tx.S.Objects(kind, n) {
+			// A plugin object that holds the delete outlives its machine,
+			// as when the sweep drops a VM that vanished: its record stays.
+			if kind == pluginObjectRows && contains(o["holds"], "delete") {
+				continue
+			}
 			if integer(o["vmid"]) == integer(m["vmid"]) {
 				tx.S.Remove(kind, fallback(o, "id", o["vmid"]))
 			}

@@ -186,6 +186,17 @@ func TestPluginObjectsHoldTheirMachine(t *testing.T) {
 			t.Fatal("the machine's records outlived it")
 		}
 	})
+	t.Run("sweep", func(t *testing.T) {
+		// A VM that vanished is swept, but an object that outlives its
+		// machine keeps its record.
+		p, _ := fixture(t)
+		m := seedMachine(p, "web", 10100)
+		putCopy(p, 10100, "delete")
+		p.execution(context.Background()).removeMachineRecord(1, m)
+		if len(p.Store.Objects(pluginObjectRows)) != 1 || p.Store.Get("machines", "10100") != nil {
+			t.Fatal("the sweep dropped a record that outlives its machine")
+		}
+	})
 	t.Run("migrate and drain", func(t *testing.T) {
 		p, _, _ := nodeFixture(t)
 		seedMachine(p, "web", 10100)
