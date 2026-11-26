@@ -12,7 +12,7 @@ import (
 var terminal = []string{"succeeded", "failed", "rolled_back", "cleanup_failed"}
 
 func publicOperation(o D) D {
-	r := pick(o, "id", "tool", "state", "phase", "created_at", "updated_at", "attempts", "result", "error", "reserved", "resource_changes", "cleanup", "current_resource", "ready_at")
+	r := pick(o, "id", "tool", "state", "phase", "created_at", "updated_at", "attempts", "result", "error", "reserved", "resource_changes", "cleanup", "current_resource", "ready_at", "progress", "message")
 	if o["state"] == "waiting" && o["waiting_for"] != nil {
 		r["waiting_for"] = o["waiting_for"]
 	}
@@ -65,7 +65,7 @@ func (o *Operations) CheckQueue(t D, tool string) {
 		fail("conflict", "Operation queue is full; wait for an existing operation", D{"retryable": true})
 	}
 }
-func (o *Operations) Submit(tool string, a, w, t D) D {
+func (o *Operations) Submit(tool string, a, w, t D, extra ...D) D {
 	args := without(a, "dry_run", "idempotency_key", "wait_seconds", "detail")
 	fingerprint := digest(string(encoded([]any{tool, withoutPortalKeys(args)})))
 	key := str(a["idempotency_key"])
@@ -86,6 +86,7 @@ func (o *Operations) Submit(tool string, a, w, t D) D {
 		k = key
 	}
 	op := D{"id": randomID(), "tenant_n": t["n"], "tool": tool, "args": args, "who": clone(w), "fingerprint": fingerprint, "idempotency_key": k, "state": "queued", "phase": "awaiting_capacity_check", "reserved": false, "resource_changes": false, "dispatched": false, "created_at": now(), "queued_at": now(), "attempts": 0, "generation": 0}
+	op = merge(append([]D{op}, extra...)...)
 	o.Save(op)
 	o.start(str(op["id"]))
 	return publicOperation(op)
@@ -188,7 +189,7 @@ func (o *Operations) Retry(t D, id string, w D) D {
 
 // cancelPhases are the waits a job reaches before it changes anything: each
 // one is raised ahead of the tool's first write (#584).
-var cancelPhases = []string{"waiting_for_priority_operation", "waiting_for_machine_operation", "waiting_for_import_slot", "waiting_for_migration_slot"}
+var cancelPhases = []string{"waiting_for_priority_operation", "waiting_for_machine_operation", "waiting_for_import_slot", "waiting_for_migration_slot", "waiting_for_plugin"}
 
 // Cancel ends an operation that has not changed anything yet: one never
 // started, or one waiting its turn. It runs under the writer, so no worker

@@ -18,8 +18,21 @@ func registerPhases(p Phases, tools ...string) {
 	}
 }
 
+// phasesOf are an operation's phases. A plugin operation's come from its
+// record, not from the tool name, so they hold after a restart before any
+// agent reports the plugin again.
+func phasesOf(op D) (Phases, bool) {
+	if p, ok := operationPhases[str(op["tool"])]; ok {
+		return p, true
+	}
+	if op["plugin"] != nil {
+		return pluginPhases, true
+	}
+	return Phases{}, false
+}
+
 func (e *Execution) runPhases() {
-	p, ok := operationPhases[str(e.Op["tool"])]
+	p, ok := phasesOf(e.Op)
 	if !ok {
 		return
 	}
@@ -32,7 +45,7 @@ func (e *Execution) runPhases() {
 }
 
 func (e *Execution) runFinish(t D) D {
-	if p, ok := operationPhases[str(e.Op["tool"])]; ok && p.Finish != nil {
+	if p, ok := phasesOf(e.Op); ok && p.Finish != nil {
 		return p.Finish(e, t)
 	}
 	return nil

@@ -289,6 +289,29 @@ A plugin is a service on a unix socket, `<name>.sock`, in the agent's `plugin_di
   or `cancel`, and `idempotency_key` names the operation. `plugin_unavailable` means the plugin
   did not answer: ask again with the same key once it is back.
 
+#### Plugin tools
+
+Each operation a node reports is a tool named `<plugin>_<operation>` (#661). No core change and
+no restart are needed: the tool is listed while some node reports the plugin as supported, and is
+gone once none does. Clients cache tool lists, so a member may need to reconnect to see a new one.
+
+- An operation is admin-only unless the plugin sets `member`. A member operation must require a
+  top-level `machine`. carrel checks that machine against the caller's tenant and passes the
+  plugin its VMID, never the name.
+- `read_only` operations are also listed on `/mcp/read-only`.
+- The control plane checks the arguments against the schema before the call is queued, and again
+  against the schema of the node that runs it. A schema may not use `$ref` outside itself, or declare
+  `tenant`, `idempotency_key`, `dry_run`, `detail` or `wait_seconds`.
+- A core tool's name wins. `catalog_get` lists the plugin tools under `sites[].plugins.tools`. It lists each
+  operation left out, with the reason, under `left_out`.
+- A call is an operation. On the node with the call's machine, or the first undrained node with
+  the plugin, it starts the plugin operation with the key `<operation id>-<run>`. It then polls until done,
+  and keeps `progress` and `message` on the operation. A restart polls the same key again.
+  `operation_retry` starts a new run under a new key.
+- A queued call waits up to 5 minutes for a node to report the plugin (`waiting_for_plugin`),
+  as after a control plane restart. A plugin that cannot be reached for 10 minutes fails the
+  call with `backend_unavailable`.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

@@ -20,6 +20,11 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 	validateBootstrapArguments(tool, a)
 	a = e.withPortalKeys(tool, a, w)
 	a = e.withCAPrincipal(tool, a, w)
+	if !coreTools[tool] {
+		if pt := p.pluginTools()[tool]; pt != nil {
+			return e.submitPlugin(pt, a, w)
+		}
+	}
 	if named("async_tools", tool) && !boolean(a["dry_run"]) {
 		var t D
 		if named("admin_tools", tool) {
@@ -72,6 +77,9 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 	return result
 }
 func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
+	if e.Op != nil && e.Op["plugin"] != nil {
+		return e.dispatchPlugin(a, w), e.Op["tenant_n"]
+	}
 	dry := boolean(a["dry_run"])
 	if !named("admin_tools", tool) {
 		e.P.requireFeature(tool)

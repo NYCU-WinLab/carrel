@@ -29,6 +29,14 @@ message OperationType {
   // JSON Schema of the parameters, a JSON object.
   string params_schema = 2;
   string description = 3;
+  // Who may call it. By default only an admin may. member lets a member
+  // call it on one of their own machines: the schema must then require a
+  // top-level "machine", which the control plane checks against the
+  // caller's tenant and hands to the plugin as the machine's VMID.
+  bool member = 4;
+  // read_only: the operation changes nothing, so it is listed on the
+  // read-only endpoint too.
+  bool read_only = 5;
 }
 
 message DescribeResponse {

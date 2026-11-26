@@ -65,8 +65,16 @@ type OperationType struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// JSON Schema of the parameters, a JSON object.
-	ParamsSchema  string `protobuf:"bytes,2,opt,name=params_schema,json=paramsSchema,proto3" json:"params_schema,omitempty"`
-	Description   string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	ParamsSchema string `protobuf:"bytes,2,opt,name=params_schema,json=paramsSchema,proto3" json:"params_schema,omitempty"`
+	Description  string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	// Who may call it. By default only an admin may. member lets a member
+	// call it on one of their own machines: the schema must then require a
+	// top-level "machine", which the control plane checks against the
+	// caller's tenant and hands to the plugin as the machine's VMID.
+	Member bool `protobuf:"varint,4,opt,name=member,proto3" json:"member,omitempty"`
+	// read_only: the operation changes nothing, so it is listed on the
+	// read-only endpoint too.
+	ReadOnly      bool `protobuf:"varint,5,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -120,6 +128,20 @@ func (x *OperationType) GetDescription() string {
 		return x.Description
 	}
 	return ""
+}
+
+func (x *OperationType) GetMember() bool {
+	if x != nil {
+		return x.Member
+	}
+	return false
+}
+
+func (x *OperationType) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
 }
 
 type DescribeResponse struct {
@@ -538,11 +560,13 @@ var File_plugin_proto protoreflect.FileDescriptor
 const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"\fplugin.proto\x12\x10carrel.plugin.v1\"\x11\n" +
-	"\x0fDescribeRequest\"j\n" +
+	"\x0fDescribeRequest\"\x9f\x01\n" +
 	"\rOperationType\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rparams_schema\x18\x02 \x01(\tR\fparamsSchema\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\"\x9d\x01\n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x16\n" +
+	"\x06member\x18\x04 \x01(\bR\x06member\x12\x1b\n" +
+	"\tread_only\x18\x05 \x01(\bR\breadOnly\"\x9d\x01\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +
