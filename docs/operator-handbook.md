@@ -307,7 +307,10 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
 - A call is an operation. On the node with the call's machine, or the first undrained node with
   the plugin, it starts the plugin operation with the key `<operation id>-<run>`. It then polls until done,
   and keeps `progress` and `message` on the operation. A restart polls the same key again.
-  `operation_retry` starts a new run under a new key.
+  `operation_retry` asks after the same key while the last run may still be going. It starts a
+  new run under a new key only once the last run is known to have ended.
+- The node that runs a call decides its access. A node that reports other `member` or
+  `read_only` flags than the first node does not run the tool, as during a rolling update.
 - A queued call waits up to 5 minutes for a node to report the plugin (`waiting_for_plugin`),
   as after a control plane restart. A plugin that cannot be reached for 10 minutes fails the
   call with `backend_unavailable`.

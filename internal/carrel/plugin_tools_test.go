@@ -18,8 +18,9 @@ type fakePlugins struct {
 	ops    map[string]D
 	gets   map[string]int
 	starts []D
-	// fail, when set, is the backend_code every call fails with.
-	fail string
+	// fail, when set, is the backend_code every call fails with; outcome,
+	// when set, is the state an operation ends in instead of succeeded.
+	fail, outcome string
 }
 
 func (f *fakePlugins) call(r D, target string) (any, error) {
@@ -43,7 +44,11 @@ func (f *fakePlugins) call(r D, target string) (any, error) {
 			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "backend_code": "not_found"}}}
 		}
 		if f.gets[key]++; f.gets[key] >= 2 {
-			f.ops[key] = merge(f.ops[key], D{"state": "succeeded", "done": true, "progress": 100, "result": D{"snapshot": "s-" + key}})
+			if f.outcome != "" {
+				f.ops[key] = merge(f.ops[key], D{"state": f.outcome, "done": true, "error": "disk full"})
+			} else {
+				f.ops[key] = merge(f.ops[key], D{"state": "succeeded", "done": true, "progress": 100, "result": D{"snapshot": "s-" + key}})
+			}
 		}
 	}
 	return clone(f.ops[key]), nil
@@ -226,35 +231,101 @@ func TestAPluginOperationSurvivesARestart(t *testing.T) {
 	}
 }
 
-// A plugin error maps to what the caller should do, and operation_retry
-// runs the plugin operation again under a new key.
-func TestAPluginErrorMapsAndRetriesUnderANewKey(t *testing.T) {
+// A plugin error maps to what the caller should do. operation_retry asks
+// again under the same key while the run may still be going, and starts a
+// new run only once the last one is known to have ended.
+func TestAPluginErrorMapsAndRetriesUnderTheRightKey(t *testing.T) {
 	p, b := fixture(t)
 	f := withPlugin(t, p, b)
 	runQueue(p)
 	seedMachine(p, "web", 10100)
-	f.fail = "invalid"
-	r := member(p, "backup_take", D{"machine": "web", "wait_seconds": 5})
-	op := obj(r["operation"])
+	set := func(fail, outcome string) {
+		f.mu.Lock()
+		f.fail, f.outcome = fail, outcome
+		f.mu.Unlock()
+	}
+	set("invalid", "")
+	op := obj(member(p, "backup_take", D{"machine": "web", "wait_seconds": 5})["operation"])
 	if op["state"] != "failed" || obj(op["error"])["code"] != "invalid" || op["next_action"] != "revise_request" {
 		t.Fatalf("invalid: %s", encoded(op))
 	}
-	f.mu.Lock()
-	f.fail = "plugin_error"
-	f.mu.Unlock()
-	r = member(p, "backup_take", D{"machine": "web", "label": "b", "wait_seconds": 5})
-	op = obj(r["operation"])
+	// The start's answer is lost: the run may be going, so a retry asks
+	// after the same key and starts nothing new.
+	set("plugin_error", "")
+	op = obj(member(p, "backup_take", D{"machine": "web", "label": "b", "wait_seconds": 5})["operation"])
 	if obj(op["error"])["code"] != "plugin_failed" {
 		t.Fatalf("plugin_error: %s", encoded(op))
 	}
 	id := str(op["id"])
-	f.mu.Lock()
-	f.fail = ""
-	f.mu.Unlock()
+	set("", "")
+	member(p, "operation_retry", D{"id": id})
+	awaitState(t, p, id, "succeeded")
+	if last := f.starts[len(f.starts)-1]; last["idempotency_key"] != id+"-1" {
+		t.Fatalf("retry after an unknown outcome used key %v", last["idempotency_key"])
+	}
+	// The plugin reports the run failed: it has ended, so a retry is a new run.
+	set("", "failed")
+	op = obj(member(p, "backup_take", D{"machine": "web", "label": "c", "wait_seconds": 5})["operation"])
+	if obj(op["error"])["code"] != "plugin_failed" || !strings.Contains(str(obj(op["error"])["message"]), "disk full") {
+		t.Fatalf("failed run: %s", encoded(op))
+	}
+	id = str(op["id"])
+	set("", "")
 	member(p, "operation_retry", D{"id": id})
 	awaitState(t, p, id, "succeeded")
 	if last := f.starts[len(f.starts)-1]; last["idempotency_key"] != id+"-2" {
-		t.Fatalf("retry key %v", last["idempotency_key"])
+		t.Fatalf("retry after a failed run used key %v", last["idempotency_key"])
+	}
+}
+
+// A member operation runs only on a machine bound to the caller's tenant:
+// a null machine is refused, whatever the schema allows.
+func TestAMemberPluginOperationNeedsAMachine(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	runQueue(p)
+	reportPlugins(p, []PluginInfo{{Name: "backup", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "take", Member: true, Params: json.RawMessage(`{"type":"object","properties":{"machine":{}},"required":["machine"]}`)}}}})
+	for _, machine := range []any{nil, "", 7} {
+		r := member(p, "backup_take", D{"machine": machine, "wait_seconds": 5})
+		if code := str(failure(r)["code"]); code != "invalid" && code != "not_found" {
+			t.Fatalf("machine %v: %s", machine, encoded(r))
+		}
+	}
+	if len(f.starts) != 0 || len(p.Store.Objects("operations")) != 0 {
+		t.Fatalf("a call without a bound machine was queued or reached the node: %v", f.starts)
+	}
+}
+
+// The node that runs a call decides its access: a node that reports the
+// operation admin-only does not run a member's call, even when another
+// node reports it member.
+func TestTheRunningNodeDecidesAccess(t *testing.T) {
+	p, b := fixture(t)
+	p.Config.Nodes = append(p.Config.Nodes, NodeConfig{Name: "carrel02", Target: "carrel-node-2"})
+	f := withPlugin(t, p, b)
+	pluginWaitForNode = 0.2
+	t.Cleanup(func() { pluginWaitForNode = 300 })
+	strict := testPlugin()
+	strict[0].Operations[0].Member = false
+	p.Hub.Hello("carrel02", "s2", AgentProtocol, "test", strict)
+	p.Hub.Heartbeat("carrel02", "s2", 1, nil)
+	runQueue(p)
+	m := seedMachine(p, "far", 10300)
+	m["node"] = "carrel02"
+	p.Store.Put("machines", 10300, 1, m)
+	if nodes := p.pluginTools()["backup_take"].Nodes; fmt.Sprint(nodes) != "[carrel01]" {
+		t.Fatalf("nodes %v", nodes)
+	}
+	r := member(p, "backup_take", D{"machine": "far", "wait_seconds": 0})
+	op := awaitState(t, p, str(obj(r["operation"])["id"]), "waiting_for_plugin")
+	deadline := time.Now().Add(3 * time.Second)
+	for !contains(terminal, op["state"]) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		op = p.Store.Get("operations", str(op["id"]))
+	}
+	if op["state"] != "failed" || obj(op["error"])["code"] != "unsupported" || len(f.starts) != 0 {
+		t.Fatalf("op %s, starts %v", encoded(op), f.starts)
 	}
 }
 

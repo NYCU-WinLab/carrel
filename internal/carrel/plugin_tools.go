@@ -100,7 +100,11 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 			for _, op := range pl.Operations {
 				name := pluginToolName(pl.Name, op.Name)
 				if t := tools[name]; t != nil {
-					t.Nodes = append(t.Nodes, n.Name)
+					// A node that grants other access is not one this tool
+					// runs on, as during a rolling update of the plugin.
+					if op.Member == t.Member && op.ReadOnly == t.ReadOnly {
+						t.Nodes = append(t.Nodes, n.Name)
+					}
 					continue
 				}
 				if coreTools[name] {
@@ -244,6 +248,9 @@ func (e *Execution) submitPlugin(pt *pluginTool, a, w D) D {
 		fail("forbidden", "This tool changes state; call it on /mcp")
 	}
 	checkPluginArgs(pt.Schema, a)
+	if pt.Member && str(a["machine"]) == "" {
+		fail("invalid", "machine must name one of your machines")
+	}
 	if !sel.readOnly {
 		e.Register(w, str(a["tenant"]), false)
 	}
@@ -261,7 +268,7 @@ func (e *Execution) submitPlugin(pt *pluginTool, a, w D) D {
 	p.writer.Lock()
 	var op D
 	err := attempt(func() {
-		op = p.Operations.Submit(pt.Name, a, w, t, D{"plugin": D{"plugin": pt.Plugin, "operation": pt.Operation}})
+		op = p.Operations.Submit(pt.Name, a, w, t, D{"plugin": D{"plugin": pt.Plugin, "operation": pt.Operation, "caller_read_only": sel.readOnly}})
 		e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "queued")
 	})
 	p.writer.Unlock()
@@ -303,11 +310,32 @@ func (e *Execution) dispatchPlugin(a, w D) D {
 			D{"recovery": "retry_infrastructure"})
 	}
 	op, _ := e.P.pluginOperation(node, str(plug["plugin"]), str(plug["operation"]))
+	// The node that runs it decides the access, whatever another node reports.
+	if !op.Member && !boolean(w["admin"]) {
+		fail("forbidden", "winlab-admin membership required")
+	}
+	if boolean(plug["caller_read_only"]) && !op.ReadOnly {
+		fail("forbidden", "This tool changes state; call it on /mcp")
+	}
+	if op.Member && obj(e.Op["machine_target"])["vmid"] == nil {
+		fail("invalid", "machine must name one of your machines")
+	}
 	checkPluginArgs(op.Params, a)
-	// The key names this run of the plugin operation: the same across
-	// restarts and re-queues, new after operation_retry.
+	// The key names one run of the plugin operation: the same across
+	// restarts, re-queues and a retry whose run may still be going. Only a
+	// run known to have ended gives way to a new key.
+	if plug["key"] != nil && !boolean(plug["ended"]) {
+		if plug["node"] != node {
+			if now()-num(e.Op["queued_at"]) < pluginWaitForNode {
+				panic(Waiting{"waiting_for_plugin", now() + pluginRecheck})
+			}
+			fail("unsupported", fmt.Sprintf("Node %s, which ran this operation, no longer reports plugin %s", plug["node"], plug["plugin"]),
+				D{"recovery": "retry_infrastructure"})
+		}
+		return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
+	}
 	runs := integer(plug["runs"]) + 1
-	plug["node"], plug["runs"], plug["key"], plug["read_only"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly
+	plug["node"], plug["runs"], plug["key"], plug["read_only"], plug["ended"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly, false
 	return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
 }
 
@@ -350,7 +378,13 @@ func (e *Execution) PerformPlugin() {
 				unreachable = time.Time{}
 				return obj(v)
 			}
-			switch code := str(obj(failureResult(err)["error"])["backend_code"]); code {
+			code := str(obj(failureResult(err)["error"])["backend_code"])
+			// A refused start never ran; any other failure leaves the run's
+			// fate unknown, so a retry asks after the same key.
+			if call == "start" && (code == "invalid" || code == "conflict" || code == "plugin_refused") {
+				plug["ended"] = true
+			}
+			switch code {
 			case "invalid":
 				fail("invalid", fmt.Sprintf("Plugin %s refused the arguments", name), D{"recovery": "revise_request"})
 			case "conflict":
@@ -380,6 +414,7 @@ func (e *Execution) PerformPlugin() {
 			e.P.writer.Unlock()
 		}
 		if boolean(r["done"]) {
+			plug["ended"] = true
 			break
 		}
 		if !sleep(e.Ctx, pluginPoll) {
