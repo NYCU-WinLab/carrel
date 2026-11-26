@@ -512,6 +512,8 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
         'for f in "$U"/carrel-plugin-*.socket; do',
         '  test -e "$f" || continue',
         '  n=${f##*/carrel-plugin-}; n=${n%.socket}',
+        # Only a name plugin_list would accept: never an empty one, which would name $L itself.
+        '  case "$n" in ""|[!a-z]*|*[!a-z0-9-]*) continue;; esac',
         '  case "$keep" in *" $n "*) continue;; esac',
         '  $S disable --now "carrel-plugin-$n.socket" "carrel-plugin-$n.service" || true',
         '  rm -f "$U/carrel-plugin-$n.socket" "$U/carrel-plugin-$n.service"',

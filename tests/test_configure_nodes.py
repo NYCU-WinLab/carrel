@@ -1098,3 +1098,13 @@ def test_apply_refuses_an_artifact_without_a_top_level_program(tmp_path):
     result, calls, units, *_ = apply(module, tmp_path, [(p, blob)])
     assert result.returncode != 0 and "no plugin program" in result.stderr
     assert not (units / "carrel-plugin-snap.socket").exists()
+
+
+def test_apply_leaves_units_whose_name_is_not_a_plugin_name(tmp_path):
+    module = load("configure-nodes.py")
+    apply(module, tmp_path, [plugin()])
+    (tmp_path / "units/carrel-plugin-.socket").write_text("x")
+    (tmp_path / "units/carrel-plugin-A_b.socket").write_text("x")
+    result, calls, units, lib, _ = apply(module, tmp_path, [])
+    assert result.returncode == 0 and lib.exists() and not (lib / "snap").exists()
+    assert sorted(f.name for f in units.iterdir()) == ["carrel-plugin-.socket", "carrel-plugin-A_b.socket"]
