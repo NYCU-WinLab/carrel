@@ -1,5 +1,6 @@
 """CT 100 reaches the node adapter on every site node (PLAN 15.15 gap 5)."""
 
+import fcntl
 import hashlib
 import importlib.util
 import io
@@ -8,6 +9,8 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE = json.loads((ROOT / "sites/b09/cluster.json").read_text())
@@ -642,9 +645,10 @@ def test_the_jump_host_takes_both_keys_as_a_forced_command(monkeypatch):
 CA = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2e="
 
 
-def apply_node_sshd(tmp_path, site, reload_fails=0, sshd_t="0", in_force=True):
-    """Run the node sshd script against files under tmp_path with stub sshd
-    and systemctl. reload_fails: how many reloads fail before one works."""
+def node_sshd_run(tmp_path, site, reload_fails=0, sshd_t="0", in_force=True, signal=None):
+    """The node sshd script, its drop-in and environment against files under
+    tmp_path with stub sshd and systemctl. reload_fails: how many reloads
+    fail before one works. signal: sent to the script by the first reload."""
     module = load("configure-nodes.py")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -655,22 +659,22 @@ def apply_node_sshd(tmp_path, site, reload_fails=0, sshd_t="0", in_force=True):
     (bin_dir / "sshd").write_text(
         f'#!/bin/sh\necho "sshd $*" >> {log}\n[ "$1" = -T ] && printf "{shown}"\n[ "$1" = -t ] && exit {sshd_t}\nexit 0\n'
     )
+    send = f'[ "$n" = 1 ] && kill -{signal} $PPID\n' if signal else ""
     (bin_dir / "systemctl").write_text(
-        f'#!/bin/sh\necho "systemctl $*" >> {log}\nn=$(grep -c "^systemctl reload" {log})\n[ "$n" -le {reload_fails} ] && exit 1\nexit 0\n'
+        f'#!/bin/sh\necho "systemctl $*" >> {log}\nn=$(grep -c "^systemctl reload" {log})\n{send}[ "$n" -le {reload_fails} ] && exit 1\nexit 0\n'
     )
     for stub in ("sshd", "systemctl"):
         (bin_dir / stub).chmod(0o755)
     conf, script = module.node_sshd_apply(
-        site, str(tmp_path / "drop.conf"), str(ca), str(tmp_path / "principals")
+        site, str(tmp_path / "drop.conf"), str(ca), str(tmp_path / "principals"), str(bin_dir / "lock")
     )
-    result = subprocess.run(
-        ["sh", "-c", script],
-        input=conf,
-        text=True,
-        capture_output=True,
-        check=False,
-        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
-    )
+    return conf, ["sh", "-c", script], {"PATH": f"{bin_dir}:/usr/bin:/bin"}
+
+
+def apply_node_sshd(tmp_path, site, **stubs):
+    conf, command, env = node_sshd_run(tmp_path, site, **stubs)
+    result = subprocess.run(command, input=conf, text=True, capture_output=True, check=False, env=env)
+    log = tmp_path / "log"
     calls = log.read_text().splitlines() if log.exists() else []
     return result.returncode, conf, calls
 
@@ -738,6 +742,76 @@ def test_a_failed_node_sshd_apply_puts_the_previous_policy_back(tmp_path):
         for name, text in before.items():
             assert (tmp_path / name).read_text() == text, (case, name)
     assert module.NODE_SSHD not in (tmp_path / "drop.conf").read_text()
+
+
+PREVIOUS = {
+    "drop.conf": "previous drop-in\n",
+    "ca.pub": "previous ca\n",
+    "principals/root": "alice\n",
+}
+
+
+def seed_previous(tmp_path):
+    (tmp_path / "principals").mkdir(exist_ok=True)
+    for name, text in PREVIOUS.items():
+        (tmp_path / name).write_text(text)
+
+
+def assert_previous(tmp_path):
+    assert files(tmp_path) == sorted(PREVIOUS)
+    for name, text in PREVIOUS.items():
+        assert (tmp_path / name).read_text() == text, name
+
+
+def test_a_signal_during_the_node_sshd_apply_puts_the_previous_policy_back(tmp_path):
+    seed_previous(tmp_path)
+    site = {"node_ssh_ca": {"key": CA, "principals": ["zyx1121"]}}
+    for signal in ["INT", "TERM", "HUP"]:
+        code, _, calls = apply_node_sshd(tmp_path, site, signal=signal)
+        assert code == 1, signal
+        assert calls.count("systemctl reload ssh.service") == 2, (signal, calls)
+        assert_previous(tmp_path)
+
+
+def test_a_killed_node_sshd_apply_is_put_back_by_the_next_run(tmp_path):
+    seed_previous(tmp_path)
+    site = {"node_ssh_ca": {"key": CA, "principals": ["zyx1121"]}}
+    # KILL cannot be trapped: the new policy is written and the copy is left.
+    code, _, _ = apply_node_sshd(tmp_path, site, signal="KILL")
+    assert code != 0
+    assert (tmp_path / "principals/root").read_text() == "zyx1121\n"
+    assert (tmp_path / "drop.conf.apply/complete").exists()
+    # The next run puts the copy back first, then applies its own policy.
+    code, _, calls = apply_node_sshd(tmp_path, site)
+    assert code == 0
+    assert calls.count("systemctl reload ssh.service") == 2, calls
+    assert (tmp_path / "principals/root").read_text() == "zyx1121\n"
+    assert not (tmp_path / "drop.conf.apply").exists()
+    # Killed again, then a run that fails its own check: its restore goes back
+    # to the policy before the killed run, not to the killed run's policy.
+    seed_previous(tmp_path)
+    apply_node_sshd(tmp_path, site, signal="KILL")
+    code, _, _ = apply_node_sshd(tmp_path, site, in_force=False)
+    assert code == 1
+    assert_previous(tmp_path)
+
+
+def test_a_node_sshd_apply_waits_for_the_one_before_it(tmp_path):
+    seed_previous(tmp_path)
+    site = {"node_ssh_ca": {"key": CA, "principals": ["zyx1121"]}}
+    conf, command, env = node_sshd_run(tmp_path, site)
+    with open(tmp_path / "bin" / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        run = subprocess.Popen(command, stdin=subprocess.PIPE, text=True, env=env)
+        run.stdin.write(conf)
+        run.stdin.close()
+        with pytest.raises(subprocess.TimeoutExpired):
+            run.wait(timeout=1)
+        # Nothing changed while the other run holds the lock.
+        assert_previous(tmp_path)
+    assert run.wait(timeout=10) == 0
+    assert (tmp_path / "principals/root").read_text() == "zyx1121\n"
+    assert not (tmp_path / "drop.conf.apply").exists()
 
 
 def test_a_new_node_sshd_drop_in_that_fails_is_removed(tmp_path):
