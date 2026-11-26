@@ -42,6 +42,13 @@ message OperationType {
   // read_only: the operation changes nothing, so it is listed on the
   // read-only endpoint too.
   bool read_only = 5;
+  // Hints for clients, as in MCP tool annotations: the operation may
+  // destroy data, or a repeat with the same arguments does nothing more.
+  bool destructive = 6;
+  bool idempotent = 7;
+  // A toolset of the tool contract the tool is also listed under, such as
+  // "machines"; it is always listed under "plugins".
+  string toolset = 8;
 }
 
 message DescribeResponse {
@@ -64,6 +71,10 @@ message StartRequest {
   string operation = 2;
   // JSON object, valid against the operation's params_schema.
   string params = 3;
+  // dry_run: report what the operation would do and change nothing. A
+  // dry run, and any start of a read_only operation, must answer done in
+  // its first reply; carrel does not ask after its key again.
+  bool dry_run = 4;
 }
 
 message GetRequest {
@@ -88,4 +99,12 @@ message Operation {
   string task = 7;
   // What the operation is doing now, for people.
   string message = 8;
+  // When failed: a carrel error code the caller acts on, one of invalid,
+  // conflict, not_found, quota_exceeded, capacity_exhausted or unsupported,
+  // with error as its message. Any other code, or none, fails the call as
+  // plugin_failed.
+  string error_code = 9;
+  // When failed: a JSON object of further facts, such as {"recovery":
+  // "revise_request"}. Its keys are added to the error carrel returns.
+  string error_details = 10;
 }

@@ -1319,7 +1319,7 @@
           }
         ],
         "summary": "Call a plugin tool (#661)",
-        "description": "The body is the tool's arguments as in tools/call, and must carry an idempotency_key. The call is checked, gated and run as on /mcp, and returns an operation. Send the same arguments with the same idempotency_key to poll it. 404 when no node reports the tool now.",
+        "description": "The body is the tool's arguments as in tools/call. The call is checked and gated as on /mcp. A read_only tool, or a call with dry_run, answers at once; any other call must carry an idempotency_key and returns an operation: send the same arguments with the same idempotency_key to poll it. 404 when no node reports the tool now.",
         "parameters": [
           {
             "name": "tool",

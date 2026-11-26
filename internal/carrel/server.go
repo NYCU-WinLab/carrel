@@ -605,9 +605,10 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 						tools = append(tools, tool)
 					}
 				}
-				if len(sel.sets) == 0 || contains(sel.sets, "plugins") {
-					tools = append(tools, pluginListing(a.Platform.pluginTools(), shows)...)
-				}
+				// A plugin tool is in toolset plugins, and in the one it names.
+				tools = append(tools, pluginListing(a.Platform.pluginTools(), func(pt *pluginTool) bool {
+					return shows(pt) && (len(sel.sets) == 0 || contains(sel.sets, "plugins") || pt.Toolset != "" && contains(sel.sets, pt.Toolset))
+				})...)
 				list.Tools = tools
 			}
 			return result, err

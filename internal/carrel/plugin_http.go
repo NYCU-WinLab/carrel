@@ -62,7 +62,8 @@ func (a *App) pluginRoutes(mux *http.ServeMux) {
 			return
 		}
 		name := r.PathValue("tool")
-		if a.Platform.pluginTools()[name] == nil {
+		pt := a.Platform.pluginTools()[name]
+		if pt == nil {
 			jsonResponse(w, 404, D{"ok": false, "error": D{"code": "not_found", "message": "No plugin tool " + name + " is reported now"}})
 			return
 		}
@@ -74,7 +75,7 @@ func (a *App) pluginRoutes(mux *http.ServeMux) {
 		}
 		// The key is how a caller polls the operation here: without it, a
 		// second request would start the work again.
-		if str(args["idempotency_key"]) == "" {
+		if !pt.ReadOnly && !boolean(args["dry_run"]) && str(args["idempotency_key"]) == "" {
 			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "idempotency_key is required: send the same arguments with the same key to poll the operation"}})
 			return
 		}

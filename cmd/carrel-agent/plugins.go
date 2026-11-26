@@ -154,7 +154,8 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 	}
 	for _, op := range d.Operations {
 		info.Operations = append(info.Operations, carrel.PluginOperation{Name: op.Name, Description: op.Description,
-			Params: json.RawMessage(op.ParamsSchema), Member: op.Member, ReadOnly: op.ReadOnly})
+			Params: json.RawMessage(op.ParamsSchema), Member: op.Member, ReadOnly: op.ReadOnly,
+			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset)})
 	}
 	p, err := c.Probe(ctx, &pluginpb.ProbeRequest{})
 	if err != nil {
@@ -239,6 +240,7 @@ type pluginJob struct {
 	IdempotencyKey string          `json:"idempotency_key"`
 	Operation      string          `json:"operation"`
 	Params         json.RawMessage `json:"params"`
+	DryRun         bool            `json:"dry_run"`
 }
 
 func reply(v any) ([]byte, bool) {
@@ -284,7 +286,7 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 		if params == "" {
 			params = "{}"
 		}
-		op, err = c.StartOperation(ctx, &pluginpb.StartRequest{IdempotencyKey: j.IdempotencyKey, Operation: j.Operation, Params: params})
+		op, err = c.StartOperation(ctx, &pluginpb.StartRequest{IdempotencyKey: j.IdempotencyKey, Operation: j.Operation, Params: params, DryRun: j.DryRun})
 	case "get":
 		op, err = c.GetOperation(ctx, &pluginpb.GetRequest{IdempotencyKey: j.IdempotencyKey})
 	case "cancel":
@@ -309,9 +311,15 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 	if op.Result != "" && json.Unmarshal([]byte(op.Result), &result) != nil {
 		return refuse("plugin_error", fmt.Sprintf("plugin %s returned a result that is not JSON", j.Plugin))
 	}
+	// Details that are not a small JSON object are dropped, not refused:
+	// the operation failed either way.
+	var details map[string]any
+	if len(op.ErrorDetails) > carrel.MaxPluginText || json.Unmarshal([]byte(op.ErrorDetails), &details) != nil {
+		details = nil
+	}
 	return reply(map[string]any{"ok": true, "result": map[string]any{"idempotency_key": op.IdempotencyKey,
-		"state": op.State, "done": op.Done, "progress": op.Progress, "result": result, "error": op.Error,
-		"task": op.Task, "message": op.Message}})
+		"state": op.State, "done": op.Done, "progress": op.Progress, "result": result, "error": clip(op.Error),
+		"error_code": clip(op.ErrorCode), "error_details": details, "task": op.Task, "message": op.Message}})
 }
 
 // dispatch runs a job: plugin jobs here, everything else in node-agent.py.

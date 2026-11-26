@@ -298,7 +298,15 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
 - An operation is admin-only unless the plugin sets `member`. A member operation must require a
   top-level `machine`. carrel checks that machine against the caller's tenant and passes the
   plugin its VMID, never the name.
-- `read_only` operations are also listed on `/mcp/read-only`.
+- `read_only` operations are also listed on `/mcp/read-only`. A read, and a call with `dry_run`,
+  answers at once on one node, as a core read does: no operation, one audit row. The plugin gets
+  `dry_run` on the start and must answer `done` in its first reply.
+- A plugin's result keys are added to the answer, as a core tool's result. carrel's own keys win.
+- A plugin that fails an operation with `error_code` `invalid`, `conflict`, `not_found`,
+  `quota_exceeded`, `capacity_exhausted` or `unsupported` gives the caller that code, its own
+  message and the keys of `error_details`. Any other failure is `plugin_failed`.
+- An operation may name a `toolset` of the tool contract, such as `machines`, to be listed there
+  as well as under `plugins`. `destructive` and `idempotent` become the tool's hints.
 - Over HTTP, `GET /plugins/v1/tools` lists the plugin tools the caller may call. `POST
   /plugins/v1/tools/<tool>` calls one, with the tool's arguments as the JSON body. Both take the same
   bearer token as `/mcp`, and a call is checked and gated as on `/mcp`. Send the same arguments
