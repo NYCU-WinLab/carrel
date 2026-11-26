@@ -143,7 +143,7 @@ func load(path string) (*agent, error) {
 	if c.CertFile != "" {
 		trust.GetClientCertificate = a.clientCertificate
 		if err := a.loadCertificate(); err != nil {
-			return nil, fmt.Errorf("cert_file: %w", err)
+			slog.Error("certificate_unreadable", "error", err)
 		}
 	}
 	a.client = &http.Client{Transport: &http.Transport{TLSClientConfig: trust.Clone()},

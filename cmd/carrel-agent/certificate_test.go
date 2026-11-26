@@ -5,10 +5,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -219,12 +221,9 @@ func TestAgentSignsInWithItsCertificate(t *testing.T) {
 	}}
 	p := carrel.NewPlatform(store, sshOnly{}, cfg)
 	p.UseAgents()
-	pool, err := carrel.LoadCertPool(labRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewUnstartedServer(p.AgentHandler())
-	server.TLS = &tls.Config{ClientCAs: pool, ClientAuth: tls.VerifyClientCertIfGiven}
+	// As cmd/carrel sets it: the handshake asks, the handler checks.
+	server.TLS = &tls.Config{ClientAuth: tls.RequestClientCert}
 	server.StartTLS()
 	defer server.Close()
 	controlCA := writeFile(t, dir, "control-ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
@@ -252,5 +251,88 @@ func TestAgentSignsInWithItsCertificate(t *testing.T) {
 	}
 	if st := p.Hub.Status("pve1", time.Now()); st["certificate_expires"] == nil || st["certificate_expiring"] != false {
 		t.Fatalf("status: %v", st)
+	}
+}
+
+// A node still on its token signs in even when its agent presents a
+// certificate the control plane would refuse: the handshake does not check
+// it, so going back to the token never depends on the certificate.
+func TestATokenNodeIgnoresAForeignCertificate(t *testing.T) {
+	dir := t.TempDir()
+	labRoot := writeFile(t, dir, "ca-root.pem", newTestCA(t).pem())
+	store, err := carrel.OpenStore(filepath.Join(dir, "carrel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	sum := sha256.Sum256([]byte("agent-token"))
+	cfg := carrel.Config{AgentClientCAFile: labRoot, AgentProvisioner: testKid, Nodes: []carrel.NodeConfig{
+		{Name: "pve1", Target: "carrel-node", Transport: "agent", AgentSource: "127.0.0.1", AgentTokenSHA256: hex.EncodeToString(sum[:])},
+	}}
+	p := carrel.NewPlatform(store, sshOnly{}, cfg)
+	p.UseAgents()
+	server := httptest.NewUnstartedServer(p.AgentHandler())
+	server.TLS = &tls.Config{ClientAuth: tls.RequestClientCert}
+	server.StartTLS()
+	defer server.Close()
+	controlCA := writeFile(t, dir, "control-ca.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	// Signed by a CA the control plane does not trust.
+	foreign := newTestCA(t)
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalECPrivateKey(key)
+	writeFile(t, dir, "agent.key", string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
+	writeFile(t, dir, "agent.crt", foreign.sign(t, &key.PublicKey, time.Now().Add(-time.Minute)))
+	a := certificateAgent(t, dir, server.URL, controlCA, "https://127.0.0.1:1", labRoot, true)
+	if a.cert.Load() == nil {
+		t.Fatal("the foreign certificate was not loaded, so the test proves nothing")
+	}
+	a.session = "s1"
+	a.run = func(context.Context, []byte) ([]byte, bool) {
+		return []byte(`{"ok":true,"result":{"via":"agent"}}`), false
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.loop(ctx); close(done) }()
+	defer func() { stop(); <-done }()
+	call, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if v, err := p.Backend.Call(call, carrel.D{"op": "status"}, "carrel-node"); err != nil || v.(map[string]any)["via"] != "agent" {
+		t.Fatalf("token node with a foreign certificate: %v %v", v, err)
+	}
+}
+
+// A key and certificate that do not match (an enrolment cut short) leave the
+// agent on its token rather than stopping it, and enrolling again fixes them.
+func TestABrokenPairDoesNotStopTheAgent(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	server := ca.server(t)
+	labRoot := writeFile(t, dir, "lab-root.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})))
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalECPrivateKey(key)
+	writeFile(t, dir, "agent.key", string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
+	writeFile(t, dir, "agent.crt", ca.sign(t, &other.PublicKey, time.Now().Add(-time.Minute)))
+	a := certificateAgent(t, dir, "https://127.0.0.1:1", labRoot, server.URL, labRoot, true)
+	if a.cert.Load() != nil || a.token != "agent-token" {
+		t.Fatal("a broken pair was taken into use, or the token was lost")
+	}
+	if err := a.enroll(context.Background(), "ott"); err != nil || a.cert.Load() == nil {
+		t.Fatalf("enrolling again: %v", err)
+	}
+	if again := certificateAgent(t, dir, "https://127.0.0.1:1", labRoot, server.URL, labRoot, true); again.cert.Load() == nil {
+		t.Fatal("the new pair does not load")
+	}
+	if _, err := os.Stat(a.cfg.KeyFile + ".next"); !os.IsNotExist(err) {
+		t.Fatal("a staged file was left behind")
+	}
+}
+
+// An expired certificate is not presented.
+func TestAnExpiredCertificateIsNotPresented(t *testing.T) {
+	a := &agent{}
+	a.cert.Store(&tls.Certificate{Certificate: [][]byte{{1}}, Leaf: &x509.Certificate{NotAfter: time.Now().Add(-time.Minute)}})
+	if c, _ := a.clientCertificate(nil); len(c.Certificate) != 0 {
+		t.Fatal("presented an expired certificate")
 	}
 }

@@ -95,7 +95,7 @@ WantedBy=timers.target
 """,
 }
 # What a failed upgrade puts back in CT 100, from the archive taken before it.
-CONFIGURED = ["etc/carrel/config.json", "etc/carrel/ssh_config", "etc/carrel/known_hosts"]
+CONFIGURED = ["etc/carrel/config.json", "etc/carrel/ssh_config", "etc/carrel/known_hosts", "etc/carrel/agent/lab-root.pem"]
 ACTIVATED = [*(f"etc/systemd/system/{name}" for name in UNITS), "usr/local/bin/carrel"]
 
 

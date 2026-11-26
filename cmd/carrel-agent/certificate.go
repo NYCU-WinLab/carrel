@@ -36,7 +36,9 @@ import (
 const renewCheck = time.Hour
 
 // loadCertificate reads cert_file and key_file. No certificate yet is not an
-// error: the agent signs in with its token until it is enrolled.
+// error: the agent signs in with its token until it is enrolled. A pair that
+// does not load (an enrolment cut short) is reported and left unused, so the
+// agent still starts with its token and can be enrolled again.
 func (a *agent) loadCertificate() error {
 	if a.cfg.CertFile == "" {
 		return nil
@@ -57,9 +59,10 @@ func (a *agent) loadCertificate() error {
 	return nil
 }
 
-// clientCertificate presents the current certificate, or none.
+// clientCertificate presents the current certificate, or none once it has
+// expired.
 func (a *agent) clientCertificate(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-	if c := a.cert.Load(); c != nil {
+	if c := a.cert.Load(); c != nil && time.Now().Before(c.Leaf.NotAfter) {
 		return c, nil
 	}
 	return &tls.Certificate{}, nil
@@ -202,31 +205,39 @@ func (a *agent) saveCertificate(chain, key []byte) error {
 	if len(pair.Leaf.DNSNames) != 1 || pair.Leaf.DNSNames[0] != a.cfg.CertificateName {
 		return fmt.Errorf("the CA returned a certificate for %v, not %s", pair.Leaf.DNSNames, a.cfg.CertificateName)
 	}
+	// Both files are written in full before either is renamed, so only a
+	// crash between the two renames leaves a mixed pair, which
+	// loadCertificate leaves unused.
+	var staged []string
 	if key != nil {
-		if err := replaceFile(a.cfg.KeyFile, key, 0o600); err != nil {
+		if err := stageFile(a.cfg.KeyFile, key, 0o600); err != nil {
 			return err
 		}
+		staged = append(staged, a.cfg.KeyFile)
 	}
-	if err := replaceFile(a.cfg.CertFile, chain, 0o644); err != nil {
+	if err := stageFile(a.cfg.CertFile, chain, 0o644); err != nil {
 		return err
+	}
+	staged = append(staged, a.cfg.CertFile)
+	for _, path := range staged {
+		if err := os.Rename(path+".next", path); err != nil {
+			return err
+		}
 	}
 	a.cert.Store(&pair)
 	return nil
 }
 
-// replaceFile replaces path by rename, so a reader never sees half a file.
-func replaceFile(path string, content []byte, mode os.FileMode) error {
+// stageFile writes path.next, to be renamed over path.
+func stageFile(path string, content []byte, mode os.FileMode) error {
 	next := path + ".next"
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	if err := os.WriteFile(next, content, mode); err != nil {
 		return err
 	}
-	if err := os.Chmod(next, mode); err != nil {
-		return err
-	}
-	return os.Rename(next, path)
+	return os.Chmod(next, mode)
 }
 
 // enroll takes a one-time token for certificate_name, makes a new key and

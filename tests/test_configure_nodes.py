@@ -881,3 +881,7 @@ def test_the_listener_gets_the_lab_root_and_drops_it_without_agent_identity(monk
     assert names == {"carrel02": "carrel02.b09.agent.carrel.winlab.tw"}
     [(args, given)] = calls
     assert args[:4] == ("pct", "exec", "100", "--") and given == IDENTITY["lab_root"]
+
+
+def test_a_failed_deploy_puts_the_listeners_lab_root_back():
+    assert "etc/carrel/agent/lab-root.pem" in load("install-control.py").CONFIGURED

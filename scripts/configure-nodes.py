@@ -618,7 +618,11 @@ def main():
     nodes = targets(site, node)
     me = nodes[0]
     agents = agent_nodes(site, nodes)
-    agent_identity(site, nodes, agents)
+    identity = agent_identity(site, nodes, agents)
+    if identity:
+        # A root openssl cannot read, or one that has expired, would lock out
+        # every certificate node.
+        run("openssl", "x509", "-noout", "-checkend", "0", input=identity["lab_root"])
     if agents and not Path("/usr/local/lib/carrel/carrel-agent").exists():
         raise SystemExit("install the node programs here first (carrel-agent missing)")
     infra = [GATEWAY, JUMP] if site.get("ssh_jump") else [GATEWAY]
