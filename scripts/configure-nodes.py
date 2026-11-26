@@ -31,6 +31,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import socket
 import subprocess
 import time
@@ -411,11 +412,51 @@ NODE_SSHD_APPLY = (
 )
 
 
-def node_sshd(n, local):
+# Lab SSH certificates for root on every node: the site file's "node_ssh_ca"
+# names the user CA key and the certificate principals (member names, or
+# svc:<portal service>) that may log in. Keys keep working beside them.
+NODE_CA_KEY = "/etc/ssh/carrel-user-ca.pub"
+NODE_PRINCIPALS = "/etc/ssh/carrel-principals"
+CA_KEY = re.compile(r"(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|rsa-sha2-(256|512)|ssh-rsa) [A-Za-z0-9+/]+={0,2}")
+PRINCIPAL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}|(svc|project):[a-z0-9][a-z0-9-]{0,62}")
+
+
+def node_ssh_ca(site):
+    """The CA key line and root's principals, or None when the site sets none."""
+    ca = site.get("node_ssh_ca")
+    if not ca:
+        return None
+    key = " ".join(str(ca.get("key", "")).split()[:2])
+    principals = ca.get("principals")
+    if not CA_KEY.fullmatch(key):
+        raise SystemExit("node_ssh_ca.key must be one SSH public key")
+    if not isinstance(principals, list) or not principals or not all(
+            isinstance(p, str) and PRINCIPAL.fullmatch(p) for p in principals):
+        raise SystemExit("node_ssh_ca.principals must list member names or svc:<service> names")
+    return key, sorted(set(principals))
+
+
+def node_sshd_files(site):
+    """The sshd drop-in and the shell lines that write or remove the CA files
+    before it. Every value is checked above, so quoting is enough."""
+    ca = node_ssh_ca(site)
+    if ca is None:
+        return NODE_SSHD, f"rm -rf {NODE_CA_KEY} {NODE_PRINCIPALS} && "
+    key, principals = ca
+    conf = NODE_SSHD + f"TrustedUserCAKeys {NODE_CA_KEY}\nAuthorizedPrincipalsFile {NODE_PRINCIPALS}/%u\n"
+    write = (f"printf '%s\\n' {shlex.quote(key)} > {NODE_CA_KEY}.next && mv {NODE_CA_KEY}.next {NODE_CA_KEY}"
+             f" && mkdir -p {NODE_PRINCIPALS} && printf '%s\\n' {' '.join(map(shlex.quote, principals))}"
+             f" > {NODE_PRINCIPALS}/root.next && mv {NODE_PRINCIPALS}/root.next {NODE_PRINCIPALS}/root && ")
+    return conf, write
+
+
+def node_sshd(n, local, site=None):
+    conf, write = node_sshd_files(site or {})
+    command = "umask 022 && " + write + NODE_SSHD_APPLY
     if local:
-        run("sh", "-c", NODE_SSHD_APPLY, input=NODE_SSHD)
+        run("sh", "-c", command, input=conf)
     else:
-        run("ssh", *peer(n), "root@" + n["address"], NODE_SSHD_APPLY, input=NODE_SSHD)
+        run("ssh", *peer(n), "root@" + n["address"], command, input=conf)
 
 
 # No cross-tenant page merging (issue #397): ksmtuned stays off and masked, KSM stays at 0.
@@ -474,6 +515,9 @@ def main():
     node = socket.gethostname().split(".")[0]
     if site["exit_nodes"][0] != node:
         raise SystemExit("run on the first exit node, which holds CT 100")
+    # A wrong CA setting stops the run before anything changes.
+    if node_ssh_ca(site) and not site.get("ssh_keys_only"):
+        raise SystemExit("node_ssh_ca needs ssh_keys_only, which writes the node sshd drop-in")
     nodes = targets(site, node)
     me = nodes[0]
     agents = agent_nodes(site, nodes)
@@ -555,7 +599,7 @@ def main():
     # key. The site turns it on once nobody logs in to a node by password.
     if site.get("ssh_keys_only"):
         for n in nodes:
-            node_sshd(n, n is me)
+            node_sshd(n, n is me, site)
         for n in nodes:
             # A new login by key still works after the reload, here too.
             run("ssh", *peer(n), "root@" + n["address"], "true")

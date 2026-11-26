@@ -636,3 +636,50 @@ def test_the_jump_host_takes_both_keys_as_a_forced_command(monkeypatch):
         'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/jump-sync.py" ssh-ed25519 SERVICE',
         'from="10.200.0.3",restrict,command="/usr/local/lib/carrel/jump-sync.py" ssh-ed25519 NODE',
     ]
+
+
+CA = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2e="
+
+
+def test_node_root_takes_lab_certificates_for_the_principals_the_site_names(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    monkeypatch.setattr(module, "NODE_CA_KEY", str(tmp_path / "ca.pub"))
+    monkeypatch.setattr(module, "NODE_PRINCIPALS", str(tmp_path / "principals"))
+    site = {"node_ssh_ca": {"key": CA + " lab-ssh-ca", "principals": ["zyx1121", "svc:carrel-admin", "zyx1121"]}}
+    conf, write = module.node_sshd_files(site)
+    assert conf.startswith(module.NODE_SSHD)
+    assert f"TrustedUserCAKeys {tmp_path}/ca.pub\n" in conf
+    assert f"AuthorizedPrincipalsFile {tmp_path}/principals/%u\n" in conf
+    subprocess.run(["sh", "-c", write + "true"], check=True)
+    assert (tmp_path / "ca.pub").read_text() == CA + "\n"
+    assert (tmp_path / "principals/root").read_text() == "svc:carrel-admin\nzyx1121\n"
+    # The site drops the setting: the files go and the drop-in has keys only.
+    conf, write = module.node_sshd_files({})
+    assert conf == module.NODE_SSHD
+    subprocess.run(["sh", "-c", write + "true"], check=True)
+    assert not (tmp_path / "ca.pub").exists() and not (tmp_path / "principals").exists()
+
+
+def test_a_bad_node_ca_setting_is_refused():
+    module = load("configure-nodes.py")
+    for ca in [{"key": "not a key", "principals": ["zyx1121"]},
+               {"key": CA, "principals": []},
+               {"key": CA, "principals": "zyx1121"},
+               {"key": CA, "principals": ["a b"]},
+               {"key": CA, "principals": ["zyx1121\nroot"]},
+               {"key": CA, "principals": ["$(reboot)"]},
+               {"key": CA, "principals": ["svc:"]}]:
+        try:
+            module.node_ssh_ca({"node_ssh_ca": ca})
+        except SystemExit:
+            continue
+        raise AssertionError(ca)
+    # Only the key type and the key are kept, never a line after them.
+    key, _ = module.node_ssh_ca({"node_ssh_ca": {"key": CA + "\nPermitRootLogin yes", "principals": ["zyx1121"]}})
+    assert key == CA
+
+
+def test_the_b09_site_node_ca_setting_is_valid():
+    module = load("configure-nodes.py")
+    key, principals = module.node_ssh_ca(SITE)
+    assert key.startswith("ecdsa-sha2-nistp256 ") and principals
