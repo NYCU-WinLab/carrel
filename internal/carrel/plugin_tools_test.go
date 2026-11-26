@@ -381,3 +381,47 @@ func TestAMemberCannotCancelAnAdminPluginOperation(t *testing.T) {
 		t.Fatalf("admin cancel: %s", encoded(r))
 	}
 }
+
+// A start whose answer is lost may have begun the run. When the plugin then
+// refuses the same key, as while its node cannot run it, the run's fate is
+// still unknown: a retry asks after the same key and the work runs once.
+func TestARefusalAfterALostStartKeepsTheKey(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	pluginPatience = time.Hour
+	t.Cleanup(func() { pluginPatience = 10 * time.Minute })
+	runQueue(p)
+	seedMachine(p, "web", 10100)
+	var calls int
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "plugin" && r["call"] == "start" {
+			f.mu.Lock()
+			calls++
+			n := calls
+			f.mu.Unlock()
+			switch n {
+			case 1:
+				// The plugin starts the run, and the answer is lost.
+				f.call(r, target)
+				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "backend_code": "plugin_unavailable"}}}
+			case 2:
+				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "backend_code": "plugin_refused"}}}
+			}
+		}
+		return f.call(r, target)
+	}
+	op := obj(member(p, "backup_take", D{"machine": "web", "wait_seconds": 5})["operation"])
+	if obj(op["error"])["code"] != "unsupported" {
+		t.Fatalf("refused: %s", encoded(op))
+	}
+	id := str(op["id"])
+	member(p, "operation_retry", D{"id": id})
+	awaitState(t, p, id, "succeeded")
+	keys := map[any]bool{}
+	for _, s := range f.starts {
+		keys[s["idempotency_key"]] = true
+	}
+	if len(keys) != 1 || !keys[id+"-1"] {
+		t.Fatalf("the work ran under %v", keys)
+	}
+}

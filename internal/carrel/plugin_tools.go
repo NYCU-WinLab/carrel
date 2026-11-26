@@ -335,7 +335,7 @@ func (e *Execution) dispatchPlugin(a, w D) D {
 		return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
 	}
 	runs := integer(plug["runs"]) + 1
-	plug["node"], plug["runs"], plug["key"], plug["read_only"], plug["ended"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly, false
+	plug["node"], plug["runs"], plug["key"], plug["read_only"], plug["ended"], plug["start_sent"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly, false, false
 	return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
 }
 
@@ -358,6 +358,16 @@ func (e *Execution) PerformPlugin() {
 	job := D{"op": "plugin", "plugin": plug["plugin"], "operation": plug["operation"], "idempotency_key": plug["key"]}
 	name := str(plug["plugin"])
 	var unreachable time.Time
+	// first: this is the first start ever sent for the key, so a refusal
+	// proves the run never began. It is recorded before the start is sent,
+	// so a restart or a lost answer never counts as a first start again.
+	first := !boolean(plug["start_sent"])
+	if first {
+		e.P.writer.Lock()
+		plug["start_sent"] = true
+		e.P.Operations.Save(e.Op)
+		e.P.writer.Unlock()
+	}
 	ask := func(call string) D {
 		for {
 			r := merge(job, D{"call": call})
@@ -379,11 +389,13 @@ func (e *Execution) PerformPlugin() {
 				return obj(v)
 			}
 			code := str(obj(failureResult(err)["error"])["backend_code"])
-			// A refused start never ran; any other failure leaves the run's
-			// fate unknown, so a retry asks after the same key.
-			if call == "start" && (code == "invalid" || code == "conflict" || code == "plugin_refused") {
+			// Only a refused first start proves the run never began; any
+			// other failure leaves its fate unknown, so a retry asks after
+			// the same key.
+			if call == "start" && first && (code == "invalid" || code == "conflict" || code == "plugin_refused") {
 				plug["ended"] = true
 			}
+			first = false
 			switch code {
 			case "invalid":
 				fail("invalid", fmt.Sprintf("Plugin %s refused the arguments", name), D{"recovery": "revise_request"})
