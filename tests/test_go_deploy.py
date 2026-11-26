@@ -33,7 +33,9 @@ def test_deploy_stages_the_release_and_runs_the_installer_on_the_host(tmp_path, 
         (tmp_path / name).write_bytes(b"static binary fixture")
     calls = []
     monkeypatch.setattr(
-        deploy, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(stdout=site_file(args) or "rev\n")
+        deploy,
+        "run",
+        lambda args, **kw: calls.append(args) or SimpleNamespace(stdout=site_file(args) or "rev\n"),
     )
     monkeypatch.setattr(
         sys, "argv", ["deploy-go.py", "--host", "root@192.168.19.101", "--artifacts", str(tmp_path)]
@@ -498,13 +500,22 @@ def test_deploy_stages_each_plugin_the_site_lists_after_checking_it(tmp_path, mo
     for name in ("carrel", "carrel-agent", "carrel-deployd", "carrel-fetch"):
         (tmp_path / name).write_bytes(b"static binary fixture")
     blob = b"plugin artifact"
-    entry = {"name": "snap", "version": "1.0.0", "url": "https://example.org/snap.tar.gz",
-             "sha256": hashlib.sha256(blob).hexdigest()}
+    entry = {
+        "name": "snap",
+        "version": "1.0.0",
+        "url": "https://example.org/snap.tar.gz",
+        "sha256": hashlib.sha256(blob).hexdigest(),
+    }
     calls, served = [], {"body": blob}
-    monkeypatch.setattr(deploy, "run", lambda args, **kw: calls.append(args)
-                        or SimpleNamespace(stdout=site_file(args, [entry]) or "rev\n"))
+    monkeypatch.setattr(
+        deploy,
+        "run",
+        lambda args, **kw: calls.append(args) or SimpleNamespace(stdout=site_file(args, [entry]) or "rev\n"),
+    )
     monkeypatch.setattr(deploy.urllib.request, "urlopen", lambda url, timeout: _io.BytesIO(served["body"]))
-    monkeypatch.setattr(sys, "argv", ["deploy-go.py", "--host", "root@carrel01", "--artifacts", str(tmp_path)])
+    monkeypatch.setattr(
+        sys, "argv", ["deploy-go.py", "--host", "root@carrel01", "--artifacts", str(tmp_path)]
+    )
     deploy.main()
     copied = next(c for c in calls if c[0] == "scp")
     assert "plugin-snap-1.0.0.tar.gz" in {Path(p).name for p in copied[1:-1]}

@@ -10,10 +10,10 @@ checked against its SHA256SUMS; without it the deploy is a development build.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
-import importlib.util
 import tarfile
 import tempfile
 import urllib.request

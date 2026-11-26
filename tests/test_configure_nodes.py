@@ -983,15 +983,30 @@ def plugin(name="snap", version="1.0.0", body=b"#!/bin/sh\necho hi\n", **flags):
         info.size, info.mode = len(body), 0o777
         tar.addfile(info, io.BytesIO(body))
     blob = data.getvalue()
-    return {"name": name, "version": version, "url": f"https://example.org/{name}.tar.gz",
-            "sha256": hashlib.sha256(blob).hexdigest(), **flags}, blob
+    return {
+        "name": name,
+        "version": version,
+        "url": f"https://example.org/{name}.tar.gz",
+        "sha256": hashlib.sha256(blob).hexdigest(),
+        **flags,
+    }, blob
 
 
-@pytest.mark.parametrize("bad", [
-    {"name": "Snap"}, {"name": "a b"}, {"name": "../x"}, {"version": "1.0"}, {"version": "1.0.0;rm"},
-    {"sha256": "ABC"}, {"url": "http://example.org/x"}, {"url": "https://x/'a"}, {"network": "yes"},
-    {"extra": 1},
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"name": "Snap"},
+        {"name": "a b"},
+        {"name": "../x"},
+        {"version": "1.0"},
+        {"version": "1.0.0;rm"},
+        {"sha256": "ABC"},
+        {"url": "http://example.org/x"},
+        {"url": "https://x/'a"},
+        {"network": "yes"},
+        {"extra": 1},
+    ],
+)
 def test_a_bad_plugin_entry_stops_the_deploy(bad):
     module = load("configure-nodes.py")
     p, _ = plugin()
@@ -1041,8 +1056,10 @@ def apply(module, tmp_path, plugins):
     systemctl.write_text(f'#!/bin/sh\necho "$*" >> {log}\n')
     systemctl.chmod(0o755)
     log.write_text("")
-    script = module.plugin_apply([p for p, _ in plugins], str(units), str(lib), str(artifacts), str(systemctl))
-    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+    script = module.plugin_apply(
+        [p for p, _ in plugins], str(units), str(lib), str(artifacts), str(systemctl)
+    )
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
     return result, log.read_text().splitlines(), units, lib, artifacts
 
 
@@ -1054,7 +1071,10 @@ def test_apply_installs_upgrades_and_removes_plugins(tmp_path):
     assert (lib / "snap/current").resolve() == lib / "snap/1.0.0"
     assert oct((lib / "snap/1.0.0/plugin").stat().st_mode & 0o777) == "0o755"
     assert (units / "carrel-plugin-freeze.socket").read_text() == module.plugin_units(freeze[0])[0]
-    assert "enable --now carrel-plugin-snap.socket" in calls and "try-restart carrel-plugin-snap.service" in calls
+    assert (
+        "enable --now carrel-plugin-snap.socket" in calls
+        and "try-restart carrel-plugin-snap.service" in calls
+    )
 
     # The same list again changes nothing and restarts nothing.
     result, calls, *_ = apply(module, tmp_path, [snap, freeze])
@@ -1095,7 +1115,7 @@ def test_apply_refuses_an_artifact_without_a_top_level_program(tmp_path):
         tar.addfile(info, io.BytesIO(b"hi"))
     blob = data.getvalue()
     p = {**plugin()[0], "sha256": hashlib.sha256(blob).hexdigest()}
-    result, calls, units, *_ = apply(module, tmp_path, [(p, blob)])
+    result, _, units, *_ = apply(module, tmp_path, [(p, blob)])
     assert result.returncode != 0 and "no plugin program" in result.stderr
     assert not (units / "carrel-plugin-snap.socket").exists()
 
@@ -1105,7 +1125,7 @@ def test_apply_leaves_units_whose_name_is_not_a_plugin_name(tmp_path):
     apply(module, tmp_path, [plugin()])
     (tmp_path / "units/carrel-plugin-.socket").write_text("x")
     (tmp_path / "units/carrel-plugin-A_b.socket").write_text("x")
-    result, calls, units, lib, _ = apply(module, tmp_path, [])
+    result, _, units, lib, _ = apply(module, tmp_path, [])
     assert result.returncode == 0 and lib.exists() and not (lib / "snap").exists()
     assert sorted(f.name for f in units.iterdir()) == ["carrel-plugin-.socket", "carrel-plugin-A_b.socket"]
 
@@ -1131,8 +1151,10 @@ def test_apply_refuses_a_link_in_the_artifact_and_touches_nothing_outside(tmp_pa
     secret = tmp_path / "secret"
     secret.write_text("key")
     secret.chmod(0o600)
-    for members in ([("plugin", "link", str(secret))],
-                    [("plugin", "file", b"#!/bin/sh\n"), ("lib", "link", "/etc")]):
+    for members in (
+        [("plugin", "link", str(secret))],
+        [("plugin", "file", b"#!/bin/sh\n"), ("lib", "link", "/etc")],
+    ):
         result, calls, units, *_ = apply(module, tmp_path, [artifact(members)])
         assert result.returncode != 0 and "only files and directories" in result.stderr
         assert oct(secret.stat().st_mode & 0o777) == "0o600" and calls == []
