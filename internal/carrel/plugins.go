@@ -31,6 +31,8 @@ type PluginOperation struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Params      json.RawMessage `json:"params_schema"`
+	Member      bool            `json:"member,omitempty"`
+	ReadOnly    bool            `json:"read_only,omitempty"`
 }
 
 // PluginInfo is one plugin as an agent found it. A plugin that does not

@@ -291,6 +291,10 @@ func (a *App) Call(ctx context.Context, name string, args, who D) D {
 
 func (a *App) call(ctx context.Context, name string, args, who D) D {
 	schema := a.schemas[name]
+	if schema == nil && a.Platform.pluginTools()[name] != nil {
+		// A plugin tool: Execute checks its arguments against its schema.
+		return memberResponse(name, args, a.Platform.Execute(ctx, name, without(args, "detail"), who))
+	}
 	if schema == nil {
 		return D{"ok": false, "error": D{"code": "invalid", "message": "Unknown tool or missing required field"}}
 	}
@@ -308,7 +312,7 @@ func (a *App) span(tool string, args, who D, start time.Time, result D) {
 		return
 	}
 	// A name nobody registered is caller input: one label, not one per guess.
-	if a.schemas[tool] == nil {
+	if a.schemas[tool] == nil && a.Platform.pluginTools()[tool] == nil {
 		tool = "unknown"
 	}
 	outcome := "ok"
@@ -548,8 +552,24 @@ func instructionsFor(sel selection) string {
 // the selected toolsets stays callable by name but is left out of tools/list,
 // for clients that ask for a smaller list and still call tools by name.
 func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: instructionsFor(sel)})
+	// Plugin tools change as nodes report plugins, so no list may be kept
+	// for long or shared between callers.
+	server := mcp.NewServer(&mcp.Implementation{Name: "carrel", Version: Version}, &mcp.ServerOptions{Instructions: instructionsFor(sel),
+		SetCacheable: func(_ context.Context, _ mcp.Request, c *mcp.Cacheable) { c.CacheScope, c.TTLMs = "private", 0 }})
 	listed := map[string]bool{}
+	call := func(ctx context.Context, name string, raw json.RawMessage) *mcp.CallToolResult {
+		args := D{}
+		var result D
+		if len(raw) > 0 {
+			if json.Unmarshal(raw, &args) != nil {
+				result = D{"ok": false, "error": D{"code": "invalid", "message": "Invalid arguments"}}
+			}
+		}
+		if result == nil {
+			result = a.Call(ctx, name, args, obj(ctx.Value(identityKey{})))
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}
+	}
 	for _, definition := range dicts(Contract["tools"]) {
 		name := str(definition["name"])
 		if !admin && named("admin_tools", name) || sel.readOnly && name != "whoami" && !boolean(obj(definition["annotations"])["readOnlyHint"]) {
@@ -559,21 +579,23 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 		var tool mcp.Tool
 		must(json.Unmarshal(encoded(definition), &tool))
 		server.AddTool(&tool, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			args := D{}
-			var result D
-			if len(request.Params.Arguments) > 0 {
-				if json.Unmarshal(request.Params.Arguments, &args) != nil {
-					result = D{"ok": false, "error": D{"code": "invalid", "message": "Invalid arguments"}}
-				}
-			}
-			if result == nil {
-				result = a.Call(ctx, name, args, obj(ctx.Value(identityKey{})))
-			}
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded(result))}}, StructuredContent: result, IsError: !boolean(result["ok"])}, nil
+			return call(ctx, name, request.Params.Arguments), nil
 		})
+	}
+	// Plugin tools are not registered: the registry is read on every list
+	// and call, so they come and go with the nodes' reports (#661).
+	shows := func(pt *pluginTool) bool {
+		return (admin || pt.Member) && (!sel.readOnly || pt.ReadOnly)
 	}
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			if c, ok := request.(*mcp.CallToolRequest); ok && c.Params != nil {
+				if _, core := listed[c.Params.Name]; !core && !coreTools[c.Params.Name] {
+					if pt := a.Platform.pluginTools()[c.Params.Name]; pt != nil && shows(pt) {
+						return call(ctx, pt.Name, c.Params.Arguments), nil
+					}
+				}
+			}
 			result, err := next(ctx, method, request)
 			if list, ok := result.(*mcp.ListToolsResult); ok && err == nil {
 				tools := []*mcp.Tool{}
@@ -581,6 +603,9 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 					if listed[tool.Name] {
 						tools = append(tools, tool)
 					}
+				}
+				if len(sel.sets) == 0 || contains(sel.sets, "plugins") {
+					tools = append(tools, pluginListing(a.Platform.pluginTools(), shows)...)
 				}
 				list.Tools = tools
 			}

@@ -61,7 +61,7 @@ func (p *Platform) sites() []D {
 			out[f.name] = D{"available": true, "tools": f.tools}
 		}
 	}
-	return []D{{"name": p.siteName(), "features": out}}
+	return []D{{"name": p.siteName(), "features": out, "plugins": p.pluginCatalog()}}
 }
 
 // requireFeature fails a tool whose feature the site lacks, naming the
