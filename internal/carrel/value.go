@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const Version = "0.12.0" // x-release-please-version
+const Version = "0.13.0" // x-release-please-version
 
 // Release is "true" only in binaries the release workflow builds (-ldflags -X);
 // every other build reports itself as a development build.

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/NYCU-WinLab/carrel/compare/v0.12.0...v0.13.0) (2026-11-26)
+
+
+### Features
+
+* **nodes:** let root on site nodes take lab SSH certificates ([#647](https://github.com/NYCU-WinLab/carrel/issues/647)) ([796ad28](https://github.com/NYCU-WinLab/carrel/commit/796ad28ad20a58928f21dfb4800bf8991c0a1fae))
+
 ## [0.12.0](https://github.com/NYCU-WinLab/carrel/compare/v0.11.0...v0.12.0) (2026-11-25)
 
 
