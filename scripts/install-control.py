@@ -378,8 +378,13 @@ def host(stage, version):
     since = int(time.time())
     agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False,
                            capture_output=True, text=True)
-    if agent.returncode:
-        raise SystemExit("carrel-agent was not started or stopped; run "
+    try:
+        report = json.loads(agent.stdout or "{}")
+    except ValueError:
+        report = {}
+    if agent.returncode and "agent" not in report:
+        raise SystemExit("carrel-agent was not started or stopped "
+                         f"({(agent.stderr or '').strip()[-400:]}); run "
                          f"python3 {stage}/configure-nodes.py --agent-service on this node")
     if '"started"' in (agent.stdout or "") and not agent_connected(since):
         # The control plane is up, but this node's jobs wait for its agent.
@@ -387,10 +392,7 @@ def host(stage, version):
                          "carrel-agent. To go back to SSH, remove this node from agent_nodes and deploy again.")
     # The other nodes' agents reach the listener only through the infra firewall's
     # 8443 rule: a node that never connects must fail the deploy, not wait silently.
-    try:
-        peers = json.loads(agent.stdout or "{}").get("peers") or {}
-    except ValueError:
-        peers = {}
+    peers = report.get("peers") or {}
     if "pushed" in peers.values():
         check = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-check", str(since)],
                                check=False, capture_output=True, text=True)
@@ -400,6 +402,9 @@ def host(stage, version):
                              "Run bootstrap-platform.py --firewall on the first exit node. A node in "
                              "agent_identity.certificate_nodes also needs a valid certificate: enrol it, or "
                              "remove it from certificate_nodes. Or remove the node from agent_nodes and deploy again.")
+    if report.get("plugins_error"):
+        raise SystemExit(f"The plugins were not installed ({report['plugins_error']}): fix the site file's "
+                         "plugins and deploy again. The control plane and the agents are up.")
     for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
         shutil.rmtree(old)
 

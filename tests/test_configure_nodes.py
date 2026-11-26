@@ -1108,3 +1108,58 @@ def test_apply_leaves_units_whose_name_is_not_a_plugin_name(tmp_path):
     result, calls, units, lib, _ = apply(module, tmp_path, [])
     assert result.returncode == 0 and lib.exists() and not (lib / "snap").exists()
     assert sorted(f.name for f in units.iterdir()) == ["carrel-plugin-.socket", "carrel-plugin-A_b.socket"]
+
+
+def artifact(members):
+    """A .tar.gz of (name, type, data or link target) members."""
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as tar:
+        for name, kind, value in members:
+            info = tarfile.TarInfo(name)
+            if kind == "link":
+                info.type, info.linkname = tarfile.SYMTYPE, value
+                tar.addfile(info)
+            else:
+                info.size = len(value)
+                tar.addfile(info, io.BytesIO(value))
+    blob = data.getvalue()
+    return {**plugin()[0], "sha256": hashlib.sha256(blob).hexdigest()}, blob
+
+
+def test_apply_refuses_a_link_in_the_artifact_and_touches_nothing_outside(tmp_path):
+    module = load("configure-nodes.py")
+    secret = tmp_path / "secret"
+    secret.write_text("key")
+    secret.chmod(0o600)
+    for members in ([("plugin", "link", str(secret))],
+                    [("plugin", "file", b"#!/bin/sh\n"), ("lib", "link", "/etc")]):
+        result, calls, units, *_ = apply(module, tmp_path, [artifact(members)])
+        assert result.returncode != 0 and "only files and directories" in result.stderr
+        assert oct(secret.stat().st_mode & 0o777) == "0o600" and calls == []
+        assert not (units / "carrel-plugin-snap.socket").exists()
+
+
+def test_a_run_that_fails_halfway_still_restarts_the_next_time(tmp_path):
+    module = load("configure-nodes.py")
+    snap, freeze = plugin(), plugin("freeze")
+    apply(module, tmp_path, [snap, freeze])
+    snap2 = plugin(version="1.1.0", body=b"#!/bin/sh\necho two\n")
+    broken = artifact([("bin/plugin", "file", b"x")])
+    broken = ({**broken[0], "name": "freeze", "version": "2.0.0"}, broken[1])
+    result, calls, *_ = apply(module, tmp_path, [snap2, broken])
+    assert result.returncode != 0 and calls == []
+    # The broken plugin is fixed: snap, unpacked last time, still restarts.
+    result, calls, _, lib, _ = apply(module, tmp_path, [snap2, freeze])
+    assert result.returncode == 0, result.stderr
+    assert "try-restart carrel-plugin-snap.service" in calls
+    assert not (lib / "snap/.restart").exists()
+
+
+def test_a_release_replaced_under_the_same_version_is_installed(tmp_path):
+    module = load("configure-nodes.py")
+    apply(module, tmp_path, [plugin()])
+    again = plugin(body=b"#!/bin/sh\necho fixed\n")
+    result, calls, _, lib, _ = apply(module, tmp_path, [again])
+    assert result.returncode == 0, result.stderr
+    assert (lib / "snap/1.0.0/plugin").read_bytes() == b"#!/bin/sh\necho fixed\n"
+    assert "try-restart carrel-plugin-snap.service" in calls

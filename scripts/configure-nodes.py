@@ -475,12 +475,15 @@ RestrictAddressFamilies={families}
 def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl"):
     """The script that makes one node run exactly these plugins.
 
-    The artifacts are in <artifacts> already. It checks every checksum before
-    it changes anything, unpacks each version beside the others, points
-    <lib>/<name>/current at it and restarts the plugin only when the version
-    changed. A plugin installed here and no longer listed loses its units and
-    files; its state directory stays, so a plugin listed again keeps its
-    operations. Every value is checked in plugin_list, so quoting is enough."""
+    The artifacts are in <artifacts> already. It checks every checksum and
+    unpacks every artifact before it switches any plugin, so a bad artifact
+    changes nothing. A version directory records the checksum it came from: a
+    release replaced under the same version is unpacked again. A plugin whose
+    program or unit changed gets a .restart mark, cleared only once it is
+    restarted, so a run that fails halfway still restarts it the next time. A
+    plugin installed here and no longer listed loses its units and files; its
+    state directory stays, so a plugin listed again keeps its operations.
+    Every value is checked in plugin_list, so quoting is enough."""
     q = shlex.quote
     lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}"]
     for p in plugins:
@@ -488,24 +491,35 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
                      f'|| {{ echo "plugin {p["name"]}: the artifact does not match its sha256" >&2; exit 1; }}')
     keep = " ".join(q(p["name"]) for p in plugins)
     lines.append(f"keep=' {keep} '")
+    # Unpack and check every version first.
+    for p in plugins:
+        name, version, sha = p["name"], p["version"], p["sha256"]
+        lines += [
+            f"d=$L/{name}/{version}",
+            f'if [ "$(cat "$d/.sha256" 2>/dev/null || true)" != {sha} ]; then',
+            '  rm -rf "$d.next" && mkdir -p "$d.next"',
+            f'  tar -xzf "$A/{plugin_artifact(p)}" -C "$d.next" --no-same-owner --no-same-permissions',
+            # A link could point root's chmod below, or the plugin, outside its directory.
+            '  if [ -n "$(find "$d.next" ! -type f ! -type d | head -n 1)" ]; then',
+            f'    echo "plugin {name}: the artifact may hold only files and directories" >&2; exit 1',
+            "  fi",
+            f'  test -f "$d.next/plugin" || {{ echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
+            '  chmod -R go-w "$d.next" && chmod 755 "$d.next/plugin"',
+            f'  echo {sha} > "$d.next/.sha256"',
+            f'  rm -rf "$d" && mv "$d.next" "$d" && touch $L/{name}/.restart',
+            "fi",
+        ]
+    # Then switch each plugin to its version and units.
     for p in plugins:
         name, version = p["name"], p["version"]
         socket_unit, service_unit = plugin_units(p)
+        unit = f"$U/carrel-plugin-{name}"
         lines += [
-            f"d=$L/{name}/{version}",
-            'if ! test -x "$d/plugin"; then',
-            '  rm -rf "$d.next" && mkdir -p "$d.next"',
-            f'  tar -xzf "$A/{plugin_artifact(p)}" -C "$d.next" --no-same-owner --no-same-permissions',
-            f'  test -f "$d.next/plugin" || {{ echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
-            '  chmod -R go-w "$d.next" && chmod 755 "$d.next/plugin" && mv "$d.next" "$d"',
-            "fi",
-            # The service unit names the version, so it differs whenever the
-            # program or its sandbox does: then a running plugin restarts.
-            f"printf '%s' {q(service_unit)} > $U/carrel-plugin-{name}.service.next",
-            f'changed_{name.replace("-", "_")}=$(cmp -s $U/carrel-plugin-{name}.service.next $U/carrel-plugin-{name}.service && echo no || echo yes)',
-            f"printf '%s' {q(socket_unit)} > $U/carrel-plugin-{name}.socket.next && mv $U/carrel-plugin-{name}.socket.next $U/carrel-plugin-{name}.socket",
+            f"printf '%s' {q(service_unit)} > {unit}.service.next",
+            f"cmp -s {unit}.service.next {unit}.service || touch $L/{name}/.restart",
+            f"printf '%s' {q(socket_unit)} > {unit}.socket.next && mv {unit}.socket.next {unit}.socket",
             f"ln -sfn {version} $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
-            f"mv $U/carrel-plugin-{name}.service.next $U/carrel-plugin-{name}.service",
+            f"mv {unit}.service.next {unit}.service",
         ]
     lines += [
         # Plugins installed here that the list no longer names.
@@ -530,7 +544,7 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
         name = p["name"]
         lines += [
             f"$S enable --now carrel-plugin-{name}.socket",
-            f'if [ "$changed_{name.replace("-", "_")}" = yes ]; then $S try-restart carrel-plugin-{name}.service; fi',
+            f"if [ -e $L/{name}/.restart ]; then $S try-restart carrel-plugin-{name}.service && rm -f $L/{name}/.restart; fi",
             # Older versions go once the new one is in place.
             f'for v in $L/{name}/*; do case "${{v##*/}}" in current|{p["version"]}) ;; *) rm -rf "$v";; esac; done',
         ]
@@ -948,7 +962,17 @@ if __name__ == "__main__":
     import sys
 
     if sys.argv[1:] == ["--agent-service"]:
-        print(json.dumps({"agent": agent_service(), "peers": agent_peers(), "plugins": plugins_on_nodes()}))
+        # A bad plugin list stops here, before the agent changes.
+        plugin_check_stage(plugin_list(json.loads(SITE.read_text())))
+        report = {"agent": agent_service(), "peers": agent_peers()}
+        # The agents are in place either way: a plugin that fails to install
+        # is reported beside them, and install-control.py still checks them.
+        try:
+            report["plugins"] = plugins_on_nodes()
+        except SystemExit as e:
+            report["plugins_error"] = str(e)
+        print(json.dumps(report))
+        sys.exit(1 if "plugins_error" in report else 0)
     elif sys.argv[1:2] == ["--agent-check"] and len(sys.argv) == 3:
         missing = peers_connected(int(sys.argv[2]))
         print(json.dumps({"not_connected": missing}))

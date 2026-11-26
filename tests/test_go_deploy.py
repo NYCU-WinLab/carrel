@@ -185,7 +185,7 @@ class Node:
             if args[0] == "journalctl"
             else ""
         )
-        return SimpleNamespace(returncode=1 if failed else 0, stdout=stdout)
+        return SimpleNamespace(returncode=1 if failed else 0, stdout=stdout, stderr="")
 
     def run(self, *args, **kwargs):
         args = tuple(str(a) for a in args)
@@ -515,3 +515,17 @@ def test_deploy_stages_each_plugin_the_site_lists_after_checking_it(tmp_path, mo
     with pytest.raises(SystemExit, match="does not match"):
         deploy.main()
     assert not [c for c in calls if c[0] == "scp"]
+
+
+def test_a_plugin_that_fails_to_install_still_has_the_agents_checked(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    # configure-nodes.py exits 1 here; the fake run returns 0, which the report decides alone.
+    node.agent_stdout = '{"agent": "started", "peers": {}, "plugins_error": "plugin snap: bad artifact"}'
+    with pytest.raises(SystemExit, match="did not reach the control plane"):
+        module.host(staged(tmp_path), "1.0.0")
+    node.journal = '{"level":"INFO","msg":"agent_connected","node":"carrel01"}'
+    (tmp_path / "again").mkdir()
+    with pytest.raises(SystemExit, match="plugins were not installed .plugin snap: bad artifact"):
+        module.host(staged(tmp_path / "again"), "1.0.0")

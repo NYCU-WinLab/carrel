@@ -343,7 +343,8 @@ removes every plugin the list no longer names:
   its state directory. A plugin that keeps failing is restarted every 5 s, and its socket stays.
 - `network: true` lets the plugin open network sockets; without it, it has unix sockets only.
   `env_file: true` reads `/etc/carrel/plugins/<name>.env`, which the operator writes, for
-  credentials such as an API token.
+  credentials such as an API token. Make it root's, mode 0600: other plugins can read
+  `/etc/carrel`.
 - A plugin removed from the list loses its units and program. Its state directory stays, so a
   plugin listed again keeps its operations.
 
