@@ -538,3 +538,27 @@ mode from the control plane's `origin` instead of the site file. The R640 guests
 6. Keep the sources stopped on the R640 node for 14 days, then retire it. Its name `carrel01` is
    also on the tailnet, in admin SSH aliases and in sensorium. Rename those before the new
    `carrel01` joins the tailnet.
+
+## 15.16 Node agents (0.13.0, 2026-11-26)
+
+All 4 nodes moved from SSH to `carrel-agent` (PLAN 8.6, #604), one node per deploy, with no
+machine change. Each deploy was `deploy-go.py --release v0.13.0` after adding the node to
+`agent_nodes` in `/etc/carrel/site.json` on carrel01 (backups `site.json.bak-20261126-*`).
+
+1. carrel01 first. Before the other nodes, `bootstrap-platform.py --firewall` added one rule to
+   `/etc/carrel/infra.nft`: port 8443 from `192.168.19.102` to `.104` on `vmbr0` to `10.200.0.3`.
+   `/etc/pve/firewall/102.fw` did not change.
+2. carrel02, carrel03 and carrel04 followed. Each logged `agent_started` and `agent_connected`
+   within the deploy's wait.
+3. Check: `node_list` shows all 4 agents connected, with `stream`, and no stale or lagging node.
+   The control plane logged no WARN or ERROR in the 15 minutes after. A snapshot of a test machine
+   on carrel01 was created and deleted through the agent (`qmdelsnapshot` in the agent's log).
+
+The same day, before the agents:
+
+- The backup host takes `service_key` only (#606). Its 2 `node_key` lines are gone; a manual
+  `carrel-backup.service` run logged `backup_complete` through the control socket.
+- Root on every node also takes lab SSH certificates for the principals in `node_ssh_ca` (#647).
+
+`node_key` and its `authorized_keys` line stay until the agents sign in with step-ca certificates
+(#601) and the boot replay passes a reboot test (#603), so `agent_nodes` can still go back to SSH.

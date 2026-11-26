@@ -11,6 +11,7 @@
     {"name": "carrel04", "address": "192.168.19.104"}
   ],
   "exit_nodes": ["carrel01"],
+  "agent_nodes": ["carrel01", "carrel02", "carrel03", "carrel04"],
   "ssh_jump": true,
   "ssh_keys_only": true,
   "node_ssh_ca": {"key": "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2eUS00sJeJA9ebfrquCmA8reWrgdWSL4yGkfm4bKEuRyPmVJoM72JdUwzhH/v3VWkAkfPQ6sxMtzgruck=", "principals": ["zyx1121"]},
