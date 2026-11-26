@@ -99,9 +99,18 @@ func contracts() string {
 	return strings.Join(s, ", ")
 }
 
+// clip cuts s to MaxPluginText as JSON carries it, on a rune boundary.
 func clip(s string) string {
-	if len(s) > carrel.MaxPluginText {
-		return s[:carrel.MaxPluginText]
+	if carrel.WireLen(s) <= carrel.MaxPluginText {
+		return s
+	}
+	n := 0
+	for i, r := range s {
+		w := carrel.WireLen(string(r))
+		if n+w > carrel.MaxPluginText {
+			return s[:i]
+		}
+		n += w
 	}
 	return s
 }
@@ -205,15 +214,22 @@ func (a *agent) pluginReport() []carrel.PluginInfo {
 	return a.plugins
 }
 
-// refreshPlugins remakes the report every pluginRefresh until stop.
+// refreshPlugins remakes the report every pluginRefresh until stop. The
+// first report is made before it returns, so the first claim carries it;
+// that costs one pluginTimeout at most.
 func (a *agent) refreshPlugins(stop context.Context) {
-	for stop.Err() == nil {
+	set := func() {
 		report := discover(stop, a.cfg.PluginDir)
 		a.mu.Lock()
 		a.plugins, a.pluginsAt = report, time.Now()
 		a.mu.Unlock()
-		sleep(stop, pluginRefresh)
 	}
+	set()
+	go func() {
+		for sleep(stop, pluginRefresh); stop.Err() == nil; sleep(stop, pluginRefresh) {
+			set()
+		}
+	}()
 }
 
 // pluginJob is a job with op "plugin".

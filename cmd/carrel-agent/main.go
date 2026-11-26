@@ -205,7 +205,7 @@ func (l *limited) Write(p []byte) (int, error) {
 func (a *agent) loop(stop context.Context) {
 	var wg sync.WaitGroup
 	connected := false
-	go a.refreshPlugins(stop)
+	a.refreshPlugins(stop)
 	for stop.Err() == nil {
 		jobs, err := a.claim(stop, false)
 		if err != nil {

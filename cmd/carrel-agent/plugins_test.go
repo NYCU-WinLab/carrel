@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -389,5 +390,29 @@ func TestAJobRefusesASymlinkedSocket(t *testing.T) {
 	v := call(t, a, `{"op":"plugin","plugin":"snapshot","call":"get","idempotency_key":"k1"}`)
 	if v["ok"] != false || v["error_code"] != "plugin_unavailable" || !strings.Contains(v["error"].(string), "must be a socket") {
 		t.Fatalf("%v", v)
+	}
+}
+
+// Text and schemas are measured as JSON carries them: a reason of CJK
+// characters cut at the limit, or a schema of escaped characters, still
+// passes the control plane's check after the trip.
+func TestThePluginReportSurvivesTheWire(t *testing.T) {
+	reason := clip("xx" + strings.Repeat("中", 600))
+	if !utf8.ValidString(reason) || carrel.WireLen(reason) > carrel.MaxPluginText {
+		t.Fatalf("clip: valid %v, %d bytes", utf8.ValidString(reason), carrel.WireLen(reason))
+	}
+	info := []carrel.PluginInfo{{Name: "a", Contract: 1, Reason: reason, Version: clip(strings.Repeat("<", 2000)),
+		Operations: []carrel.PluginOperation{{Name: "x", Params: json.RawMessage(`{"d":"` + strings.Repeat("<", 4000) + `"}`)}}}}
+	if carrel.CheckPlugins(info) == "" {
+		t.Fatal("a schema 6 times its size on the wire was taken")
+	}
+	info[0].Operations = nil
+	b, _ := json.Marshal(info)
+	var back []carrel.PluginInfo
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if msg := carrel.CheckPlugins(back); msg != "" {
+		t.Fatalf("the control plane would refuse it: %s", msg)
 	}
 }

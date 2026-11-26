@@ -52,6 +52,14 @@ var pluginName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 // PluginName reports whether s is a valid plugin name.
 func PluginName(s string) bool { return pluginName.MatchString(s) }
 
+// WireLen is the length of s as JSON carries it, quotes left out: an agent
+// and the control plane measure the same text the same way, whatever
+// escaping or invalid UTF-8 it holds.
+func WireLen(s string) int {
+	b, _ := json.Marshal(s)
+	return len(b) - 2
+}
+
 // CheckPlugins reports what is wrong with an agent's plugin report, or "".
 func CheckPlugins(plugins []PluginInfo) string {
 	if len(plugins) > MaxPlugins {
@@ -66,15 +74,16 @@ func CheckPlugins(plugins []PluginInfo) string {
 		if len(pl.Operations) > MaxPluginOperations {
 			return fmt.Sprintf("Plugin %s declares more than %d operations", pl.Name, MaxPluginOperations)
 		}
-		if len(pl.Version) > MaxPluginText || len(pl.Reason) > MaxPluginText {
+		if WireLen(pl.Version) > MaxPluginText || WireLen(pl.Reason) > MaxPluginText {
 			return fmt.Sprintf("Plugin %s reports a version or reason over %d bytes", pl.Name, MaxPluginText)
 		}
 		for _, op := range pl.Operations {
-			if len(op.Description) > MaxPluginText {
+			if WireLen(op.Description) > MaxPluginText {
 				return fmt.Sprintf("Plugin %s operation %s has a description over %d bytes", pl.Name, op.Name, MaxPluginText)
 			}
 			var schema map[string]any
-			if !pluginName.MatchString(op.Name) || len(op.Params) > MaxPluginSchema || json.Unmarshal(op.Params, &schema) != nil {
+			wire, err := json.Marshal(op.Params)
+			if !pluginName.MatchString(op.Name) || err != nil || len(wire) > MaxPluginSchema || json.Unmarshal(op.Params, &schema) != nil {
 				return fmt.Sprintf("Plugin %s operation %q needs a name of a-z, 0-9 and - and a JSON object schema", pl.Name, op.Name)
 			}
 		}
