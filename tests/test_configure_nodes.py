@@ -539,10 +539,10 @@ def test_the_agent_service_follows_the_site_file_without_blocking(tmp_path, monk
     monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
     monkeypatch.setattr(module, "AGENT_JSON", tmp_path / "agent.json")
     monkeypatch.setattr(module, "AGENT_UNIT", tmp_path / "carrel-agent.service")
-    ssh_only = {k: v for k, v in SITE.items() if k != "agent_nodes"}
+    ssh_only = {k: v for k, v in SITE.items() if k not in ("agent_nodes", "agent_identity")}
     assert module.SITE.write_text(json.dumps(ssh_only)) and module.agent_service() == "absent"
     assert calls == []
-    module.SITE.write_text(json.dumps({**SITE, "agent_nodes": ["carrel01"]}))
+    module.SITE.write_text(json.dumps({**ssh_only, "agent_nodes": ["carrel01"]}))
     assert module.agent_service() == "started"
     assert json.loads((tmp_path / "agent.json").read_text()) == {
         "control": "https://10.200.0.3:8443",
@@ -796,7 +796,10 @@ def test_agent_identity_is_checked_before_anything_changes():
     nodes = module.targets(SITE, "carrel01")
     agents = {"carrel01", "carrel02"}
     assert module.agent_identity({**SITE, "agent_identity": IDENTITY}, nodes, agents) == IDENTITY
-    assert module.agent_identity(SITE, nodes, agents) is None
+    no_identity = {k: v for k, v in SITE.items() if k != "agent_identity"}
+    assert module.agent_identity(no_identity, nodes, agents) is None
+    # The B09 site file's own identity passes the same checks.
+    assert module.agent_identity(SITE, nodes, set(SITE["agent_nodes"]))["certificate_nodes"] == []
     for bad, says in [
         ({**IDENTITY, "ca_url": "http://ca.winlab.tw"}, "https URL"),
         ({**IDENTITY, "ca_url": "https://ca.winlab.tw/x"}, "https URL"),
