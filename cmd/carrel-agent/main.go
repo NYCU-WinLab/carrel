@@ -30,6 +30,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/NYCU-WinLab/carrel/internal/carrel"
 )
 
 // config is /etc/carrel/agent.json.
@@ -50,6 +52,8 @@ type config struct {
 	CertificateName string `json:"certificate_name"`
 	CAURL           string `json:"ca_url"`
 	LabRootFile     string `json:"lab_root_file"`
+	// PluginDir holds the plugins' unix sockets (#660).
+	PluginDir string `json:"plugin_dir"`
 }
 
 const (
@@ -96,6 +100,9 @@ type agent struct {
 	// cert is the client certificate the agent presents, nil before it is
 	// enrolled.
 	cert atomic.Pointer[tls.Certificate]
+	// plugins is the latest plugin report, made at pluginsAt.
+	plugins   []carrel.PluginInfo
+	pluginsAt time.Time
 }
 
 func load(path string) (*agent, error) {
@@ -109,6 +116,9 @@ func load(path string) (*agent, error) {
 	}
 	if c.NodeAgent == "" {
 		c.NodeAgent = "/usr/local/lib/carrel/node-agent.py"
+	}
+	if c.PluginDir == "" {
+		c.PluginDir = defaultPluginDir
 	}
 	if c.Lock == "" {
 		c.Lock = "/run/carrel-agent.lock"
@@ -149,7 +159,7 @@ func load(path string) (*agent, error) {
 	a.client = &http.Client{Transport: &http.Transport{TLSClientConfig: trust.Clone()},
 		// A redirect would carry the token elsewhere: never follow one.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	a.run = a.nodeAgent
+	a.run = a.dispatch
 	a.console = func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, a.cfg.NodeAgent) }
 	var record struct {
 		Version string `json:"version"`
@@ -262,6 +272,7 @@ func (a *agent) wait(d time.Duration) {
 
 // claim polls for jobs; with drain it only reports what the agent holds.
 func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
+	plugins := a.pluginReport(ctx)
 	a.mu.Lock()
 	a.seq++
 	seq := a.seq
@@ -270,7 +281,7 @@ func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
 		held = append(held, id)
 	}
 	a.mu.Unlock()
-	body, _ := json.Marshal(map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain, "capabilities": []string{"stream"}})
+	body, _ := json.Marshal(map[string]any{"protocol": protocol, "release": a.release, "session": a.session, "seq": seq, "held": held, "drain": drain, "capabilities": []string{"stream"}, "plugins": plugins})
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	target := strings.TrimRight(a.cfg.Control, "/") + "/sites/v1/agent/claim?node=" + url.QueryEscape(a.cfg.Node)

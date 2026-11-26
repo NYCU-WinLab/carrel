@@ -273,6 +273,22 @@ The CA keeps no revocation list for these certificates: a stolen agent key works
 certificate expires, at most 7 days. To cut one node off at once, remove it from `agent_nodes`
 and deploy, then enrol it again with a new key before adding it back.
 
+### Plugins
+
+A plugin is a service on a unix socket, `<name>.sock`, in the agent's `plugin_dir`
+(`/run/carrel/plugins` by default; #564, #660). The contract is `proto/plugin/v1/plugin.proto`.
+
+- The agent trusts the directory only when its own user owns it and nobody else can write to it.
+  Otherwise it reports one entry named `plugin-dir` with the reason, and runs no plugin.
+- Every claim carries a report of each socket: name, version, contract, operations, and whether
+  the node can run it. The report is at most 30 s old. `node_list` shows it per node.
+- The agent serves the contract revisions in `PluginContracts`, the current and the previous one.
+  A plugin built for another revision is reported with a message that names what to install, and
+  every call to it is refused with `plugin_refused`.
+- A job with `"op": "plugin"` runs in the agent, not in `node-agent.py`. `call` is `start`, `get`
+  or `cancel`, and `idempotency_key` names the operation. `plugin_unavailable` means the plugin
+  did not answer: ask again with the same key once it is back.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

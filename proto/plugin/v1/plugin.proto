@@ -1,0 +1,78 @@
+// The plugin contract (#564, #660). A plugin is a service on a unix socket
+// on each node (#563); carrel-agent calls it and relays operations for the
+// control plane. Regenerate internal/pluginpb with internal/pluginpb/gen.sh.
+syntax = "proto3";
+
+package carrel.plugin.v1;
+
+option go_package = "github.com/NYCU-WinLab/carrel/internal/pluginpb";
+
+service Plugin {
+  // Describe names the plugin, its version, the contract revision it was
+  // built against and the operations it offers.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  // Probe says whether this node can run the plugin, and why not.
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
+  // StartOperation starts an operation once per idempotency key; the same
+  // key again returns the same operation.
+  rpc StartOperation(StartRequest) returns (Operation);
+  // GetOperation reads an operation by its key. Ask again until done.
+  rpc GetOperation(GetRequest) returns (Operation);
+  // Cancel stops an operation that is not done; a done one is returned as is.
+  rpc Cancel(CancelRequest) returns (Operation);
+}
+
+message DescribeRequest {}
+
+message OperationType {
+  string name = 1;
+  // JSON Schema of the parameters, a JSON object.
+  string params_schema = 2;
+  string description = 3;
+}
+
+message DescribeResponse {
+  string name = 1;
+  string version = 2;
+  // The contract revision the plugin was built against.
+  uint32 contract = 3;
+  repeated OperationType operations = 4;
+}
+
+message ProbeRequest {}
+
+message ProbeResponse {
+  bool supported = 1;
+  string reason = 2;
+}
+
+message StartRequest {
+  string idempotency_key = 1;
+  string operation = 2;
+  // JSON object, valid against the operation's params_schema.
+  string params = 3;
+}
+
+message GetRequest {
+  string idempotency_key = 1;
+}
+
+message CancelRequest {
+  string idempotency_key = 1;
+}
+
+message Operation {
+  string idempotency_key = 1;
+  // running, succeeded, failed or cancelled.
+  string state = 2;
+  bool done = 3;
+  // 0 to 100.
+  uint32 progress = 4;
+  // JSON object, set when succeeded.
+  string result = 5;
+  string error = 6;
+  // The backend's own handle, such as a Proxmox UPID.
+  string task = 7;
+  // What the operation is doing now, for people.
+  string message = 8;
+}

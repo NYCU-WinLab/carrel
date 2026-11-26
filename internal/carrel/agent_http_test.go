@@ -142,7 +142,7 @@ func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
 	if obj(nodes[2]["inventory"])["node"] != "carrel03" || nodes[0]["agent"] != nil {
 		t.Fatal(encoded(nodes))
 	}
-	p.Hub.Hello(p.Config.Nodes[1].Name, "s", "v1", "0.11.0")
+	p.Hub.Hello(p.Config.Nodes[1].Name, "s", "v1", "0.11.0", nil)
 	p.Hub.Heartbeat(p.Config.Nodes[1].Name, "s", 1, nil)
 	nodes = dicts(p.execution(context.Background()).Admin("node_list", D{}, admin)["nodes"])
 	if a := obj(nodes[1]["agent"]); a["connected"] != true || a["release"] != "0.11.0" || nodes[1]["inventory"] == nil {
@@ -160,11 +160,11 @@ func TestNodeListShowsAnAgentThatDoesNotAnswer(t *testing.T) {
 // reported.
 func TestAgentHelloIgnoresAReplacedProcess(t *testing.T) {
 	hub := NewAgentHub()
-	hub.Hello("pve1", "old", "v1", "0.11.0")
+	hub.Hello("pve1", "old", "v1", "0.11.0", nil)
 	hub.Heartbeat("pve1", "old", 1, nil)
-	hub.Hello("pve1", "new", "v1", "0.12.0")
+	hub.Hello("pve1", "new", "v1", "0.12.0", nil)
 	hub.Heartbeat("pve1", "new", 1, nil)
-	hub.Hello("pve1", "old", "v1", "0.11.0")
+	hub.Hello("pve1", "old", "v1", "0.11.0", nil)
 	if s := hub.Status("pve1", time.Now()); s["release"] != "0.12.0" {
 		t.Fatalf("status %v", s)
 	}
@@ -259,7 +259,7 @@ func TestAgentDrainingTakesNoConsole(t *testing.T) {
 		p.AgentHandler().ServeHTTP(w, req)
 		return w.Code
 	}
-	p.Hub.Hello("pve1", "s", "v1", "0.11.0", "stream")
+	p.Hub.Hello("pve1", "s", "v1", "0.11.0", nil, "stream")
 	p.Hub.Heartbeat("pve1", "s", 1, nil)
 	if !p.Hub.Capable("pve1", "stream", time.Now()) {
 		t.Fatal("the agent cannot stream before it drains")
