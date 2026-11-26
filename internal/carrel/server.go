@@ -50,6 +50,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	a.statusRoute(mux, p)
 	a.askRoute(mux, p)
 	a.mcpRoutes(mux, origin)
+	a.pluginRoutes(mux)
 	a.handler = chain(mux, a.networkGate(origin), originCheck(origin), a.oauthRateLimit, limitBody)
 	return a
 }

@@ -299,6 +299,10 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
   top-level `machine`. carrel checks that machine against the caller's tenant and passes the
   plugin its VMID, never the name.
 - `read_only` operations are also listed on `/mcp/read-only`.
+- Over HTTP, `GET /plugins/v1/tools` lists the plugin tools the caller may call. `POST
+  /plugins/v1/tools/<tool>` calls one, with the tool's arguments as the JSON body. Both take the same
+  bearer token as `/mcp`, and a call is checked and gated as on `/mcp`. Send the same arguments
+  with the same `idempotency_key` to poll the operation.
 - The control plane checks the arguments against the schema before the call is queued, and again
   against the schema of the node that runs it. A schema may not use `$ref` outside itself, or declare
   `tenant`, `idempotency_key`, `dry_run`, `detail` or `wait_seconds`.

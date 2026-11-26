@@ -98,6 +98,8 @@
                   "conflict",
                   "quota_exceeded",
                   "capacity_exhausted",
+                  "unsupported",
+                  "backend_unavailable",
                   "internal"
                 ]
               },
@@ -130,12 +132,7 @@
         }
       },
       "Error": {
-        "description": "Refused or failed; the status follows the error code (403",
-        "404": null,
-        "400": null,
-        "409": null,
-        "507": null,
-        "500)": null,
+        "description": "Refused or failed; the status follows the error code: 400 invalid, 403 forbidden, 404 not_found, 409 conflict, quota_exceeded or unsupported, 503 backend_unavailable, 507 capacity_exhausted, otherwise 500. A missing or bad token is 401 and an unreachable identity issuer is 503, both with a body of the form {\"error\": \"invalid_token\"}.",
         "content": {
           "application/json": {
             "schema": {
@@ -1279,6 +1276,67 @@
               "schema": {
                 "type": "string",
                 "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/plugins/v1/tools": {
+      "get": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "List the plugin tools the caller may call now (#661)",
+        "description": "The same tools as /mcp lists from the plugins toolset: name, description, input_schema and read_only. A tool is listed while some node reports its plugin.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/plugins/v1/tools/{tool}": {
+      "post": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "Call a plugin tool (#661)",
+        "description": "The body is the tool's arguments as in tools/call, and must carry an idempotency_key. The call is checked, gated and run as on /mcp, and returns an operation. Send the same arguments with the same idempotency_key to poll it. 404 when no node reports the tool now.",
+        "parameters": [
+          {
+            "name": "tool",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,31}_[a-z][a-z0-9-]{0,31}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
               }
             }
           }
