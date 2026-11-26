@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/NYCU-WinLab/carrel/compare/v0.13.0...v0.14.0) (2026-11-26)
+
+
+### Features
+
+* **agent:** sign agents in with lab step-ca client certificates ([#651](https://github.com/NYCU-WinLab/carrel/issues/651)) ([84ab58c](https://github.com/NYCU-WinLab/carrel/commit/84ab58ce221eba404dfd8ab1f5217095c2d6ed18))
+* **b09:** turn on agent_identity with no certificate nodes yet ([#653](https://github.com/NYCU-WinLab/carrel/issues/653)) ([de27f53](https://github.com/NYCU-WinLab/carrel/commit/de27f53cc26379964b7d2290a6013b994974ddbe)), closes [#601](https://github.com/NYCU-WinLab/carrel/issues/601)
+
 ## [0.13.0](https://github.com/NYCU-WinLab/carrel/compare/v0.12.0...v0.13.0) (2026-11-26)
 
 
