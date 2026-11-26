@@ -131,6 +131,23 @@ func TestAPluginObjectGoesOnlyOnProof(t *testing.T) {
 		t.Fatalf("a run that may have made the copy lost its record: %+v", row)
 	}
 
+	// A retry whose new run is refused proves nothing of the first run,
+	// which may have made the copy.
+	set("plugin_refused", "", nil)
+	var first D
+	for _, o := range p.Store.Objects("operations") {
+		if obj(o["plugin"])["object_name"] == "y" {
+			first = o
+		}
+	}
+	if r := p.Operations.Retry(p.Store.TenantN(1), str(first["id"]), person("alice", false)); r["operation"] == nil {
+		t.Fatalf("retry: %v", r)
+	}
+	awaitState(t, p, str(first["id"]), "failed")
+	if row, ok := copyRow(p, "y"); !ok || row.State != "creating" {
+		t.Fatal("a refused retry dropped the record of the first run")
+	}
+
 	// A refused delete leaves the record as it was.
 	set("plugin_refused", "", nil)
 	member(p, "copies_drop", D{"machine": "web", "name": "y", "wait_seconds": 5})

@@ -345,9 +345,10 @@ once, as they read carrel's own rows. The records are in the `plugin_objects` ro
 - Before a create starts, carrel checks the name is free, charges the tenant's quota and, for a
   kind with `disk`, checks the node's storage as for a snapshot. It records the object as
   `creating` and sends the record's id to the plugin as `reservation`. A plugin must refuse a
-  start of an object operation without one: an agent built before the field drops it.
+  start of an object operation without one: an agent built before the field drops it. The agent
+  starts it only if the plugin declares the object now as the report carrel charged by did.
 - carrel drops a record only on proof the object does not exist: a first start the agent or the
-  plugin refused, or a delete the plugin fails with `not_found`. Any other failure keeps it
+  plugin refused for the run that made the record, or a delete the plugin fails with `not_found`. Any other failure keeps it
   charged and holding. A delete of the object clears it.
 - A kind's `holds` names what its objects block: `freeze`, `migrate` (also `node_drain`, which
   leaves the machine with `has_plugin_objects`), `backfill` and `delete`. A kind without

@@ -462,9 +462,19 @@ func TestAnObjectOperationStartsOnlyOnItsReservation(t *testing.T) {
 	if r := call(t, a, bare); r["ok"] != false || p.started.Load() != 0 {
 		t.Fatalf("no reservation: %v", r)
 	}
-	reserved := `{"op":"plugin","plugin":"copies","call":"start","operation":"take","idempotency_key":"k2","reservation":"copies/copy/10100/a"}`
+	spec := carrel.PluginObjectSpec(info, info.Operations[0])
+	reserved := `{"op":"plugin","plugin":"copies","call":"start","operation":"take","idempotency_key":"k2","reservation":"copies/copy/10100/a","object_spec":"` + spec + `"}`
 	if r := call(t, a, reserved); r["ok"] != true || p.started.Load() != 1 || p.reservations[0] != "copies/copy/10100/a" {
 		t.Fatalf("reserved: %v, %v", r, p.reservations)
+	}
+	// The plugin changed what a copy holds since the control plane charged
+	// by its report: the start is refused.
+	p.mu.Lock()
+	p.objects[0].Holds = nil
+	p.mu.Unlock()
+	again := strings.Replace(reserved, `"k2"`, `"k3"`, 1)
+	if r := call(t, a, again); r["ok"] != false || p.started.Load() != 1 {
+		t.Fatalf("a changed declaration started: %v", r)
 	}
 
 	dir2 := pluginDir(t)

@@ -258,6 +258,9 @@ type pluginJob struct {
 	// Reservation is the record the control plane holds for an object
 	// operation (#663).
 	Reservation string `json:"reservation"`
+	// ObjectSpec is the object declaration the control plane charged by
+	// (carrel.PluginObjectSpec).
+	ObjectSpec string `json:"object_spec"`
 }
 
 func reply(v any) ([]byte, bool) {
@@ -309,7 +312,13 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 		// reserved for it, and a reserved one only on a plugin that, now,
 		// says it acts on an object: either way round the count would be
 		// wrong.
-		if !j.DryRun && slices.ContainsFunc(info.Operations, func(op carrel.PluginOperation) bool { return op.Name == j.Operation && op.ObjectKind != "" }) != (j.Reservation != "") {
+		spec := ""
+		for _, op := range info.Operations {
+			if op.Name == j.Operation {
+				spec = carrel.PluginObjectSpec(info, op)
+			}
+		}
+		if !j.DryRun && (spec != j.ObjectSpec || (spec != "") != (j.Reservation != "")) {
 			return refuse("plugin_refused", fmt.Sprintf("plugin %s operation %s and the control plane disagree on its object record", j.Plugin, j.Operation))
 		}
 		params := string(j.Params)

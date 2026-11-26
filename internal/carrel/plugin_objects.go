@@ -53,6 +53,9 @@ type pluginObject struct {
 	// DiskGB is what the object may hold on its node's storage.
 	DiskGB      int    `json:"disk_gb,omitempty"`
 	OperationID string `json:"operation_id,omitempty"`
+	// Run is the plugin run key the record was made for: only that run's
+	// refused first start proves the object was never made.
+	Run string `json:"run,omitempty"`
 	// DeletingBy is the delete operation that holds the object now, and Was
 	// the state it had before, which a refused delete gives back.
 	DeletingBy string `json:"deleting_by,omitempty"`
@@ -122,12 +125,19 @@ func pluginObjectProblem(pl PluginInfo, op PluginOperation) string {
 
 // pluginObjectSpec is what a tool's object declaration is on one node: two
 // nodes that declare it differently do not run the same tool.
-func pluginObjectSpec(pl PluginInfo, op PluginOperation) string {
-	if op.ObjectKind == "" {
+func pluginObjectSpec(pl PluginInfo, op PluginOperation) string { return PluginObjectSpec(pl, op) }
+
+// PluginObjectSpec is a digest of an operation's object declaration: the
+// kind with its charges, holds and disk, the effect, the parameter and the
+// plugin's dimensions; "" for an operation on no object. The control plane
+// sends the one it charged by with the start, and the agent starts only a
+// plugin that declares the same now.
+func PluginObjectSpec(pl PluginInfo, op PluginOperation) string {
+	if op.ObjectKind == "" && op.ObjectEffect == "" && op.ObjectParam == "" {
 		return ""
 	}
 	k, _ := pl.kind(op.ObjectKind)
-	return string(encoded(D{"op": []string{op.ObjectKind, op.ObjectEffect, op.ObjectParam}, "kind": k, "quota": pl.Quota}))
+	return digest(string(encoded(D{"op": []string{op.ObjectKind, op.ObjectEffect, op.ObjectParam}, "kind": k, "quota": pl.Quota})))
 }
 
 // pluginInfo is the plugin as one node reports it, supported.
@@ -227,6 +237,7 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 	plug := obj(e.Op["plugin"])
 	id, row, charge := e.planPluginObject(pl, op, a, t, m)
 	plug["object"], plug["object_effect"], plug["object_kind"], plug["object_name"] = id, op.ObjectEffect, op.ObjectKind, a[op.ObjectParam]
+	plug["object_spec"] = PluginObjectSpec(pl, op)
 	n := integer(t["n"])
 	switch {
 	case op.ObjectEffect == "create" && row == nil:
@@ -235,7 +246,7 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "plugin": pl.Name})
 		}
 		rec := pluginObject{ID: id, Plugin: pl.Name, Kind: op.ObjectKind, Name: str(a[op.ObjectParam]), VMID: integer(m["vmid"]),
-			State: "creating", Holds: k.Holds}
+			State: "creating", Holds: k.Holds, Run: str(plug["key"])}
 		for d, v := range charge {
 			if rec.Charge == nil {
 				rec.Charge = map[string]float64{}
@@ -278,7 +289,9 @@ func (e *Execution) settlePluginObject(succeeded bool) {
 		if succeeded {
 			row.State = "ready"
 			e.Put(pluginObjectRows, id, integer(e.Op["tenant_n"]), row)
-		} else if refused {
+		} else if refused && row.Run == str(plug["key"]) {
+			// A later run refused proves nothing of the run that made the
+			// record, which may have left the object.
 			e.S.Remove(pluginObjectRows, id)
 		}
 	case "delete":

@@ -408,13 +408,18 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 	// An object operation is checked against the record, the quota and the
 	// node first, as a core dry run is; nothing is reserved.
 	planned := D{}
+	job := D{"op": "plugin", "plugin": pt.Plugin, "operation": pt.Operation, "call": "start",
+		"idempotency_key": "inline-" + randomID(), "params": params, "dry_run": dry}
 	if op.ObjectKind != "" {
 		pl, _ := e.P.pluginInfo(node, pt.Plugin)
 		if pluginObjectProblem(pl, op) != "" || m == nil {
 			fail("unsupported", fmt.Sprintf("Node %s no longer reports plugin %s with operation %s as it was listed", node, pt.Plugin, pt.Operation),
 				D{"recovery": "retry_infrastructure"})
 		}
-		_, row, charge := e.planPluginObject(pl, op, a, t, m)
+		id, row, charge := e.planPluginObject(pl, op, a, t, m)
+		// A read of an object names the record and the declaration, as a
+		// start does; a dry run reserves nothing.
+		job["reservation"], job["object_spec"] = id, PluginObjectSpec(pl, op)
 		object := D{"kind": op.ObjectKind, "name": a[op.ObjectParam], "state": "planned"}
 		if row != nil {
 			object["state"] = row.State
@@ -432,8 +437,6 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 		return merge(planned, D{"ok": true, "dry_run": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation,
 			"node": node, "reserved": false, "resource_changes": false})
 	}
-	job := D{"op": "plugin", "plugin": pt.Plugin, "operation": pt.Operation, "call": "start",
-		"idempotency_key": "inline-" + randomID(), "params": params, "dry_run": dry}
 	v, err := e.P.Backend.Call(e.Ctx, job, e.P.nodeTarget(node))
 	if err != nil {
 		pluginRefusal(str(obj(failureResult(err)["error"])["backend_code"]), pt.Plugin, node)
@@ -584,7 +587,7 @@ func (e *Execution) PerformPlugin() {
 				}
 				r["params"] = params
 				if plug["object"] != nil {
-					r["reservation"] = plug["object"]
+					r["reservation"], r["object_spec"] = plug["object"], plug["object_spec"]
 				}
 			}
 			v, err := e.P.Backend.Call(e.Ctx, r, target)
