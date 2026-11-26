@@ -198,7 +198,7 @@ func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
 	op := o.Find(t, id)
 	// A member must not stop an admin job, such as a drain's move, that only
 	// an admin can retry.
-	if named("admin_tools", str(op["tool"])) && !boolean(w["admin"]) {
+	if (named("admin_tools", str(op["tool"])) || boolean(obj(op["plugin"])["admin_only"])) && !boolean(w["admin"]) {
 		fail("forbidden", "Only an admin can cancel an admin operation")
 	}
 	// Any kind of object can hold a reservation for the job: images too.

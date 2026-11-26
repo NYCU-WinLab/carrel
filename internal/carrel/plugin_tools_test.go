@@ -361,3 +361,23 @@ func TestABadPluginOperationIsLeftOutWithAReason(t *testing.T) {
 		t.Fatal("a read-only plugin tool is missing from the read-only endpoint")
 	}
 }
+
+// A member cannot cancel an admin-only plugin operation queued in their
+// tenant, as with a core admin tool.
+func TestAMemberCannotCancelAnAdminPluginOperation(t *testing.T) {
+	p, b := fixture(t)
+	withPlugin(t, p, b)
+	reportPlugins(p, nil)
+	runQueue(p)
+	// Registered while no node reports it, then queued while it waits.
+	reportPlugins(p, testPlugin())
+	r := p.Execute(context.Background(), "backup_prune", D{"keep": 2, "wait_seconds": 0}, person("alice", true))
+	id := str(obj(r["operation"])["id"])
+	reportPlugins(p, nil)
+	if code := str(failure(member(p, "operation_cancel", D{"id": id}))["code"]); code != "forbidden" {
+		t.Fatalf("member cancel: %s", code)
+	}
+	if r := p.Execute(context.Background(), "operation_cancel", D{"id": id}, person("alice", true)); !boolean(r["ok"]) {
+		t.Fatalf("admin cancel: %s", encoded(r))
+	}
+}

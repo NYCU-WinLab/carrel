@@ -268,7 +268,7 @@ func (e *Execution) submitPlugin(pt *pluginTool, a, w D) D {
 	p.writer.Lock()
 	var op D
 	err := attempt(func() {
-		op = p.Operations.Submit(pt.Name, a, w, t, D{"plugin": D{"plugin": pt.Plugin, "operation": pt.Operation, "caller_read_only": sel.readOnly}})
+		op = p.Operations.Submit(pt.Name, a, w, t, D{"plugin": D{"plugin": pt.Plugin, "operation": pt.Operation, "caller_read_only": sel.readOnly, "admin_only": !pt.Member}})
 		e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "queued")
 	})
 	p.writer.Unlock()
