@@ -781,3 +781,108 @@ def test_the_b09_site_node_ca_setting_is_valid():
     module = load("configure-nodes.py")
     key, principals = module.node_ssh_ca(SITE)
     assert key.startswith("ecdsa-sha2-nistp256 ") and principals
+
+
+IDENTITY = {
+    "ca_url": "https://ca.winlab.tw",
+    "lab_root": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+    "provisioner": "5Ys6ZRy1hvsI-FHi_831uQptxvkKQ3vtGxyz-TzbwGw",
+    "certificate_nodes": ["carrel02"],
+}
+
+
+def test_agent_identity_is_checked_before_anything_changes():
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    agents = {"carrel01", "carrel02"}
+    assert module.agent_identity({**SITE, "agent_identity": IDENTITY}, nodes, agents) == IDENTITY
+    assert module.agent_identity(SITE, nodes, agents) is None
+    for bad, says in [
+        ({**IDENTITY, "ca_url": "http://ca.winlab.tw"}, "https URL"),
+        ({**IDENTITY, "ca_url": "https://ca.winlab.tw/x"}, "https URL"),
+        ({**IDENTITY, "provisioner": "short"}, "key id"),
+        ({**IDENTITY, "lab_root": "not a certificate"}, "PEM"),
+        ({**IDENTITY, "lab_root": IDENTITY["lab_root"] * 2}, "PEM"),
+        ({**IDENTITY, "certificate_nodes": ["carrel03"]}, "not in agent_nodes"),
+        ({**IDENTITY, "token": "x"}, "takes ca_url"),
+        ({**IDENTITY, "certificate_nodes": "carrel02"}, "must be a list"),
+    ]:
+        try:
+            module.agent_identity({**SITE, "agent_identity": bad}, nodes, agents)
+        except SystemExit as e:
+            assert says in str(e), (bad, e)
+        else:
+            raise AssertionError(bad)
+
+
+def test_a_certificate_node_carries_its_name_and_no_token():
+    module = load("configure-nodes.py")
+    nodes = module.targets(SITE, "carrel01")
+    entries = module.node_entries(
+        nodes,
+        {"carrel01", "carrel02"},
+        {"carrel01": "ab" * 32, "carrel02": "cd" * 32},
+        {"carrel02": module.agent_certificate_name(SITE, "carrel02")},
+    )
+    assert entries[0]["agent_token_sha256"] == "ab" * 32 and "agent_certificate" not in entries[0]
+    assert entries[1] == {
+        "name": "carrel02",
+        "target": "carrel02",
+        "transport": "agent",
+        "agent_source": nodes[1]["address"],
+        "agent_certificate": "carrel02.b09.agent.carrel.winlab.tw",
+    }
+
+
+def test_the_agent_config_names_its_certificate_with_agent_identity(tmp_path, monkeypatch):
+    module = load("configure-nodes.py")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append(a) or "")
+    monkeypatch.setattr(module.socket, "gethostname", lambda: "carrel01")
+    monkeypatch.setattr(module, "SITE", tmp_path / "site.json")
+    monkeypatch.setattr(module, "AGENT_JSON", tmp_path / "agent.json")
+    monkeypatch.setattr(module, "AGENT_UNIT", tmp_path / "carrel-agent.service")
+    monkeypatch.setattr(module, "AGENT_LAB_ROOT", tmp_path / "lab-root.pem")
+    monkeypatch.setattr(module, "AGENT_IDENTITY", tmp_path / "agent-identity")
+    module.SITE.write_text(
+        json.dumps(
+            {**SITE, "agent_nodes": ["carrel01"], "agent_identity": {**IDENTITY, "certificate_nodes": []}}
+        )
+    )
+    assert module.agent_service() == "started"
+    assert json.loads((tmp_path / "agent.json").read_text()) == {
+        "control": "https://10.200.0.3:8443",
+        "ca_file": "/etc/carrel/agent-ca/ca.pem",
+        "token_file": "/etc/carrel/agent-token",
+        "node": "carrel01",
+        "cert_file": str(tmp_path / "agent-identity/agent.crt"),
+        "key_file": str(tmp_path / "agent-identity/agent.key"),
+        "certificate_name": "carrel01.b09.agent.carrel.winlab.tw",
+        "ca_url": "https://ca.winlab.tw",
+        "lab_root_file": str(tmp_path / "lab-root.pem"),
+    }
+    assert (tmp_path / "lab-root.pem").read_text() == IDENTITY["lab_root"]
+    assert (tmp_path / "agent-identity").stat().st_mode & 0o777 == 0o700
+
+
+def test_the_listener_gets_the_lab_root_and_drops_it_without_agent_identity(monkeypatch):
+    module = load("configure-nodes.py")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **kw: calls.append((a, kw.get("input"))) or "")
+    assert module.listener_identity(SITE, None) == (
+        {"agent_client_ca_file": None, "agent_provisioner": None},
+        {},
+    )
+    assert calls == []
+    client, names = module.listener_identity(SITE, IDENTITY)
+    assert client == {
+        "agent_client_ca_file": "/etc/carrel/agent/lab-root.pem",
+        "agent_provisioner": IDENTITY["provisioner"],
+    }
+    assert names == {"carrel02": "carrel02.b09.agent.carrel.winlab.tw"}
+    [(args, given)] = calls
+    assert args[:4] == ("pct", "exec", "100", "--") and given == IDENTITY["lab_root"]
+
+
+def test_a_failed_deploy_puts_the_listeners_lab_root_back():
+    assert "etc/carrel/agent/lab-root.pem" in load("install-control.py").CONFIGURED

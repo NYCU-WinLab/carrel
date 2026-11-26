@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -42,6 +43,13 @@ type config struct {
 	Node      string `json:"node"`
 	NodeAgent string `json:"node_agent"`
 	Lock      string `json:"lock"`
+	// Certificate sign-in (#601): the agent's key and certificate chain,
+	// the name the certificate carries, the lab step-ca and its root.
+	CertFile        string `json:"cert_file"`
+	KeyFile         string `json:"key_file"`
+	CertificateName string `json:"certificate_name"`
+	CAURL           string `json:"ca_url"`
+	LabRootFile     string `json:"lab_root_file"`
 }
 
 const (
@@ -85,6 +93,9 @@ type agent struct {
 	// stall is how long a console may leave its stdin full before it is
 	// stopped; 0 is 30 seconds.
 	stall time.Duration
+	// cert is the client certificate the agent presents, nil before it is
+	// enrolled.
+	cert atomic.Pointer[tls.Certificate]
 }
 
 func load(path string) (*agent, error) {
@@ -118,15 +129,26 @@ func load(path string) (*agent, error) {
 	if !pool.AppendCertsFromPEM(pem) {
 		return nil, errors.New("ca_file holds no certificate")
 	}
+	// The token stays until certificate sign-in replaces it; a node that
+	// signs in with a certificate needs none.
 	token, err := os.ReadFile(c.TokenFile)
-	if err != nil {
+	if err != nil && (c.CertFile == "" || !errors.Is(err, os.ErrNotExist)) {
 		return nil, fmt.Errorf("token_file: %w", err)
 	}
+	if c.CertFile != "" && (c.KeyFile == "" || c.CertificateName == "" || c.CAURL == "" || c.LabRootFile == "") {
+		return nil, errors.New("cert_file needs key_file, certificate_name, ca_url and lab_root_file")
+	}
 	trust := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}
-	a := &agent{cfg: c, token: strings.TrimSpace(string(token)), held: map[string]bool{}, tls: trust,
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: trust.Clone()},
-			// A redirect would carry the token elsewhere: never follow one.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &agent{cfg: c, token: strings.TrimSpace(string(token)), held: map[string]bool{}, tls: trust}
+	if c.CertFile != "" {
+		trust.GetClientCertificate = a.clientCertificate
+		if err := a.loadCertificate(); err != nil {
+			slog.Error("certificate_unreadable", "error", err)
+		}
+	}
+	a.client = &http.Client{Transport: &http.Transport{TLSClientConfig: trust.Clone()},
+		// A redirect would carry the token elsewhere: never follow one.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	a.run = a.nodeAgent
 	a.console = func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, a.cfg.NodeAgent) }
 	var record struct {
@@ -256,7 +278,7 @@ func (a *agent) claim(ctx context.Context, drain bool) ([]job, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	a.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -311,7 +333,7 @@ func (a *agent) answer(ctx context.Context, id string, out []byte, failed bool) 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	a.authorize(req)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	exit := "0"
 	if failed {
@@ -366,7 +388,7 @@ func (a *agent) streamOnce(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.token)
+	a.authorize(req)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "carrel-stream")
 	if err := req.Write(c); err != nil {
@@ -449,6 +471,13 @@ func (a *agent) streamOnce(ctx context.Context, j job) error {
 	return nil
 }
 
+// authorize adds the token, while the agent has one.
+func (a *agent) authorize(req *http.Request) {
+	if a.token != "" {
+		req.Header.Set("Authorization", "Bearer "+a.token)
+	}
+}
+
 func sleep(ctx context.Context, d time.Duration) {
 	select {
 	case <-ctx.Done():
@@ -458,12 +487,25 @@ func sleep(ctx context.Context, d time.Duration) {
 
 func main() {
 	path := flag.String("config", "/etc/carrel/agent.json", "Agent configuration")
+	enrol := flag.Bool("enroll", false, "Read a one-time step-ca token on stdin, make a key and get the agent's certificate")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	a, err := load(*path)
 	if err != nil {
 		slog.Error("configuration", "error", err)
 		os.Exit(1)
+	}
+	if *enrol {
+		token, err := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
+		if err == nil {
+			err = a.enroll(context.Background(), strings.TrimSpace(string(token)))
+		}
+		if err != nil {
+			slog.Error("enroll_failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("enrolled", "name", a.cfg.CertificateName, "expires", a.cert.Load().Leaf.NotAfter.UTC().Format(time.RFC3339))
+		return
 	}
 	// One agent per node: a second one would let the control plane fail the
 	// first one's jobs while they still run.
@@ -480,6 +522,9 @@ func main() {
 	a.session = rand.Text()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	slog.Info("agent_started", "node", a.cfg.Node, "control", a.cfg.Control)
+	slog.Info("agent_started", "node", a.cfg.Node, "control", a.cfg.Control, "certificate", a.cert.Load() != nil)
+	if a.cfg.CertFile != "" {
+		go a.renewLoop(ctx)
+	}
 	a.loop(ctx)
 }

@@ -113,8 +113,16 @@ func main() {
 	}()
 	if cfg.AgentListen != "" {
 		// Node agents (PLAN 8.6): their own TLS listener, never the gateway.
+		agentTLS := &tls.Config{MinVersion: tls.VersionTLS13}
+		if cfg.AgentClientCAFile != "" {
+			// Agents on certificate sign-in present a lab certificate (#601).
+			// The handshake only asks for it: the handler checks it, and only
+			// for a node in certificate mode, so an expired or foreign
+			// certificate never stops a node that still signs in with its token.
+			agentTLS.ClientAuth = tls.RequestClientCert
+		}
 		agents := &http.Server{Addr: cfg.AgentListen, Handler: platform.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16,
-			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
+			TLSConfig: agentTLS}
 		go func() {
 			<-ctx.Done()
 			_ = agents.Close()

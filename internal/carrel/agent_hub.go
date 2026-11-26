@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"slices"
 	"sync"
@@ -43,6 +44,12 @@ type agentNode struct {
 	// latest poll.
 	protocol, release string
 	capabilities      []string
+	// certificate is when the client certificate of the agent's latest
+	// request expires (#601); zero on token sign-in.
+	certificate time.Time
+	// warned is when the control plane last logged that certificate as
+	// running out.
+	warned time.Time
 	// streams are console streams waiting for the agent to connect back.
 	streams map[string]*agentStream
 	// wake is closed and replaced when a job is queued, so a waiting claim
@@ -240,6 +247,26 @@ func (h *AgentHub) Hello(node, session, protocol, release string, capabilities .
 	}
 }
 
+// Certificate records when the client certificate a node's agent signed in
+// with expires.
+// One that runs out in under agentCertificateWarn is logged as a WARN once an
+// hour, so the operators hear of an agent that stopped renewing (a CA outage)
+// before the node drops off.
+func (h *AgentHub) Certificate(node string, expires time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := h.node(node)
+	n.certificate = expires
+	if now := time.Now(); expires.Sub(now) < agentCertificateWarn && now.Sub(n.warned) >= time.Hour {
+		n.warned = now
+		slog.Warn("agent_certificate_expiring", "node", node, "expires", expires.UTC().Format(time.RFC3339))
+	}
+}
+
+// agentCertificateWarn is how close to its expiry a certificate is shown as
+// running out: the agent renews it with two thirds of its life left.
+const agentCertificateWarn = 48 * time.Hour
+
 // Capable reports whether a node's agent polls now and said it can do
 // something, such as "stream".
 func (h *AgentHub) Capable(node, capability string, now time.Time) bool {
@@ -258,8 +285,13 @@ func (h *AgentHub) Status(node string, now time.Time) D {
 	if n == nil || n.seen.IsZero() {
 		return D{"connected": false}
 	}
-	return D{"connected": now.Sub(n.seen) < agentSilence, "protocol": n.protocol, "release": n.release,
+	out := D{"connected": now.Sub(n.seen) < agentSilence, "protocol": n.protocol, "release": n.release,
 		"capabilities": append([]string{}, n.capabilities...), "last_poll": n.seen.UTC().Format(time.RFC3339)}
+	if !n.certificate.IsZero() {
+		out["certificate_expires"] = n.certificate.UTC().Format(time.RFC3339)
+		out["certificate_expiring"] = n.certificate.Sub(now) < agentCertificateWarn
+	}
+	return out
 }
 
 // Heartbeat is a poll that takes no job: an agent shutting down sends it

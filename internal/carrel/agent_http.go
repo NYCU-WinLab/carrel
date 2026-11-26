@@ -184,18 +184,29 @@ type bufferedConn struct {
 
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
-// agentAllowed checks the bearer token and the source address against the
-// node's configuration. A node on the SSH transport has no agent.
+// agentAllowed checks a request against the node's entry: the source
+// address always, then the client certificate for a node on certificate
+// sign-in (its token is refused), or the bearer token for the others.
 func (p *Platform) agentAllowed(r *http.Request, node string) bool {
-	var token string
-	_ = attempt(func() { token = bearer(r) }) // no token: refused below
 	from, err := netip.ParseAddr(remoteIP(r))
 	for _, n := range p.Config.Nodes {
 		if n.Name != node || n.Transport != "agent" {
 			continue
 		}
 		source, serr := netip.ParseAddr(n.AgentSource)
-		return token != "" && err == nil && serr == nil && from.Unmap() == source.Unmap() && secureEqual(digest(token), n.AgentTokenSHA256)
+		if err != nil || serr != nil || from.Unmap() != source.Unmap() {
+			return false
+		}
+		if n.AgentCertificate != "" {
+			expires, ok := p.agentCertificate(n, r.TLS, time.Now())
+			if ok {
+				p.Hub.Certificate(node, expires)
+			}
+			return ok
+		}
+		var token string
+		_ = attempt(func() { token = bearer(r) }) // no token: refused below
+		return token != "" && secureEqual(digest(token), n.AgentTokenSHA256)
 	}
 	return false
 }

@@ -101,6 +101,11 @@ type Config struct {
 	AgentListen   string `json:"agent_listen,omitempty"`
 	AgentCertFile string `json:"agent_cert_file,omitempty"`
 	AgentKeyFile  string `json:"agent_key_file,omitempty"`
+	// AgentClientCAFile is the lab root that agents' client certificates
+	// chain to, and AgentProvisioner the credential id (key id) of the
+	// step-ca provisioner that issues them (#601).
+	AgentClientCAFile string `json:"agent_client_ca_file,omitempty"`
+	AgentProvisioner  string `json:"agent_provisioner,omitempty"`
 	// FunctionEnvKey encrypts functions' environment values at rest: 32
 	// bytes in standard base64. Without it function_env is unavailable.
 	FunctionEnvKey string `json:"function_env_key,omitempty"`
@@ -125,6 +130,10 @@ type NodeConfig struct {
 	// the address its connections come from; both must match.
 	AgentTokenSHA256 string `json:"agent_token_sha256,omitempty"`
 	AgentSource      string `json:"agent_source,omitempty"`
+	// AgentCertificate is the name the agent's client certificate must
+	// carry, such as carrel01.b09.agent.carrel.winlab.tw. When it is set the
+	// agent signs in with that certificate and its token is refused (#601).
+	AgentCertificate string `json:"agent_certificate,omitempty"`
 }
 
 // Defaults that the readers used to supply at each call site.
@@ -301,11 +310,21 @@ func (c Config) Validate() error {
 		case "", "ssh":
 		case "agent":
 			agents = true
-			if !sha256Hex.MatchString(n.AgentTokenSHA256) {
+			// A node on certificate sign-in needs no token; a token given
+			// must still be well formed.
+			if (n.AgentCertificate == "" || n.AgentTokenSHA256 != "") && !sha256Hex.MatchString(n.AgentTokenSHA256) {
 				return fmt.Errorf("node %s: agent_token_sha256 must be 64 lower-case hex characters", n.Name)
 			}
 			if _, err := netip.ParseAddr(n.AgentSource); err != nil {
 				return fmt.Errorf("node %s: agent_source must be an IP address", n.Name)
+			}
+			if n.AgentCertificate != "" {
+				if !agentName.MatchString(n.AgentCertificate) {
+					return fmt.Errorf("node %s: agent_certificate must be a lower-case DNS name", n.Name)
+				}
+				if c.AgentClientCAFile == "" || c.AgentProvisioner == "" {
+					return fmt.Errorf("node %s: agent_certificate needs agent_client_ca_file and agent_provisioner", n.Name)
+				}
 			}
 		default:
 			return fmt.Errorf("node %s: transport must be ssh or agent", n.Name)
@@ -313,6 +332,11 @@ func (c Config) Validate() error {
 	}
 	if agents && (c.AgentListen == "" || c.AgentCertFile == "" || c.AgentKeyFile == "") {
 		return fmt.Errorf("a node on the agent transport needs agent_listen, agent_cert_file and agent_key_file")
+	}
+	if c.AgentClientCAFile != "" {
+		if _, err := LoadCertPool(c.AgentClientCAFile); err != nil {
+			return fmt.Errorf("agent_client_ca_file: %w", err)
+		}
 	}
 	if c.AgentListen != "" {
 		if _, err := netip.ParseAddrPort(c.AgentListen); err != nil {
