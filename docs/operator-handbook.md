@@ -89,8 +89,10 @@ principal is listed there. Keys keep working beside certificates.
 A principal is a member name, or `svc:<slug>` for everyone a portal service grants. To add or
 remove someone, change `principals` in `/etc/carrel/site.json` on the first exit node, then run
 `python3 configure-nodes.py` from the newest `/var/lib/carrel/go-upgrade-*` directory there, or
-deploy again. Removing `node_ssh_ca` removes the CA files. A certificate already issued keeps
-working until it expires (at most 24 hours).
+deploy again. Removing `node_ssh_ca` removes the CA files while `ssh_keys_only` stays on; the
+node sshd step does not run without it. A certificate already issued keeps working until it
+expires (at most 24 hours). A run that fails on a node puts that node's previous drop-in and CA
+files back.
 
 Deploy a published release with `deploy-go.py --host <first exit node> --release vX.Y.Z`: it
 downloads the release archive, checks it against the release's `SHA256SUMS`, and installs the

@@ -641,41 +641,138 @@ def test_the_jump_host_takes_both_keys_as_a_forced_command(monkeypatch):
 CA = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEypPi2e="
 
 
-def test_node_root_takes_lab_certificates_for_the_principals_the_site_names(tmp_path, monkeypatch):
+def apply_node_sshd(tmp_path, site, reload_fails=0, sshd_t="0", in_force=True):
+    """Run the node sshd script against files under tmp_path with stub sshd
+    and systemctl. reload_fails: how many reloads fail before one works."""
     module = load("configure-nodes.py")
-    monkeypatch.setattr(module, "NODE_CA_KEY", str(tmp_path / "ca.pub"))
-    monkeypatch.setattr(module, "NODE_PRINCIPALS", str(tmp_path / "principals"))
-    site = {"node_ssh_ca": {"key": CA + " lab-ssh-ca", "principals": ["zyx1121", "svc:carrel-admin", "zyx1121"]}}
-    conf, write = module.node_sshd_files(site)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "log"
+    log.unlink(missing_ok=True)
+    ca = tmp_path / "ca.pub"
+    shown = "passwordauthentication no\\n" + (f"trustedusercakeys {ca}\\n" if in_force else "")
+    (bin_dir / "sshd").write_text(
+        f'#!/bin/sh\necho "sshd $*" >> {log}\n[ "$1" = -T ] && printf "{shown}"\n[ "$1" = -t ] && exit {sshd_t}\nexit 0\n'
+    )
+    (bin_dir / "systemctl").write_text(
+        f'#!/bin/sh\necho "systemctl $*" >> {log}\nn=$(grep -c "^systemctl reload" {log})\n[ "$n" -le {reload_fails} ] && exit 1\nexit 0\n'
+    )
+    for stub in ("sshd", "systemctl"):
+        (bin_dir / stub).chmod(0o755)
+    conf, script = module.node_sshd_apply(
+        site, str(tmp_path / "drop.conf"), str(ca), str(tmp_path / "principals")
+    )
+    result = subprocess.run(
+        ["sh", "-c", script],
+        input=conf,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+    )
+    calls = log.read_text().splitlines() if log.exists() else []
+    return result.returncode, conf, calls
+
+
+def files(tmp_path):
+    return sorted(
+        str(p.relative_to(tmp_path))
+        for p in tmp_path.rglob("*")
+        if p.is_file() and "bin" not in p.parts and p.name != "log"
+    )
+
+
+def test_node_root_takes_lab_certificates_for_the_principals_the_site_names(tmp_path):
+    module = load("configure-nodes.py")
+    (tmp_path / "drop.conf").write_text(module.NODE_SSHD)
+    site = {
+        "node_ssh_ca": {"key": CA + " lab-ssh-ca", "principals": ["zyx1121", "svc:carrel-admin", "zyx1121"]}
+    }
+    code, conf, _ = apply_node_sshd(tmp_path, site)
+    assert code == 0
     assert conf.startswith(module.NODE_SSHD)
     assert f"TrustedUserCAKeys {tmp_path}/ca.pub\n" in conf
     assert f"AuthorizedPrincipalsFile {tmp_path}/principals/%u\n" in conf
-    subprocess.run(["sh", "-c", write + "true"], check=True)
+    assert (tmp_path / "drop.conf").read_text() == conf
     assert (tmp_path / "ca.pub").read_text() == CA + "\n"
     assert (tmp_path / "principals/root").read_text() == "svc:carrel-admin\nzyx1121\n"
+    assert files(tmp_path) == ["ca.pub", "drop.conf", "principals/root"]
     # The site drops the setting: the files go and the drop-in has keys only.
-    conf, write = module.node_sshd_files({})
-    assert conf == module.NODE_SSHD
-    subprocess.run(["sh", "-c", write + "true"], check=True)
-    assert not (tmp_path / "ca.pub").exists() and not (tmp_path / "principals").exists()
+    code, conf, _ = apply_node_sshd(tmp_path, {})
+    assert code == 0 and conf == module.NODE_SSHD
+    assert files(tmp_path) == ["drop.conf"]
+    assert (tmp_path / "drop.conf").read_text() == module.NODE_SSHD
+
+
+def test_a_failed_node_sshd_apply_puts_the_previous_policy_back(tmp_path):
+    module = load("configure-nodes.py")
+    before = {
+        "drop.conf": "previous drop-in\n",
+        "ca.pub": "previous ca\n",
+        "principals/root": "alice\n",
+        "principals/other": "bob\n",
+    }
+
+    def seed():
+        for name in ["drop.conf", "ca.pub"]:
+            (tmp_path / name).write_text(before[name])
+        (tmp_path / "principals").mkdir(exist_ok=True)
+        for name in ["principals/root", "principals/other"]:
+            (tmp_path / name).write_text(before[name])
+
+    site = {"node_ssh_ca": {"key": CA, "principals": ["zyx1121"]}}
+    for case in [{"reload_fails": 1}, {"sshd_t": "1"}, {"in_force": False}, {}]:
+        seed()
+        removing = case == {}
+        if removing:
+            # Removing the setting, with sshd -t failing: nothing is removed.
+            code, _, _ = apply_node_sshd(tmp_path, {}, sshd_t="1")
+        else:
+            code, _, calls = apply_node_sshd(tmp_path, site, **case)
+            # After a reload, the restored policy is loaded again.
+            reloads = calls.count("systemctl reload ssh.service")
+            assert reloads == (0 if case.get("sshd_t") else 2), (case, calls)
+        assert code == 1, case
+        assert files(tmp_path) == sorted(before), case
+        for name, text in before.items():
+            assert (tmp_path / name).read_text() == text, (case, name)
+    assert module.NODE_SSHD not in (tmp_path / "drop.conf").read_text()
+
+
+def test_a_new_node_sshd_drop_in_that_fails_is_removed(tmp_path):
+    code, _, calls = apply_node_sshd(tmp_path, {}, sshd_t="1")
+    assert code == 1
+    assert files(tmp_path) == []
+    assert "systemctl reload ssh.service" not in calls
 
 
 def test_a_bad_node_ca_setting_is_refused():
     module = load("configure-nodes.py")
-    for ca in [{"key": "not a key", "principals": ["zyx1121"]},
-               {"key": CA, "principals": []},
-               {"key": CA, "principals": "zyx1121"},
-               {"key": CA, "principals": ["a b"]},
-               {"key": CA, "principals": ["zyx1121\nroot"]},
-               {"key": CA, "principals": ["$(reboot)"]},
-               {"key": CA, "principals": ["svc:"]}]:
+    for ca in [
+        {"key": "not a key", "principals": ["zyx1121"]},
+        {"key": CA, "principals": []},
+        {"key": CA, "principals": "zyx1121"},
+        {"key": CA, "principals": ["a b"]},
+        {"key": CA, "principals": ["zyx1121\nroot"]},
+        {"key": CA, "principals": ["$(reboot)"]},
+        {"key": CA, "principals": ["svc:"]},
+        {"key": CA, "principals": ["project:robotics"]},
+    ]:
         try:
             module.node_ssh_ca({"node_ssh_ca": ca})
         except SystemExit:
             continue
         raise AssertionError(ca)
+    for value in ["ssh-ed25519 AAAA", ["x"]]:
+        try:
+            module.node_ssh_ca({"node_ssh_ca": value})
+        except SystemExit:
+            continue
+        raise AssertionError(value)
     # Only the key type and the key are kept, never a line after them.
-    key, _ = module.node_ssh_ca({"node_ssh_ca": {"key": CA + "\nPermitRootLogin yes", "principals": ["zyx1121"]}})
+    key, _ = module.node_ssh_ca(
+        {"node_ssh_ca": {"key": CA + "\nPermitRootLogin yes", "principals": ["zyx1121"]}}
+    )
     assert key == CA
 
 
