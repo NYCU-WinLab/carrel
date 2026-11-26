@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/NYCU-WinLab/carrel/compare/v0.14.0...v0.14.1) (2026-11-26)
+
+
+### Bug fixes
+
+* **nodes:** lock and trap the node sshd apply ([#657](https://github.com/NYCU-WinLab/carrel/issues/657)) ([99d4b6e](https://github.com/NYCU-WinLab/carrel/commit/99d4b6ef8f23a949b6b7ff3a0544c9e4161b2918))
+
 ## [0.14.0](https://github.com/NYCU-WinLab/carrel/compare/v0.13.0...v0.14.0) (2026-11-26)
 
 
