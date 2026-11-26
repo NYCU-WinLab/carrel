@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.12.0](https://github.com/NYCU-WinLab/carrel/compare/v0.11.0...v0.12.0) (2026-11-25)
+
+
+### Features
+
+* **agent:** route the other nodes to the agent listener ([#617](https://github.com/NYCU-WinLab/carrel/issues/617)) ([790f539](https://github.com/NYCU-WinLab/carrel/commit/790f5398d4102d3b441103cbb78e0143de859912))
+* **agent:** run machine consoles through the node agent ([#628](https://github.com/NYCU-WinLab/carrel/issues/628)) ([88df7cf](https://github.com/NYCU-WinLab/carrel/commit/88df7cfc771be250e0687a148c03514126dadc9e))
+* **agent:** ship and install carrel-agent on the first exit node ([#615](https://github.com/NYCU-WinLab/carrel/issues/615)) ([aa1e2a5](https://github.com/NYCU-WinLab/carrel/commit/aa1e2a52741a424f3d4e7fecfee2188c0cfc9963))
+* **agent:** version the protocol between the control plane and the agent ([#616](https://github.com/NYCU-WinLab/carrel/issues/616)) ([8effe35](https://github.com/NYCU-WinLab/carrel/commit/8effe35de895823680d25ed5289c766a2cc00b0a))
+* **backup:** run the nightly backup in the serving process so it reaches node agents ([#621](https://github.com/NYCU-WinLab/carrel/issues/621)) ([59cb163](https://github.com/NYCU-WinLab/carrel/commit/59cb163852f7e78da8d8bfa4200d962c37679c47))
+* cancel an operation that has changed nothing ([#589](https://github.com/NYCU-WinLab/carrel/issues/589)) ([26f7b5a](https://github.com/NYCU-WinLab/carrel/commit/26f7b5aa60d269f53b372501b717996b5044164f))
+* **carrel:** re-seal and count function values per function_env_key ([#612](https://github.com/NYCU-WinLab/carrel/issues/612)) ([0acfbbc](https://github.com/NYCU-WinLab/carrel/commit/0acfbbcd65807aa8abef33c6bdaf10f83923883c)), closes [#599](https://github.com/NYCU-WinLab/carrel/issues/599)
+* node agent routes on their own TLS listener, and carrel-agent ([#613](https://github.com/NYCU-WinLab/carrel/issues/613)) ([0c180c3](https://github.com/NYCU-WinLab/carrel/commit/0c180c3e2fd043785eaacdc0bde4b5afbc84f94b))
+* **node:** keep the desired state with a revision and replay it at boot ([#619](https://github.com/NYCU-WinLab/carrel/issues/619)) ([6417ca4](https://github.com/NYCU-WinLab/carrel/commit/6417ca4dd540369908c5773c5443781b2d7cdedd))
+* **nodes:** reach the gateway, the jump host and the backup target with a service key ([#622](https://github.com/NYCU-WinLab/carrel/issues/622)) ([9e2405c](https://github.com/NYCU-WinLab/carrel/commit/9e2405c4dfefb3f30db0e244c73fd0629b9ddc4c))
+* report what each site can do and gate tools on it ([#618](https://github.com/NYCU-WinLab/carrel/issues/618)) ([f67a71e](https://github.com/NYCU-WinLab/carrel/commit/f67a71ebdd6f0d84342bd0d92051ef5a1e0b50d9))
+* rotate the function environment key and fail versions no key opens ([#597](https://github.com/NYCU-WinLab/carrel/issues/597)) ([e2cb487](https://github.com/NYCU-WinLab/carrel/commit/e2cb487e6d1e1f1c206bd9e7592736efcae8afde))
+* route node calls through an agent hub, with SSH unchanged ([#611](https://github.com/NYCU-WinLab/carrel/issues/611)) ([7e7efde](https://github.com/NYCU-WinLab/carrel/commit/7e7efde3f4e4b98cbf2b28a13daca25ceb3a0d92))
+
+
+### Bug fixes
+
+* **agent:** bound a silent network loss on console streams with TCP keepalive ([#636](https://github.com/NYCU-WinLab/carrel/issues/636)) ([b79ebbe](https://github.com/NYCU-WinLab/carrel/commit/b79ebbea4cf4cadaecf7dea74347b19326afa404))
+* **agent:** fail a console stream at once when its agent process is replaced ([#635](https://github.com/NYCU-WinLab/carrel/issues/635)) ([07b363b](https://github.com/NYCU-WinLab/carrel/commit/07b363bcc141060ce41e672f7bfd2ef64c42de7f))
+* check branch and event when a workflow reads release or version status ([#598](https://github.com/NYCU-WinLab/carrel/issues/598)) ([0c2ebe7](https://github.com/NYCU-WinLab/carrel/commit/0c2ebe7e94b1ac3bf041230f896aabe8897aa396))
+* flush a function version to disk before marking it built ([#596](https://github.com/NYCU-WinLab/carrel/issues/596)) ([a67ac64](https://github.com/NYCU-WinLab/carrel/commit/a67ac647bde552f5f287a69c747be75bf9db0f2d))
+* hide host paths from function_logs and quote registry passwords with jq ([#608](https://github.com/NYCU-WinLab/carrel/issues/608)) ([bb3bbec](https://github.com/NYCU-WinLab/carrel/commit/bb3bbecde0a134fbd1dfd9102e068905f4d1f0e4))
+* keep the complete backup of a day when a later one lacks node files ([#633](https://github.com/NYCU-WinLab/carrel/issues/633)) ([867dcb4](https://github.com/NYCU-WinLab/carrel/commit/867dcb448c1e16eb73ff7b38aeb877d9341bacdc))
+* **node-agent:** keep desired-revision.json in step with desired.json ([#637](https://github.com/NYCU-WinLab/carrel/issues/637)) ([aeb3162](https://github.com/NYCU-WinLab/carrel/commit/aeb31629ec1270569caa0fe986f12c46e92beb72))
+* **node-agent:** replay the site IPv6 tunnel at boot, skip it on a former exit node ([#634](https://github.com/NYCU-WinLab/carrel/issues/634)) ([bb71b5d](https://github.com/NYCU-WinLab/carrel/commit/bb71b5dff28c723748d4694eece381fd050f23a9))
+* **node-agent:** skip boot replay after a partial reconcile ([#632](https://github.com/NYCU-WinLab/carrel/issues/632)) ([e2c10e8](https://github.com/NYCU-WinLab/carrel/commit/e2c10e808f10365f5330c96f966a42156b3be6f9))
+* pick a function only by the header the gateway sets ([#593](https://github.com/NYCU-WinLab/carrel/issues/593)) ([97099c2](https://github.com/NYCU-WinLab/carrel/commit/97099c29da2a45bf099224438a773283de2e0dbf))
+* retry only function builds that failed for a reason that heals ([#610](https://github.com/NYCU-WinLab/carrel/issues/610)) ([c6e1b47](https://github.com/NYCU-WinLab/carrel/commit/c6e1b47d152e979fb45ab928a3addac041d57c6c))
+* stop the image merge when a function build is cancelled ([#594](https://github.com/NYCU-WinLab/carrel/issues/594)) ([e30c403](https://github.com/NYCU-WinLab/carrel/commit/e30c4039378fd200d13a6816fc9796285a663f57))
+* sweep stuck deleting records on every reconcile pass ([#591](https://github.com/NYCU-WinLab/carrel/issues/591)) ([4f0eeb8](https://github.com/NYCU-WinLab/carrel/commit/4f0eeb87c1004708032e53010636f424e9052961))
+* try a failed function build twice more before failing the version ([#607](https://github.com/NYCU-WinLab/carrel/issues/607)) ([ac198db](https://github.com/NYCU-WinLab/carrel/commit/ac198dbcae1c21011a45b51593c6f7f4c08ed973))
+
 ## [0.11.0](https://github.com/NYCU-WinLab/carrel/compare/v0.10.0...v0.11.0) (2026-11-25)
 
 
