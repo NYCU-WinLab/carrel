@@ -66,8 +66,10 @@ type Platform struct {
 	delivered    atomic.Value
 	// desired holds, per node name, the revision of the last reconcile the
 	// node took (#603); node_list compares what the node reports with it.
-	desired   sync.Map
-	delegated sync.Mutex
+	desired sync.Map
+	// agentRoots is the lab root agents' client certificates chain to (#601).
+	agentRoots agentRoots
+	delegated  sync.Mutex
 	// delegatedAsks bounds the work Caddy's on-demand asks cause.
 	delegatedAsks askLimiter
 	// proxyProbe replaces the check through Cloudflare in tests.

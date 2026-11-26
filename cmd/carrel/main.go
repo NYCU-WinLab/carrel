@@ -113,8 +113,19 @@ func main() {
 	}()
 	if cfg.AgentListen != "" {
 		// Node agents (PLAN 8.6): their own TLS listener, never the gateway.
+		agentTLS := &tls.Config{MinVersion: tls.VersionTLS13}
+		if cfg.AgentClientCAFile != "" {
+			// Agents on certificate sign-in present a lab certificate (#601);
+			// the others still sign in with a token, so one is not required.
+			roots, err := carrel.LoadCertPool(cfg.AgentClientCAFile)
+			if err != nil {
+				slog.Error("agent_client_ca_failed", "error", err)
+				fatal()
+			}
+			agentTLS.ClientCAs, agentTLS.ClientAuth = roots, tls.VerifyClientCertIfGiven
+		}
 		agents := &http.Server{Addr: cfg.AgentListen, Handler: platform.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16,
-			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}}
+			TLSConfig: agentTLS}
 		go func() {
 			<-ctx.Done()
 			_ = agents.Close()

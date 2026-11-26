@@ -207,6 +207,68 @@ check keeps the first exit node's old token; a rotated token of another node tak
 next deploy that passes the health check. Do not delete the token file: the restored configuration would then name a token no file
 holds.
 
+### Certificate sign-in
+
+An agent can sign in with a client certificate from the lab step-ca instead of its token (#601).
+The certificate names one node, `<node>.<site>.agent.carrel.winlab.tw`, comes from the
+`carrel-agents` JWK provisioner, is for client use only and lasts 7 days. The agent renews it
+itself over mTLS once a third of its life has passed, so the only secret on the node is the
+agent's own key in `/etc/carrel/agent-identity/`. The provisioner's private key stays with the
+operator: the CA lists its public key only, and no signing secret sits on the site or in its
+backup.
+
+The site file turns it on:
+
+```json
+"agent_identity": {
+  "ca_url": "https://ca.winlab.tw",
+  "lab_root": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
+  "provisioner": "<the carrel-agents key id>",
+  "certificate_nodes": []
+}
+```
+
+With `agent_identity`, a deploy writes the lab root to `/etc/carrel/lab-root.pem` on every agent
+node and to `/etc/carrel/agent/lab-root.pem` in CT 100, adds the certificate fields to each
+`agent.json`, and sets `agent_client_ca_file` and `agent_provisioner` in `config.json`. The
+listener then asks for a client certificate but does not require one. A node in
+`certificate_nodes` gets `agent_certificate` in its `config.json` entry instead of
+`agent_token_sha256`: the control plane takes only a certificate for that name, from that
+provisioner, chained to the lab root, checked on every request. The source address check stays.
+A node not listed keeps its token, and its agent presents the certificate beside the token once
+it has one.
+
+To move a node to certificate sign-in:
+
+1. Add `agent_identity` with an empty `certificate_nodes` and deploy.
+2. On the operator machine, mint a one-time token for the node's name:
+   `step ca token <node>.<site>.agent.carrel.winlab.tw --provisioner carrel-agents --key <the
+   provisioner's private JWK> --ca-url https://ca.winlab.tw --root <lab root>`.
+3. Enrol the node over root SSH, with the token on stdin, never in arguments:
+   `ssh root@<node> '/usr/local/lib/carrel/carrel-agent -config /etc/carrel/agent.json -enroll'`
+   and paste the token. The agent makes a P-256 key, gets the certificate and logs `enrolled`.
+4. Restart the agent (`systemctl restart carrel-agent`) so it presents the certificate at once;
+   otherwise it picks it up within the hour.
+5. Add the node to `certificate_nodes` and deploy. `node_list` then shows
+   `certificate_expires` under the node's agent.
+
+To go back to the token, remove the node from `certificate_nodes` and deploy: the token file
+was never removed.
+
+Expiry and outages. The agent checks its certificate every hour and logs `certificate_renewed`,
+or `certificate_renew_failed` while the CA cannot renew it. The control plane logs a WARN
+`agent_certificate_expiring` once an hour when a node's certificate has less than 48 hours left,
+and `node_list` shows `certificate_expiring`. Every node renews on the same schedule, so a CA
+outage of more than about 4 days lets every node's certificate run out together, and every job
+on a certificate node then waits. The CA renews no expired certificate: enrol the node again
+(steps 2 to 4). Root SSH to the nodes does not depend on the agent, so it stays the way in.
+Break-glass, when the lab CA itself is down, is the operator's personal root key: it signs in
+to every node with no CA, then either enrol the nodes once the CA is back or remove them from
+`certificate_nodes` and deploy to go back to tokens.
+
+A console stream that is already open is not cut when the certificate expires; the next request
+is refused.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

@@ -17,6 +17,9 @@ and bootstrap-platform.py and after the node programs are installed there. It:
 6. prepares carrel-agent for the nodes the site file lists in "agent_nodes"
    (PLAN 8.6): a CA and the listener's certificate, a token per node, and the
    node's transport set to agent. Every other node keeps the SSH transport.
+   With "agent_identity" (#601) each agent also gets the lab root and a place
+   for its step-ca certificate, and the nodes in its "certificate_nodes" sign
+   in with that certificate only.
 
 `--agent-service` starts or stops the agent itself. install-control.py runs it
 only once the new control plane is healthy, so a failed upgrade never touches
@@ -84,6 +87,15 @@ AGENT_SOURCE = "10.200.0.1"
 # Tokens of the other nodes, one file each (the first node's stays in AGENT_TOKEN).
 AGENT_TOKENS = Path("/etc/carrel/agent-tokens")
 AGENT_TLS = "/etc/carrel/agent"
+# Certificate sign-in (#601). The site file's "agent_identity" names the lab
+# step-ca, its root and the carrel-agents provisioner's key id. Every agent
+# node then gets the root and a place for its key and certificate, and presents
+# the certificate once an operator enrols it; the nodes in
+# "certificate_nodes" sign in with it only, and their token is refused.
+AGENT_LAB_ROOT = Path("/etc/carrel/lab-root.pem")
+AGENT_IDENTITY = Path("/etc/carrel/agent-identity")
+AGENT_DOMAIN = "agent.carrel.winlab.tw"
+LISTENER_LAB_ROOT = f"{AGENT_TLS}/lab-root.pem"
 # A CA for 10 years, the listener's certificate for 825 days, renewed by any
 # run with less than 90 days left. The agent pins the CA, so a renewal needs
 # nothing on the node.
@@ -191,6 +203,46 @@ def agent_nodes(site, nodes):
     return set(names)
 
 
+def agent_identity(site, nodes, agents):
+    """The site file's agent_identity, checked, or None.
+
+    certificate_nodes must be agent nodes: a node on SSH has no agent to sign in."""
+    identity = site.get("agent_identity")
+    if not identity:
+        return None
+    if not isinstance(identity, dict) or set(identity) - {"ca_url", "lab_root", "provisioner", "certificate_nodes"}:
+        raise SystemExit("agent_identity takes ca_url, lab_root, provisioner and certificate_nodes")
+    if not re.fullmatch(r"https://[a-z0-9.-]+(:[0-9]+)?", identity.get("ca_url", "")):
+        raise SystemExit("agent_identity.ca_url must be an https URL with no path, such as https://ca.winlab.tw")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", identity.get("provisioner", "")):
+        raise SystemExit("agent_identity.provisioner must be the provisioner's key id")
+    root = identity.get("lab_root", "")
+    if not root.startswith("-----BEGIN CERTIFICATE-----") or root.count("-----BEGIN") != 1:
+        raise SystemExit("agent_identity.lab_root must be the lab root certificate, in PEM")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", site.get("site", "")):
+        raise SystemExit('agent_identity needs "site", a lower-case DNS label')
+    for name in identity.get("certificate_nodes", []):
+        if name not in agents:
+            raise SystemExit(f"agent_identity.certificate_nodes names {name}, which is not in agent_nodes")
+    return identity
+
+
+def agent_certificate_name(site, name):
+    """The one name a node's agent certificate carries."""
+    return f"{name}.{site['site']}.{AGENT_DOMAIN}"
+
+
+def agent_config(site, identity, name):
+    """A node's agent.json: the listener, its token, and with agent_identity its certificate."""
+    out = {"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
+           "token_file": str(AGENT_TOKEN), "node": name}
+    if identity:
+        out.update({"cert_file": str(AGENT_IDENTITY / "agent.crt"), "key_file": str(AGENT_IDENTITY / "agent.key"),
+                    "certificate_name": agent_certificate_name(site, name), "ca_url": identity["ca_url"],
+                    "lab_root_file": str(AGENT_LAB_ROOT)})
+    return json.dumps(out, indent=2) + "\n"
+
+
 def token_files(n, first):
     """The token file and the rotate file of a node: the first node's keep their old paths."""
     if first:
@@ -233,9 +285,13 @@ def agent_service():
     job is answered, and the deploy does not wait for it."""
     site = json.loads(SITE.read_text())
     me = targets(site, socket.gethostname().split(".")[0])[0]
-    if me["name"] in agent_nodes(site, targets(site, me["name"])):
-        replace_file(AGENT_JSON, json.dumps({"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
-                                             "token_file": str(AGENT_TOKEN), "node": me["name"]}, indent=2) + "\n", 0o644)
+    agents = agent_nodes(site, targets(site, me["name"]))
+    if me["name"] in agents:
+        identity = agent_identity(site, targets(site, me["name"]), agents)
+        if identity:
+            replace_file(AGENT_LAB_ROOT, identity["lab_root"].strip() + "\n", 0o644)
+            AGENT_IDENTITY.mkdir(mode=0o700, exist_ok=True)
+        replace_file(AGENT_JSON, agent_config(site, identity, me["name"]), 0o644)
         replace_file(AGENT_UNIT, AGENT_SERVICE, 0o644)
         run("systemctl", "daemon-reload")
         run("systemctl", "enable", "carrel-agent.service")
@@ -268,6 +324,7 @@ def agent_peers():
     site = json.loads(SITE.read_text())
     nodes = targets(site, socket.gethostname().split(".")[0])
     agents = agent_nodes(site, nodes)
+    identity = agent_identity(site, nodes, agents)
     out = {}
     for n in nodes[1:]:
         ssh = ("ssh", *peer(n), "root@" + n["address"])
@@ -275,8 +332,10 @@ def agent_peers():
             token, _ = token_files(n, False)
             peer_write(n, AGENT_TOKEN, token.read_text(), "600")
             peer_write(n, AGENT_CA / "ca.pem", (AGENT_CA / "ca.pem").read_text(), "644")
-            peer_write(n, AGENT_JSON, json.dumps({"control": "https://" + AGENT_LISTEN, "ca_file": str(AGENT_CA / "ca.pem"),
-                                                   "token_file": str(AGENT_TOKEN), "node": n["name"]}, indent=2) + "\n", "644")
+            if identity:
+                peer_write(n, AGENT_LAB_ROOT, identity["lab_root"].strip() + "\n", "644")
+                run(*ssh, f"install -d -m 700 {AGENT_IDENTITY}")
+            peer_write(n, AGENT_JSON, agent_config(site, identity, n["name"]), "644")
             peer_write(n, AGENT_UNIT, peer_unit(nodes[0], n), "644")
             run(*ssh, "systemctl daemon-reload && systemctl enable carrel-agent.service"
                 " && systemctl restart --no-block carrel-agent.service")
@@ -315,16 +374,33 @@ def peers_connected(since, wait=60):
     return [n["name"] for n in pending]
 
 
-def node_entries(nodes, agents, digests):
-    """config.json "nodes": an agent node carries its transport, token digest and source."""
+def node_entries(nodes, agents, digests, certificates=None):
+    """config.json "nodes": an agent node carries its transport, token digest and source.
+
+    A node in certificates (name: certificate name) carries the name its
+    certificate must have instead of a token digest: its token is refused."""
+    certificates = certificates or {}
     out = []
     for n in nodes:
         entry = {"name": n["name"], "target": n["target"]}
         if n["name"] in agents:
-            entry.update({"transport": "agent", "agent_token_sha256": digests[n["name"]],
-                          "agent_source": AGENT_SOURCE if n["target"] == "carrel-node" else n["address"]})
+            entry.update({"transport": "agent", "agent_source": AGENT_SOURCE if n["target"] == "carrel-node" else n["address"]})
+            if n["name"] in certificates:
+                entry["agent_certificate"] = certificates[n["name"]]
+            else:
+                entry["agent_token_sha256"] = digests[n["name"]]
         out.append(entry)
     return out
+
+
+def listener_identity(site, identity):
+    """CT 100's half of agent_identity: the lab root on disk, and the config keys (None removes one)."""
+    if not identity:
+        return {"agent_client_ca_file": None, "agent_provisioner": None}, {}
+    ct("sh", "-c", f"umask 022 && cat > {LISTENER_LAB_ROOT}.next && mv {LISTENER_LAB_ROOT}.next {LISTENER_LAB_ROOT}",
+       input=identity["lab_root"].strip() + "\n")
+    names = {name: agent_certificate_name(site, name) for name in identity.get("certificate_nodes", [])}
+    return {"agent_client_ca_file": LISTENER_LAB_ROOT, "agent_provisioner": identity["provisioner"]}, names
 
 
 def gateway(*keys):
@@ -542,6 +618,7 @@ def main():
     nodes = targets(site, node)
     me = nodes[0]
     agents = agent_nodes(site, nodes)
+    agent_identity(site, nodes, agents)
     if agents and not Path("/usr/local/lib/carrel/carrel-agent").exists():
         raise SystemExit("install the node programs here first (carrel-agent missing)")
     infra = [GATEWAY, JUMP] if site.get("ssh_jump") else [GATEWAY]
@@ -588,7 +665,8 @@ def main():
     ct("sh", "-c", "umask 022 && cat > /etc/carrel/known_hosts.next && chmod 644 /etc/carrel/known_hosts.next && mv /etc/carrel/known_hosts.next /etc/carrel/known_hosts", input=known_hosts(current, entries))
     # The agent listener's keys are in config.json only while a node uses it.
     listener = agent_listener() if agents else {k: None for k in ("agent_listen", "agent_cert_file", "agent_key_file")}
-    listed = json.dumps({"nodes": node_entries(nodes, agents, agent_digests(nodes, agents)), **listener})
+    client, certificates = listener_identity(site, agent_identity(site, nodes, agents) if agents else None)
+    listed = json.dumps({"nodes": node_entries(nodes, agents, agent_digests(nodes, agents), certificates), **listener, **client})
     # Edited in place inside CT 100 so no other key leaves it.
     ct("python3", "-c", (
         "import json,os,sys;from pathlib import Path;p=Path('/etc/carrel/config.json');"
