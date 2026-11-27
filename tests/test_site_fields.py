@@ -23,7 +23,8 @@ def test_jump_exemption_comes_from_the_site_file():
     other = {k: v for k, v in B09.items() if k != "jump_exempt_sources"}
     assert "PerSourcePenaltyExemptList" not in bootstrap.jump_sshd(other)
     assert "PerSourcePenaltyExemptList 10.0.0.0/8,192.0.2.0/24\n" in bootstrap.jump_sshd(
-        {"jump_exempt_sources": ["10.0.0.0/8", "192.0.2.0/24"]})
+        {"jump_exempt_sources": ["10.0.0.0/8", "192.0.2.0/24"]}
+    )
     with pytest.raises(SystemExit):
         bootstrap.jump_sshd({"jump_exempt_sources": "140.113.0.0/16"})
 
@@ -48,4 +49,7 @@ def test_agent_identity_domain_is_checked():
     site = dict(B09, agent_identity=dict(B09["agent_identity"], domain="Not A Name"))
     with pytest.raises(SystemExit):
         nodes.agent_identity(site, [n["name"] for n in B09["nodes"]], set(B09["agent_nodes"]))
-    assert nodes.agent_identity(B09, [n["name"] for n in B09["nodes"]], set(B09["agent_nodes"]))["domain"] == "agent.carrel.winlab.tw"
+    assert (
+        nodes.agent_identity(B09, [n["name"] for n in B09["nodes"]], set(B09["agent_nodes"]))["domain"]
+        == "agent.carrel.winlab.tw"
+    )
