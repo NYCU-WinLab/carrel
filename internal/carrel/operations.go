@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -169,6 +170,11 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	defer o.p.writer.Unlock()
 	op := o.Find(t, id)
 	if op["plugin"] == nil && !coreTools[str(op["tool"])] {
+		// A snapshot operation recorded before the plugin took over: running it
+		// again would use stale parameters (#705).
+		if strings.HasPrefix(str(op["tool"]), "snapshot_") {
+			fail("conflict", "This snapshot operation predates the snapshot plugin and cannot be retried; run the tool again", D{"recovery": "retry_new_call", "tool": op["tool"]})
+		}
 		fail("conflict", "carrel no longer runs this operation's tool itself; submit the action again", D{"recovery": "revise_request", "tool": op["tool"]})
 	}
 	if op["unfenced"] != nil {
