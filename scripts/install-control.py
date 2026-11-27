@@ -212,7 +212,11 @@ def ct_schema(stamp):
             db.close()
 
     out = {"current": version(DATABASE) if DATABASE.exists() else None, "before": None}
-    with tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive:
+    archive_path = ROLLBACK / f"go-{stamp}.tar.gz"
+    if not archive_path.exists():
+        raise SystemExit(f"The control plane archive {archive_path} of upgrade {stamp} was pruned; "
+                         "it cannot be rolled back")
+    with tarfile.open(archive_path) as archive:
         if "var/lib/carrel/carrel.db" in archive.getnames():
             scratch = ROLLBACK / f"schema-{stamp}.db"
             with archive.extractfile("var/lib/carrel/carrel.db") as source, open(scratch, "wb") as target:
@@ -259,9 +263,29 @@ def ct_restore_database(stamp):
         raise SystemExit(f"No prepared database copy: run ct prepare-database {stamp} first")
     # The copy is whole: a write-ahead log of the newer database must not be
     # replayed onto it.
-    for suffix in ("-wal", "-shm"):
-        Path(str(DATABASE) + suffix).unlink(missing_ok=True)
-    os.replace(pending, DATABASE)
+    # Move the log aside rather than delete it: if the rename fails, it goes
+    # back, so the running release never starts on a database without its log.
+    aside = []
+    try:
+        for suffix in ("-wal", "-shm"):
+            log = Path(str(DATABASE) + suffix)
+            if log.exists():
+                os.replace(log, str(log) + ".rollback")
+                aside.append(log)
+        os.replace(pending, DATABASE)
+    except OSError:
+        for log in aside:
+            try:
+                os.replace(str(log) + ".rollback", log)
+            except OSError as error:
+                print(f"Could not put {log} back from {log}.rollback: {error}", file=sys.stderr)
+        raise
+    # The database is restored: a leftover log copy is only a warning.
+    for log in aside:
+        try:
+            Path(str(log) + ".rollback").unlink(missing_ok=True)
+        except OSError as error:
+            print(f"Could not remove {log}.rollback: {error}", file=sys.stderr)
     print(json.dumps({"database": str(DATABASE), "restored_from": f"go-{stamp}"}))
 
 
@@ -559,8 +583,12 @@ def roll_back(database):
     if not (stage / "before-release.json").exists():
         raise SystemExit(f"The upgrade {stamp} kept no previous node programs: it was a first install")
     previous = json.loads((stage / "before-release.json").read_text())["version"]
-    schema = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py",
-                                "ct", "schema", stamp))
+    try:
+        schema = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py",
+                                    "ct", "schema", stamp))
+    except subprocess.CalledProcessError as error:
+        # capture() keeps stderr, where ct schema says what is wrong.
+        raise SystemExit((error.stderr or "").strip() or str(error)) from None
     migrated = schema["before"] is not None and schema["current"] != schema["before"]
     if migrated and not database:
         raise SystemExit(f"The upgrade {stamp} moved the database from schema version {schema['before']} to "

@@ -734,3 +734,97 @@ def test_the_database_copy_replaces_the_database_and_its_log(tmp_path, monkeypat
     )
     with pytest.raises(SystemExit, match="Stop carrel"):
         module.ct_restore_database("1")
+
+
+def test_a_failed_rename_puts_the_log_back(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
+    (tmp_path / "carrel.db").write_text("db")
+    (tmp_path / "carrel.db.rollback").write_text("old")
+    (tmp_path / "carrel.db-wal").write_text("log")
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="")
+    )
+    real = module.os.replace
+
+    def replace(src, dst):
+        if str(src).endswith("carrel.db.rollback"):
+            raise OSError("boom")
+        real(src, dst)
+
+    monkeypatch.setattr(module.os, "replace", replace)
+    with pytest.raises(OSError):
+        module.ct_restore_database("1")
+    assert (tmp_path / "carrel.db-wal").read_text() == "log"
+    assert not (tmp_path / "carrel.db-wal.rollback").exists()
+
+
+def test_schema_names_a_pruned_archive(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    monkeypatch.setattr(module, "ROLLBACK", tmp_path)
+    monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
+    with pytest.raises(SystemExit, match="go-9.tar.gz.*pruned"):
+        module.ct_schema("9")
+
+
+def test_rollback_shows_a_pruned_archive_without_a_traceback(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    rolled(tmp_path, module, monkeypatch, {})
+    message = "The control plane archive /x/go-20261020-000000.tar.gz of upgrade 20261020-000000 was pruned"
+
+    def capture(*args):
+        if "schema" in args:
+            raise module.subprocess.CalledProcessError(1, list(args), output="", stderr=message + "\n")
+        return "carrel.test\n"
+
+    monkeypatch.setattr(module, "capture", capture)
+    with pytest.raises(SystemExit) as raised:
+        module.rollback(database=False)
+    assert raised.value.code == message
+
+
+def test_a_failed_second_move_puts_the_first_log_back(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
+    (tmp_path / "carrel.db").write_text("db")
+    (tmp_path / "carrel.db.rollback").write_text("old")
+    (tmp_path / "carrel.db-wal").write_text("log")
+    (tmp_path / "carrel.db-shm").write_text("shm")
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="")
+    )
+    real = module.os.replace
+
+    def replace(src, dst):
+        if str(src).endswith("carrel.db-shm"):
+            raise OSError("boom")
+        real(src, dst)
+
+    monkeypatch.setattr(module.os, "replace", replace)
+    with pytest.raises(OSError):
+        module.ct_restore_database("1")
+    assert (tmp_path / "carrel.db-wal").read_text() == "log"
+    assert (tmp_path / "carrel.db").read_text() == "db"
+
+
+def test_a_failed_log_cleanup_still_restores_the_database(tmp_path, monkeypatch, capsys):
+    module = load("install-control.py")
+    monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
+    (tmp_path / "carrel.db").write_text("db")
+    (tmp_path / "carrel.db.rollback").write_text("old")
+    (tmp_path / "carrel.db-wal").write_text("log")
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="")
+    )
+    real = module.Path.unlink
+
+    def unlink(self, *a, **k):
+        if self.name.endswith("-wal.rollback"):
+            raise OSError("busy")
+        real(self, *a, **k)
+
+    monkeypatch.setattr(module.Path, "unlink", unlink)
+    module.ct_restore_database("1")
+    assert (tmp_path / "carrel.db").read_text() == "old"
+    assert not (tmp_path / "carrel.db-wal").exists()
+    assert "Could not remove" in capsys.readouterr().err
