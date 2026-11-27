@@ -314,9 +314,9 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
   message and the keys of `error_details`. Any other failure is `plugin_failed`.
 - An operation may name a `toolset` of the tool contract, such as `machines`, to be listed there
   as well as under `plugins`. `destructive` and `idempotent` become the tool's hints.
-- Over HTTP, `GET /plugins/v1/tools` lists the plugin tools the caller may call. `POST
-  /plugins/v1/tools/<tool>` calls one, with the tool's arguments as the JSON body. Both take the same
-  bearer token as `/mcp`, and a call is checked and gated as on `/mcp`. Send the same arguments
+- Over HTTP, `GET /v1/tools` lists the tools the caller may call, plugin tools included (marked
+  `"plugin": true`). `POST /plugins/v1/tools/<tool>` calls a plugin tool, with the tool's arguments as
+  the JSON body. Both take the same bearer token as `/mcp`, and a call is checked and gated as on `/mcp`. Send the same arguments
   with the same `idempotency_key` to poll the operation.
 - The control plane checks the arguments against the schema before the call is queued, and again
   against the schema of the node that runs it. A schema may not use `$ref` outside itself, or declare

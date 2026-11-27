@@ -1401,26 +1401,6 @@
         }
       }
     },
-    "/plugins/v1/tools": {
-      "get": {
-        "x-carrel-audience": "member",
-        "security": [
-          {
-            "oauth": []
-          }
-        ],
-        "summary": "List the plugin tools the caller may call now (#661)",
-        "description": "The same tools as /mcp lists from the plugins toolset: name, description, input_schema and read_only. A tool is listed while some node reports its plugin.",
-        "responses": {
-          "200": {
-            "$ref": "#/components/responses/Ok"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/plugins/v1/tools/{tool}": {
       "post": {
         "x-carrel-audience": "member",

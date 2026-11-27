@@ -1,6 +1,6 @@
 package carrel
 
-// HTTP routes for plugin tools (#661): the same tools as MCP lists, for a
+// HTTP routes for plugin tools (#661): the same tools as MCP lists (GET /v1/tools shows them), for a
 // client that speaks plain HTTP. A call goes through App.Call, so it is
 // checked, gated and run exactly as on /mcp. Poll a call by sending it again
 // with the same idempotency_key: the same arguments return the same
@@ -8,7 +8,6 @@ package carrel
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -17,45 +16,14 @@ import (
 var pluginHTTPStatus = map[string]int{"forbidden": 403, "not_found": 404, "invalid": 400, "conflict": 409,
 	"unsupported": 409, "quota_exceeded": 409, "backend_unavailable": 503}
 
-// member verifies the caller's bearer token as /mcp does, or answers 401 or
-// 503 and returns nil.
+// member verifies the caller's bearer token as /mcp does (bearerMember), or
+// answers 401 or 503 and returns nil.
 func (a *App) member(w http.ResponseWriter, r *http.Request) D {
-	authorization := r.Header.Get("Authorization")
-	refuse := func() {
-		// As /mcp does: the client finds where to sign in from here.
-		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+strings.TrimRight(a.Platform.Config.Origin, "/")+`/.well-known/oauth-protected-resource/mcp"`)
-		jsonResponse(w, 401, D{"error": "invalid_token"})
-	}
-	if !strings.HasPrefix(authorization, "Bearer ") {
-		refuse()
-		return nil
-	}
-	who, err := a.verifier.Verify(r.Context(), authorization[7:])
-	if err != nil {
-		var unavailable IssuerUnavailable
-		if errors.As(err, &unavailable) {
-			jsonResponse(w, 503, D{"error": "temporarily_unavailable"})
-		} else {
-			refuse()
-		}
-		return nil
-	}
+	who, _ := a.bearerMember(w, r, strings.TrimRight(a.Platform.Config.Origin, "/"), "/mcp")
 	return who
 }
 
 func (a *App) pluginRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /plugins/v1/tools", func(w http.ResponseWriter, r *http.Request) {
-		who := a.member(w, r)
-		if who == nil {
-			return
-		}
-		tools := []D{}
-		for _, t := range pluginListing(a.Platform.pluginTools(), func(pt *pluginTool) bool { return boolean(who["admin"]) || pt.Member }) {
-			tools = append(tools, D{"name": t.Name, "description": t.Description, "input_schema": t.InputSchema,
-				"read_only": t.Annotations != nil && t.Annotations.ReadOnlyHint})
-		}
-		jsonResponse(w, 200, D{"ok": true, "tools": tools})
-	})
 	mux.HandleFunc("POST /plugins/v1/tools/{tool}", func(w http.ResponseWriter, r *http.Request) {
 		who := a.member(w, r)
 		if who == nil {
