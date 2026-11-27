@@ -514,7 +514,11 @@ func (o *Operations) saveOutcome(e *Execution) {
 		}
 		op["recovery_machines"] = machines
 	}
+	sent := e.emitOperationEvents(op)
 	o.Save(op)
+	if sent {
+		o.p.events.notify()
+	}
 	event := "operation_waiting"
 	if contains(terminal, op["state"]) {
 		event = "operation_finished"

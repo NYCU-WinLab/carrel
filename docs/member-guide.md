@@ -506,6 +506,9 @@ The events are:
 | `app.build.failed` | A pull-mode app's build failed on its machine. |
 | `function.version.ready` | A function version is built; `live` says whether it now serves. |
 | `function.version.failed` | A function version failed to build or pull. |
+| `machine.operation.succeeded` | A machine or snapshot operation finished; `tool` and `machine` say which. |
+| `machine.operation.failed` | A machine or snapshot operation failed; `error` says why. |
+| `quota.warning` | A quota dimension reached 90% of its limit; it warns again only after falling below 80%. |
 
 To get them as HTTP POSTs, add a webhook:
 

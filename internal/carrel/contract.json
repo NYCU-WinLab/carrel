@@ -4024,6 +4024,9 @@
                 "app.build.failed",
                 "function.version.ready",
                 "function.version.failed",
+                "machine.operation.succeeded",
+                "machine.operation.failed",
+                "quota.warning",
                 "webhook.test"
               ]
             },

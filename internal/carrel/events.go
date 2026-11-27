@@ -47,7 +47,7 @@ const (
 var webhookBackoff = []time.Duration{0, 30 * time.Second, 2 * time.Minute, 10 * time.Minute, time.Hour, 6 * time.Hour}
 
 // eventTypes are the events a webhook can ask for.
-var eventTypes = []string{"app.release.live", "app.release.failed", "app.build.failed", "function.version.ready", "function.version.failed", "webhook.test"}
+var eventTypes = []string{"app.release.live", "app.release.failed", "app.build.failed", "function.version.ready", "function.version.failed", "machine.operation.succeeded", "machine.operation.failed", "quota.warning", "webhook.test"}
 
 // eventHub wakes the SSE streams and the delivery loop when an event is
 // written.
