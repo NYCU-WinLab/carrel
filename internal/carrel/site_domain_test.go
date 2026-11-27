@@ -34,6 +34,16 @@ func TestASiteUsesItsOwnDomain(t *testing.T) {
 	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "domain") {
 		t.Fatalf("validate: %v", err)
 	}
+	outside := p.Config
+	outside.Domain, outside.Origin = "stg.example.org", "https://carrel.winlab.tw"
+	if err := outside.Validate(); err == nil || !strings.Contains(err.Error(), "origin") {
+		t.Fatalf("origin outside domain: %v", err)
+	}
+	outside.Origin = "https://carrel.stg.example.org"
+	outside.Database, outside.Nodes = "x", []NodeConfig{{Name: "n", Target: "n"}}
+	if err := outside.Validate(); err != nil {
+		t.Fatalf("origin inside domain: %v", err)
+	}
 }
 
 // The gateway serves an origin and tenant sites in the site's own zone,

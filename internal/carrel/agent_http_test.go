@@ -63,7 +63,7 @@ func TestAgentRoutesCheckTokenAndSource(t *testing.T) {
 
 func TestAgentTransportConfig(t *testing.T) {
 	base := func(n NodeConfig, listen bool) Config {
-		c := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{n}}
+		c := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.winlab.tw", Database: "x", Nodes: []NodeConfig{n}}
 		if listen {
 			c.AgentListen, c.AgentCertFile, c.AgentKeyFile = "10.200.0.3:8443", "/c", "/k"
 		}

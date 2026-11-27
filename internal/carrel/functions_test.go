@@ -551,7 +551,7 @@ func TestFunctionEnvOldKeysNeedTheCurrentKey(t *testing.T) {
 		{testEnvKey, []string{"short"}, "32 bytes"},
 		{testEnvKey, []string{testEnvKey}, ""},
 	} {
-		cfg := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}, FunctionEnvKey: c.key, FunctionEnvOldKeys: c.old}
+		cfg := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.winlab.tw", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}, FunctionEnvKey: c.key, FunctionEnvOldKeys: c.old}
 		err := cfg.WithDefaults().Validate()
 		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
 			t.Fatalf("%+v: %v", c, err)
