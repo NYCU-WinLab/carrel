@@ -363,6 +363,11 @@ func (p *Platform) Start() {
 					e.ReapPreviews()
 					e.deferJump = true
 					pushJump = true
+					// A failed gateway send is retried here: Reconcile queues the
+					// current config again below (#800).
+					if st := p.gateway.Status(); st.Err != nil {
+						slog.Error("gateway_sync_failed", "event", "gateway_sync_failed", "type", "maintenance", "error", st.Err.Error())
+					}
 					e.Reconcile()
 					// A record left in "deleting" whose VM is gone keeps its
 					// reservation until the sweep removes it (#298).

@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -173,6 +174,12 @@ func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	publicHost = or(c.PublicHost, "carrel."+specialZone)
 	p.Operations = NewOperations(p)
 	p.Hub = NewAgentHub()
+	p.gateway = newGatewaySender(func(g gatewaySync) error {
+		if problem := attempt(func() { p.execution(p.ctx).sendGatewaySync(g) }); problem != nil {
+			return errors.New(describe(problem))
+		}
+		return nil
+	}, &p.delivered)
 	if len(c.WebhookBlockedRanges) > 0 {
 		webhookBlocked = nil
 		for _, r := range c.WebhookBlockedRanges {

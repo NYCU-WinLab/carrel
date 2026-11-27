@@ -247,7 +247,7 @@ func domainEdgeScenario(g *goldenRun, dns *statefulDNS, cert func(func() D)) {
 	rows("q1")
 
 	// q2: queued with a whole-second ready_at given as int64.
-	cert(func() D { return D{"state": "queued", "ready_at": time.Now().Unix() + 1} })
+	cert(func() D { return D{"state": "queued", "ready_at": time.Now().Unix() + 2} })
 	r = racy("q2", "domain_add", D{"machine": "api", "sub": "q2", "target_port": 3000, "wait_seconds": 0}, alice)
 	wait("q2", opOf(r), "waiting")
 	rows("q2w")

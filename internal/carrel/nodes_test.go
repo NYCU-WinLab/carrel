@@ -320,6 +320,10 @@ func TestCertificatesGoOnlyToTheGateway(t *testing.T) {
 		return inner(r, target)
 	}
 	p.execution(context.Background()).Reconcile()
+	// The gateway sync runs on the sender's goroutine (#804).
+	settleGateway(t, p)
+	mu.Lock()
+	defer mu.Unlock()
 	// Private keys go to the gateway only, never through a node.
 	for node, state := range sent {
 		if _, ok := state["certificates"]; ok || state["origin_certificate"] != nil {
@@ -486,5 +490,52 @@ func TestNodeListNamesNodesBehindOnTheirDesiredState(t *testing.T) {
 	r = p.execution(context.Background()).Admin("node_list", D{}, admin)
 	if dicts(r["nodes"])[0]["desired_current"] != false {
 		t.Fatal("a node whose reconcile failed shows as current: ", encoded(r["lagging_nodes"]))
+	}
+}
+
+// A gateway config that cannot be built (here a tenant pair that does not
+// cover its names) fails the reconcile, but only after the other nodes got
+// their state: one bad pair must not stop firewall changes for every tenant
+// (#804).
+func TestABadGatewayPairStillReconcilesTheOtherNodes(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	p.Config.CertificateDir = t.TempDir()
+	m := seedMachine(p, "web", 10100)
+	crt, key := testPair(t, "*.bob.winlab.tw")
+	p.execution(context.Background()).storeCertificate("alice", crt, key)
+	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})
+	p.Store.Put("domains", "web0000000000001", 1, D{"id": "web0000000000001", "tenant_n": 1, "vmid": m["vmid"], "sub": "web", "slug": "alice", "name": "web.alice.winlab.tw", "target_port": 8080, "state": "ready"})
+	var mu sync.Mutex
+	reconciled := map[string]int{}
+	gateway := 0
+	inner := b.call
+	b.mu.Lock()
+	b.call = func(r D, target string) (any, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r["op"] {
+		case "reconcile":
+			reconciled[target]++
+			return D{}, nil
+		case "sync":
+			gateway++
+			return D{}, nil
+		}
+		return inner(r, target)
+	}
+	b.mu.Unlock()
+	if err := attempt(func() { p.execution(context.Background()).Reconcile() }); err == nil {
+		t.Fatal("a gateway config with a bad pair passed")
+	}
+	settleGateway(t, p)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, target := range []string{"node-01", "node-02", "node-03"} {
+		if reconciled[target] != 1 {
+			t.Fatalf("%s reconciled %d times: %v", target, reconciled[target], reconciled)
+		}
+	}
+	if gateway != 0 {
+		t.Fatal("a config that failed to build reached the gateway")
 	}
 }

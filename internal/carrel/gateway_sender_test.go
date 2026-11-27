@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"sync"
@@ -203,4 +204,63 @@ func TestGatewaySenderBlockedSendDoesNotBlockSubmit(t *testing.T) {
 	}
 	close(release)
 	waitSender(t, func() bool { return s.Status().Delivered == 2 })
+}
+
+// settleGateway waits until the platform's sender has nothing queued or being
+// sent, so a test can look at what Reconcile handed it (#800).
+func settleGateway(t *testing.T, p *Platform) {
+	t.Helper()
+	waitSender(t, func() bool {
+		p.gateway.mu.Lock()
+		defer p.gateway.mu.Unlock()
+		return !p.gateway.running
+	})
+}
+
+// fastGatewayRetries shrinks the retry waits for a test that makes the gateway fail.
+func fastGatewayRetries(t *testing.T) {
+	t.Helper()
+	old := gatewayRetryDelays
+	gatewayRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { gatewayRetryDelays = old })
+}
+
+// Reconcile queues the gateway config and returns: a gateway that blocks does
+// not hold up the writer (#804).
+func TestReconcileDoesNotWaitForASlowGateway(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "sync" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return nil, nil, false
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.execution(context.Background()).Reconcile()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("Reconcile waited for the gateway")
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("the gateway never received the config")
+	}
+	close(release)
+	settleGateway(t, p)
+	if p.gateway.Status().Delivered == 0 {
+		t.Fatal("the config was not delivered after the gateway answered")
+	}
 }
