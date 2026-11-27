@@ -127,9 +127,11 @@ func checkWebhookURL(raw string) {
 	}
 }
 
-// publicAddr tells whether a webhook may reach ip: never the lab's own
-// networks, the tailnet range, loopback or link-local, so a member cannot
-// make the control plane call inside the site.
+// publicAddr tells whether a webhook may reach ip: never a private,
+// loopback, link-local, tailnet (CGNAT) or reserved address, so a member
+// cannot make the control plane call into the site's internal networks.
+// Public addresses, the lab's own included, are allowed: nothing in the
+// site trusts a request for coming from the control plane.
 func publicAddr(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
@@ -335,26 +337,32 @@ func (p *Platform) deliverPass(ctx context.Context) {
 		if num(h["next_attempt_at"]) > now() {
 			continue
 		}
-		n := integer(h["tenant_n"])
+		n, id := integer(h["tenant_n"]), str(h["id"])
 		cursor := int64(integer(h["cursor"]))
 		for range webhookBatch {
+			// Read the record again before each send: a removal stops the
+			// next delivery, and a rotation signs it with the new secret.
+			if h = p.Store.Get("webhooks", id); h == nil {
+				break
+			}
+			cursor = int64(integer(h["cursor"]))
 			rows := p.Store.eventsAfter(n, cursor, 1)
 			if len(rows) == 0 {
 				break
 			}
 			row := rows[0]
-			id := int64(integer(row["id"]))
+			eid := int64(integer(row["id"]))
 			if types := arr(h["types"]); len(types) > 0 && !contains(types, row["type"]) {
-				cursor = id
-				p.saveDelivery(h, D{"cursor": id})
+				cursor = eid
+				p.saveDelivery(h, D{"cursor": eid})
 				continue
 			}
 			event := publicEvent(row, slugs[n])
 			status, err := p.send(ctx, h, event)
 			delivery := D{"event": event["id"], "status": status, "at": now()}
 			if err == nil && status >= 200 && status < 300 {
-				cursor = id
-				p.saveDelivery(h, D{"cursor": id, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
+				cursor = eid
+				p.saveDelivery(h, D{"cursor": eid, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
 				continue
 			}
 			if err != nil {
@@ -363,9 +371,9 @@ func (p *Platform) deliverPass(ctx context.Context) {
 			attempts := integer(h["attempts"]) + 1
 			if attempts >= len(webhookBackoff) {
 				delivery["given_up"] = true
-				p.saveDelivery(h, D{"cursor": id, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
+				p.saveDelivery(h, D{"cursor": eid, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
 				slog.Warn("webhook_gave_up", "webhook", h["id"], "event", event["id"])
-				cursor = id
+				cursor = eid
 				continue
 			}
 			p.saveDelivery(h, D{"attempts": attempts, "next_attempt_at": now() + webhookBackoff[attempts].Seconds(), "last_delivery": delivery})

@@ -258,4 +258,48 @@ func TestEventLogKeepsItsCap(t *testing.T) {
 	}
 }
 
+// A webhook removed during a delivery gets no more events, and webhook_test
+// waits on its endpoint without the platform's write lock.
+func TestWebhookRemovalStopsDeliveryAndTestTakesNoLock(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	a, alice := NewApp(p, nil), person("alice", false)
+	ctx := context.Background()
+	var id any
+	held := make(chan bool, 1)
+	rcv := &receiver{status: 204}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("webhook-id") != "" && strings.HasPrefix(r.Header.Get("webhook-id"), "evt_test_") {
+			// The test call is waiting here: the writer must be free.
+			locked := p.writer.TryLock()
+			if locked {
+				p.writer.Unlock()
+			}
+			held <- !locked
+		} else {
+			assertOK(t, a.Call(ctx, "webhook_remove", D{"webhook": id}, alice))
+		}
+		rcv.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	allowLoopback(t, srv)
+	added := a.Call(ctx, "webhook_add", D{"url": srv.URL}, alice)
+	assertOK(t, added)
+	id = obj(added["webhook"])["id"]
+
+	assertOK(t, a.Call(ctx, "webhook_test", D{"webhook": id}, alice))
+	if <-held {
+		t.Fatal("webhook_test held the writer lock while it waited on the endpoint")
+	}
+	n := integer(p.Store.Objects("webhooks")[0]["tenant_n"])
+	e := p.execution(ctx)
+	for i := range 3 {
+		e.emit(n, "app.release.live", D{"i": i})
+	}
+	p.deliverPass(ctx)
+	if rcv.count() != 2 {
+		t.Fatalf("deliveries after the removal: %d, want the test and 1 event", rcv.count())
+	}
+}
+
 func itoa(v int64) string { return string(encoded(v)) }

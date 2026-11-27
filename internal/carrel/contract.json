@@ -3961,7 +3961,7 @@
     },
     {
       "name": "webhook_test",
-      "description": "Send one webhook.test event to a webhook now and return the HTTP status it answered with.",
+      "description": "Send one webhook.test event to a webhook now and return the HTTP status it answered with. It changes nothing in Carrel, and runs outside the platform's write lock.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3981,7 +3981,7 @@
         "additionalProperties": false
       },
       "annotations": {
-        "readOnlyHint": false,
+        "readOnlyHint": true,
         "destructiveHint": false,
         "openWorldHint": true
       }
@@ -5453,8 +5453,7 @@
     "operation_cancel",
     "webhook_add",
     "webhook_remove",
-    "webhook_rotate",
-    "webhook_test"
+    "webhook_rotate"
   ],
   "async_tools": [
     "deployment_apply",
