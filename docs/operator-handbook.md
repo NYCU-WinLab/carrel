@@ -47,7 +47,25 @@ Without a prepared manifest, the original templates retain their first-boot pack
 
 ## Install a site
 
-Each script is idempotent and runs where it acts (PLAN 8.1):
+`scripts/install.sh` runs steps 1 to 3 below on one host, in order. Run it as root from a checkout
+of this repository on each node:
+
+```sh
+# The first exit node: the network, then CT 100 and CT 101.
+scripts/install.sh --site sites/<site>/cluster.json --admin-key admin.pub
+# Every other node: join the first node's Proxmox cluster, then the network.
+scripts/install.sh --site sites/<site>/cluster.json --join <first node>
+```
+
+- The host must be listed under `nodes` in the site file.
+- Guest storage (`storage`, or `--storage`) must be a ZFS pool.
+- `--join` runs `pvecm add <node> --use_ssh 1` once, on a host with no guests.
+  - Afterwards, run `scripts/bootstrap-platform.py --firewall` on the first exit node.
+- `--prepared-dir`, `--image` and `--vmid-base` pass through to `build-templates.py`.
+- Running `install.sh` again repairs; on the first exit node it rewrites the infra firewalls.
+- `CARREL_DRY_RUN=1` prints each change instead of making it.
+
+Step 4 and the release stay separate. The steps one by one (PLAN 8.1):
 
 1. Every node: copy `sites/<site>/cluster.json` to `/etc/carrel/site.json`, set `"storage"` in
    `/etc/carrel/node.json`, then run `scripts/install-network.py`. The site file's
