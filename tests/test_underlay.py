@@ -63,6 +63,33 @@ def test_a_site_public_entry_must_be_a_protected_host(address):
         load("install-network.py").site_layout("carrel02", site)
 
 
+@pytest.mark.parametrize(
+    "address",
+    [
+        "10.200.0.5/24",
+        "10.1.2.3/24",
+        "172.20.0.5/24",
+        "192.168.1.5/24",
+        "100.64.0.9/24",
+        "127.0.0.1/8",
+        "169.254.1.1/16",
+    ],
+)
+def test_a_site_public_address_in_a_private_range_is_refused(address):
+    site = {**SITE, "public": {**SITE["public"], "address": address}}
+    with pytest.raises(SystemExit):
+        load("install-network.py").site_layout("carrel01", site)
+
+
+@pytest.mark.parametrize("address", ["198.18.61.10/24", "140.113.194.229/24"])
+def test_a_site_public_address_may_be_global_or_staging(address):
+    site = {**SITE, "public": {**SITE["public"], "address": address}}
+    assert (
+        load("install-network.py").site_layout("carrel01", site)["entries"][0]["address"]
+        == address.split("/")[0] + "/32"
+    )
+
+
 def test_a_node_outside_the_site_file_is_refused():
     with pytest.raises(SystemExit):
         load("install-network.py").site_layout("carrel09", SITE)
