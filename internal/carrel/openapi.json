@@ -683,6 +683,88 @@
         }
       }
     },
+    "/v1/tools": {
+      "get": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "List the tools the caller may run, with their input schemas. Each core tool also has its own path below, POST /v1/tools/<name>.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/tools/{name}": {
+      "post": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "Run a tool, as MCP tools/call does: the body is the tool's arguments, the answer is its result. An error answers with the status of its code.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/operations/{id}": {
+      "get": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "Read a long-running tool's operation, as operation_get with wait_seconds 0; tenant is a query parameter.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Json"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/apps/v1/agent/logs": {
       "post": {
         "x-carrel-audience": "agent",

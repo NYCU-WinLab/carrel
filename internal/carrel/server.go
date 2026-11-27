@@ -51,6 +51,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	a.statusRoute(mux, p)
 	a.askRoute(mux, p)
 	a.mcpRoutes(mux, origin)
+	a.toolRoutes(mux, origin)
 	a.pluginRoutes(mux)
 	a.handler = chain(mux, a.networkGate(origin), originCheck(origin), a.oauthRateLimit, limitBody)
 	return a
@@ -84,7 +85,7 @@ func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string, ep *endpoin
 	mux.Handle("/.well-known/", oauth)
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(openAPI)
+		_, _ = w.Write(servedOpenAPI())
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		health := Build()
@@ -134,7 +135,6 @@ func (a *App) guestRoutes(mux *http.ServeMux) {
 	})
 }
 func (a *App) mcpRoutes(mux *http.ServeMux, origin string) {
-	verifier := a.verifier
 	var serversMu sync.Mutex
 	servers := map[string]*mcp.Server{}
 	stream := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
@@ -150,22 +150,8 @@ func (a *App) mcpRoutes(mux *http.ServeMux, origin string) {
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 262144})
 	mcpHandler := func(readOnly bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			authorization := r.Header.Get("Authorization")
-			var who D
-			var err error
-			if !strings.HasPrefix(authorization, "Bearer ") {
-				err = errors.New("missing token")
-			} else {
-				who, err = verifier.Verify(r.Context(), authorization[7:])
-			}
-			if err != nil {
-				var unavailable IssuerUnavailable
-				if errors.As(err, &unavailable) {
-					jsonResponse(w, 503, D{"error": "temporarily_unavailable"})
-				} else {
-					w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+origin+`/.well-known/oauth-protected-resource`+strings.TrimSuffix(r.URL.Path, "/")+`"`)
-					jsonResponse(w, 401, D{"error": "invalid_token"})
-				}
+			who, ok := a.bearerMember(w, r, origin, strings.TrimSuffix(r.URL.Path, "/"))
+			if !ok {
 				return
 			}
 			query, err := url.ParseQuery(r.URL.RawQuery)
