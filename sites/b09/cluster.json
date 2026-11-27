@@ -30,5 +30,11 @@
     "tenants": "2a14:7581:880::/48",
     "peer": {"endpoint": "140.113.194.230:51831", "public_key": "2PQ1iS+ks9988PJLrFQte7hCWwoP+yVhoBBHNvGWXio="},
     "mtu": 1370
-  }
+  },
+  "plugins": [
+    {"name": "snapshot", "version": "0.1.0",
+     "url": "https://github.com/NYCU-WinLab/carrel/releases/download/snapshot-v0.1.0/snapshot.tar.gz",
+     "sha256": "2a33157f1943e1744f2446c5ea05ca86efde0874daeb9d9e30ddc770203d390a",
+     "network": true, "env_file": true}
+  ]
 }
