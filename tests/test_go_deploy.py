@@ -575,6 +575,48 @@ def test_rollback_puts_the_previous_release_back(tmp_path, monkeypatch):
         module.rollback(database=False)
 
 
+def older_stage(tmp_path, script="old configure-nodes.py", recorded=None):
+    """A kept stage of 0.9.0, the release the rolled-back upgrade replaced."""
+    older = tmp_path / "go-upgrade-20261019-000000"
+    older.mkdir()
+    digest = hashlib.sha256((recorded or script).encode()).hexdigest()
+    release = json.dumps({"version": "0.9.0", "sha256": {"configure-nodes.py": digest}})
+    (older / "release.json").write_text(release)
+    (older / "configure-nodes.py").write_text(script)
+    # The rolled-back upgrade saved the same record before it replaced 0.9.0.
+    (tmp_path / "go-upgrade-20261020-000000" / "before-release.json").write_text(release)
+    (tmp_path / "lib" / "release.json").write_text('{"version": "1.0.0"}')
+    return older
+
+
+def test_rollback_puts_the_previous_node_step_on_every_node(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    older = older_stage(tmp_path)
+    module.rollback(database=False)
+    nodes = node.calls.index(("python3", str(older / "configure-nodes.py")))
+    restart = node.calls.index(("pct", "exec", "100", "--", "systemctl", "restart", "carrel"))
+    agent = node.calls.index(("python3", str(older / "configure-nodes.py"), "--agent-service"))
+    assert nodes < restart < agent
+    # The newer release's node step never runs on the way back.
+    assert not any(str(stage / "configure-nodes.py") in c for c in node.calls)
+
+
+def test_rollback_without_an_intact_previous_stage_leaves_the_other_nodes_and_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    module = load("install-control.py")
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    older = older_stage(tmp_path, recorded="something else")
+    # A hashes.json in the stage that matches its script does not make it trusted.
+    digest = hashlib.sha256(b"old configure-nodes.py").hexdigest()
+    (older / "hashes.json").write_text(json.dumps({"configure-nodes.py": digest}))
+    module.rollback(database=False)
+    assert not any(c[:1] == ("python3",) and c[1].endswith("configure-nodes.py") for c in node.calls)
+    assert not any("--agent-service" in c for c in node.calls)
+    assert "deploy 0.9.0 again" in capsys.readouterr().err
+
+
 def test_rollback_skips_a_newer_failed_upgrade(tmp_path, monkeypatch):
     module = load("install-control.py")
     _, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})

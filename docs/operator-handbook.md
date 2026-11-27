@@ -180,10 +180,15 @@ It undoes the upgrade that installed the running release:
   carrel starts again on the running release.
 - It holds the node's deploy lock, so no deploy or second rollback runs beside it. Running it again
   goes one more upgrade back.
-- It leaves `carrel-deployd` in CT 100, `carrel-fetch` in CT 103 and the running `carrel-agent` at
-  the newer release. Deploy the previous release again when those must match too.
-- It restores the node programs on the first exit node only. Run `configure-nodes.py` from the
-  previous release's stage, or deploy that release again, so every node matches.
+- Once the previous version is healthy, it runs the previous release's own node step from the
+  newest kept stage of that release whose `configure-nodes.py` matches its recorded hash.
+  `configure-nodes.py` copies the restored node programs and `release.json` to the other nodes and
+  rewrites `config.json`, carrel restarts and must pass the health check again, and every
+  `carrel-agent` restarts on the restored binary and must reach the control plane, as after a
+  deploy. Without such a stage it says so and leaves the other nodes and the agents at the newer
+  release: deploy the previous release again so every node matches.
+- It leaves `carrel-deployd` in CT 100 and `carrel-fetch` in CT 103 at the newer release. Deploy the
+  previous release again when those must match too.
 
 ## Node agent
 

@@ -476,6 +476,13 @@ def install(stage, version):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
     # The node's agent starts or stops only now, against a healthy control
     # plane: a failed upgrade above never touched it.
+    agents(stage)
+    for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
+        shutil.rmtree(old)
+
+
+def agents(stage):
+    """Start or stop carrel-agent on every agent node and check each one reaches the control plane."""
     since = int(time.time())
     agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False,
                            capture_output=True, text=True)
@@ -506,8 +513,24 @@ def install(stage, version):
     if report.get("plugins_error"):
         raise SystemExit(f"The plugins were not installed ({report['plugins_error']}): fix the site file's "
                          "plugins and deploy again. The control plane and the agents are up.")
-    for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
-        shutil.rmtree(old)
+
+
+def previous_stage(release):
+    """The newest kept stage that staged this release, with the configure-nodes.py it recorded.
+
+    The digest comes from the rolled-back upgrade's saved release record, not from the stage itself."""
+    expected = (release.get("sha256") or {}).get("configure-nodes.py")
+    if not expected:
+        return None
+    for stage in sorted(STAGES.glob("go-upgrade-*"), reverse=True):
+        script = stage / "configure-nodes.py"
+        try:
+            staged = json.loads((stage / "release.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if staged == release and script.exists() and hashlib.sha256(script.read_bytes()).hexdigest() == expected:
+            return stage
+    return None
 
 
 def rollback(database):
@@ -574,8 +597,21 @@ def roll_back(database):
     finally:
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
     print(json.dumps({"rolled_back": stamp, "version": previous, "database_restored": bool(database), "health": health}))
-    print("Run configure-nodes.py from the previous release's stage on the other nodes, or deploy "
-          f"{previous} again, so every node has the same programs.", file=sys.stderr)
+    # The other nodes and every carrel-agent go back too, through the previous
+    # release's own node step: a newer configure-nodes.py may write config keys
+    # the restored carrel refuses.
+    older = previous_stage(json.loads((stage / "before-release.json").read_text()))
+    if older is None:
+        print("No kept stage of " + previous + " with its configure-nodes.py: deploy " + previous +
+              " again, so every node has the same programs.", file=sys.stderr)
+        return
+    run("python3", older / "configure-nodes.py")
+    # carrel reads config.json, which configure-nodes.py rewrote, only at start.
+    ct("systemctl", "restart", "carrel")
+    healthy(previous, host_name)
+    ct("systemctl", "is-active", "carrel")
+    agents(older)
+    print(json.dumps({"nodes_rolled_back": str(older)}))
 
 
 def main():
