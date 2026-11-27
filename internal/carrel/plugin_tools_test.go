@@ -29,6 +29,14 @@ type fakePlugins struct {
 	// forget: a start answers running and keeps nothing, as a plugin that
 	// lost its state.
 	forget bool
+	// hold keeps a started run running until it is cancelled; refuseCancel
+	// makes the plugin answer conflict to cancel.
+	hold, refuseCancel bool
+	// cancelAnswer, when set, is the state cancel answers instead of
+	// cancelling: running for a plugin that cannot stop a run, succeeded
+	// for a run that ended first.
+	cancelAnswer string
+	cancels      []D
 }
 
 func (f *fakePlugins) call(r D, target string) (any, error) {
@@ -59,11 +67,24 @@ func (f *fakePlugins) call(r D, target string) (any, error) {
 		if f.ops[key] == nil {
 			f.ops[key] = D{"idempotency_key": key, "state": "running", "done": false, "progress": 10, "task": "UPID:test:" + key, "message": "copying"}
 		}
+	case "cancel":
+		f.cancels = append(f.cancels, clone(r))
+		if f.refuseCancel {
+			return nil, Failure{D{"ok": false, "error": D{"code": "conflict", "backend_code": "conflict"}}}
+		}
+		if f.cancelAnswer != "" {
+			// A plugin that cannot stop the run answers how it stands.
+			if f.cancelAnswer != "running" {
+				f.ops[key] = merge(f.ops[key], D{"state": f.cancelAnswer, "done": true, "progress": 100, "result": D{"snapshot": "s-" + key}})
+			}
+			break
+		}
+		f.ops[key] = merge(f.ops[key], D{"state": "cancelled", "done": true})
 	case "get":
 		if f.ops[key] == nil {
 			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "backend_code": "not_found"}}}
 		}
-		if f.gets[key]++; f.gets[key] >= 2 {
+		if f.gets[key]++; f.gets[key] >= 2 && f.ops[key]["state"] == "running" && !f.hold {
 			if f.outcome != "" {
 				f.ops[key] = merge(f.ops[key], D{"state": f.outcome, "done": true, "error": "disk full"}, f.failure)
 			} else {

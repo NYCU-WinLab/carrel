@@ -218,6 +218,15 @@ func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
 	// dispatched is false only while no attempt has reached the tool's
 	// writes; a job from before the flag has none and stays uncancellable.
 	waiting := op["state"] == "waiting" && contains(cancelPhases, op["phase"]) && op["dispatched"] == false && op["resource_changes"] == false && op["prepared_result"] == nil && !reserved
+	if !fresh && !waiting && o.runningPlugin(op) {
+		// The plugin run has started: ask the plugin to stop. The poll loop
+		// then sees cancelled and ends the operation. A refusal, or an
+		// answer other than cancelled, is a conflict, and the run goes on.
+		if !dry {
+			o.cancelPlugin(op)
+		}
+		return D{"operation": publicOperation(op)}
+	}
 	if !fresh && !waiting {
 		fail("conflict", fmt.Sprintf("Only an operation that has changed nothing can be cancelled; this one is %s (%s)", op["state"], op["phase"]), D{"state": op["state"], "phase": op["phase"]})
 	}
@@ -231,6 +240,38 @@ func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
 	}
 	o.Save(op)
 	return D{"operation": publicOperation(op)}
+}
+
+// runningPlugin reports whether op is a plugin operation whose start was sent
+// and whose run has not ended.
+func (o *Operations) runningPlugin(op D) bool {
+	plug := obj(op["plugin"])
+	return op["state"] == "running" && plug != nil && boolean(plug["start_sent"]) && !boolean(plug["ended"]) && !boolean(plug["succeeded"])
+}
+
+// cancelPlugin sends cancel with the operation's key to its node. Only an
+// answer of cancelled counts: a plugin that cannot stop the run, or a run
+// that ended first, is returned as it stands, and the call is a conflict.
+func (o *Operations) cancelPlugin(op D) {
+	plug := obj(op["plugin"])
+	name := str(plug["plugin"])
+	target := o.p.nodeTarget(str(plug["node"]))
+	ctx, stop := context.WithTimeout(o.p.ctx, 30*time.Second)
+	defer stop()
+	v, err := o.p.Backend.Call(ctx, D{"op": "plugin", "plugin": plug["plugin"], "operation": plug["operation"], "idempotency_key": plug["key"], "call": "cancel"}, target)
+	if err == nil {
+		state := str(obj(v)["state"])
+		if state == "cancelled" {
+			return
+		}
+		if state == "" {
+			state = "unknown"
+		}
+		fail("conflict", fmt.Sprintf("Plugin %s did not cancel the operation; it is %s", name, state), D{"plugin_state": state, "recovery": "revise_request"})
+	}
+	code := str(obj(failureResult(err)["error"])["backend_code"])
+	pluginRefusal(code, name, str(plug["node"]))
+	fail("backend_unavailable", fmt.Sprintf("Plugin %s on node %s did not answer the cancel", name, plug["node"]), D{"recovery": "retry_infrastructure"})
 }
 
 // The FIFO writer applies durable changes. Guest readiness runs outside this writer.
