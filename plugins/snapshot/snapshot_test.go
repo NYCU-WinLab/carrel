@@ -247,6 +247,30 @@ func TestTheOperationsRunPVETasks(t *testing.T) {
 	}
 }
 
+// list returns the guest's snapshot names, sorted; a PVE error is a refusal.
+func TestListReturnsTheSnapshotNames(t *testing.T) {
+	s, f := fixture(t)
+	f.mu.Lock()
+	f.snaps[10100] = map[string]bool{"b": true, "a": true}
+	f.mu.Unlock()
+	const params = `{"machine":"10100"}`
+	if op, err := start(s, "", "list", params, "running"); err != nil || op.Result != `{"snapshots":["a","b"]}` {
+		t.Fatalf("two snapshots: %v %v", op, err)
+	}
+	f.mu.Lock()
+	f.snaps[10100] = map[string]bool{}
+	f.mu.Unlock()
+	if op, err := start(s, "", "list", params, "running"); err != nil || op.Result != `{"snapshots":[]}` {
+		t.Fatalf("no snapshots: %v %v", op, err)
+	}
+	f.mu.Lock()
+	f.listFail = 1
+	f.mu.Unlock()
+	if op, err := start(s, "", "list", params, "running"); status.Code(err) != codes.Unavailable || op != nil {
+		t.Fatalf("a PVE error: %v %v", op, err)
+	}
+}
+
 // What PVE shows decides: a snapshot that is there is not taken again, and
 // one that is not there cannot be deleted, which carrel takes as proof.
 func TestPVEStateDecides(t *testing.T) {
