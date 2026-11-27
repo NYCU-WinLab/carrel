@@ -1634,7 +1634,13 @@ to tenant networks, one instance per `reuse` function.
    `ref` and no number, so the preview must match both that number and the token's `head_ref`; a
    late close of an older pull request on a reused branch name never removes a newer preview. A preview with no deploy for 7 days
    is removed, and so are a function's previews when it is removed, unlinked or linked without
-   previews. A function has at most 5, counted against the functions and domains quota.
+   previews. A function has at most 5, counted against the `functions` and `domains` quota and also against the
+   tenant's `function_gb`: previews share that budget with production and have none of their own.
+   The worst case is 5 previews x 3 versions x 1024 MiB, about 22 GiB, and when the budget is full
+   the parent's next push fails with `quota_exceeded`.
+   In a private repository with "Send write tokens to workflows from pull requests" turned on, a
+   fork's workflow can mint an OIDC token that carrel cannot tell from a same-repository one.
+   Previews hold no secrets, so the impact is a preview built from fork code. Leave that setting off.
 4. Schedules, logs, quota and sensorium spans.
 5. The AIntern job runner as the first tenant, in `fresh` mode.
 
