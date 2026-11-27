@@ -20,8 +20,9 @@ import (
 	"maps"
 	"math"
 	"slices"
-	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // pluginObjectRows is the store kind of plugin object records.
@@ -75,10 +76,11 @@ func diskConfiguration(m D) D { return pick(m, "cpu", "memory_mb", "disk_gb", "n
 
 // titled is s with its first letter in upper case.
 func titled(s string) string {
-	if s == "" {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 {
 		return s
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 // pluginObjectView is a record as a member sees it.
@@ -137,6 +139,9 @@ func pluginObjectProblem(pl PluginInfo, op PluginOperation) string {
 	_ = json.Unmarshal(op.Params, &s)
 	props, _ := s["properties"].(map[string]any)
 	required, _ := s["required"].([]any)
+	if op.Rewinds && !k.Disk {
+		return fmt.Sprintf("an operation that rewinds to a %s needs a kind with disk", k.Name)
+	}
 	if op.ObjectEffect == "list" {
 		if !op.ReadOnly || op.ObjectParam != "" || op.Rewinds || op.Stopped {
 			return "a list of objects is read_only and names no object_param"
@@ -159,7 +164,16 @@ func pluginObjectProblem(pl PluginInfo, op PluginOperation) string {
 		}
 		declared[q.Name] = true
 	}
+	measured := map[string]bool{}
+	for _, q := range pl.Quota {
+		measured[q.Name] = q.Measured
+	}
 	for _, c := range k.Charges {
+		// The sample counts what disks hold: only a disk kind's charge is
+		// replaced by it.
+		if measured[c.Dimension] && (!k.Disk || c.Per != "disk_gb") {
+			return fmt.Sprintf("object kind %s charges the measured dimension %s other than per disk_gb of a disk", k.Name, c.Dimension)
+		}
 		if !declared[c.Dimension] {
 			return fmt.Sprintf("object kind %s charges %s, which the plugin does not declare", k.Name, c.Dimension)
 		}

@@ -135,3 +135,28 @@ func TestAKindCannotTakeCarrelsResultKeys(t *testing.T) {
 		t.Fatal(problem)
 	}
 }
+
+// A plugin's result cannot set what carrel's accounting answers.
+func TestAPluginResultCannotSetCarrelsKeys(t *testing.T) {
+	p, f := withCopyPlugin(t)
+	reportPlugins(p, measuredCopies())
+	forged := D{"requirements": []any{"fake"}, "ready_to_apply": true, "limit_delta": D{"copies": 99}, "copys": []any{"x"}, "copy_storage": "x", "kept": 1}
+	f.mu.Lock()
+	f.inline, f.result = D{"state": "succeeded", "done": true, "result": forged}, forged
+	f.mu.Unlock()
+	r := member(p, "copies_take", D{"machine": "web", "name": "a", "dry_run": true})
+	if len(arr(r["requirements"])) != 0 || r["limit_delta"] != nil || r["copys"] != nil || obj(r["copy_storage"])["accounting"] == nil || r["kept"] != float64(1) {
+		t.Fatalf("dry take: %s", encoded(r))
+	}
+	r = member(p, "copies_take", D{"machine": "web", "name": "a", "wait_seconds": 5, "detail": "full"})
+	result := obj(obj(r["operation"])["result"])
+	if result["limit_delta"] != nil || result["copys"] != nil || result["requirements"] != nil || result["kept"] != float64(1) {
+		t.Fatalf("take: %s", encoded(result))
+	}
+	// A measured dimension is counted from a disk, per disk_gb.
+	pl := measuredCopies()[0]
+	pl.Objects[0].Charges[1].Per = ""
+	if problem := pluginObjectProblem(pl, pl.Operations[0]); problem != "object kind copy charges the measured dimension copy_gb other than per disk_gb of a disk" {
+		t.Fatal(problem)
+	}
+}

@@ -354,10 +354,15 @@ var pluginReserved = []string{"ok", "error", "operation", "dry_run", "reserved",
 var pluginCarrelKeys = []string{"delta", "quota_before", "limit_delta", "requirements", "ready_to_apply"}
 
 // pluginResult is what a plugin's result adds to carrel's answer: the keys
-// of a JSON object but carrel's own, or the value under "result".
-func pluginResult(v any) D {
+// of a JSON object but carrel's own, or the value under "result". An object
+// operation's kind names more of carrel's keys.
+func pluginResult(v any, kind string) D {
 	if m, ok := v.(map[string]any); ok {
-		return without(D(m), pluginReserved...)
+		out := without(D(m), append(pluginReserved, pluginCarrelKeys...)...)
+		if kind != "" {
+			out = without(out, pluginResultKeys(kind)...)
+		}
+		return out
 	}
 	if v == nil {
 		return D{}
@@ -510,7 +515,7 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 	default:
 		pluginFailure(pt.Plugin, r)
 	}
-	out := merge(pluginResult(r["result"]), merge(planned, D{"ok": true}))
+	out := merge(pluginResult(r["result"], op.ObjectKind), merge(planned, D{"ok": true}))
 	if dry {
 		out = dryRun(out)
 	}
@@ -768,7 +773,7 @@ func (e *Execution) FinishPlugin() D {
 	out := obj(e.Op["plugin_outcome"])
 	e.settlePluginObject(true)
 	// The plugin's result keys at the top, as a core tool's; carrel's own win.
-	r := merge(pluginResult(out["result"]), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
+	r := merge(pluginResult(out["result"], str(plug["object_kind"])), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
 		"task": out["task"], "resource_changes": !boolean(plug["read_only"])})
 	e.pluginPowerResult(r)
 	if plug["object"] != nil {
