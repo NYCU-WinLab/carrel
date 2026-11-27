@@ -114,7 +114,7 @@ func TestACoreSnapshotOperationIsNotRetriedAfterTheSwitch(t *testing.T) {
 	p.Store.Put("operations", "op1", 1, D{"id": "op1", "tenant_n": 1, "tool": "snapshot_create", "state": "failed",
 		"args": D{"machine": "web", "name": "s1"}, "next_action": "operation_retry", "error": D{"code": "internal"}})
 	r := p.Execute(context.Background(), "operation_retry", D{"id": "op1"}, person("alice", false))
-	if f := failure(r); f["code"] != "conflict" || f["recovery"] != "revise_request" || !strings.Contains(str(f["message"]), "no longer runs") {
+	if f := failure(r); f["code"] != "conflict" || f["recovery"] != "retry_new_call" || !strings.Contains(str(f["message"]), "run the tool again") {
 		t.Fatal(string(encoded(r)))
 	}
 	if op := p.Store.Get("operations", "op1"); op["state"] != "failed" || len(p.Store.Objects(pluginObjectRows)) != 0 {
