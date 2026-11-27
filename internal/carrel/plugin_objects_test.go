@@ -148,6 +148,18 @@ func TestAPluginObjectGoesOnlyOnProof(t *testing.T) {
 		t.Fatal("a refused retry dropped the record of the first run")
 	}
 
+	// A retry under a declaration that now holds more is refused: the
+	// record would not hold what the new run makes.
+	set("", "", nil)
+	reportPlugins(p, copyPlugin("freeze"))
+	if r := p.Operations.Retry(p.Store.TenantN(1), str(first["id"]), person("alice", false)); r["operation"] == nil {
+		t.Fatalf("retry: %v", r)
+	}
+	if op := awaitState(t, p, str(first["id"]), "failed"); obj(op["error"])["code"] != "conflict" {
+		t.Fatalf("a retry under a changed declaration: %s", encoded(op["error"]))
+	}
+	reportPlugins(p, copyPlugin())
+
 	// A refused delete leaves the record as it was.
 	set("plugin_refused", "", nil)
 	member(p, "copies_drop", D{"machine": "web", "name": "y", "wait_seconds": 5})

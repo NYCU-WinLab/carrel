@@ -56,6 +56,9 @@ type pluginObject struct {
 	// Run is the plugin run key the record was made for: only that run's
 	// refused first start proves the object was never made.
 	Run string `json:"run,omitempty"`
+	// Spec is the declaration the record was charged and holds by
+	// (PluginObjectSpec).
+	Spec string `json:"spec,omitempty"`
 	// DeletingBy is the delete operation that holds the object now, and Was
 	// the state it had before, which a refused delete gives back.
 	DeletingBy string `json:"deleting_by,omitempty"`
@@ -205,6 +208,12 @@ func (e *Execution) planPluginObject(pl PluginInfo, op PluginOperation, a, t, m 
 	case "create":
 		if found {
 			if ours(row.OperationID) {
+				// A retry runs on the record it made, so only under the
+				// declaration that record holds by.
+				if row.Spec != PluginObjectSpec(pl, op) {
+					fail("conflict", fmt.Sprintf("Plugin %s now declares a %s otherwise than when this operation reserved it; delete the %s, then create it again", pl.Name, op.ObjectKind, op.ObjectKind),
+						D{"recovery": "revise_request"})
+				}
 				return id, &row, nil
 			}
 			fail("conflict", fmt.Sprintf("The machine has a %s named %s", op.ObjectKind, name), D{"recovery": "revise_request", "state": row.State})
@@ -246,7 +255,7 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "plugin": pl.Name})
 		}
 		rec := pluginObject{ID: id, Plugin: pl.Name, Kind: op.ObjectKind, Name: str(a[op.ObjectParam]), VMID: integer(m["vmid"]),
-			State: "creating", Holds: k.Holds, Run: str(plug["key"])}
+			State: "creating", Holds: k.Holds, Run: str(plug["key"]), Spec: PluginObjectSpec(pl, op)}
 		for d, v := range charge {
 			if rec.Charge == nil {
 				rec.Charge = map[string]float64{}
