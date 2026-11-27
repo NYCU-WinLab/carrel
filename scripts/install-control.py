@@ -241,31 +241,41 @@ def ct_schema(stamp):
     previous = archived_version(stamp)
     copy = schema_copy(previous) if previous is not None else None
     print(json.dumps({"current": current, "previous": previous, "copy": str(copy) if copy else None,
-                      "copy_time": copy.stat().st_mtime if copy else None}))
+                      "copy_time": copy.stat().st_mtime if copy else None,
+                      "copy_intact": intact(copy, previous) if copy else False}))
 
 
-def ct_restore_database(version):
-    """Put the pre-migration copy in place of the database. carrel must be stopped."""
+def intact(copy, version):
+    """True when the copy passes SQLite's integrity check and is at this schema version."""
     import sqlite3
 
-    copy = schema_copy(int(version))
-    if copy is None:
-        raise SystemExit(f"No {DATABASE}.schema-{version}-* copy to restore")
     check = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
     try:
         problems = check.execute("PRAGMA integrity_check").fetchall()
         found = check.execute("PRAGMA user_version").fetchone()[0]
+    except sqlite3.DatabaseError:
+        return False
     finally:
         check.close()
-    if problems != [("ok",)] or found != int(version):
+    return problems == [("ok",)] and found == version
+
+
+def ct_restore_database(version):
+    """Put the pre-migration copy in place of the database. carrel must be stopped."""
+    copy = schema_copy(int(version))
+    if copy is None:
+        raise SystemExit(f"No {DATABASE}.schema-{version}-* copy to restore")
+    if not intact(copy, int(version)):
         raise SystemExit(f"{copy} is not an intact schema {version} database")
     # Beside the database, then renamed. The copy stays: it is the way back.
+    # Created 0600 and never through a link: the directory belongs to carrel.
     pending = DATABASE.with_name(DATABASE.name + ".restore")
     pending.unlink(missing_ok=True)
-    shutil.copyfile(copy, pending)
     stat = DATABASE.parent.stat()
-    os.chown(pending, stat.st_uid, stat.st_gid)
-    os.chmod(pending, 0o600)
+    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as out, open(copy, "rb") as source:
+        shutil.copyfileobj(source, out)
+        os.fchown(out.fileno(), stat.st_uid, stat.st_gid)
     for suffix in ("-wal", "-shm"):
         Path(str(DATABASE) + suffix).unlink(missing_ok=True)
     os.replace(pending, DATABASE)
@@ -389,6 +399,12 @@ def undo(stage, stamp, before, had_release, configured, activated, database=None
     subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
     try:
         if database is not None:
+            # No backup may read the database while it is swapped, and carrel must be down.
+            for unit in ("carrel-backup.timer", "carrel-backup.service"):
+                subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], check=False)
+            if subprocess.run(["pct", "exec", CT, "--", "systemctl", "is-active", "--quiet", "carrel"],
+                              check=False).returncode == 0:
+                raise SystemExit("carrel did not stop: the database was not restored")
             ct_command("restore-database", str(database))
     finally:
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
@@ -466,6 +482,13 @@ def host(stage, version):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
     # The node's agent starts or stops only now, against a healthy control
     # plane: a failed upgrade above never touched it.
+    agents(stage)
+    for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
+        shutil.rmtree(old)
+
+
+def agents(stage):
+    """Start or stop carrel-agent on every agent node and check each one reaches the control plane."""
     since = int(time.time())
     agent = subprocess.run(["python3", str(stage / "configure-nodes.py"), "--agent-service"], check=False,
                            capture_output=True, text=True)
@@ -496,8 +519,6 @@ def host(stage, version):
     if report.get("plugins_error"):
         raise SystemExit(f"The plugins were not installed ({report['plugins_error']}): fix the site file's "
                          "plugins and deploy again. The control plane and the agents are up.")
-    for old in sorted(p for p in stage.parent.glob("go-upgrade-*") if p != stage)[: -(KEEP - 1)]:
-        shutil.rmtree(old)
 
 
 def rollback(stage, with_database):
@@ -522,16 +543,27 @@ def rollback(stage, with_database):
     if with_database:
         if not state["copy"]:
             raise SystemExit(f"No pre-migration copy {DATABASE}.schema-{previous}-* in CT {CT}")
+        if not state.get("copy_intact"):
+            raise SystemExit(f"{state['copy']} in CT {CT} is not an intact schema {previous} database: nothing changed")
         when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(state["copy_time"]))
         print(f"LOST: every write to the database since {when}, when {state['copy']} was made. "
               f"The database goes back to schema {previous}; that copy stays.")
         restore = previous
     release = json.loads((stage / "before-release.json").read_text()) if (stage / "before-release.json").exists() else {}
-    undo(stage, stamp, saved_paths(), (stage / "before-release.json").exists(), True, True, restore)
-    subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
+    try:
+        undo(stage, stamp, saved_paths(), (stage / "before-release.json").exists(), True, True, restore)
+    finally:
+        subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
+    # The same node step a deploy runs, now from the restored programs: the other
+    # nodes get them and release.json, and config.json gets the node list and
+    # agent token digests again. carrel reads config.json at start, so it restarts.
+    run("python3", stage / "configure-nodes.py")
+    ct("systemctl", "restart", "carrel")
     if release.get("version"):
         healthy(release["version"], origin_host())
     ct("systemctl", "is-active", "carrel")
+    # Every agent restarts on the restored carrel-agent, as after a deploy.
+    agents(stage)
     print(json.dumps({"rolled_back": str(stage), "database": bool(with_database), "version": release.get("version")}))
 
 

@@ -157,6 +157,7 @@ class Node:
     def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False):
         self.calls, self.fail_on = [], fail_on
         self.agent_stdout, self.journal = '{"agent": "absent"}', ""
+        self.carrel_active = False
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
         for name in ("node-agent.py", "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py"):
@@ -180,6 +181,9 @@ class Node:
     def subprocess_run(self, args, clear_fails):
         self.calls.append(tuple(args))
         failed = clear_fails and tuple(args[:5]) == ("pct", "exec", "102", "--", "rm")
+        if "is-active" in args:
+            # systemctl is-active: 3 means inactive, 0 active.
+            return SimpleNamespace(returncode=0 if self.carrel_active else 3, stdout="", stderr="")
         stdout = (
             self.agent_stdout
             if "--agent-service" in args
@@ -549,6 +553,7 @@ def schema_state(current, previous, copy="/var/lib/carrel/carrel.db.schema-1-202
             "previous": previous,
             "copy": copy if previous is not None else None,
             "copy_time": 1_700_000_000,
+            "copy_intact": previous is not None,
         }
     )
 
@@ -675,3 +680,113 @@ def test_restoring_the_database_refuses_a_copy_of_another_schema(tmp_path, monke
     with pytest.raises(SystemExit, match="not an intact schema 1"):
         module.ct_restore_database("1")
     assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+def test_a_rollback_puts_the_restored_node_programs_on_every_node_and_restarts_the_agents(
+    tmp_path, monkeypatch
+):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
+    order = []
+    monkeypatch.setattr(
+        module, "healthy", lambda version, host: order.append("health") or {"version": version}
+    )
+    real_run, real_sub = node.run, node.subprocess_run
+
+    def run(*args, **kwargs):
+        if str(args[-1]).endswith("configure-nodes.py"):
+            order.append("nodes")
+        if args[-3:] == ("systemctl", "restart", "carrel"):
+            order.append("restart")
+        return real_run(*args, **kwargs)
+
+    def sub(args, **kwargs):
+        if "--agent-service" in args:
+            order.append("agents")
+        return real_sub(args, False)
+
+    monkeypatch.setattr(module, "run", run)
+    monkeypatch.setattr(module.subprocess, "run", sub)
+    module.rollback(stage, False)
+    # configure-nodes.py copies the restored programs to the peers, carrel rereads
+    # config.json, and the agents restart on the restored binary once it is healthy.
+    assert order == ["nodes", "restart", "health", "agents"]
+    assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
+
+
+def test_a_rollback_whose_agent_does_not_connect_fails(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    node.agent_stdout = '{"agent": "started"}'
+    with pytest.raises(SystemExit, match="did not reach the control plane"):
+        module.rollback(stage, False)
+
+
+def test_a_rollback_refuses_a_damaged_copy_before_anything_changes(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    state = json.loads(schema_state(2, 1))
+    state["copy_intact"] = False
+    node, stage = rollback_node(module, monkeypatch, tmp_path, json.dumps(state))
+    with pytest.raises(SystemExit, match="not an intact schema 1"):
+        module.rollback(stage, True)
+    assert (node.lib / "node-agent.py").read_text() == "new node-agent.py"
+    assert not any(c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop") for c in node.calls)
+
+
+def test_a_rollback_stops_the_backup_and_restores_nothing_while_carrel_runs(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 1))
+    node.carrel_active = True
+    with pytest.raises(SystemExit, match="carrel did not stop"):
+        module.rollback(stage, True)
+    assert not [c for c in node.calls if "restore-database" in c]
+    stops = [c[-1] for c in node.calls if c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop")]
+    assert {"carrel-backup.timer", "carrel-backup.service"} <= set(stops)
+    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
+
+    node.carrel_active = False
+    node.calls.clear()
+    module.rollback(stage, True)
+    stop_backup = node.calls.index(("pct", "exec", "100", "--", "systemctl", "stop", "carrel-backup.service"))
+    restored = next(i for i, c in enumerate(node.calls) if "restore-database" in c)
+    assert stop_backup < restored
+
+
+def test_the_schema_step_reports_whether_the_copy_is_intact(tmp_path, monkeypatch, capsys):
+    import tarfile
+
+    module = load("install-control.py")
+    root = tmp_path / "rb"
+    root.mkdir()
+    old = tmp_path / "old.db"
+    make_database(old, 1)
+    with tarfile.open(root / "go-20261020-000000.tar.gz", "w:gz") as archive:
+        archive.add(old, arcname="var/lib/carrel/carrel.db")
+    database = tmp_path / "carrel.db"
+    make_database(database, 2)
+    copy = tmp_path / "carrel.db.schema-1-20261020-000000.000000000"
+    make_database(copy, 1)
+    monkeypatch.setattr(module, "DATABASE", database)
+    monkeypatch.setattr(module, "ROLLBACK", root)
+    module.ct_schema("20261020-000000")
+    assert json.loads(capsys.readouterr().out)["copy_intact"] is True
+    copy.write_bytes(b"not a database" * 100)
+    module.ct_schema("20261020-000000")
+    assert json.loads(capsys.readouterr().out)["copy_intact"] is False
+
+
+def test_restoring_the_database_never_writes_through_a_link(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    database = tmp_path / "carrel.db"
+    make_database(database, 2)
+    make_database(tmp_path / "carrel.db.schema-1-20261020-000000.000000000", 1)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("untouched")
+    (tmp_path / "carrel.db.restore").symlink_to(elsewhere)
+    monkeypatch.setattr(module, "DATABASE", database)
+    monkeypatch.setattr(module.os, "fchown", lambda fd, uid, gid: None)
+    module.ct_restore_database("1")
+    assert elsewhere.read_text() == "untouched"
+    assert not database.is_symlink()
+    assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 1

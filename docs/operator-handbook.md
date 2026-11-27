@@ -171,11 +171,16 @@ python3 /var/lib/carrel/go-upgrade-<stamp>/install-control.py rollback [--databa
 ```
 
 It restores the binary, units, configuration and node programs the last deploy saved, as a failed
-health check does, and defaults to the newest `go-upgrade-*`. With `--database` it also restores the
-newest `<database>.schema-<N>-*` copy, `N` being the schema the archived database had, and first
-prints what is lost: every write since the upgrade. The copy stays. Without `--database` it refuses
-when the database's schema is newer than the one the previous release reads, before anything
-changes; with it, it refuses when the last deploy migrated nothing.
+health check does, and defaults to the newest `go-upgrade-*`. Then it runs the deploy's node step
+from the restored programs: `configure-nodes.py` copies them and `release.json` to the other nodes,
+carrel restarts, and once it is healthy every carrel-agent restarts on the restored binary and must
+reach the control plane. With `--database` it also restores the newest `<database>.schema-<N>-*`
+copy, `N` being the schema the archived database had, and first prints what is lost: every write
+since the upgrade. The copy must pass SQLite's integrity check at schema `N` before anything
+changes, and it is put in place only with the backup timer stopped and carrel inactive. The copy
+stays. Without `--database` it refuses when the database's schema is newer than the one the
+previous release reads, before anything changes; with it, it refuses when the last deploy migrated
+nothing.
 
 ## Node agent
 
