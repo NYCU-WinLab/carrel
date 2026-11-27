@@ -13,3 +13,15 @@ Install, as root on the node:
 ```sh
 scripts/install.sh --site sites/stg/cluster.json --admin-key admin.pub
 ```
+
+Edge units, copied to `/etc/systemd/system/` on the node:
+
+- `stg-edge.service` runs `edge.sh` once at boot.
+- `stg-edge-heal.service` and `stg-edge.timer` run `edge.sh` again every minute. A network reload by the installer (`ifreload`) takes `edge-br` out of `vmbr0`, and the public address stops answering until it is attached again. `edge.sh` is safe to run any number of times.
+
+```sh
+install -m 755 sites/stg/edge.sh /usr/local/sbin/stg-edge
+cp sites/stg/stg-edge*.service sites/stg/stg-edge.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now stg-edge.service stg-edge.timer
+```

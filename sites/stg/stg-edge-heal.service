@@ -1,0 +1,8 @@
+[Unit]
+Description=Reattach the staging edge network after a network reload
+After=stg-edge.service
+Requires=stg-edge.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/stg-edge
