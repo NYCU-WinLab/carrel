@@ -266,19 +266,26 @@ def ct_restore_database(stamp):
     # Move the log aside rather than delete it: if the rename fails, it goes
     # back, so the running release never starts on a database without its log.
     aside = []
-    for suffix in ("-wal", "-shm"):
-        log = Path(str(DATABASE) + suffix)
-        if log.exists():
-            os.replace(log, str(log) + ".rollback")
-            aside.append(log)
     try:
+        for suffix in ("-wal", "-shm"):
+            log = Path(str(DATABASE) + suffix)
+            if log.exists():
+                os.replace(log, str(log) + ".rollback")
+                aside.append(log)
         os.replace(pending, DATABASE)
     except OSError:
         for log in aside:
-            os.replace(str(log) + ".rollback", log)
+            try:
+                os.replace(str(log) + ".rollback", log)
+            except OSError as error:
+                print(f"Could not put {log} back from {log}.rollback: {error}", file=sys.stderr)
         raise
+    # The database is restored: a leftover log copy is only a warning.
     for log in aside:
-        Path(str(log) + ".rollback").unlink(missing_ok=True)
+        try:
+            Path(str(log) + ".rollback").unlink(missing_ok=True)
+        except OSError as error:
+            print(f"Could not remove {log}.rollback: {error}", file=sys.stderr)
     print(json.dumps({"database": str(DATABASE), "restored_from": f"go-{stamp}"}))
 
 
@@ -576,8 +583,12 @@ def roll_back(database):
     if not (stage / "before-release.json").exists():
         raise SystemExit(f"The upgrade {stamp} kept no previous node programs: it was a first install")
     previous = json.loads((stage / "before-release.json").read_text())["version"]
-    schema = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py",
-                                "ct", "schema", stamp))
+    try:
+        schema = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py",
+                                    "ct", "schema", stamp))
+    except subprocess.CalledProcessError as error:
+        # capture() keeps stderr, where ct schema says what is wrong.
+        raise SystemExit((error.stderr or "").strip() or str(error)) from None
     migrated = schema["before"] is not None and schema["current"] != schema["before"]
     if migrated and not database:
         raise SystemExit(f"The upgrade {stamp} moved the database from schema version {schema['before']} to "
