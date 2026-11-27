@@ -7,7 +7,7 @@ import (
 )
 
 func TestCapacityCountsSnapshotsAtWhatTheyHold(t *testing.T) {
-	snapshots := []snapshotRecord{{DiskGB: 80}, {DiskGB: 80}}
+	snapshots := []diskHold{{DiskGB: 80}, {DiskGB: 80}}
 	summary := func(inventory D) (disk, policy, committed D) {
 		c := summarize(inventory, nil, snapshots, time.Now())
 		return obj(obj(c["physical"])["disk"]), obj(c["policy"]), obj(obj(c["allocatable"])["disk_gib"])
@@ -89,7 +89,7 @@ func TestCombinedCapacityNamesTheFullestNode(t *testing.T) {
 		if held != nil {
 			inventory["snapshot_bytes"] = held
 		}
-		return summarize(inventory, nil, []snapshotRecord{{DiskGB: 10}}, time.Now())
+		return summarize(inventory, nil, []diskHold{{DiskGB: 10}}, time.Now())
 	}
 	c := combine([]D{node(10, 1*GiB), node(90, 2*GiB), node(75, 3*GiB)})
 	policy, disk := obj(c["policy"]), obj(obj(c["physical"])["disk"])

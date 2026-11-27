@@ -192,7 +192,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "deployment_apply":
 		return e.DeploymentApply(t, a, w)
 	case "quota_get":
-		return D{"quota": e.Quota(t), "snapshot_storage": e.SnapshotUsage(t)}
+		return e.quotaStorage(t, D{"quota": e.Quota(t), "snapshot_storage": e.SnapshotUsage(t)})
 	case "audit_log":
 		return D{"entries": e.S.Rows("SELECT * FROM audit WHERE tenant=? OR (tenant IS NULL AND actor=?) ORDER BY id DESC LIMIT 100", n, w["sub"])}
 	case "ssh_key_list":

@@ -183,7 +183,7 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, looku
 		}
 	}
 	if held := e.pluginHeld(n, vmid, "backfill"); len(held) > 0 {
-		return "skipped", "Has a " + str(held[0]["kind"]) + ", " + str(held[0]["name"]) + ": delete it first"
+		return "skipped", heldBackfill(held)
 	}
 	principal := tenantPrincipal(t, owner)
 	if principal == "" {

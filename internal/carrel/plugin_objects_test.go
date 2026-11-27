@@ -250,7 +250,7 @@ func TestPluginObjectsHoldTheirMachine(t *testing.T) {
 			t.Fatalf("migrate: %s", encoded(r))
 		}
 		r = p.Execute(ctx, "node_drain", D{"node": "carrel01", "dry_run": true}, admin)
-		if staying := dicts(r["staying"]); len(staying) != 1 || staying[0]["reason"] != "has_plugin_objects" {
+		if staying := dicts(r["staying"]); len(staying) != 1 || staying[0]["reason"] != "has_copys" {
 			t.Fatalf("drain: %s", encoded(r))
 		}
 	})
@@ -281,5 +281,48 @@ func TestPluginQuotaDimensionsOutliveTheReport(t *testing.T) {
 	tools, left := p.pluginRegistry()
 	if tools["copies_take"] != nil || left["copies_take"] != "quota dimension snapshot_gb is one carrel counts itself" {
 		t.Fatalf("a core dimension: %v", left)
+	}
+}
+
+// A disk kind named "snapshot" refuses in the words carrel's own snapshots
+// use, so the switch to the snapshot plugin changes no message (#663).
+func TestADiskKindNamedSnapshotRefusesAsTheCoreDoes(t *testing.T) {
+	putSnapshot := func(p *Platform, vmid int) {
+		id := pluginObjectID("snapshot", "snapshot", vmid, "kept")
+		p.Store.Put(pluginObjectRows, id, 1, D{"id": id, "plugin": "snapshot", "kind": "snapshot", "name": "kept", "vmid": vmid,
+			"state": "ready", "holds": []string{"freeze", "migrate", "backfill"}, "charge": D{"snapshots": 1, "snapshot_gb": 20}, "disk_gb": 20})
+	}
+	p, _, _ := freezeSite(t)
+	putSnapshot(p, 10100)
+	f := failure(member(p, "machine_freeze", D{"machine": "box", "confirm": "box", "wait_seconds": 5}))
+	if f["message"] != "Delete the machine's disk snapshots first; they are not part of the backup" || num(f["snapshots"]) != 1 {
+		t.Fatalf("freeze: %s", encoded(f))
+	}
+
+	p, _, _ = nodeFixture(t)
+	seedMachine(p, "web", 10100)
+	runQueue(p)
+	putSnapshot(p, 10100)
+	ctx, admin := context.Background(), person("root", true)
+	f = failure(p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "web", "node": "carrel02", "wait_seconds": 5}, admin))
+	if f["message"] != "Delete the machine's snapshots before moving it" {
+		t.Fatalf("migrate: %s", encoded(f))
+	}
+	r := p.Execute(ctx, "node_drain", D{"node": "carrel01", "dry_run": true}, admin)
+	if staying := dicts(r["staying"]); len(staying) != 1 || staying[0]["reason"] != "has_snapshots" {
+		t.Fatalf("drain: %s", encoded(r))
+	}
+	if got := heldBackfill([]D{{"kind": "snapshot", "disk": true}}); got != "Has snapshots: delete them first, a rollback would undo the backfill" {
+		t.Fatalf("backfill: %q", got)
+	}
+}
+
+// quota_get shows the storage of each kind charged to a measured dimension,
+// as it shows snapshot_storage.
+func TestQuotaGetShowsAMeasuredKindsStorage(t *testing.T) {
+	p := withMeasuredCopies(t)
+	r := member(p, "quota_get", D{})
+	if s := obj(r["copy_storage"]); s["copy_gb_counts"] != "declared" || r["snapshot_storage"] == nil {
+		t.Fatalf("quota_get: %s", encoded(r))
 	}
 }
