@@ -221,6 +221,11 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
+	// https only: the issuer's endpoints receive codes, refresh tokens and
+	// the client secret, and its keys decide who is a member.
+	if u, err := url.Parse(c.Issuer); c.Issuer != "" && (err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "") {
+		return errors.New("issuer must be an https URL with no query or fragment")
+	}
 	if c.Database == "" {
 		return errors.New("database is required")
 	}

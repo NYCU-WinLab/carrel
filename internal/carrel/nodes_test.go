@@ -59,12 +59,12 @@ func TestValidateNodes(t *testing.T) {
 		}
 	}
 	// A list that is not a list, or an unknown key, is refused at load.
-	for _, text := range []string{`{"nodes": "carrel01"}`, `{"origin": "https://c.test", "issuer": "x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}], "cloudflare_tokne": "x"}`} {
+	for _, text := range []string{`{"nodes": "carrel01"}`, `{"origin": "https://c.test", "issuer": "https://sso.test/realms/x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}], "cloudflare_tokne": "x"}`} {
 		if _, err := LoadConfig([]byte(text)); err == nil {
 			t.Fatalf("accepted %s", text)
 		}
 	}
-	if c, err := LoadConfig([]byte(`{"origin": "https://c.test", "issuer": "x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}]}`)); err != nil || c.ZoneDir != defaultZoneDir || c.GuestReadyTimeout != defaultGuestReady {
+	if c, err := LoadConfig([]byte(`{"origin": "https://c.test", "issuer": "https://sso.test/realms/x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}]}`)); err != nil || c.ZoneDir != defaultZoneDir || c.GuestReadyTimeout != defaultGuestReady {
 		t.Fatalf("defaults: %+v %v", c, err)
 	}
 }
