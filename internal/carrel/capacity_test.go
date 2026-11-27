@@ -56,7 +56,7 @@ func TestStorageWatermark(t *testing.T) {
 // headroom on its own is still refused.
 func TestSnapshotAdmissionUsesHeldBytes(t *testing.T) {
 	p, b := fixture(t)
-	p.Store.Put("snapshots", "10100-old", 1, D{"id": "10100-old", "vmid": 10100, "name": "old", "disk_gb": 900, "state": "ready"})
+	putSnapshotRecord(p, 1, 10100, "old", 900, "ready", nil)
 	e := p.execution(context.Background())
 	node := p.Nodes()[0]
 	admit := func(gb float64) any {
@@ -120,11 +120,11 @@ func TestSnapshotAdmissionCountsSnapshotsBeingTaken(t *testing.T) {
 	if admit(1000) != nil {
 		t.Fatal("headroom before")
 	}
-	p.Store.Put("snapshots", "10100-new", 1, D{"id": "10100-new", "vmid": 10100, "name": "new", "disk_gb": 600, "state": "creating"})
+	putSnapshotRecord(p, 1, 10100, "new", 600, "creating", nil)
 	if admit(590) != nil || admit(600) == nil {
 		t.Fatal("snapshot being taken not counted")
 	}
-	p.Store.Put("snapshots", "10100-new", 1, D{"id": "10100-new", "vmid": 10100, "name": "new", "disk_gb": 600, "state": "ready"})
+	putSnapshotRecord(p, 1, 10100, "new", 600, "ready", nil)
 	if admit(1000) != nil {
 		t.Fatal("ready snapshot counted twice")
 	}

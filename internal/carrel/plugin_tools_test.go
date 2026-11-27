@@ -381,8 +381,8 @@ func TestTheRunningNodeDecidesAccess(t *testing.T) {
 func TestABadPluginOperationIsLeftOutWithAReason(t *testing.T) {
 	p, b := fixture(t)
 	withPlugin(t, p, b)
-	reportPlugins(p, []PluginInfo{{Name: "snapshot", Contract: 1, Supported: true, Operations: []PluginOperation{
-		{Name: "create", Params: json.RawMessage(`{"type":"object"}`)},
+	reportPlugins(p, []PluginInfo{{Name: "port", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "open", Params: json.RawMessage(`{"type":"object"}`)},
 		{Name: "steal", Params: json.RawMessage(`{"type":"object","properties":{"tenant":{"type":"string"}}}`)},
 		{Name: "peek", Params: json.RawMessage(`{"type":"object","properties":{"x":{"$ref":"file:///etc/passwd"}}}`)},
 		{Name: "loose", Member: true, Params: json.RawMessage(`{"type":"object","properties":{"vmid":{"type":"integer"}}}`)},
@@ -390,19 +390,19 @@ func TestABadPluginOperationIsLeftOutWithAReason(t *testing.T) {
 	}}})
 	cat := p.pluginCatalog()
 	left := obj(cat["left_out"])
-	for name, want := range map[string]string{"snapshot_create": "core tool", "snapshot_steal": `"tenant"`, "snapshot_peek": "may not refer to file", "snapshot_loose": `require a top-level "machine"`} {
+	for name, want := range map[string]string{"port_open": "core tool", "port_steal": `"tenant"`, "port_peek": "may not refer to file", "port_loose": `require a top-level "machine"`} {
 		if !strings.Contains(str(left[name]), want) {
 			t.Fatalf("%s: %q", name, left[name])
 		}
 	}
-	if tools := dicts(cat["tools"]); len(tools) != 1 || tools[0]["tool"] != "snapshot_inspect" {
+	if tools := dicts(cat["tools"]); len(tools) != 1 || tools[0]["tool"] != "port_inspect" {
 		t.Fatalf("tools %v", tools)
 	}
 	root := NewApp(p, testVerifier{who: person("root", true)})
 	tools, _ := listedTools(t, root, "/mcp/read-only", nil)
 	found := false
 	for _, tool := range tools {
-		found = found || tool["name"] == "snapshot_inspect"
+		found = found || tool["name"] == "port_inspect"
 	}
 	if !found {
 		t.Fatal("a read-only plugin tool is missing from the read-only endpoint")
@@ -703,6 +703,47 @@ func TestAPluginToolNamesItsToolsetAndHints(t *testing.T) {
 	}
 	if left := fmt.Sprint(p.pluginCatalog()); !strings.Contains(left, "toolset no-such-set") {
 		t.Fatalf("left out: %s", left)
+	}
+}
+
+// An admin-only plugin operation takes tenant like a core admin tool and the
+// plugin sees that tenant's machine; a member operation stays in the
+// caller's own tenants (#711).
+func TestAnAdminPluginOperationActsInAnyTenant(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	runQueue(p)
+	reportPlugins(p, []PluginInfo{{Name: "backup", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "take", Member: true, Params: json.RawMessage(`{"type":"object","properties":{"machine":{"type":"string"}},"required":["machine"]}`)},
+		{Name: "audit", Params: json.RawMessage(`{"type":"object","properties":{"machine":{"type":"string"}},"required":["machine"]}`)}}}})
+	seedMachine(p, "web", 10100)
+	theirs := seedMachine(p, "theirs", 10200)
+	p.Store.Remove("machines", 10200)
+	theirs["tenant_n"] = 2
+	p.Store.Put("machines", 10200, 2, theirs)
+	ctx := context.Background()
+	root, alice := person("root", true), person("alice", false)
+
+	r := p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob", "wait_seconds": 5}, root)
+	if obj(r["operation"])["state"] != "succeeded" || len(f.starts) != 1 || obj(f.starts[0]["params"])["machine"] != "10200" {
+		t.Fatalf("admin in bob: %s %v", encoded(r), f.starts)
+	}
+	if n := integer(p.Store.Get("operations", str(obj(r["operation"])["id"]))["tenant_n"]); n != 2 {
+		t.Fatalf("operation bound to tenant %d", n)
+	}
+	// The named tenant decides the machine: bob's machine is not in the admin's own tenant.
+	if code := str(failure(p.Execute(ctx, "backup_audit", D{"machine": "theirs"}, root))["code"]); code == "" {
+		t.Fatal("the admin's own tenant resolved bob's machine")
+	}
+	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "web", "tenant": "nobody"}, root), "not_found")
+	// A member naming another tenant is refused, on either kind of operation.
+	assertCode(t, p.Execute(ctx, "backup_take", D{"machine": "theirs", "tenant": "bob"}, alice), "forbidden")
+	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob"}, alice), "forbidden")
+	// A suspended tenant is still refused.
+	p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=2")
+	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob"}, root), "forbidden")
+	if len(f.starts) != 1 {
+		t.Fatalf("a refused call reached the node: %v", f.starts)
 	}
 }
 

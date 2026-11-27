@@ -196,19 +196,24 @@ func TestScopeRetryGuidance(t *testing.T) {
 func TestScopeDeletionPresentation(t *testing.T) {
 	for _, tool := range []string{"snapshot_delete", "port_close", "network_delete"} {
 		t.Run(tool, func(t *testing.T) {
-			p, _ := fixture(t)
+			p, b := fixture(t)
 			seedMachine(p, "dev", 10100)
-			kind, field, id := "snapshots", "snapshot", "10100-before"
+			kind, field, id := pluginObjectRows, "snapshot", pluginObjectID("snapshot", "snapshot", 10100, "before")
 			args := D{"machine": "dev", "name": "before"}
-			record := D{"id": id, "vmid": 10100, "name": "before", "disk_gb": 20, "state": "ready"}
-			if tool == "port_close" {
+			var record D
+			if tool == "snapshot_delete" {
+				withSnapshotPlugin(t, p, b, b.call)
+				putSnapshotRecord(p, 1, 10100, "before", 20, "", nil)
+			} else if tool == "port_close" {
 				kind, field, id, args = "ports", "port", "1-20011-tcp", D{"id": "1-20011-tcp"}
 				record = D{"id": id, "vmid": 10100, "public_port": 20011, "port": 8080, "proto": "tcp"}
 			} else if tool == "network_delete" {
 				kind, field, id, args = "networks", "network", "p00101", D{"network": "private", "confirm": "private"}
 				record = D{"id": id, "name": "private"}
 			}
-			p.Store.Put(kind, id, 1, record)
+			if record != nil {
+				p.Store.Put(kind, id, 1, record)
+			}
 			runQueue(p)
 			r := NewApp(p, nil).Call(context.Background(), tool, args, person("alice", false))
 			op := obj(r["operation"])

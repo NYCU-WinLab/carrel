@@ -61,7 +61,7 @@ func TestMachineMigrateMovesTheRecordAfterTheNodesAgree(t *testing.T) {
 	if r := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "web", "node": "carrel01"}, person("alice", false)); r["ok"] == true {
 		t.Fatal("a member moved a machine", r)
 	}
-	p.Store.Put("snapshots", "s1", 1, D{"id": "s1", "name": "s1", "vmid": 10100, "disk_gb": 10})
+	putSnapshotRecord(p, 1, 10100, "s1", 10, "", nil)
 	r = p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "web", "node": "carrel01"}, admin)
 	if obj(obj(r["operation"])["error"])["recovery"] != "resolve_prerequisite" {
 		t.Fatal("moved a machine with snapshots", r)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -169,6 +170,11 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	defer o.p.writer.Unlock()
 	op := o.Find(t, id)
 	if op["plugin"] == nil && !coreTools[str(op["tool"])] {
+		// A snapshot operation recorded before the plugin took over: running it
+		// again would use stale parameters (#705).
+		if strings.HasPrefix(str(op["tool"]), "snapshot_") {
+			fail("conflict", "This snapshot operation predates the snapshot plugin and cannot be retried; run the tool again", D{"recovery": "retry_new_call", "tool": op["tool"]})
+		}
 		fail("conflict", "carrel no longer runs this operation's tool itself; submit the action again", D{"recovery": "revise_request", "tool": op["tool"]})
 	}
 	if op["unfenced"] != nil {
@@ -391,9 +397,7 @@ func (o *Operations) apply(id string) {
 			for _, m := range machines {
 				if contains([]string{"initializing", "provisioning", "needs_owner_fix"}, m["state"]) {
 					previous := ""
-					if op["tool"] == "snapshot_rollback" {
-						previous = str(obj(op["rollback_restore"])["boot_id"])
-					} else if op["tool"] == "machine_power" {
+					if op["tool"] == "machine_power" {
 						previous = str(obj(op["power_restore"])["boot_id"])
 					}
 					e.WaitReady(m, previous)
@@ -560,7 +564,7 @@ func (e *Execution) BindMachine(t D) bool {
 	return false
 }
 func (e *Execution) BindObject(t D) bool {
-	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "vpn_client_remove": {"vpn_clients", "name", "name"}, "port_open": {"vips", "vip", "name"}, "domain_add": {"vips", "vip", "name"}, "snapshot_delete": {"snapshots", "name", "name"}, "snapshot_rollback": {"snapshots", "name", "name"}}
+	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "vpn_client_remove": {"vpn_clients", "name", "name"}, "port_open": {"vips", "vip", "name"}, "domain_add": {"vips", "vip", "name"}}
 	op, a := e.Op, obj(e.Op["args"])
 	spec, ok := selectors[str(op["tool"])]
 	if !ok {
@@ -572,7 +576,7 @@ func (e *Execution) BindObject(t D) bool {
 	if len(bound) > 0 {
 		o := find(objects, func(o D) bool { return o["id"] == bound["id"] })
 		if o == nil {
-			if !contains([]string{"snapshot_rollback", "machine_nic_attach", "port_open", "domain_add"}, op["tool"]) {
+			if !contains([]string{"machine_nic_attach", "port_open", "domain_add"}, op["tool"]) {
 				return true
 			}
 			fail("not_found", "The operation's original resource no longer exists")
@@ -582,7 +586,7 @@ func (e *Execution) BindObject(t D) bool {
 		}
 	} else {
 		o := find(objects, func(o D) bool {
-			return (a[arg] == o["id"] || a[arg] == o[field]) && (kind != "snapshots" || integer(o["vmid"]) == integer(obj(op["machine_target"])["vmid"]))
+			return a[arg] == o["id"] || a[arg] == o[field]
 		})
 		if o != nil {
 			op["object_target"] = D{"id": o["id"], "operation_id": o["operation_id"]}

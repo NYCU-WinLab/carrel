@@ -560,7 +560,7 @@ func (e *Execution) RefreshStorage() {
 			}
 		}
 		// Dated by this clock, not a node's: the snapshot quota trusts a
-		// sample by its age (snapshotGB).
+		// sample by its age (heldSample).
 		at := now()
 		for t, sample := range totals {
 			sample["sampled_at"] = at

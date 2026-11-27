@@ -325,7 +325,7 @@ func TestCapacityReportNamesEveryNode(t *testing.T) {
 	c := newCollector(t)
 	tel, _ := telemetryFixture(t, c, slog.NewJSONHandler(io.Discard, nil))
 	p.Telemetry = tel
-	p.Store.Put("snapshots", "10100-s", 1, D{"id": "10100-s", "vmid": 10100, "name": "s", "disk_gb": 40, "state": "ready"})
+	putSnapshotRecord(p, 1, 10100, "s", 40, "", nil)
 	inner := b.call
 	b.call = func(r D, target string) (any, error) {
 		if r["op"] == "inventory" && target == "node-02" {
