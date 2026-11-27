@@ -75,7 +75,7 @@ func (a *App) compileSchemas() {
 }
 func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string, ep *endpoints) {
 	p := a.Platform
-	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: p.Config.OIDC.WithDefaults().ClientID, Hosted: []string{}, Verifier: a.verifier, endpoints: ep, HTTP: &http.Client{Timeout: 15 * time.Second}}
+	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: p.Config.OIDC.WithDefaults().ClientID, Hosted: []string{}, Verifier: a.verifier, endpoints: ep, HTTP: &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirect}, ClientSecretFile: p.Config.OIDC.ClientSecretFile}
 	oauth.Hosted = append(oauth.Hosted, p.Config.HostedRedirects...)
 	console := consoleHandler{p: p, o: oauth}
 	oauth.Console = console.finish

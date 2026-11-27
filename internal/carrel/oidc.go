@@ -22,9 +22,12 @@ type OIDCConfig struct {
 	Audience string `json:"audience,omitempty"`
 	// ClientID is the client Carrel signs members in with, and the azp
 	// (or, without azp, the client_id of RFC 9068) a token must name.
-	ClientID      string `json:"client_id,omitempty"`
-	UsernameClaim string `json:"username_claim,omitempty"`
-	GroupsClaim   string `json:"groups_claim,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	// ClientSecretFile holds the client secret of a confidential client.
+	// Empty: a public client, which sends no secret.
+	ClientSecretFile string `json:"client_secret_file,omitempty"`
+	UsernameClaim    string `json:"username_claim,omitempty"`
+	GroupsClaim      string `json:"groups_claim,omitempty"`
 	// AdminGroups and MemberGroups are path.Match patterns over group
 	// names with any leading "/" removed; "*" does not cross a "/".
 	AdminGroups  []string `json:"admin_groups,omitempty"`
@@ -113,58 +116,112 @@ func (c OIDCConfig) identity(claims D) (D, error) {
 // endpoints reads the provider's discovery document once and keeps it for
 // the life of the process. A provider without one, or a discovery that
 // fails, gets Keycloak's paths under the issuer, as before #654; a failed
-// read is tried again after 30 seconds.
+// read is tried again after 30 seconds. The fetch runs outside the lock;
+// callers that need the document meanwhile wait on loading.
 type endpoints struct {
-	issuer string
-	http   *http.Client
-	mu     sync.Mutex
-	doc    map[string]string
-	tried  time.Time
+	issuer  string
+	http    *http.Client
+	mu      sync.Mutex
+	doc     map[string]string
+	issResp bool
+	tried   time.Time
+	loading chan struct{}
 }
 
 var keycloakPaths = map[string]string{"jwks_uri": "certs", "authorization_endpoint": "auth", "token_endpoint": "token", "revocation_endpoint": "revoke"}
 
+// noRedirect makes a client refuse redirects: a 307 or 308 would resend a
+// code, a refresh token or a client secret to the redirect target.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
 func newEndpoints(issuer string) *endpoints {
-	return &endpoints{issuer: issuer, http: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &endpoints{issuer: issuer, http: &http.Client{Timeout: 8 * time.Second, CheckRedirect: noRedirect}}
+}
+
+// ready returns the discovery document, loading it if it is due.
+func (p *endpoints) ready() (map[string]string, bool) {
+	for {
+		p.mu.Lock()
+		if p.loading != nil {
+			wait := p.loading
+			p.mu.Unlock()
+			<-wait
+			continue
+		}
+		if p.doc == nil && time.Since(p.tried) > 30*time.Second {
+			p.tried = time.Now()
+			p.loading = make(chan struct{})
+			p.mu.Unlock()
+			doc, iss := p.load()
+			p.mu.Lock()
+			p.doc, p.issResp = doc, iss
+			close(p.loading)
+			p.loading = nil
+		}
+		doc, iss := p.doc, p.issResp
+		p.mu.Unlock()
+		return doc, iss
+	}
 }
 
 // url is the endpoint name (a discovery field such as token_endpoint) of
 // issuer. A nil endpoints, as in tests that build OAuth by hand, always
 // gets the Keycloak path.
 func (p *endpoints) url(issuer, name string) string {
-	if p != nil && p.issuer == issuer {
-		p.mu.Lock()
-		if p.doc == nil && time.Since(p.tried) > 30*time.Second {
-			p.tried = time.Now()
-			p.doc = p.load()
-		}
-		u := p.doc[name]
-		p.mu.Unlock()
-		if u != "" {
-			return u
-		}
-	}
-	return issuer + "/protocol/openid-connect/" + keycloakPaths[name]
+	u, _ := p.lookup(issuer, name)
+	return u
 }
 
-func (p *endpoints) load() map[string]string {
+// lookup is url, and false when the provider published a discovery
+// document that has no such endpoint and the name is optional
+// (revocation_endpoint): the caller skips that step. Without a document
+// every endpoint falls back to Keycloak's path.
+func (p *endpoints) lookup(issuer, name string) (string, bool) {
+	if p != nil && p.issuer == issuer {
+		doc, _ := p.ready()
+		if u := doc[name]; u != "" {
+			return u, true
+		}
+		if doc != nil && name == "revocation_endpoint" {
+			return "", false
+		}
+	}
+	return issuer + "/protocol/openid-connect/" + keycloakPaths[name], true
+}
+
+// issParamRequired is true when the provider's discovery says it sends the
+// iss parameter on authorization responses (RFC 9207).
+func (p *endpoints) issParamRequired() bool {
+	if p == nil {
+		return false
+	}
+	_, iss := p.ready()
+	return iss
+}
+
+func (p *endpoints) load() (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", p.issuer+"/.well-known/openid-configuration", nil)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	r, err := p.http.Do(req)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer r.Body.Close()
 	if r.StatusCode != 200 {
-		return nil
+		return nil, false
 	}
 	var doc map[string]any
-	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&doc) != nil || doc["issuer"] != p.issuer {
-		return nil
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&doc) != nil {
+		return nil, false
+	}
+	// The issuer may be published with a trailing slash; Carrel keeps it
+	// without one (NewApp), so compare in that form.
+	if s, _ := doc["issuer"].(string); strings.TrimRight(s, "/") != p.issuer {
+		return nil, false
 	}
 	issuer, _ := url.Parse(p.issuer)
 	out := map[string]string{}
@@ -176,5 +233,10 @@ func (p *endpoints) load() map[string]string {
 			out[name] = s
 		}
 	}
-	return out
+	iss, _ := doc["authorization_response_iss_parameter_supported"].(bool)
+	return out, iss
 }
+
+// sameIssuer compares an iss value with the configured issuer, which has
+// no trailing slash.
+func sameIssuer(got, issuer string) bool { return strings.TrimRight(got, "/") == issuer }

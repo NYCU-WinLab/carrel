@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -132,5 +133,108 @@ func TestOIDCConfigDefaultsAreWinLabsAndPatternsAreChecked(t *testing.T) {
 		if bad.Validate() == nil {
 			t.Fatalf("accepted %+v", bad)
 		}
+	}
+}
+
+func TestCallbackRequiresIssOnlyWhenDiscoveryPromisesIt(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	without := provider(t, key, discovery)
+	with := provider(t, key, func(b string) D {
+		return merge(discovery(b), D{"authorization_response_iss_parameter_supported": true})
+	})
+	for _, c := range []struct {
+		p    *httptest.Server
+		q    url.Values
+		deny bool
+	}{
+		{without, url.Values{}, false},
+		{without, url.Values{"iss": {"https://evil.test"}}, true},
+		{without, url.Values{"iss": {without.URL + "/"}}, false},
+		{with, url.Values{}, true},
+		{with, url.Values{"iss": {with.URL}}, false},
+	} {
+		o := &OAuth{Issuer: c.p.URL, endpoints: newEndpoints(c.p.URL)}
+		if o.badIss(c.q) != c.deny {
+			t.Fatalf("%s %v: deny=%v", c.p.URL, c.q, !c.deny)
+		}
+	}
+}
+
+func TestIssuerWithTrailingSlash(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	p := provider(t, key, func(b string) D { return merge(discovery(b), D{"issuer": b + "/"}) })
+	ep := newEndpoints(p.URL)
+	if ep.url(p.URL, "token_endpoint") != p.URL+"/token" {
+		t.Fatal("discovery with a trailing slash issuer was dropped")
+	}
+	v := NewVerifier(p.URL, OIDCConfig{}, ep)
+	now := time.Now().Unix()
+	c := D{"iss": p.URL + "/", "aud": "carrel-mcp", "azp": "carrel-mcp", "sub": "u", "iat": now, "exp": now + 300, "preferred_username": "a", "groups": []any{"winlab-admin"}}
+	if _, err := v.Verify(context.Background(), signed(t, key, c)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Verify(context.Background(), signed(t, key, merge(c, D{"iss": "https://evil.test"}))); err == nil {
+		t.Fatal("accepted another issuer")
+	}
+}
+
+func TestNoRevocationEndpointSkipsUpstreamRevocation(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	p := provider(t, key, func(b string) D { d := discovery(b); delete(d, "revocation_endpoint"); return d })
+	ep := newEndpoints(p.URL)
+	if _, ok := ep.lookup(p.URL, "revocation_endpoint"); ok {
+		t.Fatal("revocation fell back to Keycloak")
+	}
+	if _, ok := ep.lookup(p.URL, "token_endpoint"); !ok {
+		t.Fatal("token endpoint lost")
+	}
+	gone := httptest.NewServer(http.NotFoundHandler())
+	defer gone.Close()
+	if u, ok := newEndpoints(gone.URL).lookup(gone.URL, "revocation_endpoint"); !ok || !strings.HasSuffix(u, "/revoke") {
+		t.Fatal("no discovery must keep the Keycloak path")
+	}
+}
+
+func TestUpstreamSendsSecretAndRefusesRedirects(t *testing.T) {
+	var got url.Values
+	hit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer target.Close()
+	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, target.URL, 307)
+			return
+		}
+		_ = r.ParseForm()
+		got = r.PostForm
+		jsonResponse(w, 200, D{})
+	}))
+	defer idp.Close()
+	secret := t.TempDir() + "/secret"
+	if err := os.WriteFile(secret, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := &OAuth{Issuer: idp.URL, HTTP: &http.Client{CheckRedirect: noRedirect}, ClientSecretFile: secret}
+	if _, _, err := o.upstream(context.Background(), "token_endpoint", url.Values{"code": {"c"}}); err != nil {
+		// Keycloak path under idp answers 200 too.
+		t.Fatal(err)
+	}
+	if got.Get("client_secret") != "s3cret" {
+		t.Fatalf("secret not sent: %v", got)
+	}
+	o.endpoints = &endpoints{issuer: idp.URL, doc: map[string]string{"token_endpoint": idp.URL + "/redirect"}, tried: time.Now()}
+	if _, status, _ := o.upstream(context.Background(), "token_endpoint", url.Values{"code": {"c"}}); status != 307 || hit {
+		t.Fatalf("followed a redirect: %d %v", status, hit)
+	}
+	o.ClientSecretFile = secret + ".missing"
+	if _, _, err := o.upstream(context.Background(), "token_endpoint", url.Values{}); err == nil {
+		t.Fatal("sent without the secret")
+	}
+}
+
+func TestIssuerMustBeHTTPS(t *testing.T) {
+	c := Config{Origin: "https://c.test", Issuer: "http://sso.test/realms/x", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
+	if c.Validate() == nil {
+		t.Fatal("accepted an http issuer")
 	}
 }
