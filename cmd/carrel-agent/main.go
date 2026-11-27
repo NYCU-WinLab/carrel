@@ -506,8 +506,18 @@ func sleep(ctx context.Context, d time.Duration) {
 func main() {
 	path := flag.String("config", "/etc/carrel/agent.json", "Agent configuration")
 	enrol := flag.Bool("enroll", false, "Read a one-time step-ca token on stdin, make a key and get the agent's certificate")
+	check := flag.String("check-plugin", "", "Check that the plugin of this name answers Describe and Probe, then exit (used by configure-nodes.py)")
+	checkVersion := flag.String("plugin-version", "", "With -check-plugin: the version the plugin must report")
+	checkDir := flag.String("plugin-dir", defaultPluginDir, "With -check-plugin: the directory of the plugin sockets")
 	flag.Parse()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	if *check != "" {
+		if err := waitPlugin(context.Background(), *checkDir, *check, *checkVersion, checkDeadline); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	a, err := load(*path)
 	if err != nil {
 		slog.Error("configuration", "error", err)

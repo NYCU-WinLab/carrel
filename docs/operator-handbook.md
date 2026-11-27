@@ -418,7 +418,7 @@ removes every plugin the list no longer names:
   deploy before anything changes.
 - After the control plane is healthy, `configure-nodes.py --agent-service` unpacks each artifact to
   `/usr/local/lib/carrel/plugins/<name>/<version>` and points `current` at it. A plugin restarts
-  only when its version or its unit changed. Older versions and their artifacts are removed.
+  only when its version or its unit changed. A plugin that changed must then answer Describe and Probe (`carrel-agent -check-plugin`); if it does not, `current` returns to the previous version, which stays, and the run fails. Older versions and their artifacts are removed once the new one answers.
 - carrel writes the units, not the artifact. `carrel-plugin-<name>.socket` holds
   `/run/carrel/plugins/<name>.sock`, owned by root with mode 0600. systemd starts
   `carrel-plugin-<name>.service` on the first connection, as a dynamic user that can write only

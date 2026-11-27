@@ -366,6 +366,7 @@ PLUGIN_LIB = "/usr/local/lib/carrel/plugins"
 PLUGIN_ARTIFACTS = "/var/lib/carrel/plugin-artifacts"
 PLUGIN_ENV = "/etc/carrel/plugins"
 PLUGIN_UNITS = "/etc/systemd/system"
+PLUGIN_CHECK = "/usr/local/lib/carrel/carrel-agent"
 PLUGIN_STAGE = Path(__file__).resolve().parent
 
 
@@ -472,7 +473,7 @@ RestrictAddressFamilies={families}
     return socket_unit, service_unit
 
 
-def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl"):
+def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl", checker=PLUGIN_CHECK):
     """The script that makes one node run exactly these plugins.
 
     The artifacts are in <artifacts> already. It checks every checksum and
@@ -483,9 +484,14 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     restarted, so a run that fails halfway still restarts it the next time. A
     plugin installed here and no longer listed loses its units and files; its
     state directory stays, so a plugin listed again keeps its operations.
+    A plugin that changed is checked after its restart (#673): the checker
+    (carrel-agent -check-plugin) must see it answer Describe and Probe with
+    its name and version. If it does not, current points back at the version
+    it had, which stays, and the run fails after the other plugins are done.
+    Older versions go only once the new one passed.
     Every value is checked in plugin_list, so quoting is enough."""
     q = shlex.quote
-    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}"]
+    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)} C={q(checker)}", "bad=0"]
     for p in plugins:
         lines.append(f'echo {q(p["sha256"] + "  " + artifacts + "/" + plugin_artifact(p))} | sha256sum -c --quiet - '
                      f'|| {{ echo "plugin {p["name"]}: the artifact does not match its sha256" >&2; exit 1; }}')
@@ -518,6 +524,9 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
             f"printf '%s' {q(service_unit)} > {unit}.service.next",
             f"cmp -s {unit}.service.next {unit}.service || touch $L/{name}/.restart",
             f"printf '%s' {q(socket_unit)} > {unit}.socket.next && mv {unit}.socket.next {unit}.socket",
+            # Remember the version being replaced, for a rollback.
+            f"prev=$(readlink $L/{name}/current 2>/dev/null || true)",
+            f'if [ -n "$prev" ] && [ "$prev" != {version} ]; then printf %s "$prev" > $L/{name}/.previous; fi',
             f"ln -sfn {version} $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
             f"mv {unit}.service.next {unit}.service",
         ]
@@ -542,12 +551,28 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     ]
     for p in plugins:
         name = p["name"]
+        version = p["version"]
         lines += [
             f"$S enable --now carrel-plugin-{name}.socket",
-            f"if [ -e $L/{name}/.restart ]; then $S try-restart carrel-plugin-{name}.service && rm -f $L/{name}/.restart; fi",
-            # Older versions go once the new one is in place.
-            f'for v in $L/{name}/*; do case "${{v##*/}}" in current|{p["version"]}) ;; *) rm -rf "$v";; esac; done',
+            "ok=1",
+            f"if [ -e $L/{name}/.restart ]; then",
+            f"  $S try-restart carrel-plugin-{name}.service && rm -f $L/{name}/.restart",
+            f"  if ! \"$C\" -check-plugin {name} -plugin-version {version}; then",
+            f"    ok=0; bad=1; touch $L/{name}/.restart",
+            f'    prev=$(cat $L/{name}/.previous 2>/dev/null || true)',
+            f'    if [ -n "$prev" ] && [ -d "$L/{name}/$prev" ]; then',
+            f"      ln -sfn \"$prev\" $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
+            f"      $S try-restart carrel-plugin-{name}.service || true",
+            f'      echo "plugin {name} {version} did not answer: kept $prev" >&2',
+            "    else",
+            f'      echo "plugin {name} {version} did not answer and there is no earlier version to return to" >&2',
+            "    fi",
+            "  fi",
+            "fi",
+            # Older versions go once the new one answers.
+            f'if [ "$ok" = 1 ]; then rm -f $L/{name}/.previous; for v in $L/{name}/*; do case "${{v##*/}}" in current|{version}) ;; *) rm -rf "$v";; esac; done; fi',
         ]
+    lines.append('[ "$bad" = 0 ]')
     return "\n".join(lines) + "\n"
 
 

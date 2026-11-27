@@ -1056,8 +1056,14 @@ def apply(module, tmp_path, plugins):
     systemctl.write_text(f'#!/bin/sh\necho "$*" >> {log}\n')
     systemctl.chmod(0o755)
     log.write_text("")
+    # The checker fails for any plugin named in <tmp>/fail as "name version".
+    checker = tmp_path / "checker"
+    checker.write_text(
+        f'#!/bin/sh\necho "$2 $4" >> {tmp_path}/checks.log\n! grep -qx "$2 $4" {tmp_path}/fail 2>/dev/null\n'
+    )
+    checker.chmod(0o755)
     script = module.plugin_apply(
-        [p for p, _ in plugins], str(units), str(lib), str(artifacts), str(systemctl)
+        [p for p, _ in plugins], str(units), str(lib), str(artifacts), str(systemctl), str(checker)
     )
     result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
     return result, log.read_text().splitlines(), units, lib, artifacts
@@ -1094,6 +1100,44 @@ def test_apply_installs_upgrades_and_removes_plugins(tmp_path):
     # An empty list removes everything carrel installed.
     result, calls, units, lib, _ = apply(module, tmp_path, [])
     assert result.returncode == 0 and not list(units.iterdir()) and not list(lib.iterdir())
+
+
+def test_apply_keeps_the_old_version_when_the_new_one_does_not_answer(tmp_path):
+    module = load("configure-nodes.py")
+    snap = plugin()
+    result, *_ = apply(module, tmp_path, [snap])
+    assert result.returncode == 0, result.stderr
+    snap2 = plugin(version="1.1.0", body=b"#!/bin/sh\necho two\n")
+    (tmp_path / "fail").write_text("snap 1.1.0\n")
+    result, calls, _, lib, _ = apply(module, tmp_path, [snap2])
+    assert result.returncode != 0 and "did not answer: kept 1.0.0" in result.stderr
+    assert (lib / "snap/current").resolve() == lib / "snap/1.0.0"
+    assert (lib / "snap/1.0.0").exists() and (lib / "snap/1.1.0").exists()
+    assert calls.count("try-restart carrel-plugin-snap.service") == 2
+
+    # The next run checks the new version again, and prunes once it answers.
+    (tmp_path / "fail").write_text("")
+    result, _, _, lib, _ = apply(module, tmp_path, [snap2])
+    assert result.returncode == 0, result.stderr
+    assert (lib / "snap/current").resolve() == lib / "snap/1.1.0"
+    assert not (lib / "snap/1.0.0").exists()
+
+
+def test_apply_reports_a_first_install_that_does_not_answer(tmp_path):
+    module = load("configure-nodes.py")
+    (tmp_path / "fail").write_text("snap 1.0.0\n")
+    result, *_ = apply(module, tmp_path, [plugin()])
+    assert result.returncode != 0 and "no earlier version" in result.stderr
+
+
+def test_apply_checks_only_a_plugin_that_changed(tmp_path):
+    module = load("configure-nodes.py")
+    snap = plugin()
+    apply(module, tmp_path, [snap])
+    checks = (tmp_path / "checks.log").read_text().splitlines()
+    assert checks == ["snap 1.0.0"]
+    apply(module, tmp_path, [snap])
+    assert (tmp_path / "checks.log").read_text().splitlines() == checks
 
 
 def test_apply_changes_nothing_when_an_artifact_is_wrong(tmp_path):

@@ -181,6 +181,58 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 	return info
 }
 
+// checkDeadline is how long a freshly installed plugin has to answer.
+const checkDeadline = 20 * time.Second
+
+// checkPlugin asks one plugin once, and fails unless it answers Describe
+// with the expected name, version and a contract this agent serves, and
+// answers Probe (#673). A Probe that says "not supported here" is an answer.
+func checkPlugin(ctx context.Context, dir, name, version string) error {
+	conn, c, err := dialPlugin(dir, name)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(ctx, pluginTimeout)
+	defer cancel()
+	d, err := c.Describe(ctx, &pluginpb.DescribeRequest{})
+	if err != nil {
+		return fmt.Errorf("not answering Describe: %s", status.Convert(err).Message())
+	}
+	if d.Name != name {
+		return fmt.Errorf("the plugin on %s.sock calls itself %q", name, clip(d.Name))
+	}
+	if version != "" && d.Version != version {
+		return fmt.Errorf("plugin %s reports version %q, expected %q", name, clip(d.Version), version)
+	}
+	if !slices.Contains(carrel.PluginContracts, d.Contract) {
+		return fmt.Errorf("plugin %s speaks contract %d; this agent serves contracts %s", name, d.Contract, contracts())
+	}
+	if _, err := c.Probe(ctx, &pluginpb.ProbeRequest{}); err != nil {
+		return fmt.Errorf("probe failed: %s", status.Convert(err).Message())
+	}
+	return nil
+}
+
+// waitPlugin repeats checkPlugin until it passes or the deadline ends: the
+// socket starts the plugin on the first connection, and systemd restarts a
+// plugin that failed once.
+func waitPlugin(ctx context.Context, dir, name, version string, deadline time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	for {
+		err := checkPlugin(ctx, dir, name, version)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("plugin %s: %w", name, err)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 // discover reports every plugin socket in dir, sorted by name. Plugins are
 // asked at once, each within pluginTimeout, so a hung one costs no more.
 // A report past MaxPluginReport keeps the first plugins whole and the rest
