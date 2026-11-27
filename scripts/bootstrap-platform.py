@@ -178,7 +178,10 @@ def caddy(vmid):
         with tarfile.open(archive) as tar:
             binary.write_bytes(tar.extractfile("caddy").read())
         unit.write_text(CADDY_UNIT)
-        run("pct", "push", str(vmid), str(binary), "/usr/local/bin/caddy", "--perms", "755")
+        # Push beside the target and rename over it: writing the running binary
+        # in place fails with "Text file busy" on a rerun.
+        run("pct", "push", str(vmid), str(binary), "/usr/local/bin/caddy.carrel-next", "--perms", "755")
+        run("pct", "exec", str(vmid), "--", "mv", "-f", "/usr/local/bin/caddy.carrel-next", "/usr/local/bin/caddy")
         run("pct", "exec", str(vmid), "--", "mkdir", "-p", "/etc/systemd/system/caddy.service.d")
         run("pct", "push", str(vmid), str(unit), "/etc/systemd/system/caddy.service.d/carrel.conf", "--perms", "644")
     run("pct", "exec", str(vmid), "--", "systemctl", "daemon-reload")
