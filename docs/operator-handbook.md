@@ -141,6 +141,29 @@ the backup host. There, ssh offers `node_key` first, so a backup that lands does
 The backup's database was restored to a temporary
 location and passed SQLite integrity checking; a full infra/tenant disaster restore is pending.
 
+## Upgrade and rollback
+
+### Order
+
+1. Upgrade the control plane first, with `deploy-go.py --host <first exit node> --release vX.Y.Z`.
+2. Then upgrade each site's node programs, agents and plugins, one site at a time. Check
+   `node_list` for `stale_nodes` before the next site.
+
+A control plane serves its own agent protocol version and the one before it (#561). So an agent
+one release behind keeps working while its site waits, and a site must not skip a release of the
+control plane.
+
+### What a rollback needs
+
+Release N always reads the data release N-1 wrote. Going back from N to N-1 depends on the
+database:
+
+- **N adds no schema migration:** roll back by binaries alone. Deploy N-1 again, or let a failed
+  health check restore it.
+- **N appends to `schemaMigrations`:** N-1 refuses the newer database. Restoring the
+  pre-migration copy (see [Database schema](#database-schema)) loses every write since the upgrade.
+  The release notes of such a release say so.
+
 ## Node agent
 
 A node reaches the control plane over SSH by default. On the agent transport (PLAN 8.6),
