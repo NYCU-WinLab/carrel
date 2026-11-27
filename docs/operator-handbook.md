@@ -385,6 +385,11 @@ what a disk rewind must find unchanged (#663).
   the plugin may still be writing its disk. The error says `machine_left_stopped`. The machine is
   fenced (`plugin_fence`): every other operation on it is refused until `operation_retry` asks
   after the same run and restores the guest when it ends.
+- When a retry cannot settle the run (the plugin lost its state, or keeps answering that it has
+  no record), clear the fence with `machine_unfence`. It reads the node first and refuses while
+  the guest has an active Proxmox task or holds a lock. A lock with no task is stale: check the
+  guest, run the `qm unlock` or `pct unlock` the error names, then run it again. The fenced
+  operation stays failed, and the guest stays stopped until someone starts it.
 - Each new run reads the guest's power again, so a retry never runs on a guest the last run
   brought back.
 - A run that succeeded is not repeated: when the guest does not come back, a retry only starts it.

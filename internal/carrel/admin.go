@@ -95,6 +95,8 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		return e.DrainNode(tool, a, w)
 	case "machine_ca_backfill":
 		return e.CABackfill(a, w)
+	case "machine_unfence":
+		return e.UnfenceMachine(a)
 	case "platform_power":
 		return e.PlatformPower(a, w)
 	case "reconcile_run":
