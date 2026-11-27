@@ -366,6 +366,14 @@ PLUGIN_LIB = "/usr/local/lib/carrel/plugins"
 PLUGIN_ARTIFACTS = "/var/lib/carrel/plugin-artifacts"
 PLUGIN_ENV = "/etc/carrel/plugins"
 PLUGIN_UNITS = "/etc/systemd/system"
+PLUGIN_CHECK = "/usr/local/lib/carrel/carrel-agent"
+# Defaults for every plugin service (#674); a site file raises them per plugin.
+PLUGIN_LIMITS = {"tasks_max": "256", "memory_max": "512M", "cpu_quota": "100%"}
+PLUGIN_LIMIT_FORMS = {
+    "tasks_max": re.compile(r"[1-9][0-9]{0,5}"),
+    "memory_max": re.compile(r"[1-9][0-9]{0,5}[KMG]"),
+    "cpu_quota": re.compile(r"[1-9][0-9]{0,3}%"),
+}
 PLUGIN_STAGE = Path(__file__).resolve().parent
 
 
@@ -377,8 +385,9 @@ def plugin_list(site):
         raise SystemExit("plugins must be a list")
     seen = set()
     for p in plugins:
-        if not isinstance(p, dict) or set(p) - {"name", "version", "url", "sha256", "network", "env_file"}:
-            raise SystemExit("a plugin has name, version, url, sha256 and optionally network and env_file")
+        if not isinstance(p, dict) or set(p) - {"name", "version", "url", "sha256", "network", "env_file", *PLUGIN_LIMITS}:
+            raise SystemExit("a plugin has name, version, url, sha256 and optionally network, env_file, "
+                             "tasks_max, memory_max and cpu_quota")
         if not PLUGIN_NAME.fullmatch(str(p.get("name"))) or p["name"] in seen:
             raise SystemExit(f"plugin name {p.get('name')!r} must be unique, of a-z, 0-9 and -")
         seen.add(p["name"])
@@ -391,6 +400,9 @@ def plugin_list(site):
         for flag in ("network", "env_file"):
             if not isinstance(p.get(flag, False), bool):
                 raise SystemExit(f"plugin {p['name']}: {flag} is true or false")
+        for key, form in PLUGIN_LIMIT_FORMS.items():
+            if key in p and not form.fullmatch(str(p[key])):
+                raise SystemExit(f"plugin {p['name']}: {key} must look like {PLUGIN_LIMITS[key]}")
     return plugins
 
 
@@ -414,6 +426,7 @@ def plugin_units(p):
     name = p["name"]
     families = "AF_UNIX AF_INET AF_INET6" if p.get("network") else "AF_UNIX"
     env = f"EnvironmentFile={PLUGIN_ENV}/{name}.env\n" if p.get("env_file") else ""
+    lim = {k: str(p.get(k, v)) for k, v in PLUGIN_LIMITS.items()}
     ip = "" if p.get("network") else "IPAddressDeny=any\n"
     socket_unit = f"""# Managed by carrel configure-nodes.py: plugin {name}.
 [Unit]
@@ -465,6 +478,9 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+TasksMax={lim["tasks_max"]}
+MemoryMax={lim["memory_max"]}
+CPUQuota={lim["cpu_quota"]}
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 RestrictAddressFamilies={families}
@@ -472,7 +488,7 @@ RestrictAddressFamilies={families}
     return socket_unit, service_unit
 
 
-def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl"):
+def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl", checker=PLUGIN_CHECK):
     """The script that makes one node run exactly these plugins.
 
     The artifacts are in <artifacts> already. It checks every checksum and
@@ -483,9 +499,14 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     restarted, so a run that fails halfway still restarts it the next time. A
     plugin installed here and no longer listed loses its units and files; its
     state directory stays, so a plugin listed again keeps its operations.
+    A plugin that changed is checked after its restart (#673): the checker
+    (carrel-agent -check-plugin) must see it answer Describe and Probe with
+    its name and version. If it does not, current points back at the version
+    it had, which stays, and the run fails after the other plugins are done.
+    Older versions go only once the new one passed.
     Every value is checked in plugin_list, so quoting is enough."""
     q = shlex.quote
-    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}"]
+    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)} C={q(checker)}", "failed=0"]
     for p in plugins:
         lines.append(f'echo {q(p["sha256"] + "  " + artifacts + "/" + plugin_artifact(p))} | sha256sum -c --quiet - '
                      f'|| {{ echo "plugin {p["name"]}: the artifact does not match its sha256" >&2; exit 1; }}')
@@ -501,9 +522,9 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
             f'  tar -xzf "$A/{plugin_artifact(p)}" -C "$d.next" --no-same-owner --no-same-permissions',
             # A link could point root's chmod below, or the plugin, outside its directory.
             '  if [ -n "$(find "$d.next" ! -type f ! -type d | head -n 1)" ]; then',
-            f'    echo "plugin {name}: the artifact may hold only files and directories" >&2; exit 1',
+            f'    rm -rf "$d.next"; echo "plugin {name}: the artifact may hold only files and directories" >&2; exit 1',
             "  fi",
-            f'  test -f "$d.next/plugin" || {{ echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
+            f'  test -f "$d.next/plugin" || {{ rm -rf "$d.next"; echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
             '  chmod -R go-w "$d.next" && chmod 755 "$d.next/plugin"',
             f'  echo {sha} > "$d.next/.sha256"',
             f'  rm -rf "$d" && mv "$d.next" "$d" && touch $L/{name}/.restart',
@@ -518,6 +539,9 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
             f"printf '%s' {q(service_unit)} > {unit}.service.next",
             f"cmp -s {unit}.service.next {unit}.service || touch $L/{name}/.restart",
             f"printf '%s' {q(socket_unit)} > {unit}.socket.next && mv {unit}.socket.next {unit}.socket",
+            # Remember the version being replaced, for a rollback.
+            f"prev=$(readlink $L/{name}/current 2>/dev/null || true)",
+            f'if [ -n "$prev" ] && [ "$prev" != {version} ]; then printf %s "$prev" > $L/{name}/.previous; fi',
             f"ln -sfn {version} $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
             f"mv {unit}.service.next {unit}.service",
         ]
@@ -542,12 +566,32 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     ]
     for p in plugins:
         name = p["name"]
+        version = p["version"]
         lines += [
             f"$S enable --now carrel-plugin-{name}.socket",
-            f"if [ -e $L/{name}/.restart ]; then $S try-restart carrel-plugin-{name}.service && rm -f $L/{name}/.restart; fi",
-            # Older versions go once the new one is in place.
-            f'for v in $L/{name}/*; do case "${{v##*/}}" in current|{p["version"]}) ;; *) rm -rf "$v";; esac; done',
+            "ok=1",
+            f"if [ -e $L/{name}/.restart ]; then",
+            # A failed restart keeps the mark, says so, and fails the run after the other plugins.
+            (
+                f"  if $S try-restart carrel-plugin-{name}.service; then rm -f $L/{name}/.restart; "
+                f'else echo "plugin {name}: the restart failed; the next deploy retries it" >&2; ok=0; failed=1; fi'
+            ),
+            f"  if ! \"$C\" -check-plugin {name} -plugin-version {version}; then",
+            f"    ok=0; failed=1; touch $L/{name}/.restart",
+            f'    prev=$(cat $L/{name}/.previous 2>/dev/null || true)',
+            f'    if [ -n "$prev" ] && [ -d "$L/{name}/$prev" ]; then',
+            f"      ln -sfn \"$prev\" $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
+            f"      $S try-restart carrel-plugin-{name}.service || true",
+            f'      echo "plugin {name} {version} did not answer: kept $prev" >&2',
+            "    else",
+            f'      echo "plugin {name} {version} did not answer and there is no earlier version to return to" >&2',
+            "    fi",
+            "  fi",
+            "fi",
+            # Older versions go once the new one is restarted and answers.
+            f'if [ "$ok" = 1 ]; then rm -f $L/{name}/.previous; for v in $L/{name}/*; do case "${{v##*/}}" in current|{version}) ;; *) rm -rf "$v";; esac; done; fi',
         ]
+    lines.append('[ "$failed" = 0 ]')
     return "\n".join(lines) + "\n"
 
 
@@ -969,7 +1013,7 @@ if __name__ == "__main__":
         # is reported beside them, and install-control.py still checks them.
         try:
             report["plugins"] = plugins_on_nodes()
-        except SystemExit as e:
+        except (SystemExit, OSError) as e:
             report["plugins_error"] = str(e)
         print(json.dumps(report))
         sys.exit(1 if "plugins_error" in report else 0)

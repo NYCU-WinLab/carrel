@@ -514,3 +514,70 @@ func TestAStoppingOperationStartsOnlyOnTheSameDeclaration(t *testing.T) {
 		t.Fatalf("same declaration: %v", r)
 	}
 }
+
+func TestCheckPluginAnswersOnlyForTheExpectedPlugin(t *testing.T) {
+	dir := pluginDir(t)
+	serve(t, dir, newFake("snapshot", 1))
+	if err := checkPlugin(context.Background(), dir, "snapshot", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPlugin(context.Background(), dir, "snapshot", "2.0.0"); err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("a wrong version passed: %v", err)
+	}
+	serve(t, dir, newFake("other", 1))
+	if err := os.Rename(filepath.Join(dir, "other.sock"), filepath.Join(dir, "liar.sock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPlugin(context.Background(), dir, "liar", ""); err == nil || !strings.Contains(err.Error(), "calls itself") {
+		t.Fatalf("a wrong name passed: %v", err)
+	}
+	serve(t, dir, newFake("old", 9))
+	if err := checkPlugin(context.Background(), dir, "old", ""); err == nil || !strings.Contains(err.Error(), "contract 9") {
+		t.Fatalf("a wrong contract passed: %v", err)
+	}
+	broken := newFake("broken", 1)
+	broken.brokenProbe = true
+	serve(t, dir, broken)
+	if err := checkPlugin(context.Background(), dir, "broken", ""); err == nil || !strings.Contains(err.Error(), "probe failed") {
+		t.Fatalf("a failing probe passed: %v", err)
+	}
+	// A plugin that says it is unsupported here still answered.
+	unsupported := newFake("freeze", 1)
+	unsupported.supported = false
+	serve(t, dir, unsupported)
+	if err := checkPlugin(context.Background(), dir, "freeze", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitPlugin(context.Background(), dir, "missing", "", 1500*time.Millisecond); err == nil {
+		t.Fatal("a missing socket passed")
+	}
+}
+
+// A writable or symlinked parent lets someone replace plugin_dir (#666).
+func TestCheckPluginDirParents(t *testing.T) {
+	root := pluginDir(t)
+	inner := filepath.Join(root, "a", "plugins")
+	if err := os.MkdirAll(inner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPluginDir(inner); err != nil {
+		t.Fatalf("closed parents: %v", err)
+	}
+	parent := filepath.Join(root, "a")
+	if err := os.Chmod(parent, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPluginDir(inner); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("group writable parent: %v", err)
+	}
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(parent, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPluginDir(filepath.Join(link, "plugins")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked parent: %v", err)
+	}
+}
