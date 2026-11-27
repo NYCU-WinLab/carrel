@@ -251,7 +251,8 @@ def main():
                         help="Site file shared by every node (sites/<site>/cluster.json)")
     args = parser.parse_args()
     node = socket.gethostname().split(".")[0]
-    layout = site_layout(node, json.loads(args.site.read_text()))
+    site = json.loads(args.site.read_text())
+    layout = site_layout(node, site)
     address = layout["address"]
     # The hostname alone could match another machine, such as an older host
     # with the same name (issue #48): the site's address must be here.
@@ -268,7 +269,7 @@ def main():
     pending = Path("/var/lib/carrel/sdn-pending")
     sdn_changed = pending.exists()
     for path, key, ident, args in [
-        ("controllers", "controller", "carrel", ["--type", "evpn", "--asn", "65009", "--peers", peers]),
+        ("controllers", "controller", "carrel", ["--type", "evpn", "--asn", str(site.get("evpn_asn", 65009)), "--peers", peers]),
         (
             "zones",
             "zone",
@@ -279,7 +280,7 @@ def main():
                 "--controller",
                 "carrel",
                 "--vrf-vxlan",
-                "99999",
+                str(site.get("vrf_vxlan", 99999)),
                 "--mtu",
                 "1450",
                 "--exitnodes",
