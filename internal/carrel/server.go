@@ -85,7 +85,7 @@ func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string, ep *endpoin
 	mux.Handle("/.well-known/", oauth)
 	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(servedOpenAPI())
+		_, _ = w.Write(servedOpenAPI(strings.TrimRight(p.Config.Origin, "/")))
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		health := Build()

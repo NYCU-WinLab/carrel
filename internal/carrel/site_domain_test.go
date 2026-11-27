@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,11 @@ func TestASiteUsesItsOwnDomain(t *testing.T) {
 	m := p.execution(context.Background()).PublicMachine(p.Store.Get("machines", "10100"), []portGrant{{VMID: 10100, Port: 22, Proto: "tcp", PublicPort: 20010}})
 	if str(m["ssh"]) != "ssh -p 20010 user@carrel.stg.example.org" || !strings.Contains(str(m["ssh_config"]), "Host dev.alice dev.alice.stg.example.org\n  HostName carrel.stg.example.org\n") {
 		t.Fatalf("machine %s", encoded(m))
+	}
+	var doc D
+	_ = json.Unmarshal(servedOpenAPI("https://carrel.stg.example.org"), &doc)
+	if url := obj(arr(doc["servers"])[0])["url"]; url != "https://carrel.stg.example.org" {
+		t.Fatalf("openapi server %v", url)
 	}
 	if got := previewHost(p.Store.TenantN(1), "pr-1"); got != "pr-1.alice.stg.example.org" {
 		t.Fatalf("preview host %s", got)

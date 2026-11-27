@@ -71,7 +71,9 @@ func (e *Execution) Reserved() map[string]bool {
 }
 func (e *Execution) DomainRecord(t D, remove bool) {
 	name := "*." + str(t["slug"]) + "." + specialZone
-	owner := fmt.Sprintf("carrel:%s:tenant:%d", or(e.P.Config.Site, "b09"), integer(t["n"]))
+	// The owner tag is fixed: records already carry it, and each site has
+	// its own zone, so tags of two sites never meet.
+	owner := fmt.Sprintf("carrel:b09:tenant:%d", integer(t["n"]))
 	records := dicts(e.CF("GET", "?name="+url.QueryEscape(name), nil)["result"])
 	if len(records) > 0 && (len(records) != 1 || records[0]["comment"] != owner) {
 		fail("conflict", "Refusing DNS record owned outside carrel")

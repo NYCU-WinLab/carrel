@@ -127,7 +127,7 @@ func TestOpenAPIHasEveryTool(t *testing.T) {
 	var doc struct {
 		Paths map[string]map[string]D `json:"paths"`
 	}
-	if err := json.Unmarshal(servedOpenAPI(), &doc); err != nil {
+	if err := json.Unmarshal(servedOpenAPI(""), &doc); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range dicts(Contract["tools"]) {
