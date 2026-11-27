@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -325,4 +326,52 @@ func TestQuotaGetShowsAMeasuredKindsStorage(t *testing.T) {
 	if s := obj(r["copy_storage"]); s["copy_gb_counts"] != "declared" || r["snapshot_storage"] == nil {
 		t.Fatalf("quota_get: %s", encoded(r))
 	}
+}
+
+// putGone stores a record that stands for a machine gone from the cluster.
+func putGone(p *Platform, name string, vmid int) {
+	id := pluginObjectID("freezer", "frozen", vmid, name)
+	p.Store.Put(pluginObjectRows, id, 1, D{"id": id, "plugin": "freezer", "kind": "frozen", "name": name, "vmid": vmid, "tenant_n": 1,
+		"state": "ready", "gone": true, "ip": "10.200.1.11", "resources": D{"cpu": 2, "memory_mb": 2048, "disk_gb": 20},
+		"charge": D{"frozen_gb": 20}})
+}
+
+// A record of a gone machine answers as a frozen row does: its names get a
+// 503 route, machine_list shows it, its quota stays charged, and it cannot
+// be deleted as a live machine.
+func TestAGonePluginRecordStandsForAFrozenMachine(t *testing.T) {
+	t.Run("route", func(t *testing.T) {
+		state, origin := gatewayState(t)
+		state["machines"] = []any{}
+		obj(arr(state["domains"])[0])["tenant_n"] = 3
+		state[pluginObjectRows] = []any{D{"vmid": 10300, "tenant_n": 3, "gone": true}}
+		caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", origin, dicts(state["certificates"]))
+		if !strings.Contains(caddy, "respond 503") {
+			t.Fatal(caddy)
+		}
+	})
+	t.Run("list quota delete", func(t *testing.T) {
+		p, _ := fixture(t)
+		runQueue(p)
+		putGone(p, "old", 10101)
+		var got D
+		for _, m := range dicts(member(p, "machine_list", D{})["machines"]) {
+			if m["name"] == "old" {
+				got = m
+			}
+		}
+		if got == nil || got["state"] != "frozen" || got["ip"] != "10.200.1.11" {
+			t.Fatalf("machine_list: %s", encoded(member(p, "machine_list", D{})))
+		}
+		if quotaUsed(p, "frozen_gb") != float64(20) || quotaUsed(p, "ips") != float64(1) {
+			t.Fatalf("quota: %s", encoded(member(p, "quota_get", D{})))
+		}
+		r := member(p, "machine_delete", D{"machine": "old", "confirm": "old"})
+		if failure(r)["code"] != "conflict" {
+			t.Fatalf("delete: %s", encoded(r))
+		}
+		if failure(member(p, "machine_create", D{"name": "old", "dry_run": true}))["code"] != "conflict" {
+			t.Fatal("the name of a gone machine was handed out")
+		}
+	})
 }

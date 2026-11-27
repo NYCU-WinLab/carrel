@@ -3,6 +3,7 @@ package carrel
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"sort"
 	"strconv"
@@ -78,6 +79,9 @@ func frozenIndex(state D) map[int]int {
 	for _, f := range dicts(state["frozen"]) {
 		frozen[integer(f["vmid"])] = integer(f["tenant_n"])
 	}
+	// A plugin record that stands for a machine gone from the cluster parks
+	// its names the same way.
+	maps.Copy(frozen, goneIndex(state))
 	return frozen
 }
 

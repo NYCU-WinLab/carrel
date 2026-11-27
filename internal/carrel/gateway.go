@@ -142,7 +142,7 @@ func (e *Execution) SyncGateway(state D) map[string]any {
 		}()
 		// The frozen machines and the functions' routers are for this
 		// configuration only: the nodes get the state as it was.
-		view := D{"frozen": e.S.Objects("frozen"), "function_routes": e.functionRoutes()}
+		view := D{"frozen": e.S.Objects("frozen"), pluginObjectRows: e.S.Objects(pluginObjectRows), "function_routes": e.functionRoutes()}
 		for k, v := range state {
 			view[k] = v
 		}

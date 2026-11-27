@@ -221,6 +221,9 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 			if f := e.frozenMachine(t, a["machine"]); f != nil && find(ms, func(m D) bool { return m["vmid"] == f["vmid"] }) == nil {
 				return D{"machines": []D{e.PublicFrozen(f)}}
 			}
+			if g := e.goneMachine(t, a["machine"]); g != nil && find(ms, func(m D) bool { return m["vmid"] == g.VMID }) == nil {
+				return D{"machines": []D{publicGone(*g)}}
+			}
 			ms = []D{e.Machine(t, a["machine"])}
 		}
 		out := []D{}
@@ -238,6 +241,11 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 				// Seen as a machine too while a freeze is being finished.
 				if find(ms, func(m D) bool { return m["vmid"] == f["vmid"] }) == nil {
 					out = append(out, e.PublicFrozen(f))
+				}
+			}
+			for _, g := range e.goneRecords(n) {
+				if find(ms, func(m D) bool { return m["vmid"] == g.VMID }) == nil {
+					out = append(out, publicGone(g))
 				}
 			}
 		}

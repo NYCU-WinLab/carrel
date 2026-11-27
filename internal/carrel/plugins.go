@@ -83,6 +83,9 @@ type PluginObjectKind struct {
 	Charges []PluginCharge `json:"charges,omitempty"`
 	Holds   []string       `json:"holds,omitempty"`
 	Disk    bool           `json:"disk,omitempty"`
+	// Gone: a record of this kind stands for a machine that has left the
+	// cluster (a frozen machine), not for an object on a live one.
+	Gone bool `json:"gone,omitempty"`
 }
 
 // PluginInfo is one plugin as an agent found it. A plugin that does not

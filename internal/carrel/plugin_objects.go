@@ -68,6 +68,71 @@ type pluginObject struct {
 	// Configuration is the machine's resources and NICs when a disk object
 	// was made: a rewind to it is refused once they changed.
 	Configuration D `json:"configuration,omitempty"`
+	// Gone marks a record that stands for a machine that has left the
+	// cluster: Name is the machine's name, VMID and IP stay taken, TenantN
+	// owns it, its domains answer 503, and Charge is what it still counts.
+	// Resources are the facts machine_list shows of it.
+	Gone      bool   `json:"gone,omitempty"`
+	TenantN   int    `json:"tenant_n,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	Resources D      `json:"resources,omitempty"`
+}
+
+// goneRecords are the records of tenant n that stand for a machine that has
+// left the cluster.
+func (e *Execution) goneRecords(n int) []pluginObject {
+	out := []pluginObject{}
+	for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows, n) {
+		if o.Gone {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// goneMachine is the gone-machine record of tenant t that ref names, by vmid
+// or name, or nil.
+func (e *Execution) goneMachine(t D, ref any) *pluginObject {
+	if ref == nil {
+		return nil
+	}
+	for _, o := range e.goneRecords(integer(t["n"])) {
+		if str(o.VMID) == str(ref) || o.Name == str(ref) {
+			return &o
+		}
+	}
+	return nil
+}
+
+// goneIndex maps the vmid of each gone-machine record in state to its tenant.
+func goneIndex(state D) map[int]int {
+	gone := map[int]int{}
+	for _, o := range dicts(state[pluginObjectRows]) {
+		if boolean(o["gone"]) {
+			gone[integer(o["vmid"])] = integer(o["tenant_n"])
+		}
+	}
+	return gone
+}
+
+// publicGone is a gone-machine record as machine_list shows it.
+func publicGone(o pluginObject) D {
+	r := D{"name": o.Name, "state": "frozen"}
+	maps.Copy(r, o.Resources)
+	if o.IP != "" {
+		r["ip"] = o.IP
+	}
+	r["quota"] = D{"ips": 1}
+	maps.Copy(r["quota"].(D), D(anyMap(o.Charge)))
+	return r
+}
+
+func anyMap(m map[string]float64) D {
+	out := D{}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // diskConfiguration is what a disk rewind must find unchanged. iso_volume: a
@@ -369,7 +434,7 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "measured": q.Measured, "plugin": pl.Name})
 		}
 		rec := pluginObject{ID: id, Plugin: pl.Name, Kind: op.ObjectKind, Name: str(a[op.ObjectParam]), VMID: integer(m["vmid"]),
-			State: "creating", Holds: k.Holds, Run: str(plug["key"]), Spec: PluginOperationSpec(pl, op)}
+			State: "creating", Holds: k.Holds, Gone: k.Gone, TenantN: n, Run: str(plug["key"]), Spec: PluginOperationSpec(pl, op)}
 		for d, v := range charge {
 			if rec.Charge == nil {
 				rec.Charge = map[string]float64{}
