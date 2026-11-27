@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/NYCU-WinLab/carrel/compare/v0.16.0...v0.17.0) (2026-11-27)
+
+
+### Features
+
+* carrel remembers the plugin tools a node listed ([#696](https://github.com/NYCU-WinLab/carrel/issues/696)) ([6c69c5e](https://github.com/NYCU-WinLab/carrel/commit/6c69c5ed839e1e3f0a5f029dc7f9cec4cc19e1be))
+
 ## [0.16.0](https://github.com/NYCU-WinLab/carrel/compare/v0.15.0...v0.16.0) (2026-11-27)
 
 
