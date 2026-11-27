@@ -6,17 +6,72 @@ The output manifest is consumed by build-templates.py --prepared-dir on the node
 """
 
 import argparse
+import glob
 import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
+# The image, the libguestfs appliance and its scratch files need this much space
+# (operator handbook). A shared tmpfs /tmp that fills halfway kills the build in
+# the middle of apt, so every scratch file goes under the output directory.
+MIN_FREE = 6 * 1024**3
+ENV = dict(os.environ)
+MIRROR = "deb.debian.org"
+
 
 def run(*args):
-    subprocess.run([str(a) for a in args], check=True)
+    subprocess.run([str(a) for a in args], check=True, env=ENV)
+
+
+def output_of(*args):
+    return subprocess.check_output([str(a) for a in args], text=True, env=ENV)
+
+
+def workspace(output_dir):
+    """Keep libguestfs scratch files and its appliance cache next to the output."""
+    free = shutil.disk_usage(output_dir).free
+    if free < MIN_FREE:
+        raise SystemExit(f"{output_dir} has {free // 1024**2} MiB free; preparation needs {MIN_FREE // 1024**3} GiB")
+    scratch = output_dir / ".guestfs"
+    scratch.mkdir(exist_ok=True)
+    ENV["TMPDIR"] = ENV["LIBGUESTFS_CACHEDIR"] = str(scratch)
+    return scratch
+
+
+def check_kernel():
+    """supermin boots the host kernel, which some distributions keep root-only."""
+    if ENV.get("SUPERMIN_KERNEL"):
+        return
+    kernels = glob.glob("/boot/vmlinuz-*")
+    if kernels and not any(os.access(k, os.R_OK) for k in kernels):
+        raise SystemExit(
+            "the host kernel /boot/vmlinuz-* is not readable, so libguestfs cannot boot its appliance: "
+            "copy one with `sudo install -m 644 -o $USER /boot/vmlinuz-$(uname -r) DIR/vmlinuz` "
+            "and set SUPERMIN_KERNEL=DIR/vmlinuz")
+
+
+def check_network(image, scratch):
+    """The appliance must resolve the package mirror before apt runs.
+
+    When the passt backend gets no DHCP lease, a task-local passt that exits
+    127 makes libguestfs fall back to SLIRP, without touching the shared
+    installation or resolver."""
+    probe = ["virt-customize", "-n", "-a", str(image), "--run-command", "getent hosts " + MIRROR]
+    if subprocess.run(probe, env=ENV, capture_output=True, check=False).returncode == 0:
+        return
+    shim = scratch / "bin"
+    shim.mkdir(exist_ok=True)
+    (shim / "passt").write_text("#!/bin/sh\nexit 127\n")
+    (shim / "passt").chmod(0o755)
+    ENV["PATH"] = str(shim) + os.pathsep + ENV.get("PATH", "")
+    if subprocess.run(probe, env=ENV, capture_output=True, check=False).returncode != 0:
+        raise SystemExit(f"the libguestfs appliance cannot resolve {MIRROR} with passt or SLIRP; check the host network")
 
 
 def digest(path):
@@ -42,19 +97,18 @@ def main():
     output = args.output_dir / (args.image + ".qcow2")
     if output.exists():
         parser.error("output already exists; use a new build directory")
+    scratch = workspace(args.output_dir)
+    check_kernel()
     # Preserve partition numbers, GUIDs and boot-loader offsets. virt-resize can
     # renumber Ubuntu's separate /boot partition and leave BIOS GRUB in rescue.
     run("qemu-img", "convert", "-O", "qcow2", args.source, output)
     run("qemu-img", "resize", output, "10G")
-    roots = subprocess.check_output(
-        ["guestfish", "--ro", "-a", str(output), "run", ":", "inspect-os"], text=True
-    ).split()
+    check_network(output, scratch)
+    roots = output_of("guestfish", "--ro", "-a", output, "run", ":", "inspect-os").split()
     if len(roots) != 1 or not re.fullmatch(r"/dev/sda[1-9][0-9]*", roots[0]):
         raise RuntimeError("expected one partitioned root filesystem on /dev/sda")
     root = roots[0]
-    filesystem = subprocess.check_output(
-        ["guestfish", "--ro", "-a", str(output), "run", ":", "vfs-type", root], text=True
-    ).strip()
+    filesystem = output_of("guestfish", "--ro", "-a", output, "run", ":", "vfs-type", root).strip()
     if filesystem != "ext4":
         raise RuntimeError("expected an ext4 root filesystem")
     # Debian's GPT keeps a 1 MiB tail reservation. Leave it intact instead of
@@ -114,6 +168,7 @@ def main():
     }
     if node:
         node.unlink()
+    shutil.rmtree(scratch)
     output.with_suffix(".json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps(manifest))
 

@@ -3,6 +3,8 @@
 import hashlib
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -101,6 +103,16 @@ def test_minimal_preparation_does_not_fetch_development_tools(tmp_path, monkeypa
 
     monkeypatch.setattr(module, "run", run)
     monkeypatch.setattr(module.subprocess, "check_output", capture)
+    probes = []
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda args, **kw: probes.append(kw["env"]) or subprocess.CompletedProcess(args, 0),
+    )
+    monkeypatch.setitem(module.ENV, "SUPERMIN_KERNEL", "/fixture/vmlinuz")
+    monkeypatch.setattr(
+        module.shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(0, 0, module.MIN_FREE)
+    )
     monkeypatch.setattr(module.urllib.request, "urlopen", unexpected_download)
     monkeypatch.setattr(module.urllib.request, "urlretrieve", unexpected_download)
     monkeypatch.setattr(
@@ -120,6 +132,9 @@ def test_minimal_preparation_does_not_fetch_development_tools(tmp_path, monkeypa
     manifest = json.loads((output / "debian-13-minimal.json").read_text())
     assert manifest["prepared"] is True and manifest["environment"] == "minimal"
     assert manifest["disk_gb"] == 10 and "node_archive" not in manifest
+    # libguestfs scratch files stayed next to the output and were removed after.
+    assert probes and probes[0]["TMPDIR"] == str(output / ".guestfs")
+    assert not (output / ".guestfs").exists()
     assert {"cloud-init", "python3", "qemu-guest-agent", "unattended-upgrades", "rsync"} <= set(
         manifest["packages"]
     )
@@ -185,3 +200,35 @@ def test_new_guests_use_the_site_mirror(monkeypatch, tmp_path):
     site.write_text(json.dumps({"apt_mirrors": {"debian": "https://x; rm -rf /"}}))
     with pytest.raises(ValueError):
         module.mirror_command("debian-13")
+
+
+def test_preparation_stops_without_space(tmp_path, monkeypatch):
+    module = load_script("prepare-template.py")
+    monkeypatch.setattr(module.shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(10, 9, 1024**3))
+    with pytest.raises(SystemExit, match="1024 MiB free"):
+        module.workspace(tmp_path)
+
+
+def test_unreadable_kernel_names_the_fix(monkeypatch):
+    module = load_script("prepare-template.py")
+    monkeypatch.delitem(module.ENV, "SUPERMIN_KERNEL", raising=False)
+    monkeypatch.setattr(module.glob, "glob", lambda pattern: ["/boot/vmlinuz-fixture"])
+    monkeypatch.setattr(module.os, "access", lambda path, mode: False)
+    with pytest.raises(SystemExit, match="SUPERMIN_KERNEL"):
+        module.check_kernel()
+
+
+def test_network_falls_back_to_slirp(tmp_path, monkeypatch):
+    module = load_script("prepare-template.py")
+    paths = []
+
+    def probe(args, **kw):
+        paths.append(kw["env"]["PATH"])
+        return subprocess.CompletedProcess(args, 0 if len(paths) == 2 else 1)
+
+    monkeypatch.setattr(module.subprocess, "run", probe)
+    monkeypatch.setattr(module, "ENV", {"PATH": "/usr/bin"})
+    module.check_network(tmp_path / "image.qcow2", tmp_path)
+    shim = tmp_path / "bin" / "passt"
+    assert paths == ["/usr/bin", str(tmp_path / "bin") + ":/usr/bin"]
+    assert shim.read_text() == "#!/bin/sh\nexit 127\n" and shim.stat().st_mode & 0o111
