@@ -2775,3 +2775,18 @@ def test_guest_tasks_reads_the_guests_active_tasks(monkeypatch, tmp_path, capsys
     module.main()
     assert reads == [(f"/nodes/{module.NODE}/tasks", {"vmid": MACHINE["vmid"], "source": "active"})]
     assert '"upid": "U"' in capsys.readouterr().out.replace('":"', '": "')
+
+
+def test_a_failed_action_writes_its_cause_to_the_journal(monkeypatch):
+    node = load("node-agent.py")
+    logged = []
+    monkeypatch.setattr("syslog.openlog", lambda *a: None)
+    monkeypatch.setattr("syslog.syslog", lambda priority, message: logged.append(message))
+    try:
+        raise ValueError("network t005 has no subnet")
+    except ValueError as e:
+        answer = node.answer_failure(e)
+    assert answer == {"ok": False, "error_code": "invalid_request", "error": "Node action failed"}
+    assert len(logged) == 1
+    assert logged[0].startswith("invalid_request: Traceback")
+    assert "ValueError: network t005 has no subnet" in logged[0]
