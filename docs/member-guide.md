@@ -454,3 +454,21 @@ execution or file-reading API. Verification uses disposable guests and their own
 
 Saved SSH keys apply to future creations, and to existing machines only where carrel-keys is
 installed; elsewhere removing one does not rotate existing guest keys.
+
+## Tools over HTTP
+
+Every tool is also an HTTP route, for a script or client without MCP. Use the same OAuth access
+token as the MCP connector:
+
+```sh
+curl -s -X POST https://carrel.winlab.tw/v1/tools/machine_get \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"machine":"web"}'
+```
+
+- The body is the tool's arguments, and the answer is its result, as MCP `tools/call` returns it.
+- An error answers with the status of its code: 400 `invalid`, 403 `forbidden`, 404 `not_found`,
+  409 `conflict`, 503 `unavailable`.
+- `GET /v1/tools` lists the tools you may run. Core tools come with their input schemas; plugin tools carry only their name.
+- A long-running tool returns an operation; read it with `GET /v1/operations/<id>`.
+- `GET /openapi.json` has a path for every tool.
