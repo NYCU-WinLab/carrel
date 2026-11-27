@@ -340,6 +340,18 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Only the host's scheduler sets this header (scheduler.go).
+	req.Header.Del(scheduleHeader)
+	r.dispatch(w, req)
+}
+
+// Scheduled serves a request the host's scheduler made, with its
+// X-Carrel-Schedule header kept.
+func (r *Router) Scheduled(w http.ResponseWriter, req *http.Request) {
+	r.dispatch(w, req)
+}
+
+func (r *Router) dispatch(w http.ResponseWriter, req *http.Request) {
 	name := functionName(req)
 	if name == "" {
 		http.Error(w, "no such function", http.StatusNotFound)

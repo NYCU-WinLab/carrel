@@ -515,6 +515,7 @@ func goldenScenario(g *goldenRun) {
 	call("functions", "function_registry", D{"function": "hook"}, alice)
 	call("functions", "function_link", D{"function": "hook", "repo": "alice/hook"}, alice)
 	call("functions", "function_rollback", D{"function": "hook"}, alice)
+	call("functions", "function_schedule", D{"function": "hook", "name": "nightly", "cron": "0 3 * * *", "time_zone": "Asia/Taipei"}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook", "dry_run": true}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook"}, alice)
 	call("functions", "domain_add", D{"function": "hook", "sub": "hook2", "target_port": 80}, alice)

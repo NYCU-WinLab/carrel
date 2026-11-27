@@ -159,6 +159,12 @@ func serve(args []string) error {
 		router.Run(ctx)
 		close(reaped)
 	}()
+	scheduler := &fn.Scheduler{Router: router, Note: func(id, line string) { runtime.Note(c.root, id, line) }}
+	scheduled := make(chan struct{})
+	go func() {
+		scheduler.Run(ctx)
+		close(scheduled)
+	}()
 	agented := make(chan struct{})
 	go func() {
 		defer close(agented)
@@ -172,8 +178,9 @@ func serve(args []string) error {
 				_, err := c.buildVersion(ctx, f, image, "", false, env, auth)
 				return err
 			},
-			Lock:   c.lockFunction,
-			Forget: router.Forget,
+			Lock:      c.lockFunction,
+			Forget:    router.Forget,
+			Scheduler: scheduler,
 		}
 		agent.Run(ctx)
 	}()
@@ -208,6 +215,8 @@ func serve(args []string) error {
 		<-drained
 	}
 	stop()
+	// Scheduled runs go through the router: they end before it is reaped.
+	<-scheduled
 	<-reaped
 	<-guarded
 	<-agented

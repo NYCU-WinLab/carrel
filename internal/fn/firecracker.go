@@ -659,6 +659,17 @@ type capLog struct {
 	midLine bool
 }
 
+// Note writes one line from the host itself into function id's log under
+// root, beside its instances' output, so function_logs shows it.
+func (fc *Firecracker) Note(root, id, line string) {
+	if !nameRE.MatchString(id) {
+		return
+	}
+	if _, err := fc.logFor(filepath.Join(root, id, "log")).Write([]byte("[carrel] " + line + "\n")); err != nil {
+		slog.Warn("note_failed", "function", id, "error", err)
+	}
+}
+
 func (fc *Firecracker) logFor(path string) *capLog {
 	fc.logsMu.Lock()
 	defer fc.logsMu.Unlock()
