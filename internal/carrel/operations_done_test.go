@@ -26,9 +26,6 @@ func TestOperationDoneFollowsTheTerminalStates(t *testing.T) {
 func TestRetryRefusesLegacySnapshotOperation(t *testing.T) {
 	p, _, _ := appFixture(t)
 	tenant := p.Store.TenantN(1)
-	// Once the core code is gone the tool is no longer a core tool.
-	delete(coreTools, "snapshot_create")
-	t.Cleanup(func() { coreTools["snapshot_create"] = true })
 	p.Store.Put("operations", "op-legacy", 1, D{"id": "op-legacy", "tenant_n": 1, "tool": "snapshot_create", "state": "failed",
 		"error": D{"code": "backend_unavailable", "message": "boom"}})
 	before := len(p.Store.Objects("operations"))
