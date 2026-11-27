@@ -169,6 +169,9 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "operation_get":
 		var ops []D
 		if a["id"] != nil {
+			if old := e.S.Get("operations", str(a["id"])); old != nil && adminOnly(old) && !boolean(w["admin"]) {
+				fail("not_found", "Operation not found in this tenant")
+			}
 			e.P.Operations.Wait(e.Ctx, t, str(a["id"]), intAt(a, "wait_seconds", 55))
 			ops = []D{e.P.Operations.Find(t, str(a["id"]))}
 		} else {
@@ -176,10 +179,17 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		}
 		out := []D{}
 		for _, o := range ops {
+			if adminOnly(o) && !boolean(w["admin"]) {
+				continue
+			}
 			out = append(out, publicOperation(o))
 		}
 		return D{"operations": out}
 	case "operation_retry":
+		// A member must not read or reset an admin's operation (#758).
+		if old := e.S.Get("operations", str(a["id"])); old != nil && adminOnly(old) && !boolean(w["admin"]) {
+			fail("not_found", "Operation not found in this tenant")
+		}
 		if dry {
 			return D{"operation": publicOperation(e.P.Operations.Find(t, str(a["id"])))}
 		}

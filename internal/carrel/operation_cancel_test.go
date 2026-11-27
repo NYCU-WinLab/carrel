@@ -160,3 +160,43 @@ func TestOnlyAnAdminCancelsAnAdminJob(t *testing.T) {
 	p.Store.Put("operations", "suspend", 1, D{"id": "suspend", "tenant_n": 1, "tool": "tenant_suspend", "args": D{}, "who": person("admin", true), "state": "queued", "phase": "awaiting_capacity_check", "attempts": 0, "dispatched": false, "resource_changes": false})
 	assertCode(t, p.Execute(context.Background(), "operation_cancel", D{"id": "suspend"}, person("admin", true)), "conflict")
 }
+
+// A member must not read an admin's operation on their tenant, by id or in
+// the list; the admin still can (#758).
+func TestOperationGetHidesAdminOperationsFromMembers(t *testing.T) {
+	p, _ := fixture(t)
+	p.Store.Put("operations", "suspend", 1, D{"id": "suspend", "tenant_n": 1, "tool": "tenant_suspend", "state": "succeeded", "created_at": 100.0, "updated_at": 101.0})
+	app := NewApp(p, nil)
+	alice, admin := person("alice", false), person("admin", true)
+	byID := app.Call(context.Background(), "operation_get", D{"id": "suspend", "wait_seconds": 0}, alice)
+	if boolean(byID["ok"]) || str(obj(byID["error"])["code"]) != "not_found" {
+		t.Fatalf("member read an admin operation: %s", encoded(byID))
+	}
+	list := app.Call(context.Background(), "operation_get", D{}, alice)
+	if len(dicts(list["operations"])) != 0 {
+		t.Fatalf("member listed an admin operation: %s", encoded(list))
+	}
+	seen := app.Call(context.Background(), "operation_get", D{"id": "suspend", "wait_seconds": 0}, admin)
+	if len(dicts(seen["operations"])) != 1 {
+		t.Fatalf("admin lost the operation: %s", encoded(seen))
+	}
+}
+
+// operation_retry must not let a member read or reset an admin's operation,
+// in either form; an admin in that tenant still can (#758).
+func TestOperationRetryHidesAdminOperationsFromMembers(t *testing.T) {
+	p, _ := fixture(t)
+	p.Store.Put("operations", "move", 1, D{"id": "move", "tenant_n": 1, "tool": "machine_migrate", "args": D{"machine": "dev"}, "who": person("admin", true), "state": "failed", "error": D{"code": "internal", "message": "secret detail"}, "created_at": 100.0, "updated_at": 101.0})
+	alice := person("alice", false)
+	for _, a := range []D{{"id": "move", "dry_run": true}, {"id": "move", "wait_seconds": 0}} {
+		r := p.Execute(context.Background(), "operation_retry", a, alice)
+		assertCode(t, r, "not_found")
+		if strings.Contains(string(encoded(r)), "secret detail") || strings.Contains(string(encoded(r)), "machine_migrate") {
+			t.Fatalf("member read an admin operation: %s", encoded(r))
+		}
+	}
+	if got := p.Store.Get("operations", "move"); got["state"] != "failed" || got["error"] == nil {
+		t.Fatalf("member reset an admin operation: %s", encoded(got))
+	}
+	assertOK(t, p.Execute(context.Background(), "operation_retry", D{"id": "move", "dry_run": true}, person("alice", true)))
+}
