@@ -36,6 +36,8 @@ type fakePVE struct {
 	proxy bool
 	// hold: tasks stay running until released.
 	hold bool
+	// listFail: the next this many snapshot lists fail.
+	listFail int
 	// exit is the exit status of the next task; "" is OK.
 	exit string
 	// auth is the token every request must carry.
@@ -104,6 +106,11 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && rest[0] == "status":
 		reply(map[string]any{"status": f.power[vmid]})
 	case r.Method == http.MethodGet && rest[0] == "snapshot":
+		if f.listFail > 0 {
+			f.listFail--
+			http.Error(w, "storage is busy", http.StatusInternalServerError)
+			return
+		}
 		out := []map[string]any{{"name": "current"}}
 		for n := range snaps {
 			out = append(out, map[string]any{"name": n})
@@ -431,5 +438,24 @@ func TestAPluginWithoutItsStateSaysNothing(t *testing.T) {
 	}
 	if _, err := s.GetOperation(context.Background(), &pluginpb.GetRequest{IdempotencyKey: "k"}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("get: %v", err)
+	}
+}
+
+// A task that ended OK while the list cannot be read leaves the run
+// running: the next call reads the list and decides (#685).
+func TestAListThatFailsDecidesNothing(t *testing.T) {
+	s, f := fixture(t)
+	f.hold = true
+	if _, err := start(s, "k1", "create", take, "running"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.hold, f.listFail = false, 1
+	f.mu.Unlock()
+	if op := get(t, s, "k1"); op.State != "running" {
+		t.Fatalf("with no list: %v", op)
+	}
+	if op := get(t, s, "k1"); op.State != "succeeded" {
+		t.Fatalf("with the list: %v", op)
 	}
 }
