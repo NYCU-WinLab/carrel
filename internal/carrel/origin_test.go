@@ -401,3 +401,23 @@ func TestASiteWithoutTenantsReconcilesOnlyForItsOrigin(t *testing.T) {
 		t.Fatal("reconciled for an origin that is not configured")
 	}
 }
+
+// The revision is recorded before the node is asked, so a lost reply does not
+// leave the node holding a revision this database never recorded (#806).
+func TestReconcileRecordsRevisionBeforeSending(t *testing.T) {
+	p, b, _ := originFixture(t)
+	e := p.execution(context.Background())
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "reconcile" {
+			if obj(p.Store.SiteGet("reconcile", "sent"))["revision"] != r["revision"] {
+				t.Error("the revision was not recorded before the send")
+			}
+			return nil, errors.New("reply lost")
+		}
+		return D{}, nil
+	}
+	attempt(func() { e.Reconcile() })
+	if obj(p.Store.SiteGet("reconcile", "sent"))["revision"] == nil {
+		t.Fatal("no revision recorded after a failed reconcile")
+	}
+}
