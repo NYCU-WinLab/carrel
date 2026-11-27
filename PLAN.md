@@ -1632,7 +1632,7 @@ to tenant networks, one instance per `reuse` function.
    which publishes it. The closing run calls `DELETE /functions/v1/deploy/<tenant>/<name>/preview`
    with the number it closes. A merged pull request's close token carries the base branch as
    `ref` and no number, so the preview must match both that number and the token's `head_ref`; a
-   late close of an older pull request on a reused branch name never removes a newer preview. A preview with no deploy for 7 days
+   late close of an older pull request on a reused branch name never removes a newer preview. A merged close must also name the base branch (`base_ref`) the preview was deployed against, so two pull requests from one head branch to different bases cannot remove each other's preview; a preview stored without a base keeps the head rule alone. A preview with no deploy for 7 days
    is removed, and so are a function's previews when it is removed, unlinked or linked without
    previews. A function has at most 5, counted against the functions and domains quota.
 4. Schedules, logs, quota and sensorium spans.

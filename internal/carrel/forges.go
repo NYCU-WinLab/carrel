@@ -41,6 +41,10 @@ type CIClaims struct {
 	// request on every activity: the close of a merged pull request
 	// carries the base branch as ref (#645).
 	HeadRef string
+	// BaseRef is GitHub's base_ref on a pull_request run: the branch the pull
+	// request targets. A merged close must name the base the preview was
+	// deployed against (#779).
+	BaseRef string
 	// RefProtected is GitLab's ref_protected: the ref is a protected branch
 	// or tag. GitHub's token has no such claim.
 	RefProtected bool
@@ -106,7 +110,7 @@ func (v *GitHubVerifier) Verify(ctx context.Context, token string) (CIClaims, er
 	if err != nil {
 		return CIClaims{}, err
 	}
-	c := CIClaims{Issuer: githubIssuer, Repository: strings.ToLower(str(claims["repository"])), RepositoryID: str(claims["repository_id"]), Ref: str(claims["ref"]), SHA: str(claims["sha"]), Event: str(claims["event_name"]), HeadRef: str(claims["head_ref"])}
+	c := CIClaims{Issuer: githubIssuer, Repository: strings.ToLower(str(claims["repository"])), RepositoryID: str(claims["repository_id"]), Ref: str(claims["ref"]), SHA: str(claims["sha"]), Event: str(claims["event_name"]), HeadRef: str(claims["head_ref"]), BaseRef: str(claims["base_ref"])}
 	if c.Repository == "" || c.RepositoryID == "" || c.Ref == "" {
 		return CIClaims{}, errors.New("missing repository claims")
 	}
