@@ -20,6 +20,9 @@ func TestDomainRetriesWhenCertificateIsLate(t *testing.T) {
 	}))
 	defer cf.Close()
 	p.Config.CloudflareAPI, p.Config.CloudflareZone, p.Config.CertificateDir = cf.URL, "test", t.TempDir()
+	// Origin issuance in the full pass must fail fast against the fake, never
+	// reach real Let's Encrypt while holding the certificate lock.
+	p.Config.ACMEDirectory = cf.URL
 	crt, key := testPair(t, "*.alice.winlab.tw")
 	p.execution(context.Background()).storeCertificate("alice", crt, key)
 	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})
