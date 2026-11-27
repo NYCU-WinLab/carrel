@@ -59,11 +59,6 @@ func (e *Execution) PlanMigration(a D) D {
 	if !contains([]string{"ready", "running", "stopped"}, m["state"]) {
 		fail("conflict", "Only a ready or stopped machine can move", D{"recovery": "resolve_prerequisite"})
 	}
-	for _, s := range e.snapshots(integer(t["n"])) {
-		if s.VMID == integer(m["vmid"]) {
-			fail("conflict", "Delete the machine's snapshots before moving it", D{"recovery": "resolve_prerequisite"})
-		}
-	}
 	e.refusePluginHeld(integer(t["n"]), m["vmid"], "migrate", "a machine that moves")
 	if obj(e.Call(D{"op": "inventory"}, target.Target))["tenant_route"] == false {
 		fail("conflict", "The target node has no tenant route", D{"recovery": "retry_infrastructure"})
@@ -208,8 +203,6 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 			reason = "tenant_suspended"
 		case !contains([]string{"ready", "running", "stopped"}, m["state"]):
 			reason = "machine_" + str(m["state"])
-		case len(filter(e.snapshotRows(integer(t["n"])), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) })) > 0:
-			reason = "has_snapshots"
 		case len(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate")) > 0:
 			reason = heldReason(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate"))
 		}

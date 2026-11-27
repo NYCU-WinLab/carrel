@@ -69,6 +69,11 @@ func fixture(t *testing.T) (*Platform, *fakeBackend) {
 	s.Register("user:alice", "alice")
 	s.Register("user:bob", "bob")
 	s.Register("winlab-projects/shared", "shared")
+	// As every site after #663: the snapshot plugin's dimensions and tools
+	// are known before any node reports it.
+	if _, err := MigrateSnapshots(s); err != nil {
+		t.Fatal(err)
+	}
 	b := &fakeBackend{inventory: baseInventory()}
 	p := NewPlatform(s, b, Config{Origin: "https://carrel.test", Issuer: "https://issuer.test", GuestPollInterval: 1, GuestReadyTimeout: 3,
 		PublicAddress: "140.113.60.184", Nodes: []NodeConfig{{Name: "carrel01", Target: "carrel-node"}}}.WithDefaults())
@@ -576,7 +581,7 @@ func TestReadOnlyInstructionsAndNoOnboarding(t *testing.T) {
 // The annotation rule of PLAN 4.1, over every tool in the contract.
 func TestContractAnnotations(t *testing.T) {
 	destructive := map[string]bool{
-		"machine_delete": true, "snapshot_delete": true, "snapshot_rollback": true, "image_delete": true,
+		"machine_delete": true, "image_delete": true,
 		"public_ip_release": true, "vip_remove": true, "function_remove": true, "app_unlink": true,
 		"app_webhook_rotate": true,
 	}

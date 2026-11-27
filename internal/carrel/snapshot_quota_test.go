@@ -9,10 +9,11 @@ import (
 // snapshotQuotaFixture gives alice one 80 GiB machine with two snapshots.
 func snapshotQuotaFixture(t *testing.T) (*Platform, *App, func(tool string, args D) D) {
 	t.Helper()
-	p, _ := fixture(t)
+	p, b := fixture(t)
+	withSnapshotPlugin(t, p, b, b.call)
 	p.Store.Put("machines", 10100, 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "kind": "vm", "node": "carrel01", "cpu": 1, "memory_mb": 1024, "disk_gb": 80, "state": "ready"})
 	for _, name := range []string{"s1", "s2"} {
-		p.Store.Put("snapshots", "10100-"+name, 1, D{"id": "10100-" + name, "vmid": 10100, "name": name, "disk_gb": 80, "state": "ready"})
+		putSnapshotRecord(p, 1, 10100, name, 80, "", nil)
 	}
 	app := NewApp(p, nil)
 	who := person("alice", false)
@@ -59,11 +60,11 @@ func TestSnapshotQuotaCountsWhatSnapshotsHold(t *testing.T) {
 	if used := num(obj(obj(call("machine_delete", D{"machine": "web", "confirm": "web", "dry_run": true})["quota_after"])["used"])["snapshot_gb"]); used != 0 {
 		t.Fatal("machine delete preview", used)
 	}
-	p.Store.Remove("snapshots", "10100-s2")
+	p.Store.Remove(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s2"))
 	if used, _ := snapshotGBOf(t, call("snapshot_delete", D{"machine": "web", "name": "s1", "dry_run": true})); used != 0 {
 		t.Fatal("last snapshot delete preview", used)
 	}
-	p.Store.Put("snapshots", "10100-s2", 1, D{"id": "10100-s2", "vmid": 10100, "name": "s2", "disk_gb": 80, "state": "ready"})
+	putSnapshotRecord(p, 1, 10100, "s2", 80, "", nil)
 
 	// A sample the nodes stopped renewing, or one a node could not take, is not trusted.
 	// Nor is one dated ahead of this clock: it would never grow old.
@@ -100,7 +101,7 @@ func TestSnapshotRefusedWhileHeldSpaceIsOverTheLimit(t *testing.T) {
 func TestSnapshotQuotaWithoutSnapshotsOrSample(t *testing.T) {
 	p, _, call := snapshotQuotaFixture(t)
 	for _, name := range []string{"s1", "s2"} {
-		p.Store.Remove("snapshots", "10100-"+name)
+		p.Store.Remove(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, name))
 	}
 	// An old sample of a tenant that has no snapshots counts nothing.
 	sampleSnapshots(p, 50, 40*24*time.Hour, true)
@@ -118,14 +119,18 @@ func TestSnapshotQuotaWithoutSnapshotsOrSample(t *testing.T) {
 }
 
 func TestSnapshotCreatedUnderMeasuredQuotaKeepsItsRecord(t *testing.T) {
-	p, _, _ := snapshotQuotaFixture(t)
+	p, _, call := snapshotQuotaFixture(t)
 	sampleSnapshots(p, 3, time.Minute, true)
-	r := p.execution(context.Background()).SnapshotAction("snapshot_create", D{"machine": "web", "name": "s3"}, p.Store.TenantN(1))
-	used := obj(obj(r["quota_after"])["used"])
-	if num(used["snapshot_gb"]) != 3 || num(used["snapshots"]) != 3 || obj(r["snapshot_storage"])["snapshot_gb_counts"] != "held" {
-		t.Fatal(encoded(r))
+	runQueue(p)
+	r := call("snapshot_create", D{"machine": "web", "name": "s3", "wait_seconds": 5})
+	if obj(r["operation"])["state"] != "succeeded" {
+		t.Fatal(string(encoded(r)))
 	}
-	if s := p.Store.Get("snapshots", "10100-s3"); s["state"] != "ready" || num(s["disk_gb"]) != 80 {
+	used := obj(obj(call("quota_get", D{})["quota"])["used"])
+	if num(used["snapshot_gb"]) != 3 || num(used["snapshots"]) != 3 {
+		t.Fatal(encoded(used))
+	}
+	if s := p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s3")); s["state"] != "ready" || num(obj(s["charge"])["snapshot_gb"]) != 80 {
 		t.Fatal(encoded(s))
 	}
 }
@@ -138,7 +143,7 @@ func TestOverSnapshotSpaceBlocksOnlySnapshots(t *testing.T) {
 	for _, over := range []func(){func() { sampleSnapshots(p, 201, time.Minute, true) }, func() {
 		// No sample: three snapshots of an 80 GiB disk count 240.
 		p.Store.Remove("storage_usage", "1")
-		p.Store.Put("snapshots", "10100-s3", 1, D{"id": "10100-s3", "vmid": 10100, "name": "s3", "disk_gb": 80, "state": "ready"})
+		putSnapshotRecord(p, 1, 10100, "s3", 80, "", nil)
 	}} {
 		over()
 		tenant := p.Store.TenantN(1)
@@ -167,7 +172,7 @@ func TestOverSnapshotSpaceBlocksOnlySnapshots(t *testing.T) {
 func TestStorageSampleIsDatedByTheControlPlane(t *testing.T) {
 	p, _, _ := nodeFixture(t)
 	p.Store.Put("machines", 10100, 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "node": "carrel01", "disk_gb": 80})
-	p.Store.Put("snapshots", "10100-s1", 1, D{"id": "10100-s1", "vmid": 10100, "name": "s1", "disk_gb": 80, "state": "ready"})
+	putSnapshotRecord(p, 1, 10100, "s1", 80, "", nil)
 	e := p.execution(context.Background())
 	if _, measured := e.snapshotGB(1); measured {
 		t.Fatal("measured without a sample")

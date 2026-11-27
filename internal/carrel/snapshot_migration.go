@@ -1,0 +1,88 @@
+package carrel
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+)
+
+// snapshotMigration is the site row that marks the copy of the core
+// snapshot rows into the plugin ledger as done (#663).
+const snapshotMigration = "snapshot_plugin_objects"
+
+// snapshotPluginName is the rule the snapshot plugin holds names to: PVE
+// refuses a one-character snapshot name.
+var snapshotPluginName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,31}$`)
+
+// snapshotPluginQuota and snapshotPluginTools are what the snapshot plugin
+// declares (plugins/snapshot Describe; a test holds them equal). The
+// migration writes them, so a call before the first report answers
+// unavailable and the limits stay where they were.
+var snapshotPluginQuota = []D{
+	{"name": "snapshot_gb", "default_limit": 200.0, "unit": "GiB", "measured": true, "plugin": "snapshot"},
+	{"name": "snapshots", "default_limit": 4.0, "unit": "", "measured": false, "plugin": "snapshot"},
+}
+
+var snapshotPluginTools = []D{
+	{"name": "snapshot_create", "plugin": "snapshot", "member": true, "read_only": false, "kind": "snapshot", "dims": []any{"snapshots", "snapshot_gb"}},
+	{"name": "snapshot_delete", "plugin": "snapshot", "member": true, "read_only": false, "kind": "snapshot", "dims": []any{"snapshots", "snapshot_gb"}},
+	{"name": "snapshot_list", "plugin": "snapshot", "member": true, "read_only": true, "kind": "snapshot", "dims": []any{"snapshots", "snapshot_gb"}},
+	{"name": "snapshot_rollback", "plugin": "snapshot", "member": true, "read_only": false, "kind": "snapshot", "dims": []any{"snapshots", "snapshot_gb"}},
+}
+
+// MigrateSnapshots copies every core snapshot row into the plugin ledger,
+// once, in one transaction, before any operation is recovered. The old rows
+// stay as they are, so the release before can still run on them; snapshot
+// changes made after the copy do not go back to them. Anything the copy
+// cannot carry stops the start: an operation on snapshots still running, a
+// snapshot that is not ready, a name the plugin refuses, or a record that
+// exists already.
+func MigrateSnapshots(s *Store) (result D, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result, err = nil, fmt.Errorf("snapshot migration: %v", r)
+		}
+	}()
+	if done := s.SiteGet("migration", snapshotMigration); done != nil {
+		return D{"skipped": true, "copied": done["copied"]}, nil
+	}
+	copied := 0
+	s.Transaction(func(tx *Store) {
+		for _, op := range tx.ActiveOperations() {
+			switch op["tool"] {
+			case "snapshot_create", "snapshot_delete", "snapshot_rollback":
+				panic(fmt.Sprintf("operation %s (%s) is still %s: let it end first", op["id"], op["tool"], op["state"]))
+			}
+		}
+		for _, r := range tx.Rows("SELECT tenant, data FROM objects WHERE kind='snapshots' ORDER BY id") {
+			var snap snapshotRecord
+			must(json.Unmarshal([]byte(str(r["data"])), &snap))
+			n := integer(r["tenant"])
+			switch {
+			case snap.State != "" && snap.State != "ready":
+				panic(fmt.Sprintf("snapshot %s is %s, not ready", snap.ID, snap.State))
+			case !snapshotPluginName.MatchString(snap.Name):
+				panic(fmt.Sprintf("snapshot %s has a name the plugin refuses", snap.ID))
+			case snap.Configuration == nil:
+				panic(fmt.Sprintf("snapshot %s has no configuration", snap.ID))
+			}
+			id := pluginObjectID("snapshot", "snapshot", snap.VMID, snap.Name)
+			if tx.Get(pluginObjectRows, id) != nil {
+				panic(fmt.Sprintf("plugin object %s exists already", id))
+			}
+			rec := pluginObject{ID: id, Plugin: "snapshot", Kind: "snapshot", Name: snap.Name, VMID: snap.VMID, State: "ready",
+				Charge: map[string]float64{"snapshots": 1, "snapshot_gb": float64(snap.DiskGB)}, Holds: []string{"freeze", "migrate", "backfill"},
+				DiskGB: snap.DiskGB, OperationID: snap.OperationID, Configuration: snap.Configuration}
+			tx.Put(pluginObjectRows, id, n, decode(string(encoded(rec))))
+			copied++
+		}
+		for _, q := range snapshotPluginQuota {
+			tx.SitePut(pluginQuotaRows, str(q["name"]), q)
+		}
+		for _, t := range snapshotPluginTools {
+			tx.SitePut(pluginToolRows, str(t["name"]), t)
+		}
+		tx.SitePut("migration", snapshotMigration, D{"copied": copied, "at": now()})
+	})
+	return D{"skipped": false, "copied": copied}, nil
+}

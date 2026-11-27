@@ -96,6 +96,14 @@ func main() {
 		telemetry.Close()
 		return
 	}
+	// Before any operation is recovered: the snapshot tools are the
+	// snapshot plugin's from this release on (#663).
+	if migrated, err := carrel.MigrateSnapshots(store); err != nil {
+		slog.Error("snapshot_migration_failed", "error", err)
+		fatal()
+	} else if migrated["skipped"] != true {
+		slog.Info("snapshot_migration", "result", migrated)
+	}
 	platform.UseAgents()
 	app := carrel.NewApp(platform, nil)
 	server := &http.Server{Addr: *listen, Handler: app, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 16}

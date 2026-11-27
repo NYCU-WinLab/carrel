@@ -324,7 +324,7 @@ func (e *Execution) Usage(t D) D {
 			used[k] = num(used[k]) + num(v)
 		}
 	}
-	for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "networks": "networks", "snapshots": "snapshots"} {
+	for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "networks": "networks"} {
 		used[dim] = len(e.S.Objects(kind, n))
 	}
 	// A frozen machine keeps its address and charges its disk to its own quota.
@@ -332,7 +332,6 @@ func (e *Execution) Usage(t D) D {
 		used["ips"] = num(used["ips"]) + 1
 		used["frozen_gb"] = num(used["frozen_gb"]) + num(f["disk_gb"])
 	}
-	used["snapshot_gb"], _ = e.snapshotGB(n)
 	used["functions"] = len(e.S.Objects("functions", n))
 	used["function_gb"] = math.Round(e.functionBytes(n)/GiB*100) / 100
 	e.pluginUsage(n, used)

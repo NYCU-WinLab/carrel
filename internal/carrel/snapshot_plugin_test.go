@@ -3,6 +3,7 @@ package carrel
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/NYCU-WinLab/carrel/plugins/snapshot"
 )
@@ -29,48 +30,37 @@ func snapshotPluginInfo() PluginInfo {
 	return pl
 }
 
-// The snapshot plugin declares what the core snapshot tools do. Until the
-// switch (#663 PR 5) the core tools keep their names and carrel counts the
-// dimensions itself, so the plugin's tools are left out for that alone.
-func TestTheSnapshotPluginDeclaresTheCoreSnapshotTools(t *testing.T) {
+// The snapshot plugin's 4 operations are all tools, under the names and
+// with the default limits the core snapshot tools had (#663).
+func TestTheSnapshotPluginDeclaresTheSnapshotTools(t *testing.T) {
 	pl := snapshotPluginInfo()
 	if len(pl.Operations) != 4 {
 		t.Fatalf("operations: %+v", pl.Operations)
 	}
 	for _, op := range pl.Operations {
-		if p := pluginSchemaProblem(op); p != "" {
-			t.Errorf("%s: %s", op.Name, p)
-		}
-		if p := pluginPowerProblem(op); p != "" {
-			t.Errorf("%s: %s", op.Name, p)
-		}
-		if p := pluginObjectProblem(pl, op); p != "quota dimension snapshots is one carrel counts itself" {
-			t.Errorf("%s: %q", op.Name, p)
+		for _, p := range []string{pluginSchemaProblem(op), pluginPowerProblem(op), pluginObjectProblem(pl, op)} {
+			if p != "" {
+				t.Errorf("%s: %s", op.Name, p)
+			}
 		}
 	}
-	// With the core dimensions gone, every operation is a tool.
-	saved := DefaultQuota
-	DefaultQuota = without(DefaultQuota, "snapshots", "snapshot_gb")
-	defer func() { DefaultQuota = saved }()
-	for _, op := range pl.Operations {
-		if p := pluginObjectProblem(pl, op); p != "" {
-			t.Errorf("%s after the switch: %s", op.Name, p)
-		}
-	}
-	// The plugin asks for what the core quota holds.
 	for _, q := range pl.Quota {
-		if num(saved[q.Name]) != q.DefaultLimit {
-			t.Errorf("%s: default %v, core %v", q.Name, q.DefaultLimit, saved[q.Name])
+		if want := map[string]float64{"snapshots": 4, "snapshot_gb": 200}[q.Name]; q.DefaultLimit != want {
+			t.Errorf("%s: default %v, want %v", q.Name, q.DefaultLimit, want)
 		}
 	}
-
+	for _, dim := range []string{"snapshots", "snapshot_gb"} {
+		if _, ok := DefaultQuota[dim]; ok {
+			t.Errorf("carrel still counts %s itself", dim)
+		}
+	}
 	p, b := fixture(t)
 	withPlugin(t, p, b)
 	reportPlugins(p, []PluginInfo{pl})
-	_, left := p.pluginRegistry()
+	tools, left := p.pluginRegistry()
 	for _, name := range []string{"snapshot_create", "snapshot_delete", "snapshot_rollback", "snapshot_list"} {
-		if left[name] != "a core tool has this name" {
-			t.Errorf("%s: %q", name, left[name])
+		if tools[name] == nil {
+			t.Errorf("%s: left out, %q", name, left[name])
 		}
 	}
 }
@@ -96,43 +86,51 @@ func TestAConfirmRepeatsTheObjectName(t *testing.T) {
 	}
 }
 
-// The plugin's tools read as the core snapshot tools do: the same
-// descriptions, machine and confirm arguments and hints. The name pattern
-// differs on purpose: PVE refuses a one-character name.
-func TestTheSnapshotPluginToolsReadAsTheCoreOnes(t *testing.T) {
-	core := map[string]D{}
-	for _, d := range dicts(Contract["tools"]) {
-		core[str(d["name"])] = d
+// putSnapshotRecord writes a snapshot plugin record as the migration does
+// (#663); state "" is ready.
+func putSnapshotRecord(p *Platform, n, vmid int, name string, gb int, state string, configuration D) {
+	if state == "" {
+		state = "ready"
 	}
-	for _, op := range snapshotPluginInfo().Operations {
-		c := core["snapshot_"+op.Name]
-		if c == nil {
-			t.Fatalf("%s: no core tool", op.Name)
-		}
-		// The rollback says it shuts a running guest down gracefully, and
-		// carrel adds the operation sentence to every plugin tool.
-		want := str(c["description"])
-		if op.Name == "rollback" {
-			want = "Roll back disk contents; later changes are lost. Confirm snapshot name. A running machine is shut down gracefully first. " +
-				"Restores the previous power state and checks guest readiness. Brief downtime is expected."
-		}
-		if op.Description != want {
-			t.Errorf("%s: description %q, want %q", op.Name, op.Description, want)
-		}
-		var params D
-		must(json.Unmarshal(op.Params, &params))
-		props, coreProps := obj(params["properties"]), obj(obj(c["inputSchema"])["properties"])
-		for _, key := range []string{"machine"} {
-			if !equal(props[key], coreProps[key]) {
-				t.Errorf("%s.%s: %s, core %s", op.Name, key, encoded(props[key]), encoded(coreProps[key]))
-			}
-		}
-		if !equal(params["required"], obj(c["inputSchema"])["required"]) {
-			t.Errorf("%s: required %v, core %v", op.Name, params["required"], obj(c["inputSchema"])["required"])
-		}
-		a := obj(c["annotations"])
-		if op.ReadOnly != boolean(a["readOnlyHint"]) || op.Destructive != boolean(a["destructiveHint"]) || op.Idempotent != boolean(a["idempotentHint"]) {
-			t.Errorf("%s: hints read_only %v destructive %v idempotent %v, core %s", op.Name, op.ReadOnly, op.Destructive, op.Idempotent, encoded(a))
-		}
+	id := pluginObjectID("snapshot", "snapshot", vmid, name)
+	row := D{"id": id, "plugin": "snapshot", "kind": "snapshot", "name": name, "vmid": vmid, "state": state,
+		"charge": D{"snapshots": 1, "snapshot_gb": gb}, "holds": []string{"freeze", "migrate", "backfill"}, "disk_gb": gb}
+	if configuration != nil {
+		row["configuration"] = configuration
 	}
+	p.Store.Put(pluginObjectRows, id, n, row)
+}
+
+// reportSnapshotPlugin makes node carrel01 report the snapshot plugin; the
+// returned fake answers its runs when a backend relays them to it.
+func reportSnapshotPlugin(t *testing.T, p *Platform) *fakePlugins {
+	t.Helper()
+	pluginPoll, pluginRecheck = 5*time.Millisecond, 0.05
+	t.Cleanup(func() { pluginPoll, pluginRecheck = 2*time.Second, 10 })
+	reportPlugins(p, []PluginInfo{snapshotPluginInfo()})
+	return &fakePlugins{ops: map[string]D{}, gets: map[string]int{}}
+}
+
+// withSnapshotPlugin is a site whose node reports the snapshot plugin and
+// answers its runs; call, when set, answers every other request, else the
+// backend answers as it does with no call.
+func withSnapshotPlugin(t *testing.T, p *Platform, b *fakeBackend, call func(D, string) (any, error)) *fakePlugins {
+	t.Helper()
+	f := reportSnapshotPlugin(t, p)
+	b.call = func(r D, target string) (any, error) {
+		switch {
+		case r["op"] == "plugin":
+			return f.call(r, target)
+		case call != nil:
+			return call(r, target)
+		case r["op"] == "inventory":
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			return clone(b.inventory), nil
+		case r["op"] == "storage_usage":
+			return []D{}, nil
+		}
+		return D{"status": "running"}, nil
+	}
+	return f
 }

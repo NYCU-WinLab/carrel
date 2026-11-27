@@ -515,7 +515,7 @@ func (e *Execution) BindMachine(t D) bool {
 	return false
 }
 func (e *Execution) BindObject(t D) bool {
-	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "vpn_client_remove": {"vpn_clients", "name", "name"}, "port_open": {"vips", "vip", "name"}, "domain_add": {"vips", "vip", "name"}, "snapshot_delete": {"snapshots", "name", "name"}, "snapshot_rollback": {"snapshots", "name", "name"}}
+	selectors := map[string][3]string{"machine_nic_attach": {"networks", "network", "name"}, "network_delete": {"networks", "network", "name"}, "port_close": {"ports", "id", "id"}, "domain_remove": {"domains", "name", "name"}, "peer_revoke": {"peers", "id", "id"}, "vip_remove": {"vips", "name", "name"}, "vpn_client_remove": {"vpn_clients", "name", "name"}, "port_open": {"vips", "vip", "name"}, "domain_add": {"vips", "vip", "name"}}
 	op, a := e.Op, obj(e.Op["args"])
 	spec, ok := selectors[str(op["tool"])]
 	if !ok {
@@ -527,7 +527,7 @@ func (e *Execution) BindObject(t D) bool {
 	if len(bound) > 0 {
 		o := find(objects, func(o D) bool { return o["id"] == bound["id"] })
 		if o == nil {
-			if !contains([]string{"snapshot_rollback", "machine_nic_attach", "port_open", "domain_add"}, op["tool"]) {
+			if !contains([]string{"machine_nic_attach", "port_open", "domain_add"}, op["tool"]) {
 				return true
 			}
 			fail("not_found", "The operation's original resource no longer exists")
@@ -537,7 +537,7 @@ func (e *Execution) BindObject(t D) bool {
 		}
 	} else {
 		o := find(objects, func(o D) bool {
-			return (a[arg] == o["id"] || a[arg] == o[field]) && (kind != "snapshots" || integer(o["vmid"]) == integer(obj(op["machine_target"])["vmid"]))
+			return a[arg] == o["id"] || a[arg] == o[field]
 		})
 		if o != nil {
 			op["object_target"] = D{"id": o["id"], "operation_id": o["operation_id"]}
