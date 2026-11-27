@@ -39,7 +39,13 @@ func OpenStore(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{DB: db, q: db}
-	if _, e = db.Exec(`PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); e != nil {
+	if _, e = db.Exec(`PRAGMA busy_timeout=10000`); e == nil {
+		e = enableWAL(db)
+	}
+	if e == nil {
+		_, e = db.Exec(`PRAGMA foreign_keys=ON`)
+	}
+	if e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -48,6 +54,20 @@ func OpenStore(path string) (*Store, error) {
 		return nil, e
 	}
 	return s, nil
+}
+
+// enableWAL switches the database to WAL. Two openers of a fresh database can
+// race to make that switch, and SQLite answers the loser with SQLITE_BUSY at
+// once, without honouring busy_timeout, so retry for a bounded time (#754).
+func enableWAL(db *sql.DB) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, e := db.Exec(`PRAGMA journal_mode=WAL`)
+		if e == nil || time.Now().After(deadline) || !strings.Contains(e.Error(), "SQLITE_BUSY") && !strings.Contains(e.Error(), "database is locked") {
+			return e
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 func (s *Store) Exec(q string, args ...any) {
 	_, e := s.q.ExecContext(context.Background(), q, args...)
