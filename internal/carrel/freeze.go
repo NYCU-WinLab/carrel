@@ -515,7 +515,9 @@ func (e *Execution) DeleteFrozen(f D, a, t D) D {
 	if a["confirm"] != f["name"] {
 		fail("invalid", "confirm must equal the machine name")
 	}
+	e.refusePluginHeld(n, f["vmid"], "delete", "deleting the machine would lose it")
 	delta := D{"ips": -1, "frozen_gb": -num(f["disk_gb"]), "public_ports": -len(filter(toDicts(e.ports(n)), func(p D) bool { return integer(p["vmid"]) == integer(f["vmid"]) }))}
+	e.pluginObjectsFreed(n, f, delta)
 	if !dry {
 		if name := str(f["thaw_node"]); name != "" {
 			// A thaw was begun: the machine may be restored there, wholly or in part.

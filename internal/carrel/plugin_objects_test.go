@@ -203,6 +203,19 @@ func TestPluginObjectsHoldTheirMachine(t *testing.T) {
 			t.Fatal("the machine's records outlived it")
 		}
 	})
+	t.Run("frozen delete", func(t *testing.T) {
+		p, _, _ := freezeSite(t)
+		putCopy(p, 10100, "delete")
+		if r := member(p, "machine_freeze", D{"machine": "box", "confirm": "box", "wait_seconds": 5}); obj(r["operation"])["state"] != "succeeded" {
+			t.Fatalf("freeze: %s", encoded(r))
+		}
+		if r := member(p, "machine_delete", D{"machine": "box", "confirm": "box", "wait_seconds": 5}); failure(r)["code"] != "conflict" {
+			t.Fatalf("frozen delete: %s", encoded(r))
+		}
+		if len(p.Store.Objects(pluginObjectRows)) != 1 {
+			t.Fatal("the frozen delete dropped the record")
+		}
+	})
 	t.Run("sweep", func(t *testing.T) {
 		// A VM that vanished is swept, but an object that outlives its
 		// machine keeps its record.
