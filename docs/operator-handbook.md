@@ -13,9 +13,12 @@ identity and SSH keys, and emits a hashed manifest. Copy the prepared image/mani
 then run `scripts/build-templates.py --prepared-dir <directory> --image debian-13-minimal --vmid-base <fresh-id>` there.
 Repeat `--image` to import several images; omitting it retains the two-development-image workflow.
 Allow at least 6 GiB of free image workspace plus space for the libguestfs appliance cache.
-Kernel access may require sudo. Check appliance DHCP/DNS if package downloads fail. When a
-sandbox's `passt` backend cannot obtain a DHCP lease, a task-local PATH shim returning 127 for
-`passt` selects libguestfs's SLIRP fallback without replacing the shared installation or resolver.
+The script keeps libguestfs scratch files and its appliance cache in `<output-dir>/.guestfs`, so a
+small shared tmpfs `/tmp` cannot fill halfway, and stops at once when the output directory has less
+than 6 GiB free. It also stops with the fix when the host kernel is root-only (set `SUPERMIN_KERNEL`
+to a readable copy). Before apt runs it checks that the appliance resolves the Debian mirror; when
+`passt` gets no DHCP lease it retries with a task-local shim that selects libguestfs's SLIRP
+fallback, without replacing the shared installation or resolver.
 APT index failures abort preparation; a failed candidate must not be activated.
 After verifying the candidates, pass their generated `templates.json` to
 `scripts/deploy-go.py --artifacts <sandbox-built-directory> --templates <directory>/templates.json`.
