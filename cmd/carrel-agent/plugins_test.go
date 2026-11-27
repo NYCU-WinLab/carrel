@@ -515,6 +515,44 @@ func TestAStoppingOperationStartsOnlyOnTheSameDeclaration(t *testing.T) {
 	}
 }
 
+func TestCheckPluginAnswersOnlyForTheExpectedPlugin(t *testing.T) {
+	dir := pluginDir(t)
+	serve(t, dir, newFake("snapshot", 1))
+	if err := checkPlugin(context.Background(), dir, "snapshot", "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPlugin(context.Background(), dir, "snapshot", "2.0.0"); err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("a wrong version passed: %v", err)
+	}
+	serve(t, dir, newFake("other", 1))
+	if err := os.Rename(filepath.Join(dir, "other.sock"), filepath.Join(dir, "liar.sock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPlugin(context.Background(), dir, "liar", ""); err == nil || !strings.Contains(err.Error(), "calls itself") {
+		t.Fatalf("a wrong name passed: %v", err)
+	}
+	serve(t, dir, newFake("old", 9))
+	if err := checkPlugin(context.Background(), dir, "old", ""); err == nil || !strings.Contains(err.Error(), "contract 9") {
+		t.Fatalf("a wrong contract passed: %v", err)
+	}
+	broken := newFake("broken", 1)
+	broken.brokenProbe = true
+	serve(t, dir, broken)
+	if err := checkPlugin(context.Background(), dir, "broken", ""); err == nil || !strings.Contains(err.Error(), "probe failed") {
+		t.Fatalf("a failing probe passed: %v", err)
+	}
+	// A plugin that says it is unsupported here still answered.
+	unsupported := newFake("freeze", 1)
+	unsupported.supported = false
+	serve(t, dir, unsupported)
+	if err := checkPlugin(context.Background(), dir, "freeze", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitPlugin(context.Background(), dir, "missing", "", 1500*time.Millisecond); err == nil {
+		t.Fatal("a missing socket passed")
+	}
+}
+
 // A writable or symlinked parent lets someone replace plugin_dir (#666).
 func TestCheckPluginDirParents(t *testing.T) {
 	root := pluginDir(t)

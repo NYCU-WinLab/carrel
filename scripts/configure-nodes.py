@@ -366,6 +366,7 @@ PLUGIN_LIB = "/usr/local/lib/carrel/plugins"
 PLUGIN_ARTIFACTS = "/var/lib/carrel/plugin-artifacts"
 PLUGIN_ENV = "/etc/carrel/plugins"
 PLUGIN_UNITS = "/etc/systemd/system"
+PLUGIN_CHECK = "/usr/local/lib/carrel/carrel-agent"
 # Defaults for every plugin service (#674); a site file raises them per plugin.
 PLUGIN_LIMITS = {"tasks_max": "256", "memory_max": "512M", "cpu_quota": "100%"}
 PLUGIN_LIMIT_FORMS = {
@@ -487,7 +488,7 @@ RestrictAddressFamilies={families}
     return socket_unit, service_unit
 
 
-def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl"):
+def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_ARTIFACTS, systemctl="systemctl", checker=PLUGIN_CHECK):
     """The script that makes one node run exactly these plugins.
 
     The artifacts are in <artifacts> already. It checks every checksum and
@@ -498,9 +499,14 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     restarted, so a run that fails halfway still restarts it the next time. A
     plugin installed here and no longer listed loses its units and files; its
     state directory stays, so a plugin listed again keeps its operations.
+    A plugin that changed is checked after its restart (#673): the checker
+    (carrel-agent -check-plugin) must see it answer Describe and Probe with
+    its name and version. If it does not, current points back at the version
+    it had, which stays, and the run fails after the other plugins are done.
+    Older versions go only once the new one passed.
     Every value is checked in plugin_list, so quoting is enough."""
     q = shlex.quote
-    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}", "failed=0"]
+    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)} C={q(checker)}", "failed=0"]
     for p in plugins:
         lines.append(f'echo {q(p["sha256"] + "  " + artifacts + "/" + plugin_artifact(p))} | sha256sum -c --quiet - '
                      f'|| {{ echo "plugin {p["name"]}: the artifact does not match its sha256" >&2; exit 1; }}')
@@ -533,6 +539,9 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
             f"printf '%s' {q(service_unit)} > {unit}.service.next",
             f"cmp -s {unit}.service.next {unit}.service || touch $L/{name}/.restart",
             f"printf '%s' {q(socket_unit)} > {unit}.socket.next && mv {unit}.socket.next {unit}.socket",
+            # Remember the version being replaced, for a rollback.
+            f"prev=$(readlink $L/{name}/current 2>/dev/null || true)",
+            f'if [ -n "$prev" ] && [ "$prev" != {version} ]; then printf %s "$prev" > $L/{name}/.previous; fi',
             f"ln -sfn {version} $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
             f"mv {unit}.service.next {unit}.service",
         ]
@@ -557,16 +566,30 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     ]
     for p in plugins:
         name = p["name"]
+        version = p["version"]
         lines += [
             f"$S enable --now carrel-plugin-{name}.socket",
+            "ok=1",
+            f"if [ -e $L/{name}/.restart ]; then",
             # A failed restart keeps the mark, says so, and fails the run after the other plugins.
             (
-                f"if [ -e $L/{name}/.restart ]; then if $S try-restart carrel-plugin-{name}.service; "
-                f"then rm -f $L/{name}/.restart; "
-                f'else echo "plugin {name}: the restart failed; the next deploy retries it" >&2; failed=1; fi; fi'
+                f"  if $S try-restart carrel-plugin-{name}.service; then rm -f $L/{name}/.restart; "
+                f'else echo "plugin {name}: the restart failed; the next deploy retries it" >&2; ok=0; failed=1; fi'
             ),
-            # Older versions go once the new one is in place.
-            f'for v in $L/{name}/*; do case "${{v##*/}}" in current|{p["version"]}) ;; *) rm -rf "$v";; esac; done',
+            f"  if ! \"$C\" -check-plugin {name} -plugin-version {version}; then",
+            f"    ok=0; failed=1; touch $L/{name}/.restart",
+            f'    prev=$(cat $L/{name}/.previous 2>/dev/null || true)',
+            f'    if [ -n "$prev" ] && [ -d "$L/{name}/$prev" ]; then',
+            f"      ln -sfn \"$prev\" $L/{name}/current.next && mv -T $L/{name}/current.next $L/{name}/current",
+            f"      $S try-restart carrel-plugin-{name}.service || true",
+            f'      echo "plugin {name} {version} did not answer: kept $prev" >&2',
+            "    else",
+            f'      echo "plugin {name} {version} did not answer and there is no earlier version to return to" >&2',
+            "    fi",
+            "  fi",
+            "fi",
+            # Older versions go once the new one is restarted and answers.
+            f'if [ "$ok" = 1 ]; then rm -f $L/{name}/.previous; for v in $L/{name}/*; do case "${{v##*/}}" in current|{version}) ;; *) rm -rf "$v";; esac; done; fi',
         ]
     lines.append('[ "$failed" = 0 ]')
     return "\n".join(lines) + "\n"
