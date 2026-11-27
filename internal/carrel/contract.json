@@ -3829,6 +3829,164 @@
       }
     },
     {
+      "name": "webhook_add",
+      "description": "Send the tenant's events (a release that went live or failed, a failed build, a function version that is ready or failed) to an https URL as signed POSTs, in order, retried for about 8 hours. Each delivery follows Standard Webhooks: webhook-id, webhook-timestamp and webhook-signature headers. Returns the signing secret, shown only here. At most 10 per tenant. GET /v1/events streams the same events without a URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "https URL on a public address."
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "app.release.live",
+                "app.release.failed",
+                "app.build.failed",
+                "function.version.ready",
+                "function.version.failed",
+                "webhook.test"
+              ]
+            },
+            "description": "Event types to send; empty or absent sends all."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "webhook_list",
+      "description": "List the tenant's webhooks, the event types, and each webhook's last delivery.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "webhook_remove",
+      "description": "Stop and remove a webhook.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "pattern": "^wh_[a-z0-9]{1,32}$",
+            "description": "The webhook's id from webhook_list."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "webhook"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "webhook_rotate",
+      "description": "Replace a webhook's signing secret. For 24 hours deliveries carry signatures from both the old and the new secret, so the receiver can switch without a gap. Returns the new secret, shown only here.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "pattern": "^wh_[a-z0-9]{1,32}$",
+            "description": "The webhook's id from webhook_list."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "webhook"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "webhook_test",
+      "description": "Send one webhook.test event to a webhook now and return the HTTP status it answered with.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "webhook": {
+            "type": "string",
+            "pattern": "^wh_[a-z0-9]{1,32}$",
+            "description": "The webhook's id from webhook_list."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "webhook"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "function_deploy",
       "description": "Deploy a container image as a function: it runs only while it has requests and sleeps without memory otherwise, waking from a snapshot in about 100 ms. The image must serve HTTP on its port. Each deploy builds a new version from the image (pulled anonymously; linux/amd64) and puts it live once its first answer below 500 arrives. Returns at once with state building; follow it with function_get and wait_seconds. A function keeps no state between instances.",
       "inputSchema": {
@@ -5292,7 +5450,11 @@
     "function_remove",
     "runner_add",
     "runner_remove",
-    "operation_cancel"
+    "operation_cancel",
+    "webhook_add",
+    "webhook_remove",
+    "webhook_rotate",
+    "webhook_test"
   ],
   "async_tools": [
     "deployment_apply",
@@ -5503,7 +5665,12 @@
       "app_webhook_rotate",
       "runner_add",
       "runner_list",
-      "runner_remove"
+      "runner_remove",
+      "webhook_add",
+      "webhook_list",
+      "webhook_remove",
+      "webhook_rotate",
+      "webhook_test"
     ],
     "functions": [
       "function_deploy",

@@ -127,6 +127,7 @@ type Platform struct {
 	// jumpLast is the outcome of the last background SyncJump ("" before any).
 	jumpLast           string
 	reports            map[int]chan struct{}
+	events             eventHub
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
 	sshProbe           func(context.Context, D) bool

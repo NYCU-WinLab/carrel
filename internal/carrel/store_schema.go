@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS oauth(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT N
 CREATE TABLE IF NOT EXISTS site(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id));`)
 		return err
 	},
+	// 1 to 2: each tenant's event log (#642).
+	func(tx *sql.Tx) error {
+		_, err := tx.Exec(`CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,tenant INTEGER NOT NULL,at REAL NOT NULL,type TEXT NOT NULL,data TEXT NOT NULL);
+CREATE INDEX events_tenant ON events(tenant,id);`)
+		return err
+	},
 }
 
 // SchemaVersion is the version this release writes and reads.

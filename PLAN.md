@@ -167,7 +167,7 @@ Tool annotations follow one rule, and `TestContractAnnotations` checks it over t
 registers an eligible tenant. `destructiveHint` is true when the call removes something the member
 cannot get back with one call: deleted data (`machine_delete`, `snapshot_delete`, `image_delete`,
 `function_remove`, `app_unlink`), state that is overwritten (`snapshot_rollback`), a resource
-returned to a pool (`vip_remove`, `public_ip_release`) and a secret replaced (`app_webhook_rotate`).
+returned to a pool (`vip_remove`, `public_ip_release`) and a secret replaced (`app_webhook_rotate`, `webhook_rotate`).
 Removing a grant, key, route or client that one add call restores is not destructive.
 `idempotentHint` is true on a write whose repeat with the same arguments changes nothing more.
 
@@ -251,6 +251,9 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `function_rollback` | `function`; switches back to the previous version |
 | | `function_schedule` | `function`, `name`, `cron`, `time_zone`, `path`, `body`, `remove`; a cron schedule the function's host fires with `X-Carrel-Schedule` |
 | | `function_remove` | `confirm: <name>`; deletes every version and snapshot |
+| Events | `webhook_add` | `url`, `types`; signed POSTs (Standard Webhooks) of the tenant's events, retried for about 8 hours; returns the secret once |
+| | `webhook_list`, `webhook_remove`, `webhook_test` | the webhooks and their last delivery; `webhook_test` sends one `webhook.test` event |
+| | `webhook_rotate` | `webhook`; a new secret, the old one also signs for 24 hours |
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
 | Virtual addresses | `vip_add`, `vip_list`, `vip_remove` | `name`, `machines` (section 6.3) |
 | Insight | `machine_metrics` | CPU, memory, disk and network from the hypervisor |

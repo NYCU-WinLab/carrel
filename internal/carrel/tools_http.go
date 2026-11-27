@@ -113,6 +113,7 @@ func (a *App) toolRoutes(mux *http.ServeMux, origin string) {
 		}
 		writeToolResult(w, a.Call(r.Context(), "operation_get", args, who))
 	})
+	mux.HandleFunc("GET /v1/events", a.eventStream(origin))
 }
 
 func writeToolResult(w http.ResponseWriter, result D) {

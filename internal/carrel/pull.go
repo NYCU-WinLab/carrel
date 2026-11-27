@@ -161,7 +161,9 @@ func (p *Platform) reportFailedBuild(ctx context.Context, app D, body D) D {
 	e.Transaction(func(tx *Execution) {
 		tx.S.Put("releases", id, n, r)
 		tx.S.Put("apps", app["id"], n, app)
+		tx.emit(n, "app.build.failed", D{"app": app["name"], "release": id, "sha": sha, "error": r["error"]})
 	})
+	p.events.notify()
 	e.pruneReleases(app)
 	e.S.Log("agent:"+str(app["id"]), n, "app_build_failed", D{"app": app["name"], "sha": sha}, "ok")
 	return D{"ok": true}

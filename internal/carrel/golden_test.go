@@ -494,6 +494,12 @@ func goldenScenario(g *goldenRun) {
 	call("apps", "app_link", D{"machine": "web", "name": "gitea", "mode": "pull", "repo": "git@git.example.org:alice/site.git", "build": "make", "start": "./run", "port": 8080}, alice)
 	call("apps", "app_webhook_rotate", D{"app": "gitea"}, alice)
 	call("apps", "app_unlink", D{"app": "gitea", "confirm": "gitea"}, alice)
+	// No function_env_key here: a webhook cannot seal its secret.
+	call("apps", "webhook_add", D{"url": "https://hooks.example.org/carrel"}, alice)
+	call("apps", "webhook_list", D{}, alice)
+	call("apps", "webhook_rotate", D{"webhook": "wh_missing"}, alice)
+	call("apps", "webhook_test", D{"webhook": "wh_missing"}, alice)
+	call("apps", "webhook_remove", D{"webhook": "wh_missing"}, alice)
 	// Organization and GitLab runners: no visibility lookup leaves the test.
 	call("runners", "runner_add", D{"machine": "web", "provider": "github", "url": "https://github.com/winlab", "dry_run": true}, alice)
 	call("runners", "runner_add", D{"machine": "web", "provider": "github", "url": "https://github.com/winlab"}, alice)
