@@ -3,7 +3,6 @@ package carrel
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 )
@@ -68,10 +67,6 @@ func TestSnapshotMigrationRefusesWhatItCannotCarry(t *testing.T) {
 		"no configuration": {func(p *Platform) {
 			p.Store.Put("snapshots", "10100-s1", 1, without(legacySnapshot(10100, "s1", nil), "configuration"))
 		}, "no configuration"},
-		"exists": {func(p *Platform) {
-			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", nil))
-			putSnapshotRecord(p, 1, 10100, "s1", 20, "", nil)
-		}, "exists already"},
 		"active operation": {func(p *Platform) {
 			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", nil))
 			p.Store.Put("operations", "op1", 1, D{"id": "op1", "tool": "snapshot_delete", "state": "running"})
@@ -156,16 +151,14 @@ func TestSnapshotsMoveBackForARollback(t *testing.T) {
 }
 
 // The move back refuses, changing nothing, while a snapshot runs or a
-// record is not ready.
+// record is not ready. A core row under a record's name is replaced instead
+// (TestSnapshotCollisionKeepsTheRecord).
 func TestSnapshotsMoveBackRefuses(t *testing.T) {
 	for name, setup := range map[string]func(p *Platform){
 		"running": func(p *Platform) {
 			p.Store.Put("operations", "op1", 1, D{"id": "op1", "tool": "snapshot_create", "state": "running"})
 		},
 		"not ready": func(p *Platform) { putSnapshotRecord(p, 1, 10100, "busy", 20, "deleting", D{"cpu": 1}) },
-		"row exists": func(p *Platform) {
-			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", nil))
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, _ := fixture(t)
@@ -198,45 +191,37 @@ func TestSnapshotsMoveDeletesByRowKey(t *testing.T) {
 	}
 }
 
-// collisionSQL is the delete the handbook gives for a name collision during
-// a rollback: it removes the core row and leaves the plugin ledger and PVE.
-const collisionSQL = `DELETE FROM objects WHERE kind=? AND id=?", ("snapshots", sys.argv[2])`
-
-// A name collision is one PVE snapshot behind two rows. The handbook keeps
-// the plugin record, whose configuration matches PVE, and removes only the
-// core row; both moves then run.
-func TestSnapshotCollisionRunbook(t *testing.T) {
-	handbook, err := os.ReadFile("../../docs/operator-handbook.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	section := string(handbook)[strings.Index(string(handbook), "#### Rolling back to a release before the snapshot plugin"):]
-	section = section[:strings.Index(section, "\n## ")]
-	if !strings.Contains(section, collisionSQL) || strings.Contains(section, "qm delsnapshot") {
-		t.Fatal("the handbook's collision steps changed")
-	}
-	kept := D{"cpu": 1, "disk_gb": 20, "memory_mb": 1024, "nics": []any{}}
-	for name, move := range map[string]func(*Store) (D, error){"back": MoveSnapshotsBack, "forward": MigrateSnapshots} {
-		t.Run(name, func(t *testing.T) {
-			p, _ := fixture(t)
-			putSnapshotRecord(p, 1, 10100, "s1", 20, "", kept)
-			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", D{"configuration": D{"cpu": 4, "disk_gb": 20, "memory_mb": 8192, "nics": []any{}}}))
-			if _, err := move(p.Store); err == nil || !strings.Contains(err.Error(), "exists already") {
-				t.Fatal("collision not refused", err)
-			}
-			p.Store.Exec("DELETE FROM objects WHERE kind=? AND id=?", "snapshots", "10100-s1")
-			if _, err := move(p.Store); err != nil {
-				t.Fatal(err)
-			}
-			var got D
-			if name == "back" {
-				got = p.Store.Get("snapshots", "10100-s1")
-			} else {
-				got = p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s1"))
-			}
-			if got == nil || num(obj(got["configuration"])["cpu"]) != 1 {
-				t.Fatal("the kept record lost the PVE configuration", string(encoded(got)))
-			}
-		})
+// A name collision merges only when both rows agree on configuration and
+// size; otherwise it stops the move and changes nothing (#723).
+func TestSnapshotCollision(t *testing.T) {
+	cfg := D{"cpu": 1, "disk_gb": 20, "memory_mb": 1024, "nics": []any{}}
+	for name, c := range map[string]struct {
+		move func(*Store) (D, error)
+		key  string
+	}{"back": {MoveSnapshotsBack, "replaced"}, "forward": {MigrateSnapshots, "dropped"}} {
+		for _, differ := range []D{nil, {"configuration": merge(cfg, D{"memory_mb": 8192})}, {"disk_gb": 40}} {
+			t.Run(fmt.Sprintf("%s/%v", name, differ), func(t *testing.T) {
+				p, _ := fixture(t)
+				putSnapshotRecord(p, 1, 10100, "s1", 20, "", cfg)
+				p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", merge(D{"configuration": cfg}, differ)))
+				ledger, core := len(p.Store.Objects(pluginObjectRows)), len(p.Store.Objects("snapshots"))
+				r, err := c.move(p.Store)
+				if differ != nil {
+					if err == nil || !strings.Contains(err.Error(), "differ") || len(p.Store.Objects(pluginObjectRows)) != ledger || len(p.Store.Objects("snapshots")) != core {
+						t.Fatal("a differing collision merged", r, err)
+					}
+					return
+				}
+				if err != nil || !equal(r[c.key], []any{"10100-s1"}) {
+					t.Fatal(r, err)
+				}
+				if name == "back" && (len(p.Store.Objects(pluginObjectRows)) != 0 || p.Store.Get("snapshots", "10100-s1") == nil) {
+					t.Fatal("move back left the ledger")
+				}
+				if name == "forward" && (len(p.Store.Objects("snapshots")) != 0 || p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s1")) == nil) {
+					t.Fatal("move forward left a core row")
+				}
+			})
+		}
 	}
 }

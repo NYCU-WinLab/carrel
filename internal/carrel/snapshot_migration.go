@@ -37,8 +37,9 @@ var snapshotPluginTools = []D{
 // holds the moved snapshots as plugin objects, once, and a snapshot that
 // release takes is moved at the next start. Anything the move cannot carry
 // stops the start: an operation on snapshots still running, a snapshot that
-// is not ready, a name the plugin refuses, a row with no configuration, or
-// a record that exists already. The plugin's tool and quota rows are written
+// is not ready, a name the plugin refuses, or a row with no configuration.
+// A row under a name the ledger holds, alike in configuration and size, is
+// dropped and named in the result; one that differs stops it (#723). The plugin's tool and quota rows are written
 // on the first move only, so a later report's values are not undone.
 func MigrateSnapshots(s *Store) (result D, err error) {
 	defer func() {
@@ -46,7 +47,7 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 			result, err = nil, fmt.Errorf("snapshot migration: %v", r)
 		}
 	}()
-	moved := 0
+	moved, dropped := 0, []any{}
 	s.Transaction(func(tx *Store) {
 		rows := tx.Rows("SELECT id, tenant, data FROM objects WHERE kind='snapshots' ORDER BY id")
 		done := tx.SiteGet("migration", snapshotMigration)
@@ -72,8 +73,11 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 				panic(fmt.Sprintf("snapshot %s has no configuration", snap.ID))
 			}
 			id := pluginObjectID("snapshot", "snapshot", snap.VMID, snap.Name)
-			if tx.Get(pluginObjectRows, id) != nil {
-				panic(fmt.Sprintf("plugin object %s exists already", id))
+			if rec := tx.Get(pluginObjectRows, id); rec != nil {
+				sameSnapshotRows(decode(str(r["data"])), rec)
+				tx.Remove("snapshots", r["id"])
+				dropped = append(dropped, r["id"])
+				continue
 			}
 			rec := pluginObject{ID: id, Plugin: "snapshot", Kind: "snapshot", Name: snap.Name, VMID: snap.VMID, State: "ready",
 				Charge: map[string]float64{"snapshots": 1, "snapshot_gb": float64(snap.DiskGB)}, Holds: []string{"freeze", "migrate", "backfill"},
@@ -97,7 +101,11 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 		}
 		tx.SitePut("migration", snapshotMigration, D{"moved": total, "at": now()})
 	})
-	return D{"moved": moved}, nil
+	out := D{"moved": moved}
+	if len(dropped) > 0 {
+		out["dropped"] = dropped
+	}
+	return out, nil
 }
 
 // MoveSnapshotsBack is the reverse move, for a binary rollback to a release
@@ -105,15 +113,18 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 // starts. That release decides a name is free from its own rows alone, so a
 // snapshot left in the plugin ledger could be taken again over the one PVE
 // keeps, under the configuration of today, and a later rollback would
-// restore older contents than it says. It refuses, changing nothing, while
-// a snapshot operation runs or a record is not ready.
+// restore older contents than it says. A core row such a release wrote under
+// a record's name, alike in configuration and size, is replaced by the
+// record and named in the result; one that differs stops it. It
+// refuses, changing nothing, while a snapshot operation runs or a record is
+// not ready.
 func MoveSnapshotsBack(s *Store) (result D, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result, err = nil, fmt.Errorf("snapshot move back: %v", r)
 		}
 	}()
-	moved := 0
+	moved, replaced := 0, []any{}
 	s.Transaction(func(tx *Store) {
 		for _, op := range tx.ActiveOperations() {
 			if strings.HasPrefix(str(op["tool"]), "snapshot_") {
@@ -133,8 +144,9 @@ func MoveSnapshotsBack(s *Store) (result D, err error) {
 				panic(fmt.Sprintf("snapshot %s has no configuration", o.ID))
 			}
 			id := fmt.Sprintf("%d-%s", o.VMID, o.Name)
-			if tx.Get("snapshots", id) != nil {
-				panic(fmt.Sprintf("snapshot row %s exists already", id))
+			if row := tx.Get("snapshots", id); row != nil {
+				sameSnapshotRows(row, decode(str(r["data"])))
+				replaced = append(replaced, id)
 			}
 			gb := int(o.Charge["snapshot_gb"])
 			if gb == 0 {
@@ -155,5 +167,23 @@ func MoveSnapshotsBack(s *Store) (result D, err error) {
 		}
 		tx.SiteRemove("migration", snapshotMigration)
 	})
-	return D{"moved_back": moved}, nil
+	out := D{"moved_back": moved}
+	if len(replaced) > 0 {
+		out["replaced"] = replaced
+	}
+	return out, nil
+}
+
+// sameSnapshotRows lets a core row and a plugin record under one name merge
+// only when they agree on what was taken: the configuration and the size.
+// An older release that ran with the records in the ledger may have taken
+// the name again over the snapshot PVE keeps, which leaves both rows alike;
+// or a member deleted that snapshot and took a new one under other
+// resources, and then only an admin who looks at PVE can tell which row is
+// right. That case stops the move, changing nothing (#723).
+func sameSnapshotRows(row, rec D) {
+	if equal(row["configuration"], rec["configuration"]) && num(row["disk_gb"]) == num(obj(rec["charge"])["snapshot_gb"]) {
+		return
+	}
+	panic(fmt.Sprintf("snapshot %v-%v has a core row and a plugin record that differ: compare them with PVE, then remove the wrong one", rec["vmid"], rec["name"]))
 }
