@@ -1,0 +1,35 @@
+# A release that adds a schema migration cannot be rolled back by binaries
+# alone (operator handbook, Upgrade and rollback). A pull request that appends
+# to schemaMigrations must say how its rollback works, in a line of its body
+# that starts with "Rollback:" (#767).
+name: migration-note
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+permissions:
+  contents: read
+jobs:
+  rollback-note:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          file=internal/carrel/store_schema.go
+          count() { git show "$1:$file" 2>/dev/null | grep -cP '^\tfunc\(tx \*sql\.Tx\) error \{' || true; }
+          before=$(count "$BASE")
+          after=$(count HEAD)
+          echo "schema migrations: $before on the base, $after here"
+          if [ "$after" -le "$before" ]; then
+            exit 0
+          fi
+          if printf '%s\n' "$BODY" | grep -qE '^Rollback: .{10,}'; then
+            exit 0
+          fi
+          echo "::error::This pull request adds a schema migration. Add a line to its body that starts with 'Rollback:' and says how to go back, for example 'Rollback: restore the pre-migration copy; writes since the upgrade are lost'."
+          exit 1
