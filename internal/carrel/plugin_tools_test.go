@@ -789,6 +789,12 @@ func TestAPluginOperationFailsPastItsRunLimit(t *testing.T) {
 	if obj(op["plugin"])["started_at"] != nil {
 		t.Fatalf("retry window not reset: %s", encoded(op))
 	}
+	// The plugin was asked once, with the key of the timed-out run (#710).
+	f.mu.Lock()
+	if len(f.cancels) != 1 || f.cancels[0]["idempotency_key"] != obj(op["plugin"])["key"] {
+		t.Fatalf("cancels %v, want one for key %v", f.cancels, obj(op["plugin"])["key"])
+	}
+	f.mu.Unlock()
 
 	// The machine is free: another operation on it runs, and one that
 	// finishes within the limit is unaffected.
@@ -797,4 +803,30 @@ func TestAPluginOperationFailsPastItsRunLimit(t *testing.T) {
 	f.mu.Unlock()
 	r = member(p, "backup_take", D{"machine": "web", "wait_seconds": 0})
 	awaitState(t, p, str(obj(r["operation"])["id"]), "succeeded")
+}
+
+// A plugin that refuses the cancel does not keep the operation running: it
+// fails at the limit all the same, and the cancel is sent once (#710).
+func TestAPluginOperationFailsPastItsRunLimitWhenCancelIsRefused(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	plugins := testPlugin()
+	plugins[0].Operations[0].MaxSeconds = 1
+	reportPlugins(p, plugins)
+	seedMachine(p, "web", 10100)
+	f.mu.Lock()
+	f.hold, f.refuseCancel = true, true
+	f.mu.Unlock()
+	r := member(p, "backup_take", D{"machine": "web", "wait_seconds": 0})
+	id := str(obj(r["operation"])["id"])
+	runQueue(p)
+	op := awaitState(t, p, id, "failed")
+	if e := obj(op["error"]); e["code"] != "plugin_failed" || !strings.Contains(str(e["message"]), "1s") {
+		t.Fatalf("error %s", encoded(op))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.cancels) != 1 {
+		t.Fatalf("cancels %v, want exactly one", f.cancels)
+	}
 }
