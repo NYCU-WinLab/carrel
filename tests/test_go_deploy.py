@@ -540,3 +540,138 @@ def test_a_plugin_that_fails_to_install_still_has_the_agents_checked(tmp_path, m
     (tmp_path / "again").mkdir()
     with pytest.raises(SystemExit, match="plugins were not installed .plugin snap: bad artifact"):
         module.host(staged(tmp_path / "again"), "1.0.0")
+
+
+def schema_state(current, previous, copy="/var/lib/carrel/carrel.db.schema-1-20261020-000000.000000000"):
+    return json.dumps(
+        {
+            "current": current,
+            "previous": previous,
+            "copy": copy if previous is not None else None,
+            "copy_time": 1_700_000_000,
+        }
+    )
+
+
+def rollback_node(module, monkeypatch, tmp_path, state):
+    node = Node(module, monkeypatch, tmp_path)
+    stage = staged(tmp_path)
+    (stage / "before-node-agent.py").write_text("old node-agent.py")
+    (stage / "before-release.json").write_text('{"version": "0.9.0"}')
+    (node.lib / "node-agent.py").write_text("new node-agent.py")
+    monkeypatch.setattr(module, "capture", lambda *a: state if a[-2] == "schema" else "carrel.test\n")
+    return node, stage
+
+
+def test_a_rollback_restores_the_binary_units_and_node_programs_but_not_the_database(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
+    module.rollback(stage, False)
+    restore = next(c for c in node.calls if c[6:8] == ("ct", "restore"))
+    assert set(module.ACTIVATED) <= set(json.loads(restore[9]))
+    assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
+    assert not any("restore-database" in c for c in node.ct() for c in c)
+    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
+
+
+def test_a_rollback_refuses_a_newer_database_without_the_database_flag(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 1))
+    with pytest.raises(SystemExit, match="--database"):
+        module.rollback(stage, False)
+    assert (node.lib / "node-agent.py").read_text() == "new node-agent.py"
+    assert not any(c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop") for c in node.calls)
+
+
+def test_a_rollback_with_the_database_prints_the_loss_and_restores_the_copy_while_carrel_is_stopped(
+    tmp_path, monkeypatch, capsys
+):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 1))
+    module.rollback(stage, True)
+    assert "LOST: every write" in capsys.readouterr().out
+    restored = [c for c in node.calls if c[-2:] == ("restore-database", "1")]
+    assert len(restored) == 1
+    stop = max(
+        i
+        for i, c in enumerate(node.calls)
+        if c == ("pct", "exec", "100", "--", "systemctl", "stop", "carrel")
+    )
+    start = node.calls.index(("pct", "exec", "100", "--", "systemctl", "start", "carrel"))
+    assert stop < node.calls.index(restored[0]) < start
+
+
+def test_a_rollback_will_not_restore_a_database_the_last_deploy_did_not_migrate(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
+    with pytest.raises(SystemExit, match="migrated nothing"):
+        module.rollback(stage, True)
+    assert not any(c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop") for c in node.calls)
+
+
+def test_a_rollback_with_the_database_needs_the_premigration_copy(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    state = json.loads(schema_state(2, 1))
+    state["copy"] = None
+    _, stage = rollback_node(module, monkeypatch, tmp_path, json.dumps(state))
+    with pytest.raises(SystemExit, match="No pre-migration copy"):
+        module.rollback(stage, True)
+
+
+def make_database(path, version):
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE t(x)")
+    db.execute(f"PRAGMA user_version={version}")
+    db.commit()
+    db.close()
+
+
+def test_the_archived_database_names_the_schema_the_previous_release_reads(tmp_path, monkeypatch, capsys):
+    import tarfile
+
+    module = load("install-control.py")
+    root = tmp_path / "rb"
+    root.mkdir()
+    old = tmp_path / "old.db"
+    make_database(old, 1)
+    with tarfile.open(root / "go-20261020-000000.tar.gz", "w:gz") as archive:
+        archive.add(old, arcname="var/lib/carrel/carrel.db")
+    database = tmp_path / "carrel.db"
+    make_database(database, 2)
+    make_database(tmp_path / "carrel.db.schema-1-20261020-000000.000000000", 1)
+    monkeypatch.setattr(module, "DATABASE", database)
+    monkeypatch.setattr(module, "ROLLBACK", root)
+    module.ct_schema("20261020-000000")
+    state = json.loads(capsys.readouterr().out)
+    assert (
+        state["current"] == 2
+        and state["previous"] == 1
+        and state["copy"].endswith("20261020-000000.000000000")
+    )
+
+
+def test_restoring_the_database_replaces_it_with_the_premigration_copy_and_keeps_the_copy(
+    tmp_path, monkeypatch
+):
+    module = load("install-control.py")
+    database = tmp_path / "carrel.db"
+    make_database(database, 2)
+    (tmp_path / "carrel.db-wal").write_text("stale")
+    copy = tmp_path / "carrel.db.schema-1-20261020-000000.000000000"
+    make_database(copy, 1)
+    monkeypatch.setattr(module, "DATABASE", database)
+    module.ct_restore_database("1")
+    assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 1
+    assert copy.exists() and not (tmp_path / "carrel.db-wal").exists()
+    assert oct(database.stat().st_mode & 0o777) == "0o600"
+
+
+def test_restoring_the_database_refuses_a_copy_of_another_schema(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    database = tmp_path / "carrel.db"
+    make_database(database, 2)
+    make_database(tmp_path / "carrel.db.schema-1-20261020-000000.000000000", 0)
+    monkeypatch.setattr(module, "DATABASE", database)
+    with pytest.raises(SystemExit, match="not an intact schema 1"):
+        module.ct_restore_database("1")
+    assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 2

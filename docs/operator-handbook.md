@@ -164,6 +164,19 @@ database:
   pre-migration copy (see [Database schema](#database-schema)) loses every write since the upgrade.
   The release notes of such a release say so.
 
+To go back one release, run on the first exit node (the deploy's stage directory stays there):
+
+```sh
+python3 /var/lib/carrel/go-upgrade-<stamp>/install-control.py rollback [--database]
+```
+
+It restores the binary, units, configuration and node programs the last deploy saved, as a failed
+health check does, and defaults to the newest `go-upgrade-*`. With `--database` it also restores the
+newest `<database>.schema-<N>-*` copy, `N` being the schema the archived database had, and first
+prints what is lost: every write since the upgrade. The copy stays. Without `--database` it refuses
+when the database's schema is newer than the one the previous release reads, before anything
+changes; with it, it refuses when the last deploy migrated nothing.
+
 ## Node agent
 
 A node reaches the control plane over SSH by default. On the agent transport (PLAN 8.6),
