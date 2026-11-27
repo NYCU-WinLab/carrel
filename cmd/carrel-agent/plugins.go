@@ -156,7 +156,8 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 		info.Operations = append(info.Operations, carrel.PluginOperation{Name: op.Name, Description: op.Description,
 			Params: json.RawMessage(op.ParamsSchema), Member: op.Member, ReadOnly: op.ReadOnly,
 			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset), DryRun: op.DryRun,
-			ObjectKind: clip(op.ObjectKind), ObjectEffect: clip(op.ObjectEffect), ObjectParam: clip(op.ObjectParam)})
+			ObjectKind: clip(op.ObjectKind), ObjectEffect: clip(op.ObjectEffect), ObjectParam: clip(op.ObjectParam),
+			Stopped: op.Stopped, Rewinds: op.Rewinds})
 	}
 	for _, q := range d.Quota {
 		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit)})
@@ -258,9 +259,11 @@ type pluginJob struct {
 	// Reservation is the record the control plane holds for an object
 	// operation (#663).
 	Reservation string `json:"reservation"`
-	// ObjectSpec is the object declaration the control plane charged by
-	// (carrel.PluginObjectSpec).
-	ObjectSpec string `json:"object_spec"`
+	// OperationSpec is what the control plane did around the operation by
+	// its report (carrel.PluginOperationSpec), and Machine the facts of the
+	// operation's machine.
+	OperationSpec string          `json:"operation_spec"`
+	Machine       json.RawMessage `json:"machine"`
 }
 
 func reply(v any) ([]byte, bool) {
@@ -312,13 +315,13 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 		// reserved for it, and a reserved one only on a plugin that, now,
 		// says it acts on an object: either way round the count would be
 		// wrong.
-		spec := ""
+		spec, object := "", false
 		for _, op := range info.Operations {
 			if op.Name == j.Operation {
-				spec = carrel.PluginObjectSpec(info, op)
+				spec, object = carrel.PluginOperationSpec(info, op), op.ObjectKind != ""
 			}
 		}
-		if !j.DryRun && (spec != j.ObjectSpec || (spec != "") != (j.Reservation != "")) {
+		if !j.DryRun && (spec != j.OperationSpec || object != (j.Reservation != "")) {
 			return refuse("plugin_refused", fmt.Sprintf("plugin %s operation %s and the control plane disagree on its object record", j.Plugin, j.Operation))
 		}
 		params := string(j.Params)
@@ -326,7 +329,7 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 			params = "{}"
 		}
 		op, err = c.StartOperation(ctx, &pluginpb.StartRequest{IdempotencyKey: j.IdempotencyKey, Operation: j.Operation, Params: params,
-			DryRun: j.DryRun, Reservation: j.Reservation})
+			DryRun: j.DryRun, Reservation: j.Reservation, Machine: string(j.Machine)})
 	case "get":
 		op, err = c.GetOperation(ctx, &pluginpb.GetRequest{IdempotencyKey: j.IdempotencyKey})
 	case "cancel":

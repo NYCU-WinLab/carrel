@@ -356,6 +356,27 @@ once, as they read carrel's own rows. The records are in the `plugin_objects` ro
 - A record keeps the holds it was made with, and the plugin's dimensions keep their limits, while
   no node reports the plugin. An admin sets a plugin dimension with `quota_set` as any other.
 
+#### Plugin operations on a machine
+
+An operation whose schema requires `machine` gets the machine's facts with the start, as
+`machine`: VMID, kind, node, CPU, memory, disk, power state and `configuration`, a digest of
+what a disk rewind must find unchanged (#663).
+
+- `stopped`: the guest must be stopped while the operation runs. carrel refuses a paused guest,
+  and a machine that is provisioning, deleting, migrating or resizing. It shuts a running guest
+  down gracefully before the start. A dry run reports `downtime_expected`.
+- Once the run has ended, carrel starts the guest again if it was running, and waits for a report
+  from the new boot. The result says `power_state` and `power_state_restored`.
+- A run whose fate is unknown, such as a plugin that stopped answering, leaves the guest stopped:
+  the plugin may still be writing its disk. The error says `machine_left_stopped`.
+  `operation_retry` asks after the same run and restores the guest when it ends.
+- A run that succeeded is not repeated: when the guest does not come back, a retry only starts it.
+- `rewinds`: the operation may bring the disk back to an earlier state. It must also be
+  `stopped`. carrel treats the guest's access files as unknown and pushes the principals again.
+- The start carries a digest of what carrel did around the operation (`operation_spec`). The agent
+  starts it only if the plugin declares the same now. A plugin must refuse a `stopped` start whose
+  `machine` does not say `power_state` stopped: an older agent sends none.
+
 #### Installing plugins
 
 The site file lists the plugins a site runs (#662). carrel installs them on every agent node and

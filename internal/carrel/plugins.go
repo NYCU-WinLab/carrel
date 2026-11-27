@@ -48,6 +48,10 @@ type PluginOperation struct {
 	ObjectKind   string `json:"object_kind,omitempty"`
 	ObjectEffect string `json:"object_effect,omitempty"`
 	ObjectParam  string `json:"object_param,omitempty"`
+	// Stopped: the machine is stopped while it runs; Rewinds: it may bring
+	// the disk back to an earlier state.
+	Stopped bool `json:"stopped,omitempty"`
+	Rewinds bool `json:"rewinds,omitempty"`
 }
 
 // PluginQuota is a quota dimension a plugin's objects are charged to.

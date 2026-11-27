@@ -63,6 +63,17 @@ message OperationType {
   string object_kind = 10;
   string object_effect = 11;
   string object_param = 12;
+  // stopped: the machine must be stopped while the operation runs (#663).
+  // carrel refuses a paused guest, shuts a running one down gracefully
+  // before the start and, once the run has ended, starts it again and waits
+  // until it is ready. StartRequest.machine says power_state "stopped"; a
+  // plugin must refuse a start of such an operation that does not, as an
+  // agent built before the field sends none.
+  bool stopped = 13;
+  // rewinds: the operation may bring the machine's disk back to an earlier
+  // state, as a snapshot rollback does. carrel then treats the guest's
+  // access files as unknown and waits for a report from a new boot.
+  bool rewinds = 14;
 }
 
 // A quota dimension the plugin's objects are charged to. Tenants' quota
@@ -129,6 +140,11 @@ message StartRequest {
   // INVALID_ARGUMENT: an agent built before the field drops it, and carrel
   // would then not have counted the object.
   string reservation = 5;
+  // machine: JSON facts of the machine the operation acts on, for an
+  // operation whose schema requires "machine": vmid, kind ("vm" or "ct"),
+  // node, cpu, memory_mb, disk_gb, power_state and configuration, a digest
+  // of what a disk rewind must find unchanged (resources, NICs and ISO).
+  string machine = 6;
 }
 
 message GetRequest {

@@ -98,9 +98,20 @@ type OperationType struct {
 	// an object belongs to one machine. carrel charges the tenant's quota and
 	// reserves the record before the start, and sends its id as
 	// StartRequest.reservation.
-	ObjectKind    string `protobuf:"bytes,10,opt,name=object_kind,json=objectKind,proto3" json:"object_kind,omitempty"`
-	ObjectEffect  string `protobuf:"bytes,11,opt,name=object_effect,json=objectEffect,proto3" json:"object_effect,omitempty"`
-	ObjectParam   string `protobuf:"bytes,12,opt,name=object_param,json=objectParam,proto3" json:"object_param,omitempty"`
+	ObjectKind   string `protobuf:"bytes,10,opt,name=object_kind,json=objectKind,proto3" json:"object_kind,omitempty"`
+	ObjectEffect string `protobuf:"bytes,11,opt,name=object_effect,json=objectEffect,proto3" json:"object_effect,omitempty"`
+	ObjectParam  string `protobuf:"bytes,12,opt,name=object_param,json=objectParam,proto3" json:"object_param,omitempty"`
+	// stopped: the machine must be stopped while the operation runs (#663).
+	// carrel refuses a paused guest, shuts a running one down gracefully
+	// before the start and, once the run has ended, starts it again and waits
+	// until it is ready. StartRequest.machine says power_state "stopped"; a
+	// plugin must refuse a start of such an operation that does not, as an
+	// agent built before the field sends none.
+	Stopped bool `protobuf:"varint,13,opt,name=stopped,proto3" json:"stopped,omitempty"`
+	// rewinds: the operation may bring the machine's disk back to an earlier
+	// state, as a snapshot rollback does. carrel then treats the guest's
+	// access files as unknown and waits for a report from a new boot.
+	Rewinds       bool `protobuf:"varint,14,opt,name=rewinds,proto3" json:"rewinds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -217,6 +228,20 @@ func (x *OperationType) GetObjectParam() string {
 		return x.ObjectParam
 	}
 	return ""
+}
+
+func (x *OperationType) GetStopped() bool {
+	if x != nil {
+		return x.Stopped
+	}
+	return false
+}
+
+func (x *OperationType) GetRewinds() bool {
+	if x != nil {
+		return x.Rewinds
+	}
+	return false
 }
 
 // A quota dimension the plugin's objects are charged to. Tenants' quota
@@ -608,7 +633,12 @@ type StartRequest struct {
 	// object_kind. A plugin must refuse such a start without one, as
 	// INVALID_ARGUMENT: an agent built before the field drops it, and carrel
 	// would then not have counted the object.
-	Reservation   string `protobuf:"bytes,5,opt,name=reservation,proto3" json:"reservation,omitempty"`
+	Reservation string `protobuf:"bytes,5,opt,name=reservation,proto3" json:"reservation,omitempty"`
+	// machine: JSON facts of the machine the operation acts on, for an
+	// operation whose schema requires "machine": vmid, kind ("vm" or "ct"),
+	// node, cpu, memory_mb, disk_gb, power_state and configuration, a digest
+	// of what a disk rewind must find unchanged (resources, NICs and ISO).
+	Machine       string `protobuf:"bytes,6,opt,name=machine,proto3" json:"machine,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -674,6 +704,13 @@ func (x *StartRequest) GetDryRun() bool {
 func (x *StartRequest) GetReservation() string {
 	if x != nil {
 		return x.Reservation
+	}
+	return ""
+}
+
+func (x *StartRequest) GetMachine() string {
+	if x != nil {
+		return x.Machine
 	}
 	return ""
 }
@@ -898,7 +935,7 @@ var File_plugin_proto protoreflect.FileDescriptor
 const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"\fplugin.proto\x12\x10carrel.plugin.v1\"\x11\n" +
-	"\x0fDescribeRequest\"\xfd\x02\n" +
+	"\x0fDescribeRequest\"\xb1\x03\n" +
 	"\rOperationType\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rparams_schema\x18\x02 \x01(\tR\fparamsSchema\x12 \n" +
@@ -915,7 +952,9 @@ const file_plugin_proto_rawDesc = "" +
 	" \x01(\tR\n" +
 	"objectKind\x12#\n" +
 	"\robject_effect\x18\v \x01(\tR\fobjectEffect\x12!\n" +
-	"\fobject_param\x18\f \x01(\tR\vobjectParam\"]\n" +
+	"\fobject_param\x18\f \x01(\tR\vobjectParam\x12\x18\n" +
+	"\astopped\x18\r \x01(\bR\astopped\x12\x18\n" +
+	"\arewinds\x18\x0e \x01(\bR\arewinds\"]\n" +
 	"\x0eQuotaDimension\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rdefault_limit\x18\x02 \x01(\x01R\fdefaultLimit\x12\x12\n" +
@@ -942,13 +981,14 @@ const file_plugin_proto_rawDesc = "" +
 	"\fProbeRequest\"E\n" +
 	"\rProbeResponse\x12\x1c\n" +
 	"\tsupported\x18\x01 \x01(\bR\tsupported\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xa8\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xc2\x01\n" +
 	"\fStartRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1c\n" +
 	"\toperation\x18\x02 \x01(\tR\toperation\x12\x16\n" +
 	"\x06params\x18\x03 \x01(\tR\x06params\x12\x17\n" +
 	"\adry_run\x18\x04 \x01(\bR\x06dryRun\x12 \n" +
-	"\vreservation\x18\x05 \x01(\tR\vreservation\"5\n" +
+	"\vreservation\x18\x05 \x01(\tR\vreservation\x12\x18\n" +
+	"\amachine\x18\x06 \x01(\tR\amachine\"5\n" +
 	"\n" +
 	"GetRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\"8\n" +
