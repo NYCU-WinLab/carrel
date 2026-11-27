@@ -579,10 +579,13 @@ def older_stage(tmp_path, script="old configure-nodes.py", recorded=None):
     """A kept stage of 0.9.0, the release the rolled-back upgrade replaced."""
     older = tmp_path / "go-upgrade-20261019-000000"
     older.mkdir()
-    (older / "release.json").write_text('{"version": "0.9.0"}')
-    (older / "configure-nodes.py").write_text(script)
     digest = hashlib.sha256((recorded or script).encode()).hexdigest()
-    (older / "hashes.json").write_text(json.dumps({"configure-nodes.py": digest}))
+    release = json.dumps({"version": "0.9.0", "sha256": {"configure-nodes.py": digest}})
+    (older / "release.json").write_text(release)
+    (older / "configure-nodes.py").write_text(script)
+    # The rolled-back upgrade saved the same record before it replaced 0.9.0.
+    (tmp_path / "go-upgrade-20261020-000000" / "before-release.json").write_text(release)
+    (tmp_path / "lib" / "release.json").write_text('{"version": "1.0.0"}')
     return older
 
 
@@ -604,7 +607,10 @@ def test_rollback_without_an_intact_previous_stage_leaves_the_other_nodes_and_sa
 ):
     module = load("install-control.py")
     node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
-    older_stage(tmp_path, recorded="something else")
+    older = older_stage(tmp_path, recorded="something else")
+    # A hashes.json in the stage that matches its script does not make it trusted.
+    digest = hashlib.sha256(b"old configure-nodes.py").hexdigest()
+    (older / "hashes.json").write_text(json.dumps({"configure-nodes.py": digest}))
     module.rollback(database=False)
     assert not any(c[:1] == ("python3",) and c[1].endswith("configure-nodes.py") for c in node.calls)
     assert not any("--agent-service" in c for c in node.calls)

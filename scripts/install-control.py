@@ -516,16 +516,19 @@ def agents(stage):
 
 
 def previous_stage(release):
-    """The newest kept stage that staged this release, with its configure-nodes.py intact."""
+    """The newest kept stage that staged this release, with the configure-nodes.py it recorded.
+
+    The digest comes from the rolled-back upgrade's saved release record, not from the stage itself."""
+    expected = (release.get("sha256") or {}).get("configure-nodes.py")
+    if not expected:
+        return None
     for stage in sorted(STAGES.glob("go-upgrade-*"), reverse=True):
         script = stage / "configure-nodes.py"
         try:
             staged = json.loads((stage / "release.json").read_text())
-            hashes = json.loads((stage / "hashes.json").read_text())
         except (OSError, ValueError):
             continue
-        if (staged == release and script.exists()
-                and hashlib.sha256(script.read_bytes()).hexdigest() == hashes.get("configure-nodes.py")):
+        if staged == release and script.exists() and hashlib.sha256(script.read_bytes()).hexdigest() == expected:
             return stage
     return None
 
