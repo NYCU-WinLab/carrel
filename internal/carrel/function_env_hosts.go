@@ -116,9 +116,21 @@ func (p *Platform) AgentHostKey(ctx context.Context, token, source string, body 
 // checkpoint empties the log before and after. Backups taken earlier still
 // hold the old values; they open only with function_env_key.
 func (p *Platform) scrubDatabase() error {
-	for _, q := range []string{"PRAGMA wal_checkpoint(TRUNCATE)", "VACUUM", "PRAGMA wal_checkpoint(TRUNCATE)"} {
-		if _, err := p.Store.DB.Exec(q); err != nil {
-			slog.Error("database_scrub_failed", "step", q, "error", err)
+	checkpoint := func() error {
+		// A reader in another process (a backup) holds frames back: the
+		// answer says so in its first column, not as an error.
+		var busy, frames, done int
+		if err := p.Store.DB.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &frames, &done); err != nil {
+			return err
+		}
+		if busy != 0 {
+			return fmt.Errorf("a reader kept the write-ahead log")
+		}
+		return nil
+	}
+	for _, step := range []func() error{checkpoint, func() error { _, err := p.Store.DB.Exec("VACUUM"); return err }, checkpoint} {
+		if err := step(); err != nil {
+			slog.Error("database_scrub_failed", "error", err, "next_action", "run sqlite3 <database> 'VACUUM; PRAGMA wal_checkpoint(TRUNCATE)' with no backup running")
 			return err
 		}
 	}
