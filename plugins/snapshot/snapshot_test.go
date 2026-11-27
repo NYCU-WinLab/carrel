@@ -32,6 +32,8 @@ type fakePVE struct {
 	lose bool
 	// refuse: the next start is answered with this error, doing nothing.
 	refuse string
+	// proxy: the next start is done but pveproxy answers 596.
+	proxy bool
 	// hold: tasks stay running until released.
 	hold bool
 	// exit is the exit status of the next task; "" is OK.
@@ -142,6 +144,11 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.tasks[upid] = &fakeTask{upid: upid, typ: taskTypes[kind][op], id: fmt.Sprint(vmid), start: time.Now().Unix(), running: true, exit: exit, apply: apply}
+		if f.proxy {
+			f.proxy = false
+			http.Error(w, "Connection timed out", 596)
+			return
+		}
 		if f.lose {
 			f.lose = false
 			conn, _, _ := w.(http.Hijacker).Hijack()
@@ -377,5 +384,19 @@ func TestAnEarlierTaskIsNotTheRuns(t *testing.T) {
 	}
 	if op := get(t, newServer(), "k2"); op.State != "failed" || !f.snaps[10100]["s2"] {
 		t.Fatalf("second delete: %v", op)
+	}
+}
+
+// A 596 from pveproxy is not PVE's refusal: pvedaemon may have started the
+// task, so the run stays running and finds it.
+func TestAProxyTimeoutIsNotARefusal(t *testing.T) {
+	s, f := fixture(t)
+	f.proxy, f.hold = true, true
+	op, err := start(s, "k1", "create", take, "running")
+	if err != nil || op.State != "running" {
+		t.Fatalf("start: %v %v", op, err)
+	}
+	if op := get(t, s, "k1"); op.State != "running" || op.Task == "" || f.sent != 1 {
+		t.Fatalf("found: %v, sent %d", op, f.sent)
 	}
 }

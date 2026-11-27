@@ -25,7 +25,9 @@ type pve struct {
 }
 
 // apiError is an answer PVE gave: the request reached it and was refused.
-// Any other error says nothing of what PVE did.
+// Any other error says nothing of what PVE did. A status from 502 up is not
+// PVE's answer: pveproxy gives 59x of its own when pvedaemon is slow, and
+// pvedaemon may still start the task.
 type apiError struct {
 	Status  int
 	Message string
@@ -69,6 +71,9 @@ func (p *pve) do(ctx context.Context, method, path string, form url.Values) (jso
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode >= 502 {
+		return nil, fmt.Errorf("PVE's proxy answered %s", resp.Status)
 	}
 	if resp.StatusCode >= 300 {
 		// PVE puts the reason in the status line, and field errors in the body.
