@@ -178,24 +178,38 @@ func TestConcurrentOpenersMigrateOnce(t *testing.T) {
 	}
 }
 
-// A migration that keeps failing keeps one copy, not one per attempt.
+// A migration that keeps failing keeps 2 copies, not one per attempt: the
+// oldest stays and the newest is replaced on every attempt.
 func TestAFailingMigrationKeepsOneCopy(t *testing.T) {
 	saved, savedVersion := schemaMigrations, SchemaVersion
 	defer func() { schemaMigrations, SchemaVersion = saved, savedVersion }()
 	schemaMigrations = append(append([]func(*sql.Tx) error{}, saved...), func(tx *sql.Tx) error { return errors.New("broken") })
 	SchemaVersion = len(schemaMigrations)
 	path := atVersion(t, savedVersion)
+	pattern := fmt.Sprintf("%s.schema-%d-*", path, savedVersion)
+	var first, second []string
 	for i := 0; i < 3; i++ {
-		if _, err := OpenStore(path); err == nil {
-			t.Fatal("a broken migration passed")
+		if _, err := OpenStore(path); err == nil || !strings.Contains(err.Error(), "broken") {
+			t.Fatal("a broken migration passed", err)
+		}
+		switch i {
+		case 0:
+			first, _ = filepath.Glob(pattern)
+		case 1:
+			second, _ = filepath.Glob(pattern)
 		}
 	}
-	if copies, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, savedVersion)); len(copies) != 1 {
-		t.Fatal("copies", copies)
+	copies, _ := filepath.Glob(pattern)
+	if len(first) != 1 || len(second) != 2 || len(copies) != 2 {
+		t.Fatal("copies", first, second, copies)
+	}
+	if copies[0] != first[0] || copies[1] == second[1] {
+		t.Fatal("the oldest copy must stay and the newest be replaced", first, second, copies)
 	}
 }
 
-// An earlier copy from the same version is kept; no newer copy replaces it.
+// An earlier copy from the same version is kept, copies between it and the
+// new one go, and a new copy holds the data being migrated (#743).
 func TestTheOldestCopyIsKept(t *testing.T) {
 	saved, savedVersion := schemaMigrations, SchemaVersion
 	defer func() { schemaMigrations, SchemaVersion = saved, savedVersion }()
@@ -203,12 +217,46 @@ func TestTheOldestCopyIsKept(t *testing.T) {
 	SchemaVersion = len(schemaMigrations)
 	path := atVersion(t, savedVersion)
 	first := fmt.Sprintf("%s.schema-%d-20000101-000000.000000000", path, savedVersion)
+	middle := fmt.Sprintf("%s.schema-%d-20010101-000000.000000000", path, savedVersion)
+	for _, f := range []string{first, middle} {
+		if err := os.WriteFile(f, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := OpenStore(path); err == nil || !strings.Contains(err.Error(), "broken") {
+		t.Fatal("the broken migration", err)
+	}
+	copies, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, savedVersion))
+	if len(copies) != 2 || copies[0] != first {
+		t.Fatal("copies", copies)
+	}
+	if data, err := os.ReadFile(first); err != nil || string(data) != "old" {
+		t.Fatal("the oldest copy changed", err)
+	}
+	db, err := sql.Open("sqlite", copies[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var slug string
+	if err := db.QueryRow("SELECT slug FROM tenants").Scan(&slug); err != nil || slug != "alice" {
+		t.Fatal("the new copy", slug, err)
+	}
+}
+
+// The result names the new copy as backup and the kept one as first_backup.
+func TestMigrateReportsBothCopies(t *testing.T) {
+	path := atVersion(t, SchemaVersion-1)
+	first := fmt.Sprintf("%s.schema-%d-20000101-000000.000000000", path, SchemaVersion-1)
 	if err := os.WriteFile(first, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	OpenStore(path)
-	copies, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, savedVersion))
-	if data, err := os.ReadFile(first); len(copies) != 1 || err != nil || string(data) != "old" {
-		t.Fatal("copies", copies, err)
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	if s.Schema["first_backup"] != first || s.Schema["backup"] == nil || s.Schema["backup"] == first {
+		t.Fatal("schema", s.Schema)
 	}
 }
