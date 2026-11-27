@@ -262,7 +262,11 @@ def main():
     # PVE's SDN regeneration hook requires dnsmasq@.service; carrel's private
     # network DHCP also runs dnsmasq, in its own namespace.
     run("systemctl", "mask", "dnsmasq.service")
-    run("apt-get", "install", "-y", "dnsmasq", "wireguard-tools")
+    # A blank host has none of these (#569): PVE's EVPN controller needs frr
+    # and frr-pythontools, the nftables firewall below is proxmox-firewall,
+    # and the function host's flows need conntrack (#242).
+    run("apt-get", "install", "-y", "dnsmasq", "wireguard-tools", "frr", "frr-pythontools",
+        "proxmox-firewall", "conntrack")
     run("systemctl", "enable", "--now", "frr")
     # A change made before a failed run is still owed its apply (issue #48):
     # the marker survives the failure, and the rerun applies.

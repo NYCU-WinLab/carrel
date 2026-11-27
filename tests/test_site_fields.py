@@ -53,3 +53,24 @@ def test_agent_identity_domain_is_checked():
         nodes.agent_identity(B09, [n["name"] for n in B09["nodes"]], set(B09["agent_nodes"]))["domain"]
         == "agent.carrel.winlab.tw"
     )
+
+
+def test_gateway_resolver_follows_the_site_file(monkeypatch):
+    bootstrap = load("bootstrap-platform.py")
+    pushed = {}
+
+    def run(*args, **_):
+        if args[:2] == ("pct", "push"):
+            pushed[args[4]] = Path(args[3]).read_text()
+
+    monkeypatch.setattr(bootstrap, "run", run)
+    bootstrap.dns(101, {})
+    conf = pushed["/etc/carrel-dns.conf"]
+    assert "listen-address=10.200.0.2\n" in conf and "server=1.1.1.1\nserver=1.0.0.1\n" in conf
+    assert "ExecStart=/usr/sbin/dnsmasq" in pushed["/etc/systemd/system/carrel-dns.service"]
+    pushed.clear()
+    bootstrap.dns(101, {"infra_nameserver": "9.9.9.9"})
+    assert (
+        "server=9.9.9.9\n" in pushed["/etc/carrel-dns.conf"]
+        and "1.1.1.1" not in pushed["/etc/carrel-dns.conf"]
+    )

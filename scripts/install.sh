@@ -89,6 +89,22 @@ if [[ -n $join ]]; then
 	fi
 fi
 
+# A host without a subscription cannot read the enterprise repositories that
+# installing proxmox-ve adds, and every apt-get update after fails. Turn them
+# off and read pve-no-subscription instead (from the site's mirror if one is
+# already configured).
+if ! pvesubscription get 2>/dev/null | grep -q '^status: active'; then
+	for f in /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/ceph.sources; do
+		if [[ -f $f ]] && grep -q enterprise.proxmox.com "$f" && ! grep -q '^Enabled: no' "$f"; then
+			run sh -c "echo 'Enabled: no' >> '$f'"
+		fi
+	done
+	if ! grep -rqs pve-no-subscription /etc/apt/sources.list.d/ /etc/apt/sources.list; then
+		codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+		run sh -c "printf 'Types: deb\nURIs: http://download.proxmox.com/debian/pve\nSuites: %s\nComponents: pve-no-subscription\nSigned-By: /usr/share/keyrings/proxmox-archive-keyring.gpg\n' '$codename' > /etc/apt/sources.list.d/proxmox.sources"
+	fi
+fi
+
 run install -d -m 755 /etc/carrel
 if ! cmp -s "$site" /etc/carrel/site.json; then
 	[[ -f /etc/carrel/site.json ]] && run cp /etc/carrel/site.json "/etc/carrel/site.json.$(date +%Y%m%d%H%M%S)"

@@ -1,0 +1,18 @@
+{
+  "site": "stg",
+  "cluster": "carrel-stg",
+  "storage": "tank",
+  "underlay_interface": "vmbr0",
+  "nodes": [
+    {"name": "carrel-stg01", "address": "10.10.11.110"}
+  ],
+  "exit_nodes": ["carrel-stg01"],
+  "agent_nodes": ["carrel-stg01"],
+  "ssh_jump": true,
+  "fetch": false,
+  "public": {
+    "address": "198.18.61.10/24",
+    "gateway": "198.18.61.1",
+    "vlan": 61
+  }
+}
