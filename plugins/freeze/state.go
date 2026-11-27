@@ -31,16 +31,24 @@ type run struct {
 	// Phase is where a freeze stands: backup, verify or destroy.
 	Phase   string `json:"phase,omitempty"`
 	Storage string `json:"storage,omitempty"`
+	// Target is the guest storage a restore puts the disks on.
+	Target string `json:"target,omitempty"`
 	// Note names the backup this run made; PVE keeps it as the backup's notes.
 	Note string `json:"note,omitempty"`
 	// VerifyBy is when the wait for the backup's verification ends, in Unix seconds.
 	VerifyBy int64 `json:"verify_by,omitempty"`
 	// Digest and Started prove the machine is what the backup holds: its
 	// config digest and its newest start, taken before the backup was sent.
-	Digest    string `json:"digest,omitempty"`
-	Started   int64  `json:"started,omitempty"`
-	Volid     string `json:"volid,omitempty"`
-	Size      int64  `json:"size,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+	Started int64  `json:"started,omitempty"`
+	Volid   string `json:"volid,omitempty"`
+	Size    int64  `json:"size,omitempty"`
+	// Discard says that a delete found a cut-off restore to remove first.
+	Discard bool `json:"discard,omitempty"`
+	// Cancelled says that a cancel stopped the restore.
+	Cancelled bool `json:"cancelled,omitempty"`
+	// Result is the JSON result a thaw or a delete ended with.
+	Result    string `json:"result,omitempty"`
 	Done      bool   `json:"done,omitempty"`
 	State     string `json:"state,omitempty"`
 	Error     string `json:"error,omitempty"`

@@ -104,18 +104,23 @@ func (p *pve) version(ctx context.Context) error {
 
 // needed are the privileges the token must hold, by the path they are held on.
 // VM.Config.Options clears a guest's onboot; Sys.Audit on the node lists the
-// starts of a guest by any user, not only the token's own.
-func needed(storage, node string) map[string][]string {
-	return map[string][]string{
+// starts of a guest by any user, not only the token's own; a thaw restores
+// the disks to the guest storage.
+func needed(storage, guestStorage, node string) map[string][]string {
+	need := map[string][]string{
 		"/vms":                {"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"},
 		"/storage/" + storage: {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"},
 		"/nodes/" + node:      {"Sys.Audit"},
 	}
+	if guestStorage != storage {
+		need["/storage/"+guestStorage] = []string{"Datastore.AllocateSpace"}
+	}
+	return need
 }
 
 // missing are the needed privileges the token does not hold, as "<priv> on <path>".
-func (p *pve) missing(ctx context.Context, storage string) ([]string, error) {
-	need := needed(storage, p.node)
+func (p *pve) missing(ctx context.Context, storage, guestStorage string) ([]string, error) {
+	need := needed(storage, guestStorage, p.node)
 	paths := make([]string, 0, len(need))
 	for path := range need {
 		paths = append(paths, path)
@@ -280,8 +285,20 @@ func (p *pve) start(ctx context.Context, r *run) (string, error) {
 	case "backup":
 		data, err = p.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/vzdump", url.PathEscape(p.node)), url.Values{
 			"vmid": {fmt.Sprint(r.VMID)}, "storage": {r.Storage}, "mode": {"stop"}, "notes-template": {r.Note}})
-	case "destroy":
+	case "destroy", "discard":
 		data, err = p.do(ctx, http.MethodDelete, p.guest(r.Kind, r.VMID)+"?"+url.Values{"purge": {"1"}}.Encode(), nil)
+	case "restore":
+		// The disks go to the site's guest storage, as the node agent restores
+		// them: without one PVE puts a container's every mount point on
+		// "local", which is not the guest storage and often cannot hold one.
+		form := url.Values{"vmid": {fmt.Sprint(r.VMID)}, "storage": {r.Target}}
+		if r.Kind == "ct" {
+			form.Set("ostemplate", r.Volid)
+			form.Set("restore", "1")
+		} else {
+			form.Set("archive", r.Volid)
+		}
+		data, err = p.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/%s", url.PathEscape(p.node), kinds[r.Kind]), form)
 	default:
 		return "", fmt.Errorf("no task for phase %q", r.Phase)
 	}
@@ -293,8 +310,11 @@ func (p *pve) start(ctx context.Context, r *run) (string, error) {
 
 // taskType is the PVE type of the task of the run's phase.
 func taskType(r *run) string {
-	if r.Phase == "destroy" {
+	switch r.Phase {
+	case "destroy", "discard":
 		return map[string]string{"vm": "qmdestroy", "ct": "vzdestroy"}[r.Kind]
+	case "restore":
+		return map[string]string{"vm": "qmrestore", "ct": "vzrestore"}[r.Kind]
 	}
 	return "vzdump"
 }
@@ -365,6 +385,7 @@ type backup struct {
 	Volid        string `json:"volid"`
 	Notes        string `json:"notes"`
 	Size         int64  `json:"size"`
+	CTime        int64  `json:"ctime"`
 	Protected    int    `json:"protected"`
 	Verification struct {
 		State string `json:"state"`
@@ -414,4 +435,54 @@ func (p *pve) removeBackup(ctx context.Context, storage string, b *backup) error
 	}
 	_, err := p.do(ctx, http.MethodDelete, fmt.Sprintf("/nodes/%s/storage/%s/content/%s", url.PathEscape(p.node), url.PathEscape(storage), url.PathEscape(b.Volid)), nil)
 	return err
+}
+
+// guestConfig reads the lock and the name of a guest: a VM's name, a
+// container's hostname. A restore PVE cut off leaves its half locked "create".
+func (p *pve) guestConfig(ctx context.Context, kind string, vmid int) (lock, name string, err error) {
+	data, err := p.do(ctx, http.MethodGet, p.guest(kind, vmid)+"/config", nil)
+	if err != nil {
+		return "", "", err
+	}
+	var c struct {
+		Lock     string `json:"lock"`
+		Name     string `json:"name"`
+		Hostname string `json:"hostname"`
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return "", "", err
+	}
+	name = c.Name
+	if kind == "ct" {
+		name = c.Hostname
+	}
+	return c.Lock, name, nil
+}
+
+// backupVolid is the backup on the storage with this volume id, or nil.
+func (p *pve) backupVolid(ctx context.Context, storage string, vmid int, volid string) (*backup, error) {
+	q := url.Values{"content": {"backup"}, "vmid": {fmt.Sprint(vmid)}}
+	list, err := p.backupList(ctx, storage, q)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Volid == volid {
+			return &list[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// backupList lists the backups of the storage that match the query.
+func (p *pve) backupList(ctx context.Context, storage string, q url.Values) ([]backup, error) {
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/storage/%s/content?%s", url.PathEscape(p.node), url.PathEscape(storage), q.Encode()), nil)
+	if err != nil {
+		return nil, err
+	}
+	var list []backup
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
 }

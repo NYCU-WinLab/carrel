@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/NYCU-WinLab/carrel/internal/pluginpb"
@@ -65,6 +66,7 @@ func fixtureWith(t *testing.T, storage string, h http.HandlerFunc) *server {
 	t.Setenv("CARREL_PVE_NODE", "pve")
 	t.Setenv("CARREL_PVE_CA", ca)
 	t.Setenv("CARREL_BACKUP_STORAGE", storage)
+	t.Setenv("CARREL_GUEST_STORAGE", "tank")
 	return newServer()
 }
 
@@ -77,7 +79,7 @@ func probe(t *testing.T, s *server) *pluginpb.ProbeResponse {
 	return p
 }
 
-func TestDescribeListsBothOperations(t *testing.T) {
+func TestDescribeListsTheOperations(t *testing.T) {
 	d := Describe()
 	if d.Name != "freeze" {
 		t.Fatalf("name %q", d.Name)
@@ -85,7 +87,12 @@ func TestDescribeListsBothOperations(t *testing.T) {
 	got := map[string]*pluginpb.OperationType{}
 	for _, op := range d.Operations {
 		got[op.Name] = op
-		if !op.Member || op.Toolset != "machines" || op.ObjectKind != "frozen" {
+		if !op.Member {
+			// The admin operations have no machine and no object.
+			if op.ObjectKind != "" || op.Toolset != "" {
+				t.Errorf("admin operation %s: %+v", op.Name, op)
+			}
+		} else if !op.Member || op.Toolset != "machines" || op.ObjectKind != "frozen" {
 			t.Errorf("operation %s: %+v", op.Name, op)
 		}
 		var schema map[string]any
@@ -93,7 +100,7 @@ func TestDescribeListsBothOperations(t *testing.T) {
 			t.Errorf("operation %s: schema is not JSON", op.Name)
 		}
 	}
-	if len(got) != 2 || got["machine_freeze"] == nil || got["machine_thaw"] == nil {
+	if len(got) != 4 || got["machine_freeze"] == nil || got["machine_thaw"] == nil || got["frozen_delete"] == nil || got["backup_sweep"] == nil {
 		t.Fatalf("operations: %v", got)
 	}
 	if len(d.Objects) != 1 || !d.Objects[0].Gone || d.Objects[0].Name != "frozen" {
@@ -117,6 +124,9 @@ func TestDescribeMatchesTheContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, op := range Describe().Operations {
+		if !op.Member {
+			continue
+		}
 		i := slices.IndexFunc(c.Tools, func(x struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
@@ -138,25 +148,33 @@ func TestProbeWithNoBackupStorageIsUnsupported(t *testing.T) {
 
 func TestProbeNeedsThePrivilegesOnTheStorage(t *testing.T) {
 	vms := []string{"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"}
-	all := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
+	all := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"},
+		"/storage/tank": {"Datastore.AllocateSpace"}, "/nodes/pve": {"Sys.Audit"}}
 	if p := probe(t, fixture(t, "pbs", all)); !p.Supported {
 		t.Fatalf("probe: %+v", p)
 	}
-	short := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
+	short := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}, "/storage/tank": all["/storage/tank"], "/nodes/pve": {"Sys.Audit"}}
 	p := probe(t, fixture(t, "pbs", short))
 	if p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/pbs" {
 		t.Fatalf("probe: %+v", p)
 	}
 	// Without Sys.Audit the token sees only its own tasks, not the starts of others.
-	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"]}
+	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"], "/storage/tank": all["/storage/tank"]}
 	if p := probe(t, fixture(t, "pbs", noAudit)); p.Supported || p.Reason != "the token lacks Sys.Audit on /nodes/pve" {
+		t.Fatalf("probe: %+v", p)
+	}
+	// A thaw restores the disks to the guest storage.
+	noGuest := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"], "/nodes/pve": {"Sys.Audit"}}
+	if p := probe(t, fixture(t, "pbs", noGuest)); p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/tank" {
 		t.Fatalf("probe: %+v", p)
 	}
 }
 
-func TestThawDoesNotRunYet(t *testing.T) {
+func TestProbeWithNoGuestStorageIsUnsupported(t *testing.T) {
 	s := fixture(t, "pbs", nil)
-	if _, err := s.StartOperation(context.Background(), &pluginpb.StartRequest{Operation: "machine_thaw"}); err == nil {
-		t.Fatal("started")
+	t.Setenv("CARREL_GUEST_STORAGE", "")
+	s = newServer()
+	if p := probe(t, s); p.Supported || !strings.Contains(p.Reason, "CARREL_GUEST_STORAGE") {
+		t.Fatalf("probe: %+v", p)
 	}
 }
