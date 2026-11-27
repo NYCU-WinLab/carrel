@@ -103,7 +103,8 @@ func TestANewerSchemaIsRefused(t *testing.T) {
 	_, err := db.Exec("PRAGMA user_version=" + itoaSchema(SchemaVersion+1))
 	must(err)
 	db.Close()
-	if _, err := OpenStore(path); err == nil || !strings.Contains(err.Error(), "schema version") {
+	// The message names the copy to restore (#767).
+	if _, err := OpenStore(path); err == nil || !strings.Contains(err.Error(), "schema version") || !strings.Contains(err.Error(), path+".schema-"+itoaSchema(SchemaVersion)+"-") {
 		t.Fatal(err)
 	}
 	if schemaVersionOf(t, path) != SchemaVersion+1 {
