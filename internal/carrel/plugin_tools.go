@@ -12,8 +12,10 @@ package carrel
 // the caller's tenant (BindMachine) and hands the plugin its VMID.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -799,6 +801,13 @@ func (e *Execution) runPlugin() {
 			e.P.writer.Lock()
 			delete(plug, "started_at")
 			e.P.writer.Unlock()
+			// Ask the plugin to stop the run, once and best effort: the
+			// operation fails whether or not the plugin answers.
+			cctx, stop := context.WithTimeout(e.Ctx, 30*time.Second)
+			if _, err := e.P.Backend.Call(cctx, merge(job, D{"call": "cancel"}), target); err != nil {
+				slog.Warn("plugin cancel after run limit failed", "plugin", name, "operation", plug["operation"], "error", err)
+			}
+			stop()
 			fail("plugin_failed", fmt.Sprintf("Plugin %s ran longer than its limit of %s", name, time.Duration(limit*float64(time.Second))), D{"recovery": "retry"})
 		}
 		if !sleep(e.Ctx, pluginPoll) {
