@@ -235,3 +235,25 @@ func (p *pve) version(ctx context.Context) error {
 	_, err := p.do(ctx, http.MethodGet, "/version", nil)
 	return err
 }
+
+// needed are the privileges the token must hold on /vms.
+var needed = []string{"VM.Audit", "VM.Snapshot", "VM.Snapshot.Rollback"}
+
+// missing are the needed privileges the token does not hold on /vms.
+func (p *pve) missing(ctx context.Context) ([]string, error) {
+	raw, err := p.do(ctx, http.MethodGet, "/access/permissions?"+url.Values{"path": {"/vms"}}.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var perms map[string]map[string]int
+	if err := json.Unmarshal(raw, &perms); err != nil {
+		return nil, fmt.Errorf("PVE's permissions: %w", err)
+	}
+	out := []string{}
+	for _, priv := range needed {
+		if _, ok := perms["/vms"][priv]; !ok {
+			out = append(out, priv)
+		}
+	}
+	return out, nil
+}
