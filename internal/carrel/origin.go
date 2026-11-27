@@ -82,7 +82,8 @@ func (e *Execution) originAwaitsGateway() bool {
 // maintenanceReconciles reports whether the maintenance pass reconciles.
 // A site with tenants always does. A site with none does only to send the
 // gateway its origin pair, and only when the first node holds no state or
-// the state this database sent: an empty database put in front of a
+// the state this database sent (or, while a send is unacknowledged, the
+// state it sent before): an empty database put in front of a
 // working site must not reconcile its tenants' networks away.
 func (e *Execution) maintenanceReconciles() bool {
 	if len(e.S.Tenants()) > 0 {
@@ -97,7 +98,10 @@ func (e *Execution) maintenanceReconciles() bool {
 	}); err != nil {
 		return false
 	}
-	if held == nil || held == "" || str(held) == str(obj(e.S.SiteGet("reconcile", "sent"))["revision"]) {
+	// The revision sent, or while a send is unacknowledged the one the node
+	// acknowledged before it (#806).
+	sent := obj(e.S.SiteGet("reconcile", "sent"))
+	if held == nil || held == "" || str(held) == str(sent["revision"]) || (sent["previous"] != nil && str(held) == str(sent["previous"])) {
 		return true
 	}
 	slog.Error("origin_reconcile_refused", "type", "maintenance", "reason", "the first node holds state this database did not send")

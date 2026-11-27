@@ -473,10 +473,22 @@ func (e *Execution) Reconcile() D {
 	for _, n := range nodes {
 		e.P.desired.Store(n.Name, revision)
 	}
-	result := D{"node": e.Call(request, nodes[0].Target)}
 	// The database that sent this state, so a site with no tenant can later
 	// tell its own nodes from nodes another database configured (#569).
-	if str(obj(e.S.SiteGet("reconcile", "sent"))["revision"]) != revision {
+	// Recorded before sending, beside the last revision the first node
+	// acknowledged: a lost reply leaves the node at the new revision, a
+	// failed send leaves it at the previous one, and both stay accepted
+	// (#806). previous holds until a reply acknowledges a revision.
+	sent := obj(e.S.SiteGet("reconcile", "sent"))
+	if str(sent["revision"]) != revision {
+		previous, pending := sent["previous"]
+		if !pending {
+			previous = sent["revision"]
+		}
+		e.S.SitePut("reconcile", "sent", D{"revision": revision, "previous": previous})
+	}
+	result := D{"node": e.Call(request, nodes[0].Target)}
+	if _, pending := obj(e.S.SiteGet("reconcile", "sent"))["previous"]; pending {
 		e.S.SitePut("reconcile", "sent", D{"revision": revision})
 	}
 	e.recordIPv6(result["node"])
