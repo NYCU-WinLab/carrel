@@ -357,9 +357,7 @@ func (p *Platform) Start() {
 			pushJump := false
 			err := attempt(func() {
 				e := p.execution(p.ctx)
-				// A new site has no tenant yet, but the gateway still needs
-				// carrel's own certificate before its name can resolve (#569).
-				if len(e.S.Tenants()) > 0 || e.originAwaitsGateway() {
+				if e.maintenanceReconciles() {
 					e.ExpireGrants()
 					e.ExpireVPNClients()
 					e.ReapPreviews()
