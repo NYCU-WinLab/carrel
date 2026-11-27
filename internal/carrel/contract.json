@@ -3114,12 +3114,6 @@
             "type": "string",
             "description": "The machine name again."
           },
-          "idempotency_key": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 128,
-            "description": "Reuse to retry a lost submission with identical arguments."
-          },
           "dry_run": {
             "type": "boolean",
             "default": false,

@@ -77,6 +77,25 @@ func TestUnfenceRefusesWhileTheFencedOperationRuns(t *testing.T) {
 	}
 }
 
+// A queued fenced operation counts as active too.
+func TestUnfenceRefusesWhileTheFencedOperationIsQueued(t *testing.T) {
+	p, f, _ := withRewindPlugin(t, "running")
+	f.mu.Lock()
+	f.forget = true
+	f.mu.Unlock()
+	r := member(p, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
+	id := str(obj(r["operation"])["id"])
+	op := p.Store.Get("operations", id)
+	op["state"] = "queued"
+	p.Store.Put("operations", id, 1, op)
+	if f := failure(p.Execute(context.Background(), "machine_unfence", D{"tenant": "alice", "machine": "web", "confirm": "web"}, person("root", true))); f["code"] != "conflict" || f["operation"] != id {
+		t.Fatalf("a queued fenced operation: %s", encoded(f))
+	}
+	if p.Store.Get("machines", "10100")["plugin_fence"] != id {
+		t.Fatal("the fence went")
+	}
+}
+
 // Once unfenced, the fenced operation is over: a retry would resume it with
 // the power it recorded before the fence.
 func TestAnUnfencedOperationIsNotRetried(t *testing.T) {
@@ -98,6 +117,9 @@ func TestAnUnfencedOperationIsNotRetried(t *testing.T) {
 	op := p.Store.Get("operations", id)
 	if op["state"] != "failed" || obj(op["error"])["recovery"] != "revise_request" || obj(op["unfenced"])["by"] != "root" {
 		t.Fatalf("the operation: %s", encoded(op))
+	}
+	if got := obj(publicOperation(op)["unfenced"]); got["by"] != "root" || got["at"] == nil {
+		t.Fatalf("the public operation hides who unfenced: %s", encoded(publicOperation(op)))
 	}
 }
 
