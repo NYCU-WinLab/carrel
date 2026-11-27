@@ -366,6 +366,13 @@ PLUGIN_LIB = "/usr/local/lib/carrel/plugins"
 PLUGIN_ARTIFACTS = "/var/lib/carrel/plugin-artifacts"
 PLUGIN_ENV = "/etc/carrel/plugins"
 PLUGIN_UNITS = "/etc/systemd/system"
+# Defaults for every plugin service (#674); a site file raises them per plugin.
+PLUGIN_LIMITS = {"tasks_max": "256", "memory_max": "512M", "cpu_quota": "100%"}
+PLUGIN_LIMIT_FORMS = {
+    "tasks_max": re.compile(r"[1-9][0-9]{0,5}"),
+    "memory_max": re.compile(r"[1-9][0-9]{0,5}[KMG]"),
+    "cpu_quota": re.compile(r"[1-9][0-9]{0,3}%"),
+}
 PLUGIN_STAGE = Path(__file__).resolve().parent
 
 
@@ -377,8 +384,9 @@ def plugin_list(site):
         raise SystemExit("plugins must be a list")
     seen = set()
     for p in plugins:
-        if not isinstance(p, dict) or set(p) - {"name", "version", "url", "sha256", "network", "env_file"}:
-            raise SystemExit("a plugin has name, version, url, sha256 and optionally network and env_file")
+        if not isinstance(p, dict) or set(p) - {"name", "version", "url", "sha256", "network", "env_file", *PLUGIN_LIMITS}:
+            raise SystemExit("a plugin has name, version, url, sha256 and optionally network, env_file, "
+                             "tasks_max, memory_max and cpu_quota")
         if not PLUGIN_NAME.fullmatch(str(p.get("name"))) or p["name"] in seen:
             raise SystemExit(f"plugin name {p.get('name')!r} must be unique, of a-z, 0-9 and -")
         seen.add(p["name"])
@@ -391,6 +399,9 @@ def plugin_list(site):
         for flag in ("network", "env_file"):
             if not isinstance(p.get(flag, False), bool):
                 raise SystemExit(f"plugin {p['name']}: {flag} is true or false")
+        for key, form in PLUGIN_LIMIT_FORMS.items():
+            if key in p and not form.fullmatch(str(p[key])):
+                raise SystemExit(f"plugin {p['name']}: {key} must look like {PLUGIN_LIMITS[key]}")
     return plugins
 
 
@@ -414,6 +425,7 @@ def plugin_units(p):
     name = p["name"]
     families = "AF_UNIX AF_INET AF_INET6" if p.get("network") else "AF_UNIX"
     env = f"EnvironmentFile={PLUGIN_ENV}/{name}.env\n" if p.get("env_file") else ""
+    lim = {k: str(p.get(k, v)) for k, v in PLUGIN_LIMITS.items()}
     ip = "" if p.get("network") else "IPAddressDeny=any\n"
     socket_unit = f"""# Managed by carrel configure-nodes.py: plugin {name}.
 [Unit]
@@ -465,6 +477,9 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
+TasksMax={lim["tasks_max"]}
+MemoryMax={lim["memory_max"]}
+CPUQuota={lim["cpu_quota"]}
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
 RestrictAddressFamilies={families}

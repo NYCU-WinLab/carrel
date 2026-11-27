@@ -427,6 +427,9 @@ removes every plugin the list no longer names:
   `env_file: true` reads `/etc/carrel/plugins/<name>.env`, which the operator writes, for
   credentials such as an API token. Make it root's, mode 0600: other plugins can read
   `/etc/carrel`.
+- Every plugin service is capped at `TasksMax=256`, `MemoryMax=512M` and `CPUQuota=100%`, so a
+  leaking or forking plugin cannot starve the node. Raise one per plugin with `tasks_max`,
+  `memory_max` (such as `2G`) or `cpu_quota` (such as `200%`) in its site file entry.
 - A plugin removed from the list loses its units and program. Its state directory stays, so a
   plugin listed again keeps its operations.
 
