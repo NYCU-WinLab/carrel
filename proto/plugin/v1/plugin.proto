@@ -53,6 +53,49 @@ message OperationType {
   // Without it, carrel never sends a dry run to the plugin: a plugin built
   // before the field would run the operation for real.
   bool dry_run = 9;
+  // An operation on an object carrel keeps a record of (#663): object_kind
+  // names one of DescribeResponse.objects, object_effect is create, delete
+  // or use, and object_param names the required string parameter that
+  // names the object. The schema must also require a top-level "machine":
+  // an object belongs to one machine. carrel charges the tenant's quota and
+  // reserves the record before the start, and sends its id as
+  // StartRequest.reservation.
+  string object_kind = 10;
+  string object_effect = 11;
+  string object_param = 12;
+}
+
+// A quota dimension the plugin's objects are charged to. Tenants' quota
+// holds it as any other; an admin sets it with quota_set.
+message QuotaDimension {
+  // a-z, 0-9 and _, and not a dimension carrel counts itself.
+  string name = 1;
+  // The limit of a tenant whose quota does not set it.
+  double default_limit = 2;
+  string unit = 3;
+}
+
+// What one object charges: amount of a dimension the plugin declares, per
+// object, or times a fact of the object's machine (per is cpu, memory_mb or
+// disk_gb).
+message Charge {
+  string dimension = 1;
+  double amount = 2;
+  string per = 3;
+}
+
+// A kind of object an operation can create. carrel keeps a record of each
+// object, charges it to the tenant and refuses the actions in holds while
+// the object's machine has one.
+message ObjectKind {
+  string name = 1;
+  repeated Charge charges = 2;
+  // holds: any of freeze, migrate (also drain), backfill and delete. A kind
+  // without delete dies with its machine: machine_delete forgets it.
+  repeated string holds = 3;
+  // disk: an object may hold up to its machine's disk on the node's
+  // storage, as a disk snapshot does; admission checks the node for it.
+  bool disk = 4;
 }
 
 message DescribeResponse {
@@ -61,6 +104,8 @@ message DescribeResponse {
   // The contract revision the plugin was built against.
   uint32 contract = 3;
   repeated OperationType operations = 4;
+  repeated QuotaDimension quota = 5;
+  repeated ObjectKind objects = 6;
 }
 
 message ProbeRequest {}
@@ -79,6 +124,11 @@ message StartRequest {
   // dry run, and any start of a read_only operation, must answer done in
   // its first reply; carrel does not ask after its key again.
   bool dry_run = 4;
+  // reservation: the id of the record carrel holds for an operation with an
+  // object_kind. A plugin must refuse such a start without one, as
+  // INVALID_ARGUMENT: an agent built before the field drops it, and carrel
+  // would then not have counted the object.
+  string reservation = 5;
 }
 
 message GetRequest {

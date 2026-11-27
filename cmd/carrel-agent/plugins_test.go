@@ -38,9 +38,13 @@ type fakePlugin struct {
 	started   *atomic.Int32
 	// types replaces the one snapshot operation; brokenProbe and hang make
 	// a plugin misbehave.
-	types       []*pluginpb.OperationType
-	brokenProbe bool
-	hang        bool
+	types   []*pluginpb.OperationType
+	quota   []*pluginpb.QuotaDimension
+	objects []*pluginpb.ObjectKind
+	// reservations are what each start carried.
+	reservations []string
+	brokenProbe  bool
+	hang         bool
 }
 
 func newFake(name string, contract uint32) *fakePlugin {
@@ -57,7 +61,7 @@ func (f *fakePlugin) Describe(ctx context.Context, _ *pluginpb.DescribeRequest) 
 	if types == nil {
 		types = []*pluginpb.OperationType{{Name: "snapshot", ParamsSchema: `{"type":"object"}`}}
 	}
-	return &pluginpb.DescribeResponse{Name: f.name, Version: "1.0.0", Contract: f.contract, Operations: types}, nil
+	return &pluginpb.DescribeResponse{Name: f.name, Version: "1.0.0", Contract: f.contract, Operations: types, Quota: f.quota, Objects: f.objects}, nil
 }
 
 func (f *fakePlugin) Probe(context.Context, *pluginpb.ProbeRequest) (*pluginpb.ProbeResponse, error) {
@@ -77,6 +81,7 @@ func (f *fakePlugin) StartOperation(_ context.Context, r *pluginpb.StartRequest)
 		return op, nil
 	}
 	f.started.Add(1)
+	f.reservations = append(f.reservations, r.Reservation)
 	op := &pluginpb.Operation{IdempotencyKey: r.IdempotencyKey, State: "running", Task: "UPID:test:" + r.IdempotencyKey}
 	f.ops[r.IdempotencyKey] = op
 	return op, nil
@@ -435,5 +440,49 @@ func TestADryRunReachesOnlyAPluginThatTakesOne(t *testing.T) {
 	b := &agent{cfg: config{PluginDir: dir2}}
 	if r := call(t, b, job); r["ok"] != true || current.started.Load() != 1 {
 		t.Fatalf("declared dry run: %v", r)
+	}
+}
+
+// An object operation starts only with the record the control plane
+// reserved, and a reservation only reaches a plugin that, now, says the
+// operation acts on an object (#663). The report carries the declaration.
+func TestAnObjectOperationStartsOnlyOnItsReservation(t *testing.T) {
+	dir := pluginDir(t)
+	p := newFake("copies", 1)
+	p.types = []*pluginpb.OperationType{{Name: "take", ParamsSchema: `{"type":"object"}`, ObjectKind: "copy", ObjectEffect: "create", ObjectParam: "name"}}
+	p.quota = []*pluginpb.QuotaDimension{{Name: "copies", DefaultLimit: 2}}
+	p.objects = []*pluginpb.ObjectKind{{Name: "copy", Holds: []string{"freeze"}, Charges: []*pluginpb.Charge{{Dimension: "copies", Amount: 1}}}}
+	serve(t, dir, p)
+	a := &agent{cfg: config{PluginDir: dir}}
+	info := describe(context.Background(), dir, "copies")
+	if !info.Supported || len(info.Objects) != 1 || info.Objects[0].Holds[0] != "freeze" || info.Quota[0].DefaultLimit != 2 || info.Operations[0].ObjectEffect != "create" {
+		t.Fatalf("report: %+v", info)
+	}
+	bare := `{"op":"plugin","plugin":"copies","call":"start","operation":"take","idempotency_key":"k1"}`
+	if r := call(t, a, bare); r["ok"] != false || p.started.Load() != 0 {
+		t.Fatalf("no reservation: %v", r)
+	}
+	spec := carrel.PluginObjectSpec(info, info.Operations[0])
+	reserved := `{"op":"plugin","plugin":"copies","call":"start","operation":"take","idempotency_key":"k2","reservation":"copies/copy/10100/a","object_spec":"` + spec + `"}`
+	if r := call(t, a, reserved); r["ok"] != true || p.started.Load() != 1 || p.reservations[0] != "copies/copy/10100/a" {
+		t.Fatalf("reserved: %v, %v", r, p.reservations)
+	}
+	// The plugin changed what a copy holds since the control plane charged
+	// by its report: the start is refused.
+	p.mu.Lock()
+	p.objects[0].Holds = nil
+	p.mu.Unlock()
+	again := strings.Replace(reserved, `"k2"`, `"k3"`, 1)
+	if r := call(t, a, again); r["ok"] != false || p.started.Load() != 1 {
+		t.Fatalf("a changed declaration started: %v", r)
+	}
+
+	dir2 := pluginDir(t)
+	plain := newFake("copies", 1)
+	plain.types = []*pluginpb.OperationType{{Name: "take", ParamsSchema: `{"type":"object"}`}}
+	serve(t, dir2, plain)
+	b := &agent{cfg: config{PluginDir: dir2}}
+	if r := call(t, b, reserved); r["ok"] != false || plain.started.Load() != 0 {
+		t.Fatalf("a reservation reached a plugin without objects: %v", r)
 	}
 }

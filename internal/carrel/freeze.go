@@ -23,8 +23,13 @@ var backupVolume = regexp.MustCompile(`^[a-z][a-z0-9_.-]*:backup/[A-Za-z0-9_./:+
 
 // forgetMachine removes everything of a machine that hangs off its VMID.
 func (tx *Execution) forgetMachine(n int, m D) {
-	for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports", "cloud_init"} {
+	for _, kind := range []string{"ports", "domains", "snapshots", "guest_reports", "cloud_init", pluginObjectRows} {
 		for _, o := range tx.S.Objects(kind, n) {
+			// A plugin object that holds the delete outlives its machine,
+			// as when the sweep drops a VM that vanished: its record stays.
+			if kind == pluginObjectRows && contains(o["holds"], "delete") {
+				continue
+			}
 			if integer(o["vmid"]) == integer(m["vmid"]) {
 				tx.S.Remove(kind, fallback(o, "id", o["vmid"]))
 			}
@@ -224,6 +229,7 @@ func (e *Execution) freezeChecks(n int, m D) {
 	if snaps := filter(toDicts(e.snapshots(n)), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) }); len(snaps) > 0 {
 		fail("conflict", "Delete the machine's disk snapshots first; they are not part of the backup", D{"recovery": "resolve_prerequisite", "snapshots": len(snaps)})
 	}
+	e.refusePluginHeld(n, m["vmid"], "freeze", "a frozen machine")
 	if held := e.freezeHeld(n, m); len(held) > 0 {
 		fail("conflict", "Release "+str(held[0]["name"])+" first: it is a shared resource that a frozen machine cannot keep", D{"recovery": "resolve_prerequisite", "held": held})
 	}
@@ -509,7 +515,9 @@ func (e *Execution) DeleteFrozen(f D, a, t D) D {
 	if a["confirm"] != f["name"] {
 		fail("invalid", "confirm must equal the machine name")
 	}
+	e.refusePluginHeld(n, f["vmid"], "delete", "deleting the machine would lose it")
 	delta := D{"ips": -1, "frozen_gb": -num(f["disk_gb"]), "public_ports": -len(filter(toDicts(e.ports(n)), func(p D) bool { return integer(p["vmid"]) == integer(f["vmid"]) }))}
+	e.pluginObjectsFreed(n, f, delta)
 	if !dry {
 		if name := str(f["thaw_node"]); name != "" {
 			// A thaw was begun: the machine may be restored there, wholly or in part.

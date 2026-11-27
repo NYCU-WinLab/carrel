@@ -153,7 +153,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		limits := obj(t["quota"])
 		dim := str(r["dimension"])
 		if tool == "request_approve" {
-			validateQuotaLimit(t, dim, r["amount"], true)
+			e.validateQuotaLimit(t, dim, r["amount"], true)
 			validateGrantExpiry(r["until"])
 			e.checkExpiring(t, dim)
 		}
@@ -185,7 +185,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 	switch tool {
 	case "quota_set":
 		dim := str(a["dimension"])
-		validateQuotaLimit(t, dim, a["amount"], false)
+		e.validateQuotaLimit(t, dim, a["amount"], false)
 		e.checkExpiring(t, dim)
 		limits := merge(obj(t["quota"]), D{dim: a["amount"]})
 		if num(limits["public_ports"]) > 10 || num(limits["networks"]) > 99 || num(limits["machines"]) > 100 {

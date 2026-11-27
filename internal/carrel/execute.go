@@ -342,6 +342,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		}
 		request["action"] = "delete"
 		request["confirm"] = a["confirm"]
+		e.refusePluginHeld(n, m["vmid"], "delete", "deleting the machine would lose it")
 		delta = machineDelta(m)
 		for k, v := range delta {
 			delta[k] = -num(v)
@@ -360,6 +361,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 				delta["snapshot_gb"] = -held
 			}
 		}
+		e.pluginObjectsFreed(n, m, delta)
 	case "machine_power":
 		return e.PowerMachine(m, a, t)
 	case "machine_resize":

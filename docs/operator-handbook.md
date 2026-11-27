@@ -330,6 +330,32 @@ gone once none does. Clients cache tool lists, so a member may need to reconnect
   as after a control plane restart. A plugin that cannot be reached for 10 minutes fails the
   call with `backend_unavailable`.
 
+#### Plugin objects
+
+A plugin can declare kinds of objects its operations make on a machine, such as a disk snapshot
+(#663). carrel keeps a record of each object, so quota, admission and the core actions read it at
+once, as they read carrel's own rows. The records are in the `plugin_objects` rows.
+
+- A plugin declares its quota dimensions, each with a default limit, and its object kinds. A kind
+  names what one object charges: an amount per object, or times the machine's `cpu`, `memory_mb`
+  or `disk_gb`. A dimension may not have the name of one carrel counts itself, such as
+  `snapshots`; the operations are then left out, with the reason.
+- An operation names its `object_kind`, its `object_effect` (`create`, `delete` or `use`) and
+  the required string parameter that names the object. It must also require `machine`.
+- Before a create starts, carrel checks the name is free, charges the tenant's quota and, for a
+  kind with `disk`, checks the node's storage as for a snapshot. It records the object as
+  `creating` and sends the record's id to the plugin as `reservation`. A plugin must refuse a
+  start of an object operation without one: an agent built before the field drops it. The agent
+  starts it only if the plugin declares the object now as the report carrel charged by did.
+- carrel drops a record only on proof the object does not exist: a first start the agent or the
+  plugin refused for the run that made the record, or a delete the plugin fails with `not_found`. Any other failure keeps it
+  charged and holding. A delete of the object clears it.
+- A kind's `holds` names what its objects block: `freeze`, `migrate` (also `node_drain`, which
+  leaves the machine with `has_plugin_objects`), `backfill` and `delete`. A kind without
+  `delete` dies with its machine: `machine_delete` frees its charge and forgets the records.
+- A record keeps the holds it was made with, and the plugin's dimensions keep their limits, while
+  no node reports the plugin. An admin sets a plugin dimension with `quota_set` as any other.
+
 #### Installing plugins
 
 The site file lists the plugins a site runs (#662). carrel installs them on every agent node and

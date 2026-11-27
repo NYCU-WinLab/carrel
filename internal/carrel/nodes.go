@@ -144,6 +144,13 @@ func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []snapshotRecord) {
 			snapshots = append(snapshots, s)
 		}
 	}
+	// A plugin object that holds disk space counts as a snapshot does.
+	for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows) {
+		m := e.S.Get("machines", str(o.VMID))
+		if o.DiskGB > 0 && (m == nil && node == e.P.Nodes()[0] || m != nil && on(m)) {
+			snapshots = append(snapshots, snapshotRecord{ID: o.ID, VMID: o.VMID, Name: o.Name, DiskGB: o.DiskGB, State: o.State})
+		}
+	}
 	return reservations, snapshots
 }
 
