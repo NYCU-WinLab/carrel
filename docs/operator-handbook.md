@@ -467,7 +467,8 @@ A snapshot name has at least 2 characters: PVE refuses a one-character name.
 1. Stop carrel first (`systemctl stop carrel`). `carrel -move-snapshots-back` refuses unless
    `carrel.service` is inactive or failed, and while another carrel process holds the store's
    lock file (`<database>.lock`).
-2. Run `carrel -move-snapshots-back` with the newer binary. It moves the plugin's snapshot records
+2. Run `runuser -u carrel -- carrel -move-snapshots-back` with the newer binary: as the service's
+   user, so the lock file and the database stay the service's. It moves the plugin's snapshot records
    back to core rows, so the older release charges each snapshot once. It also removes the
    plugin's tool and quota site rows, so the older release does not treat `snapshots` and
    `snapshot_gb` as plugin dimensions or route snapshot calls to plugin tools. It refuses, changing
