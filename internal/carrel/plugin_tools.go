@@ -608,6 +608,7 @@ func (e *Execution) dispatchPlugin(a, w D) D {
 	plug["node"], plug["runs"], plug["key"], plug["read_only"], plug["ended"], plug["start_sent"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly, false, false
 	delete(plug, "refused")
 	delete(plug, "plugin_code")
+	delete(plug, "started_at")
 	e.resetPower(true)
 	e.prepareRun(node, op, a)
 	return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
@@ -624,6 +625,7 @@ func (e *Execution) prepareRun(node string, op PluginOperation, a D) {
 		fail("unsupported", fmt.Sprintf("Plugin %s on node %s: %s", plug["plugin"], node, problem), D{"recovery": "retry_infrastructure"})
 	}
 	plug["operation_spec"], plug["rewinds"] = PluginOperationSpec(pl, op), op.Rewinds
+	plug["max_run"] = pluginRunLimit(op).Seconds()
 	var m D
 	if id := obj(e.Op["machine_target"])["vmid"]; id != nil {
 		if m = e.S.Get("machines", str(id)); m == nil {
@@ -761,6 +763,14 @@ func (e *Execution) runPlugin() {
 			}
 		}
 	}
+	// The run time limit counts from the first start of this attempt, not
+	// from queue time, and survives a restart.
+	if plug["started_at"] == nil {
+		e.P.writer.Lock()
+		plug["started_at"] = now()
+		e.P.Operations.Save(e.Op)
+		e.P.writer.Unlock()
+	}
 	r := ask("start")
 	for {
 		if r["progress"] != e.Op["progress"] || r["message"] != e.Op["message"] {
@@ -772,6 +782,14 @@ func (e *Execution) runPlugin() {
 		if boolean(r["done"]) {
 			plug["ended"] = true
 			break
+		}
+		if limit := num(plug["max_run"]); limit > 0 && now()-num(plug["started_at"]) > limit {
+			// The run is not known to have ended, so the failure leaves
+			// any fence as it is. A retry gets a fresh window.
+			e.P.writer.Lock()
+			delete(plug, "started_at")
+			e.P.writer.Unlock()
+			fail("plugin_failed", fmt.Sprintf("Plugin %s ran longer than its limit of %s", name, time.Duration(limit*float64(time.Second))), D{"recovery": "retry"})
 		}
 		if !sleep(e.Ctx, pluginPoll) {
 			panic(e.Ctx.Err())
