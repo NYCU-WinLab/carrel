@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // snapshotMigration is the site row that marks the move of the core
@@ -95,4 +96,54 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 		tx.SitePut("migration", snapshotMigration, D{"moved": total, "at": now()})
 	})
 	return D{"moved": moved}, nil
+}
+
+// MoveSnapshotsBack is the reverse move, for a binary rollback to a release
+// before #663: run it with this binary, carrel stopped, before the older one
+// starts. That release decides a name is free from its own rows alone, so a
+// snapshot left in the plugin ledger could be taken again over the one PVE
+// keeps, under the configuration of today, and a later rollback would
+// restore older contents than it says. It refuses, changing nothing, while
+// a snapshot operation runs or a record is not ready.
+func MoveSnapshotsBack(s *Store) (result D, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result, err = nil, fmt.Errorf("snapshot move back: %v", r)
+		}
+	}()
+	moved := 0
+	s.Transaction(func(tx *Store) {
+		for _, op := range tx.ActiveOperations() {
+			if strings.HasPrefix(str(op["tool"]), "snapshot_") {
+				panic(fmt.Sprintf("operation %s (%s) is still %s: let it end first", op["id"], op["tool"], op["state"]))
+			}
+		}
+		for _, r := range tx.Rows("SELECT tenant, data FROM objects WHERE kind=? ORDER BY id", pluginObjectRows) {
+			var o pluginObject
+			must(json.Unmarshal([]byte(str(r["data"])), &o))
+			if o.Plugin != "snapshot" || o.Kind != "snapshot" {
+				continue
+			}
+			switch {
+			case o.State != "ready":
+				panic(fmt.Sprintf("snapshot %s is %s, not ready", o.ID, o.State))
+			case o.Configuration == nil:
+				panic(fmt.Sprintf("snapshot %s has no configuration", o.ID))
+			}
+			id := fmt.Sprintf("%d-%s", o.VMID, o.Name)
+			if tx.Get("snapshots", id) != nil {
+				panic(fmt.Sprintf("snapshot row %s exists already", id))
+			}
+			gb := int(o.Charge["snapshot_gb"])
+			if gb == 0 {
+				gb = o.DiskGB
+			}
+			row := snapshotRecord{ID: id, VMID: o.VMID, Name: o.Name, DiskGB: gb, State: "ready", OperationID: o.OperationID, Configuration: o.Configuration}
+			tx.Put("snapshots", id, integer(r["tenant"]), decode(string(encoded(row))))
+			tx.Remove(pluginObjectRows, o.ID)
+			moved++
+		}
+		tx.SiteRemove("migration", snapshotMigration)
+	})
+	return D{"moved_back": moved}, nil
 }

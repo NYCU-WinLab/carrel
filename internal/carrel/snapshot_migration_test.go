@@ -121,3 +121,59 @@ func TestACoreSnapshotOperationIsNotRetriedAfterTheSwitch(t *testing.T) {
 		t.Fatal("the refused retry changed something")
 	}
 }
+
+// Moving back before a rollback gives the release before its own rows again,
+// as they were, and the next start moves them forward once more.
+func TestSnapshotsMoveBackForARollback(t *testing.T) {
+	p := unmigrated(t)
+	old := legacySnapshot(10100, "before", nil)
+	p.Store.Put("snapshots", old["id"], 1, old)
+	if _, err := MigrateSnapshots(p.Store); err != nil {
+		t.Fatal(err)
+	}
+	// A snapshot the plugin took after the switch goes back too.
+	putSnapshotRecord(p, 1, 10100, "after", 30, "", D{"cpu": 2, "disk_gb": 30, "memory_mb": 2048, "nics": []any{}})
+	r, err := MoveSnapshotsBack(p.Store)
+	if err != nil || r["moved_back"] != 2 {
+		t.Fatal(r, err)
+	}
+	if got := p.Store.Get("snapshots", str(old["id"])); !equal(decode(string(encoded(got))), decode(string(encoded(old)))) {
+		t.Fatalf("moved back %s, was %s", encoded(got), encoded(old))
+	}
+	if got := p.Store.Get("snapshots", "10100-after"); num(got["disk_gb"]) != 30 || obj(got["configuration"])["cpu"] == nil || got["state"] != "ready" {
+		t.Fatal(string(encoded(got)))
+	}
+	if len(p.Store.Objects(pluginObjectRows)) != 0 || p.Store.SiteGet("migration", snapshotMigration) != nil {
+		t.Fatal("the ledger or the marker kept snapshots")
+	}
+	if r, err := MigrateSnapshots(p.Store); err != nil || r["moved"] != 2 || len(p.Store.Objects("snapshots")) != 0 {
+		t.Fatal("forward again", r, err)
+	}
+}
+
+// The move back refuses, changing nothing, while a snapshot runs or a
+// record is not ready.
+func TestSnapshotsMoveBackRefuses(t *testing.T) {
+	for name, setup := range map[string]func(p *Platform){
+		"running": func(p *Platform) {
+			p.Store.Put("operations", "op1", 1, D{"id": "op1", "tool": "snapshot_create", "state": "running"})
+		},
+		"not ready": func(p *Platform) { putSnapshotRecord(p, 1, 10100, "busy", 20, "deleting", D{"cpu": 1}) },
+		"row exists": func(p *Platform) {
+			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", nil))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, _ := fixture(t)
+			putSnapshotRecord(p, 1, 10100, "s1", 20, "", D{"cpu": 1})
+			setup(p)
+			ledger, core := len(p.Store.Objects(pluginObjectRows)), len(p.Store.Objects("snapshots"))
+			if r, err := MoveSnapshotsBack(p.Store); err == nil {
+				t.Fatal(r)
+			}
+			if len(p.Store.Objects(pluginObjectRows)) != ledger || len(p.Store.Objects("snapshots")) != core || p.Store.SiteGet("migration", snapshotMigration) == nil {
+				t.Fatal("a refused move back changed rows")
+			}
+		})
+	}
+}

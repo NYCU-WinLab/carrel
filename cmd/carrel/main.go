@@ -23,6 +23,7 @@ func main() {
 	version := flag.Bool("version", false, "Print version")
 	backup := flag.Bool("backup", false, "Create a consistent backup and send it to the backup target")
 	reseal := flag.Bool("reseal-function-values", false, "Seal stored function values again with function_env_key and print how many each key opened")
+	moveBack := flag.Bool("move-snapshots-back", false, "Move the snapshot plugin's records back to core rows, for a rollback to a release before #663; run with carrel stopped")
 	dryRun := flag.Bool("dry-run", false, "With -reseal-function-values: only count, change nothing")
 	flag.Parse()
 	stderr := slog.NewJSONHandler(os.Stderr, nil)
@@ -65,6 +66,16 @@ func main() {
 	}
 	platform := carrel.NewPlatform(store, backend, cfg)
 	platform.Telemetry = telemetry
+	if *moveBack {
+		result, err := carrel.MoveSnapshotsBack(store)
+		if err != nil {
+			slog.Error("snapshot_move_back_failed", "error", err)
+			fatal()
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(result)
+		telemetry.Close()
+		return
+	}
 	if *reseal {
 		result, err := platform.ResealFunctionValues(*dryRun)
 		if err != nil {
