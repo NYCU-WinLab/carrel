@@ -1663,9 +1663,8 @@ to tenant networks, one instance per `reuse` function.
 ### 8.1 The installer
 
 The installer is a short ordered list of idempotent scripts, each run where it acts (README,
-"Install a site"); running one again repairs, never assumes a blank slate. Planned: one
-`install.sh` that runs them in order, with `--join <existing node>` to add a node that holds no
-guests.
+"Install a site"); running one again repairs, never assumes a blank slate. `install.sh` runs
+them in order on one host, with `--join <existing node>` to add a node that holds no guests.
 
 - Every node: the site file, `storage` in `node.json`, then `install-network.py`.
 - First exit node: `bootstrap-platform.py` creates CT 100 and CT 101.
