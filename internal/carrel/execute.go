@@ -335,6 +335,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.functionLink(a, t)
 	case "runner_add", "runner_list", "runner_remove":
 		return e.RunnerTool(tool, a, t)
+	case "webhook_add", "webhook_list", "webhook_remove", "webhook_rotate", "webhook_test":
+		return e.WebhookTool(tool, a, t)
 	}
 	fail("invalid", "Unknown tool")
 	return nil

@@ -583,7 +583,7 @@ func TestContractAnnotations(t *testing.T) {
 	destructive := map[string]bool{
 		"machine_delete": true, "image_delete": true,
 		"public_ip_release": true, "vip_remove": true, "function_remove": true, "app_unlink": true,
-		"app_webhook_rotate": true,
+		"app_webhook_rotate": true, "webhook_rotate": true,
 	}
 	tools := dicts(Contract["tools"])
 	if len(tools) == 0 {
@@ -600,7 +600,7 @@ func TestContractAnnotations(t *testing.T) {
 			}
 		}
 		readOnly, hasIdempotent := boolean(a["readOnlyHint"]), a["idempotentHint"] != nil
-		if want := !named("mutations", name) && name != "whoami"; readOnly != want {
+		if want := !named("mutations", name) && name != "whoami" && name != "webhook_test"; readOnly != want {
 			t.Errorf("%s: readOnlyHint is %v, want %v", name, readOnly, want)
 		}
 		if want := destructive[name]; boolean(a["destructiveHint"]) != want {

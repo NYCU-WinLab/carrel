@@ -356,6 +356,11 @@ func (p *Platform) resealFunctionValues(dry bool) D {
 				reseal(s, "function_versions", v["id"], n, v, "env", fid)
 			}
 		}
+		for _, h := range s.Objects("webhooks") {
+			id, n := str(h["id"]), integer(h["tenant_n"])
+			reseal(s, "webhooks", id, n, h, "secret", "webhook:"+id)
+			reseal(s, "webhooks", id, n, h, "previous_secret", "webhook:"+id+"#previous")
+		}
 	})
 	slog.Info("function_values_resealed", "dry_run", dry, "counts", counts, "resealed", resealed)
 	return D{"dry_run": dry, "counts": counts, "resealed": resealed}

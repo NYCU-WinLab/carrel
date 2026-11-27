@@ -1441,6 +1441,25 @@
           }
         }
       }
+    },
+    "/v1/events": {
+      "get": {
+        "x-carrel-audience": "member",
+        "security": [
+          {
+            "oauth": []
+          }
+        ],
+        "summary": "The tenant's events as server-sent events: from the Last-Event-ID header (or ?after) on, then each new one; tenant is a query parameter. Without either, the stream starts at the newest event. It ends after 30 minutes; reconnect with Last-Event-ID.",
+        "responses": {
+          "200": {
+            "description": "text/event-stream"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   }
 }

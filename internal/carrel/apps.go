@@ -561,6 +561,7 @@ func (p *Platform) AgentReport(ctx context.Context, token string, body D) D {
 	if r == nil || r["app"] != app["id"] {
 		fail("not_found", "Release not found")
 	}
+	previous := r["state"]
 	r["state"] = state
 	app["agent_seen_at"] = now()
 	switch state {
@@ -590,7 +591,16 @@ func (p *Platform) AgentReport(ctx context.Context, token string, body D) D {
 	e.Transaction(func(tx *Execution) {
 		tx.S.Put("releases", id, n, r)
 		tx.S.Put("apps", app["id"], n, app)
+		if state != previous && state != "deploying" {
+			data := D{"app": app["name"], "release": id, "sha": r["sha"]}
+			if state == "failed" {
+				data["error"] = r["error"]
+				data["rolled_back"] = strings.HasSuffix(str(r["error"]), "previous release restored")
+			}
+			tx.emit(n, "app.release."+state, data)
+		}
 	})
+	p.events.notify()
 	e.S.Log("agent:"+str(app["id"]), n, "app_report", D{"app": app["name"], "release": id, "state": state}, "ok")
 	return D{"ok": true}
 }

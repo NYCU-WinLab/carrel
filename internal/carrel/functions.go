@@ -524,6 +524,7 @@ func (p *Platform) FunctionReport(ctx context.Context, token, source string, bod
 				switch {
 				case held["state"] == "ready" && v["state"] == "building":
 					v["state"], v["ready_at"] = "ready", now()
+					tx.emit(n, "function.version.ready", D{"function": f["name"], "version": version, "live": f["pending"] == version})
 					if f["pending"] == version {
 						if c := str(f["current"]); c != "" {
 							f["previous"] = c
@@ -534,6 +535,7 @@ func (p *Platform) FunctionReport(ctx context.Context, token, source string, bod
 					dirty = true
 				case held["state"] == "failed" && v["state"] == "building":
 					v["state"], v["error"] = "failed", truncate(str(held["error"]), 1000)
+					tx.emit(n, "function.version.failed", D{"function": f["name"], "version": version, "error": v["error"]})
 					if f["pending"] == version {
 						f["pending"] = nil
 					}
@@ -559,5 +561,6 @@ func (p *Platform) FunctionReport(ctx context.Context, token, source string, bod
 		}
 		tx.S.SitePut("function_hosts", host.Name, D{"name": host.Name, "seen_at": now()})
 	})
+	p.events.notify()
 	return D{"revision": p.Store.functionRevision()}
 }

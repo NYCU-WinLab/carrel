@@ -472,3 +472,36 @@ curl -s -X POST https://carrel.winlab.tw/v1/tools/machine_get \
 - `GET /v1/tools` lists the tools you may run. Core tools come with their input schemas; plugin tools carry only their name.
 - A long-running tool returns an operation; read it with `GET /v1/operations/<id>`.
 - `GET /openapi.json` has a path for every tool.
+
+## Events
+
+Carrel tells you when a deploy finishes, so you do not need to poll `app_get` or `function_get`.
+The events are:
+
+| Event | When |
+|---|---|
+| `app.release.live` | A release is serving. |
+| `app.release.failed` | A release failed its start or health check; `rolled_back` says whether the previous one is back. |
+| `app.build.failed` | A pull-mode app's build failed on its machine. |
+| `function.version.ready` | A function version is built; `live` says whether it now serves. |
+| `function.version.failed` | A function version failed to build or pull. |
+
+To get them as HTTP POSTs, add a webhook:
+
+1. Run `webhook_add` with an https URL, and `types` to pick events (empty sends all).
+2. Save the `secret` it returns: it is shown once.
+3. Run `webhook_test` to send one `webhook.test` event.
+
+Each POST follows [Standard Webhooks](https://www.standardwebhooks.com): check the
+`webhook-signature` header with the secret, using any Standard Webhooks library. Carrel sends one
+event at a time, in order, and retries a failed delivery for about 8 hours. `webhook_list` shows
+the last delivery. `webhook_rotate` replaces the secret: for 24 hours each POST carries a
+signature from both secrets.
+
+To read events without a URL, stream them with the same token as the tools:
+
+```sh
+curl -N https://carrel.winlab.tw/v1/events -H "Authorization: Bearer $TOKEN"
+```
+
+Reconnect with the `Last-Event-ID` header to get the events you missed, from the last 7 days.
