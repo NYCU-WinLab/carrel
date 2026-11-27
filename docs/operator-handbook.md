@@ -467,9 +467,11 @@ A snapshot name has at least 2 characters: PVE refuses a one-character name.
 The database keeps its schema version in `PRAGMA user_version` (#565). At start carrel refuses a
 version newer than it knows, and applies each missing migration in its own transaction. Before the
 first one it copies the whole database to `<database>.schema-<from>-<stamp>` (mode 0600) and logs
-`schema_migrated` with the copy's path. To roll back across a migration, stop carrel and restore
-that copy, or the store backup, before starting the older release: an older release that knows the
-version check refuses the newer database.
+`schema_migrated` with the copy's path; it keeps the newest copy for each version it migrated
+from. Openers wait on `<database>-schema.lock`, so the service and the backup timer never migrate
+at once. To roll back across a migration, stop carrel and restore that copy, or the store backup,
+before starting the older release. Releases from this one on refuse a newer database; earlier ones
+do not check the version.
 
 #### Rolling back to a release before the snapshot plugin
 

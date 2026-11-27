@@ -39,7 +39,7 @@ func OpenStore(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{DB: db, q: db}
-	if _, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;`); e != nil {
+	if _, e = db.Exec(`PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); e != nil {
 		db.Close()
 		return nil, e
 	}

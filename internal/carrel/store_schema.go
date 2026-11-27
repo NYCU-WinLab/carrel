@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -34,8 +36,21 @@ var SchemaVersion = len(schemaMigrations)
 // migrateSchema refuses a database newer than this release, then applies
 // each missing migration in its own transaction, which also records the new
 // version. A database that holds tables already is copied first, whole and
-// consistent, to <path>.schema-<from>-<stamp>.
+// consistent, to <path>.schema-<from>-<stamp>; an older copy from the same
+// version goes, so a migration that keeps failing keeps one copy. Every
+// opener holds <path>-schema.lock meanwhile and reads the version under it,
+// so the service, -backup and -reseal never apply a migration twice.
 func migrateSchema(db *sql.DB, path string) (D, error) {
+	if path != ":memory:" {
+		lock, err := os.OpenFile(path+"-schema.lock", os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		defer lock.Close()
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+			return nil, err
+		}
+	}
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return nil, err
@@ -52,12 +67,16 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 		return nil, err
 	}
 	if tables > 0 && path != ":memory:" {
-		copy := fmt.Sprintf("%s.schema-%d-%s", path, version, time.Now().UTC().Format("20060102-150405"))
+		earlier, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, version))
+		copy := fmt.Sprintf("%s.schema-%d-%s", path, version, time.Now().UTC().Format("20060102-150405.000000000"))
 		if _, err := db.Exec("VACUUM INTO ?", copy); err != nil {
 			return nil, fmt.Errorf("copy the database before migrating: %w", err)
 		}
 		if err := os.Chmod(copy, 0o600); err != nil {
 			return nil, err
+		}
+		for _, old := range earlier {
+			os.Remove(old)
 		}
 		out["backup"] = copy
 	}

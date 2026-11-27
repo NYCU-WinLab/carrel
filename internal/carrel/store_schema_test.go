@@ -3,11 +3,13 @@ package carrel
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func schemaVersionOf(t *testing.T, path string) int {
@@ -133,5 +135,62 @@ func TestAFailedMigrationKeepsTheVersion(t *testing.T) {
 	must(db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='half'").Scan(&n))
 	if n != 0 {
 		t.Fatal("a failed migration left a table")
+	}
+}
+
+// 2 openers at once apply a migration once: the second waits on the lock
+// and finds the version already moved (#741 review).
+func TestConcurrentOpenersMigrateOnce(t *testing.T) {
+	saved, savedVersion := schemaMigrations, SchemaVersion
+	defer func() { schemaMigrations, SchemaVersion = saved, savedVersion }()
+	schemaMigrations = append(append([]func(*sql.Tx) error{}, saved...), func(tx *sql.Tx) error {
+		time.Sleep(300 * time.Millisecond)
+		_, err := tx.Exec("UPDATE tenants SET slug=slug||'+'")
+		return err
+	})
+	SchemaVersion = len(schemaMigrations)
+	path := atVersion(t, savedVersion)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			s, err := OpenStore(path)
+			if err == nil {
+				s.DB.Close()
+			}
+			errs <- err
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Close()
+	if slug := s.Tenants()[0]["slug"]; slug != "alice+" {
+		t.Fatalf("slug %v: the migration ran %d times", slug, strings.Count(str(slug), "+"))
+	}
+	if copies, _ := filepath.Glob(path + ".schema-*"); len(copies) != 1 {
+		t.Fatal("copies", copies)
+	}
+}
+
+// A migration that keeps failing keeps one copy, not one per attempt.
+func TestAFailingMigrationKeepsOneCopy(t *testing.T) {
+	saved, savedVersion := schemaMigrations, SchemaVersion
+	defer func() { schemaMigrations, SchemaVersion = saved, savedVersion }()
+	schemaMigrations = append(append([]func(*sql.Tx) error{}, saved...), func(tx *sql.Tx) error { return errors.New("broken") })
+	SchemaVersion = len(schemaMigrations)
+	path := atVersion(t, savedVersion)
+	for i := 0; i < 3; i++ {
+		if _, err := OpenStore(path); err == nil {
+			t.Fatal("a broken migration passed")
+		}
+	}
+	if copies, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, savedVersion)); len(copies) != 1 {
+		t.Fatal("copies", copies)
 	}
 }
