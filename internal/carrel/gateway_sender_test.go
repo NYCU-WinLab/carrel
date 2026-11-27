@@ -264,3 +264,131 @@ func TestReconcileDoesNotWaitForASlowGateway(t *testing.T) {
 		t.Fatal("the config was not delivered after the gateway answered")
 	}
 }
+
+// hangGateway makes every gateway sync wait for release, and records each
+// sync it receives. The returned count is read under the lock.
+func hangGateway(b *fakeBackend, release chan struct{}) (started chan struct{}, sent func() []string) {
+	started = make(chan struct{}, 16)
+	var mu sync.Mutex
+	var log []string
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] != "sync" {
+			return nil, nil, false
+		}
+		mu.Lock()
+		log = append(log, str(r["hosts"]))
+		mu.Unlock()
+		started <- struct{}{}
+		<-release
+		return D{}, nil, true
+	})
+	return started, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), log...)
+	}
+}
+
+// within fails the test when f does not finish quickly. It frees the gateway
+// first so a failing test does not leave the sender stuck.
+func within(t *testing.T, release chan struct{}, what string, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatalf("%s waited for the gateway", what)
+	}
+}
+
+// With a gateway that never answers, a tenant write and an admin
+// reconcile_run both finish while the writer stays free, and once the gateway
+// recovers it receives the latest config only (#800).
+func TestGatewayDownDoesNotHoldTheWriter(t *testing.T) {
+	p, b, _ := freezeSite(t)
+	release := make(chan struct{})
+	started, sent := hangGateway(b, release)
+	within(t, release, "a tenant write", func() {
+		assertOK(t, member(p, "port_open", D{"machine": "box", "port": 8080, "proto": "tcp"}))
+	})
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("the gateway never received the first config")
+	}
+	if !p.writer.TryLock() {
+		close(release)
+		t.Fatal("the writer is held while the gateway is silent")
+	}
+	p.writer.Unlock()
+	within(t, release, "reconcile_run", func() {
+		assertOK(t, p.Execute(context.Background(), "reconcile_run", D{}, person("alice", true)))
+	})
+	within(t, release, "a second tenant write", func() {
+		assertOK(t, member(p, "port_open", D{"machine": "box", "port": 8081, "proto": "tcp"}))
+	})
+	gen := p.gateway.Submit(gatewaySync{hosts: "latest", held: map[string]any{"v": "latest"}})
+	close(release)
+	waitSender(t, func() bool { return p.gateway.Status().Delivered == gen })
+	settleGateway(t, p)
+	log := sent()
+	if len(log) != 2 || log[len(log)-1] != "latest" {
+		t.Fatalf("the gateway got %q, want the first config and then only the latest", log)
+	}
+	if held, _ := p.delivered.Load().(map[string]any); held["v"] != "latest" {
+		t.Fatalf("delivered %v", held)
+	}
+}
+
+// A site with no tenant and a pending origin pair: the record stays on the old
+// address while the gateway is silent and moves after delivery (#798, #800).
+func TestOriginRecordWaitsForAsynchronousDelivery(t *testing.T) {
+	p, b, dns := originFixture(t)
+	dns.records["carrel.winlab.tw"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": originOwner}}
+	b.call = func(r D, target string) (any, error) { return D{}, nil }
+	release := make(chan struct{})
+	started, _ := hangGateway(b, release)
+	var served D
+	var mu sync.Mutex
+	intercept(b, func(r D) (any, error, bool) {
+		if r["op"] == "sync" {
+			mu.Lock()
+			served = D{}
+			for name, pair := range obj(r["certificates"]) {
+				served[name] = fingerprint(obj(pair)["fullchain"])
+			}
+			mu.Unlock()
+		}
+		if r["op"] == "status" {
+			mu.Lock()
+			defer mu.Unlock()
+			return D{"certificates": served}, nil, true
+		}
+		return nil, nil, false
+	})
+	e := p.execution(context.Background())
+	within(t, release, "Reconcile", func() { e.Reconcile() })
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("the gateway never received the config")
+	}
+	e.MaintainOrigin()
+	if len(dns.writes) != 0 {
+		close(release)
+		t.Fatal("moved the record before the gateway took the pair")
+	}
+	close(release)
+	settleGateway(t, p)
+	e.MaintainOrigin()
+	if len(dns.writes) != 1 || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
+		t.Fatal(encoded(dns.writes))
+	}
+}

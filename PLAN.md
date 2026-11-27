@@ -590,6 +590,11 @@ by guessing its VNI. VNIs are not secrets; this filter is the protection.
   third of the lifetime is left. The
   internet-facing gateway never holds a DNS token, because a zone token can
   rewrite every record in the zone, `auth.winlab.tw` included.
+- **Gateway delivery**: asynchronous. Reconcile builds the gateway config under the writer lock and
+  queues it on an ordered sender; the send never runs under that lock. Configs are ordered by
+  generation (a newer one replaces a queued or retrying older one), each is tried 4 times with
+  backoff, and a failure is left to the maintenance pass. A record moves only after the gateway
+  confirms the pair it serves (#800).
 - **Certificate budget**: Let's Encrypt allows 50 new certificates per registered domain per 7 days,
   shared with every other `winlab.tw` site, the ones on Vercel included. A renewal with the same
   names is exempt from that limit, with or without ARI (rate limit page, checked 2026-10-20), so
