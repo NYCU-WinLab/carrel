@@ -32,9 +32,9 @@
     "mtu": 1370
   },
   "plugins": [
-    {"name": "snapshot", "version": "0.1.0",
-     "url": "https://github.com/NYCU-WinLab/carrel/releases/download/snapshot-v0.1.0/snapshot.tar.gz",
-     "sha256": "2a33157f1943e1744f2446c5ea05ca86efde0874daeb9d9e30ddc770203d390a",
+    {"name": "snapshot", "version": "0.2.0",
+     "url": "https://github.com/NYCU-WinLab/carrel/releases/download/snapshot-v0.2.0/snapshot.tar.gz",
+     "sha256": "db544146954ed1709b51f36c1b332bf397dddcd3f28ac9947eab05928f109ae1",
      "network": true, "env_file": true}
   ]
 }
