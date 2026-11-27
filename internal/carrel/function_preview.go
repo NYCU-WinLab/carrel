@@ -132,7 +132,7 @@ func (e *Execution) receivePreview(t, f D, c CIClaims, image string) D {
 		}
 	})
 	if created {
-		e.P.kickMaintenance()
+		e.P.kickDomains()
 	}
 	e.S.Log(c.Forge()+":"+c.Repository, n, "function_preview", D{"function": pf["name"], "version": pf["pending"], "sha": c.SHA, "image": image}, "ok")
 	return D{"version": functionRelease(pf, e.S.Get("function_versions", functionVersionID(str(pf["id"]), str(pf["pending"]))), str(pf["pending"])),
