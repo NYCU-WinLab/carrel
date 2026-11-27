@@ -48,7 +48,7 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 	}()
 	moved := 0
 	s.Transaction(func(tx *Store) {
-		rows := tx.Rows("SELECT tenant, data FROM objects WHERE kind='snapshots' ORDER BY id")
+		rows := tx.Rows("SELECT id, tenant, data FROM objects WHERE kind='snapshots' ORDER BY id")
 		done := tx.SiteGet("migration", snapshotMigration)
 		if done != nil && len(rows) == 0 {
 			return
@@ -79,7 +79,9 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 				Charge: map[string]float64{"snapshots": 1, "snapshot_gb": float64(snap.DiskGB)}, Holds: []string{"freeze", "migrate", "backfill"},
 				DiskGB: snap.DiskGB, OperationID: snap.OperationID, Configuration: snap.Configuration}
 			tx.Put(pluginObjectRows, id, n, decode(string(encoded(rec))))
-			tx.Remove("snapshots", snap.ID)
+			// Delete by the row key: a data id that differs would leave the
+			// core row behind and stop the next start.
+			tx.Remove("snapshots", r["id"])
 			moved++
 		}
 		total := moved
@@ -142,6 +144,14 @@ func MoveSnapshotsBack(s *Store) (result D, err error) {
 			tx.Put("snapshots", id, integer(r["tenant"]), decode(string(encoded(row))))
 			tx.Remove(pluginObjectRows, o.ID)
 			moved++
+		}
+		// The plugin's site rows go too, so the older release does not count
+		// them again; the next forward move writes them anew.
+		for _, q := range snapshotPluginQuota {
+			tx.SiteRemove(pluginQuotaRows, str(q["name"]))
+		}
+		for _, t := range snapshotPluginTools {
+			tx.SiteRemove(pluginToolRows, str(t["name"]))
 		}
 		tx.SiteRemove("migration", snapshotMigration)
 	})

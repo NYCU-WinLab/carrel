@@ -146,6 +146,9 @@ func TestSnapshotsMoveBackForARollback(t *testing.T) {
 	if len(p.Store.Objects(pluginObjectRows)) != 0 || p.Store.SiteGet("migration", snapshotMigration) != nil {
 		t.Fatal("the ledger or the marker kept snapshots")
 	}
+	if len(p.Store.SiteRows(pluginQuotaRows)) != 0 || len(p.Store.SiteRows(pluginToolRows)) != 0 {
+		t.Fatal("the move back left the plugin's site rows")
+	}
 	if r, err := MigrateSnapshots(p.Store); err != nil || r["moved"] != 2 || len(p.Store.Objects("snapshots")) != 0 {
 		t.Fatal("forward again", r, err)
 	}
@@ -175,5 +178,21 @@ func TestSnapshotsMoveBackRefuses(t *testing.T) {
 				t.Fatal("a refused move back changed rows")
 			}
 		})
+	}
+}
+
+// The move deletes the core row by its key, not by the id in its data.
+func TestSnapshotsMoveDeletesByRowKey(t *testing.T) {
+	p := unmigrated(t)
+	old := legacySnapshot(10100, "before", nil)
+	p.Store.Put("snapshots", "other-key", 1, old)
+	if _, err := MigrateSnapshots(p.Store); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Store.Objects("snapshots")) != 0 {
+		t.Fatal("the core row stayed")
+	}
+	if r, err := MigrateSnapshots(p.Store); err != nil || r["moved"] != 0 {
+		t.Fatal(r, err)
 	}
 }

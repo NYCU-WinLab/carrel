@@ -462,6 +462,21 @@ UPID once PVE answers. A plugin that restarts follows the same task; one whose a
 finds the task by its type and start time, and sends the request again only when PVE has none.
 A snapshot name has at least 2 characters: PVE refuses a one-character name.
 
+#### Rolling back to a release before the snapshot plugin
+
+1. Stop carrel first (`systemctl stop carrel`). `carrel -move-snapshots-back` does not check for a
+   running service: run while it is up, the running binary loses the records until its next start.
+2. Run `carrel -move-snapshots-back` with the newer binary. It moves the plugin's snapshot records
+   back to core rows and removes the plugin's tool and quota site rows, so the older release does
+   not count them twice. It refuses, changing nothing, while a snapshot operation runs or a record
+   is not ready.
+3. Start the older release.
+
+If the older release took a snapshot under a name the plugin ledger already holds, the move back
+stops with `snapshot row <vmid>-<name> exists already` and nothing changes. The same stop happens at
+the next forward start as `plugin object ... exists already`. Pick which snapshot to keep, delete
+the other in PVE (`qm delsnapshot <vmid> <name>`) and its row, then run the move again.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key
