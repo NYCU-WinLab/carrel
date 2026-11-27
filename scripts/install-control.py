@@ -212,7 +212,11 @@ def ct_schema(stamp):
             db.close()
 
     out = {"current": version(DATABASE) if DATABASE.exists() else None, "before": None}
-    with tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive:
+    archive_path = ROLLBACK / f"go-{stamp}.tar.gz"
+    if not archive_path.exists():
+        raise SystemExit(f"The control plane archive {archive_path} of upgrade {stamp} was pruned; "
+                         "it cannot be rolled back")
+    with tarfile.open(archive_path) as archive:
         if "var/lib/carrel/carrel.db" in archive.getnames():
             scratch = ROLLBACK / f"schema-{stamp}.db"
             with archive.extractfile("var/lib/carrel/carrel.db") as source, open(scratch, "wb") as target:
@@ -259,9 +263,22 @@ def ct_restore_database(stamp):
         raise SystemExit(f"No prepared database copy: run ct prepare-database {stamp} first")
     # The copy is whole: a write-ahead log of the newer database must not be
     # replayed onto it.
+    # Move the log aside rather than delete it: if the rename fails, it goes
+    # back, so the running release never starts on a database without its log.
+    aside = []
     for suffix in ("-wal", "-shm"):
-        Path(str(DATABASE) + suffix).unlink(missing_ok=True)
-    os.replace(pending, DATABASE)
+        log = Path(str(DATABASE) + suffix)
+        if log.exists():
+            os.replace(log, str(log) + ".rollback")
+            aside.append(log)
+    try:
+        os.replace(pending, DATABASE)
+    except OSError:
+        for log in aside:
+            os.replace(str(log) + ".rollback", log)
+        raise
+    for log in aside:
+        Path(str(log) + ".rollback").unlink(missing_ok=True)
     print(json.dumps({"database": str(DATABASE), "restored_from": f"go-{stamp}"}))
 
 
