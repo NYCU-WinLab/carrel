@@ -348,6 +348,7 @@ func (p *Platform) Start() {
 				if len(e.S.Tenants()) > 0 {
 					e.ExpireGrants()
 					e.ExpireVPNClients()
+					e.ReapPreviews()
 					e.deferJump = true
 					pushJump = true
 					e.Reconcile()
@@ -382,8 +383,11 @@ func (p *Platform) Start() {
 				slog.Log(p.ctx, levelUnlessStopping(p.ctx, slog.LevelError), "origin_maintenance_failed", "type", "maintenance", "code", failure["code"], "backend_code", failure["backend_code"])
 			}
 			p.execution(p.ctx).RefreshStorage()
-			if !sleep(p.ctx, 300*time.Second) {
+			select {
+			case <-p.ctx.Done():
 				return
+			case <-p.maintainKick:
+			case <-time.After(300 * time.Second):
 			}
 		}
 	}()
@@ -614,4 +618,12 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 		}
 	})
 	return server
+}
+
+// kickMaintenance runs the maintenance loop's next pass now.
+func (p *Platform) kickMaintenance() {
+	select {
+	case p.maintainKick <- struct{}{}:
+	default:
+	}
 }

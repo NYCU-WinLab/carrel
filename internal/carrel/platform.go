@@ -125,9 +125,12 @@ type Platform struct {
 	jumpBackoff    time.Duration
 	jumpBackoffMax time.Duration
 	// jumpLast is the outcome of the last background SyncJump ("" before any).
-	jumpLast           string
-	reports            map[int]chan struct{}
-	events             eventHub
+	jumpLast string
+	reports  map[int]chan struct{}
+	events   eventHub
+	// maintainKick wakes the maintenance loop before its 5 minutes are up,
+	// so a preview's domain is published at once (#645).
+	maintainKick       chan struct{}
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
 	sshProbe           func(context.Context, D) bool
@@ -151,7 +154,7 @@ type Execution struct {
 
 func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1)}
+	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1), maintainKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)
 	p.Hub = NewAgentHub()
 	return p
