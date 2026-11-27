@@ -245,6 +245,20 @@ def targets(grant, m, state):
     return grant["vmid"] == m["vmid"]
 
 
+def site_public_address():
+    """The site's public IPv4 address from site.json.
+
+    None when the file, the key or a well-formed string address is missing:
+    a bad site.json grants no exemption and never stops the firewall.
+    """
+    try:
+        public = site().get("public") if SITE.exists() else None
+        address = public.get("address") if isinstance(public, dict) else None
+        return ipaddress.IPv4Interface(address).ip if isinstance(address, str) else None
+    except (OSError, ValueError):
+        return None
+
+
 def guest_firewall(m, state, config):
     # These rules cover net0 only: experiment NICs run with firewall=0, so a
     # restricted machine's private NICs stay unfiltered (issue #75).
@@ -335,7 +349,10 @@ def guest_firewall(m, state, config):
         # Only a protected public host (issue #28): an entry for a private
         # range would open it above the drops below.
         protected = [ipaddress.ip_network(a, strict=False) for a in config["protected_addresses"]]
-        if dest.version != 4 or dest.prefixlen != 32 or not dest.network_address.is_global or not any(p.version == 4 and dest.subnet_of(p) for p in protected):
+        # The site's own public address is the installer's choice and may sit
+        # in a non-global range, such as staging's 198.18.0.0/15 (PLAN 10.5).
+        routable = dest.network_address.is_global or dest.network_address == site_public_address()
+        if dest.version != 4 or dest.prefixlen != 32 or not routable or not any(p.version == 4 and dest.subnet_of(p) for p in protected):
             raise ValueError(f"public entry {entry['address']} is not a protected public address")
         port = integer(entry["port"], 1, 65535)
         rules.append(f"OUT ACCEPT -dest {dest} -p tcp -dport {port}")
