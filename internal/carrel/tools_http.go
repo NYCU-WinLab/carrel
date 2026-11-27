@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Every MCP tool is also an HTTP route (#641): POST /v1/tools/{name} runs
@@ -57,6 +59,17 @@ func (a *App) callable(name string, who D) bool {
 	return false
 }
 
+// mcpAnnotations spells a contract tool's annotations as tools/list does.
+func mcpAnnotations(v any) any {
+	var ann mcp.ToolAnnotations
+	if json.Unmarshal(encoded(v), &ann) != nil {
+		return v
+	}
+	var out any
+	must(json.Unmarshal(encoded(&ann), &out))
+	return out
+}
+
 func (a *App) toolRoutes(mux *http.ServeMux, origin string) {
 	mux.HandleFunc("GET /v1/tools", func(w http.ResponseWriter, r *http.Request) {
 		who, ok := a.bearerMember(w, r, origin, "/mcp")
@@ -66,13 +79,13 @@ func (a *App) toolRoutes(mux *http.ServeMux, origin string) {
 		tools := []D{}
 		for _, d := range dicts(Contract["tools"]) {
 			if a.callable(str(d["name"]), who) {
-				tools = append(tools, pick(d, "name", "description", "inputSchema", "annotations"))
+				entry := pick(d, "name", "description", "inputSchema")
+				entry["annotations"] = mcpAnnotations(d["annotations"])
+				tools = append(tools, entry)
 			}
 		}
-		for _, pt := range a.Platform.pluginTools() {
-			if a.callable(pt.Name, who) {
-				tools = append(tools, D{"name": pt.Name, "plugin": true})
-			}
+		for _, t := range pluginListing(a.Platform.pluginTools(), func(pt *pluginTool) bool { return a.callable(pt.Name, who) }) {
+			tools = append(tools, D{"name": t.Name, "description": t.Description, "inputSchema": t.InputSchema, "annotations": t.Annotations, "plugin": true})
 		}
 		jsonResponse(w, 200, D{"ok": true, "tools": tools})
 	})
