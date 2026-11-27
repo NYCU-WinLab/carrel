@@ -44,18 +44,50 @@ const (
 )
 
 // checkPluginDir refuses a directory another user could place a socket in,
-// or a symlink to one: a socket there is trusted with root operations.
+// or a symlink to one: a socket there is trusted with root operations. It
+// checks every parent up to / as well (#666): whoever can write to a parent
+// can replace the directory below it.
 func checkPluginDir(dir string) error {
-	info, err := os.Lstat(dir)
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	for p := dir; ; p = filepath.Dir(p) {
+		if err := checkPluginPath(p, p == dir); err != nil {
+			return err
+		}
+		if p == "/" {
+			return nil
+		}
+	}
+}
+
+// checkPluginPath checks one component of the plugin_dir path. The directory
+// itself must be the agent's user's and closed to group and others. A parent
+// may be root's or the agent's user's, and closed to group and others, except
+// that a sticky directory such as /tmp is fine: nobody there can replace an
+// entry they do not own, and the next component is checked in turn.
+func checkPluginPath(p string, last bool) error {
+	info, err := os.Lstat(p)
 	if err != nil {
 		return err
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	if !info.IsDir() || !ok {
-		return fmt.Errorf("%s is not a directory", dir)
+	if !ok || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("%s is not a directory (symlinks are refused)", p)
 	}
-	if int(st.Uid) != os.Geteuid() || info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s must be owned by the agent's user and writable by nobody else", dir)
+	uid, me := int(st.Uid), os.Geteuid()
+	if last {
+		if uid != me || info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("%s must be owned by the agent's user and writable by nobody else", p)
+		}
+		return nil
+	}
+	if uid != 0 && uid != me {
+		return fmt.Errorf("parent %s must be owned by root or the agent's user", p)
+	}
+	if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("parent %s must not be writable by group or others", p)
 	}
 	return nil
 }
