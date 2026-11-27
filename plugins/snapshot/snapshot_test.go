@@ -38,6 +38,8 @@ type fakePVE struct {
 	hold bool
 	// listFail: the next this many snapshot lists fail.
 	listFail int
+	// privs are the token's privileges on the path it asks about.
+	privs []string
 	// exit is the exit status of the next task; "" is OK.
 	exit string
 	// auth is the token every request must carry.
@@ -63,6 +65,14 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api2/json/"), "/")
 	if r.URL.Path == "/api2/json/version" {
 		reply(map[string]any{"version": "9.2"})
+		return
+	}
+	if r.URL.Path == "/api2/json/access/permissions" {
+		privs := map[string]int{}
+		for _, p := range f.privs {
+			privs[p] = 1
+		}
+		reply(map[string]any{r.URL.Query().Get("path"): privs})
 		return
 	}
 	if len(parts) >= 3 && parts[0] == "nodes" && parts[2] == "tasks" {
@@ -169,7 +179,7 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 func fixture(t *testing.T) (*server, *fakePVE) {
 	t.Helper()
 	f := &fakePVE{snaps: map[int]map[string]bool{10100: {}, 10200: {}}, power: map[int]string{10100: "stopped", 10200: "stopped"},
-		tasks: map[string]*fakeTask{}, auth: "PVEAPIToken=root@pam!carrel-snapshot=secret"}
+		tasks: map[string]*fakeTask{}, privs: []string{"VM.Audit", "VM.Snapshot", "VM.Snapshot.Rollback"}, auth: "PVEAPIToken=root@pam!carrel-snapshot=secret"}
 	ts := httptest.NewTLSServer(http.HandlerFunc(f.handler))
 	t.Cleanup(ts.Close)
 	dir := t.TempDir()
@@ -457,5 +467,20 @@ func TestAListThatFailsDecidesNothing(t *testing.T) {
 	}
 	if op := get(t, s, "k1"); op.State != "succeeded" {
 		t.Fatalf("with the list: %v", op)
+	}
+}
+
+// The probe says the plugin is supported only when the token holds every
+// privilege it needs on /vms.
+func TestTheProbeChecksTheTokensPrivileges(t *testing.T) {
+	s, f := fixture(t)
+	if p, _ := s.Probe(context.Background(), &pluginpb.ProbeRequest{}); !p.Supported {
+		t.Fatalf("all privileges: %v", p)
+	}
+	f.mu.Lock()
+	f.privs = []string{"VM.Audit"}
+	f.mu.Unlock()
+	if p, _ := s.Probe(context.Background(), &pluginpb.ProbeRequest{}); p.Supported || !strings.Contains(p.Reason, "VM.Snapshot, VM.Snapshot.Rollback") {
+		t.Fatalf("missing: %v", p)
 	}
 }

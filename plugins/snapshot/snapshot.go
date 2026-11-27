@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,6 +107,15 @@ func (s *server) Probe(ctx context.Context, _ *pluginpb.ProbeRequest) (*pluginpb
 	}
 	if err := s.pve.version(ctx); err != nil {
 		return &pluginpb.ProbeResponse{Reason: "the PVE API does not answer: " + err.Error()}, nil
+	}
+	// A token that signs in but lacks a privilege fails only when a member
+	// uses it: the probe says so first.
+	missing, err := s.pve.missing(ctx)
+	if err != nil {
+		return &pluginpb.ProbeResponse{Reason: "the token's permissions cannot be read: " + err.Error()}, nil
+	}
+	if len(missing) > 0 {
+		return &pluginpb.ProbeResponse{Reason: "the token lacks " + strings.Join(missing, ", ") + " on /vms; run scripts/configure-snapshot-plugin.py"}, nil
 	}
 	return &pluginpb.ProbeResponse{Supported: true}, nil
 }
