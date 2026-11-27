@@ -103,16 +103,19 @@ func (p *pve) version(ctx context.Context) error {
 }
 
 // needed are the privileges the token must hold, by the path they are held on.
-func needed(storage string) map[string][]string {
+// VM.Config.Options clears a guest's onboot; Sys.Audit on the node lists the
+// starts of a guest by any user, not only the token's own.
+func needed(storage, node string) map[string][]string {
 	return map[string][]string{
-		"/vms":                {"VM.Audit", "VM.Backup"},
-		"/storage/" + storage: {"Datastore.Audit", "Datastore.AllocateSpace"},
+		"/vms":                {"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"},
+		"/storage/" + storage: {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"},
+		"/nodes/" + node:      {"Sys.Audit"},
 	}
 }
 
 // missing are the needed privileges the token does not hold, as "<priv> on <path>".
 func (p *pve) missing(ctx context.Context, storage string) ([]string, error) {
-	need := needed(storage)
+	need := needed(storage, p.node)
 	paths := make([]string, 0, len(need))
 	for path := range need {
 		paths = append(paths, path)
@@ -135,4 +138,280 @@ func (p *pve) missing(ctx context.Context, storage string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// kinds are the API names of the guest kinds.
+var kinds = map[string]string{"vm": "qemu", "ct": "lxc"}
+
+// guest is the API path of a guest on this node.
+func (p *pve) guest(kind string, vmid int) string {
+	return fmt.Sprintf("/nodes/%s/%s/%d", url.PathEscape(p.node), kinds[kind], vmid)
+}
+
+// exists says whether the node has the guest.
+func (p *pve) exists(ctx context.Context, kind string, vmid int) (bool, error) {
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/%s", url.PathEscape(p.node), kinds[kind]), nil)
+	if err != nil {
+		return false, err
+	}
+	var list []struct {
+		VMID int `json:"vmid"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return false, err
+	}
+	for _, g := range list {
+		if g.VMID == vmid {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// status is the guest's power state: running, stopped or paused.
+func (p *pve) status(ctx context.Context, kind string, vmid int) (string, error) {
+	data, err := p.do(ctx, http.MethodGet, p.guest(kind, vmid)+"/status/current", nil)
+	if err != nil {
+		return "", err
+	}
+	var s struct {
+		Status    string `json:"status"`
+		QMPStatus string `json:"qmpstatus"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return "", err
+	}
+	if s.QMPStatus == "paused" || s.QMPStatus == "suspended" {
+		return "paused", nil
+	}
+	return s.Status, nil
+}
+
+// config reads the digest of the guest's config, and whether it starts with the node.
+func (p *pve) config(ctx context.Context, kind string, vmid int) (digest string, onboot bool, err error) {
+	data, err := p.do(ctx, http.MethodGet, p.guest(kind, vmid)+"/config", nil)
+	if err != nil {
+		return "", false, err
+	}
+	var c struct {
+		Digest string          `json:"digest"`
+		Onboot json.RawMessage `json:"onboot"`
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return "", false, err
+	}
+	// PVE gives onboot as 1 or "1", and leaves it out when it is off.
+	on := strings.Trim(string(c.Onboot), `"`)
+	return c.Digest, on != "" && on != "0" && on != "null", nil
+}
+
+// noOnboot clears the guest's onboot, so a node reboot does not start it.
+func (p *pve) noOnboot(ctx context.Context, kind string, vmid int) error {
+	_, err := p.do(ctx, http.MethodPut, p.guest(kind, vmid)+"/config", url.Values{"onboot": {"0"}})
+	return err
+}
+
+// lastStart is the start time of the guest's newest start task, by any user
+// (the node's boot, HA, an admin, its owner), in Unix seconds, or 0.
+func (p *pve) lastStart(ctx context.Context, kind string, vmid int) (int64, error) {
+	tt := map[string]string{"vm": "qmstart", "ct": "vzstart"}[kind]
+	q := url.Values{"vmid": {fmt.Sprint(vmid)}, "typefilter": {tt}, "limit": {"50"}, "source": {"all"}}
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/tasks?%s", url.PathEscape(p.node), q.Encode()), nil)
+	if err != nil {
+		return 0, err
+	}
+	var tasks []struct {
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		StartTime int64  `json:"starttime"`
+	}
+	if err := json.Unmarshal(data, &tasks); err != nil {
+		return 0, err
+	}
+	var last int64
+	for _, t := range tasks {
+		if t.Type == tt && t.ID == fmt.Sprint(vmid) && t.StartTime > last {
+			last = t.StartTime
+		}
+	}
+	return last, nil
+}
+
+// snapshots counts the guest's disk snapshots.
+func (p *pve) snapshots(ctx context.Context, kind string, vmid int) (int, error) {
+	data, err := p.do(ctx, http.MethodGet, p.guest(kind, vmid)+"/snapshot", nil)
+	if err != nil {
+		return 0, err
+	}
+	var list []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, s := range list {
+		// "current" is the live state, not a snapshot.
+		if s.Name != "current" {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// upid reads the task a request started.
+func upid(data json.RawMessage) (string, error) {
+	var id string
+	if err := json.Unmarshal(data, &id); err != nil || !strings.HasPrefix(id, "UPID:") {
+		return "", fmt.Errorf("PVE answered with no task: %s", data)
+	}
+	return id, nil
+}
+
+// start sends the request that starts the task of the run's phase, and
+// returns its UPID: a backup of the stopped guest, or its removal. The
+// removal purges the guest from jobs and HA, and removes only the disks of
+// its config, which the backup holds: destroy-unreferenced-disks would also
+// remove disks the backup never saw, as the node agent never did.
+func (p *pve) start(ctx context.Context, r *run) (string, error) {
+	var data json.RawMessage
+	var err error
+	switch r.Phase {
+	case "backup":
+		data, err = p.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/vzdump", url.PathEscape(p.node)), url.Values{
+			"vmid": {fmt.Sprint(r.VMID)}, "storage": {r.Storage}, "mode": {"stop"}, "notes-template": {r.Note}})
+	case "destroy":
+		data, err = p.do(ctx, http.MethodDelete, p.guest(r.Kind, r.VMID)+"?"+url.Values{"purge": {"1"}}.Encode(), nil)
+	default:
+		return "", fmt.Errorf("no task for phase %q", r.Phase)
+	}
+	if err != nil {
+		return "", err
+	}
+	return upid(data)
+}
+
+// taskType is the PVE type of the task of the run's phase.
+func taskType(r *run) string {
+	if r.Phase == "destroy" {
+		return map[string]string{"vm": "qmdestroy", "ct": "vzdestroy"}[r.Kind]
+	}
+	return "vzdump"
+}
+
+// tasks are the UPIDs of the tasks of type tt on the guest that this token
+// started at or after since, running or ended, oldest first.
+func (p *pve) tasks(ctx context.Context, tt string, vmid int, since int64) ([]string, error) {
+	// source=all: the default lists only tasks that have ended.
+	q := url.Values{"vmid": {fmt.Sprint(vmid)}, "typefilter": {tt}, "since": {fmt.Sprint(since)}, "limit": {"500"}, "source": {"all"}}
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/tasks?%s", url.PathEscape(p.node), q.Encode()), nil)
+	if err != nil {
+		return nil, err
+	}
+	var tasks []struct {
+		UPID      string `json:"upid"`
+		Type      string `json:"type"`
+		ID        string `json:"id"`
+		StartTime int64  `json:"starttime"`
+	}
+	if err := json.Unmarshal(data, &tasks); err != nil {
+		return nil, err
+	}
+	// A UPID ends with the user that started the task.
+	mine := ":" + p.tokenID() + ":"
+	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].StartTime < tasks[j].StartTime })
+	out := []string{}
+	for _, t := range tasks {
+		if t.Type == tt && t.ID == fmt.Sprint(vmid) && t.StartTime >= since && strings.HasSuffix(t.UPID, mine) {
+			out = append(out, t.UPID)
+		}
+	}
+	return out, nil
+}
+
+// tokenID is the user part of the token, such as root@pam!carrel-freeze.
+func (p *pve) tokenID() string {
+	id := strings.TrimPrefix(p.token, "PVEAPIToken=")
+	if i := strings.LastIndex(id, "="); i >= 0 {
+		id = id[:i]
+	}
+	return id
+}
+
+// taskStatus says whether a task has ended and, if so, its exit status.
+func (p *pve) taskStatus(ctx context.Context, upid string) (ended bool, exit string, err error) {
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/tasks/%s/status", url.PathEscape(p.node), url.PathEscape(upid)), nil)
+	if err != nil {
+		return false, "", err
+	}
+	var s struct {
+		Status     string `json:"status"`
+		ExitStatus string `json:"exitstatus"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return false, "", err
+	}
+	return s.Status == "stopped", s.ExitStatus, nil
+}
+
+// stopTask asks PVE to stop a running task.
+func (p *pve) stopTask(ctx context.Context, upid string) error {
+	_, err := p.do(ctx, http.MethodDelete, fmt.Sprintf("/nodes/%s/tasks/%s", url.PathEscape(p.node), url.PathEscape(upid)), nil)
+	return err
+}
+
+// backup is a backup on the storage as PVE lists it.
+type backup struct {
+	Volid        string `json:"volid"`
+	Notes        string `json:"notes"`
+	Size         int64  `json:"size"`
+	Protected    int    `json:"protected"`
+	Verification struct {
+		State string `json:"state"`
+	} `json:"verification"`
+}
+
+// backupOf is the backup of the guest whose notes are exactly note, or nil.
+// More than one is an error: which is the run's would be a guess.
+func (p *pve) backupOf(ctx context.Context, storage string, vmid int, note string) (*backup, error) {
+	q := url.Values{"content": {"backup"}, "vmid": {fmt.Sprint(vmid)}}
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/storage/%s/content?%s", url.PathEscape(p.node), url.PathEscape(storage), q.Encode()), nil)
+	if err != nil {
+		return nil, err
+	}
+	var list []backup
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	var found *backup
+	for i := range list {
+		if strings.TrimSpace(list[i].Notes) == note {
+			if found != nil {
+				return nil, errors.New("more than one backup carries this run's note")
+			}
+			found = &list[i]
+		}
+	}
+	return found, nil
+}
+
+// protect marks a backup protected, so a prune job cannot take it.
+func (p *pve) protect(ctx context.Context, storage, volid string, on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	_, err := p.do(ctx, http.MethodPut, fmt.Sprintf("/nodes/%s/storage/%s/content/%s", url.PathEscape(p.node), url.PathEscape(storage), url.PathEscape(volid)), url.Values{"protected": {v}})
+	return err
+}
+
+// removeBackup deletes a backup, lifting its protection first.
+func (p *pve) removeBackup(ctx context.Context, storage string, b *backup) error {
+	if b.Protected != 0 {
+		if err := p.protect(ctx, storage, b.Volid, false); err != nil {
+			return err
+		}
+	}
+	_, err := p.do(ctx, http.MethodDelete, fmt.Sprintf("/nodes/%s/storage/%s/content/%s", url.PathEscape(p.node), url.PathEscape(storage), url.PathEscape(b.Volid)), nil)
+	return err
 }

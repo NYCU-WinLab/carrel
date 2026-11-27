@@ -43,7 +43,12 @@ func fakePVE(privs map[string][]string) http.HandlerFunc {
 // fixture is a server of a site with this storage and these privileges.
 func fixture(t *testing.T, storage string, privs map[string][]string) *server {
 	t.Helper()
-	ts := httptest.NewTLSServer(fakePVE(privs))
+	return fixtureWith(t, storage, fakePVE(privs))
+}
+
+func fixtureWith(t *testing.T, storage string, h http.HandlerFunc) *server {
+	t.Helper()
+	ts := httptest.NewTLSServer(h)
 	t.Cleanup(ts.Close)
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca.pem")
@@ -132,20 +137,26 @@ func TestProbeWithNoBackupStorageIsUnsupported(t *testing.T) {
 }
 
 func TestProbeNeedsThePrivilegesOnTheStorage(t *testing.T) {
-	all := map[string][]string{"/vms": {"VM.Audit", "VM.Backup"}, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace"}}
+	vms := []string{"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"}
+	all := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
 	if p := probe(t, fixture(t, "pbs", all)); !p.Supported {
 		t.Fatalf("probe: %+v", p)
 	}
-	short := map[string][]string{"/vms": {"VM.Audit", "VM.Backup"}, "/storage/pbs": {"Datastore.Audit"}}
+	short := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
 	p := probe(t, fixture(t, "pbs", short))
 	if p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/pbs" {
 		t.Fatalf("probe: %+v", p)
 	}
+	// Without Sys.Audit the token sees only its own tasks, not the starts of others.
+	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"]}
+	if p := probe(t, fixture(t, "pbs", noAudit)); p.Supported || p.Reason != "the token lacks Sys.Audit on /nodes/pve" {
+		t.Fatalf("probe: %+v", p)
+	}
 }
 
-func TestNoOperationRunsYet(t *testing.T) {
+func TestThawDoesNotRunYet(t *testing.T) {
 	s := fixture(t, "pbs", nil)
-	if _, err := s.StartOperation(context.Background(), &pluginpb.StartRequest{Operation: "machine_freeze"}); err == nil {
+	if _, err := s.StartOperation(context.Background(), &pluginpb.StartRequest{Operation: "machine_thaw"}); err == nil {
 		t.Fatal("started")
 	}
 }
