@@ -19,6 +19,9 @@ func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
 	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
 		used[integer(m["vmid"])] = true
 	}
+	for _, g := range e.goneRecords(n) {
+		used[g.VMID] = true
+	}
 	slot := 0
 	for ; slot < 100; slot++ {
 		if !used[10000+n*100+slot] {
