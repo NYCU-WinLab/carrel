@@ -164,7 +164,8 @@ declare no output schema: one identical envelope on every tool cost 24 KB of eac
 
 Tool annotations follow one rule, and `TestContractAnnotations` checks it over the whole contract.
 `readOnlyHint` is true exactly for the tools that are not in `mutations`, except `whoami`, which
-registers an eligible tenant. `destructiveHint` is true when the call removes something the member
+registers an eligible tenant, and `webhook_test`, which sends a request out but changes nothing in
+Carrel, so it runs without the write lock and stays off the read-only endpoint. `destructiveHint` is true when the call removes something the member
 cannot get back with one call: deleted data (`machine_delete`, `snapshot_delete`, `image_delete`,
 `function_remove`, `app_unlink`), state that is overwritten (`snapshot_rollback`), a resource
 returned to a pool (`vip_remove`, `public_ip_release`) and a secret replaced (`app_webhook_rotate`, `webhook_rotate`).

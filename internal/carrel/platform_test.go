@@ -600,7 +600,7 @@ func TestContractAnnotations(t *testing.T) {
 			}
 		}
 		readOnly, hasIdempotent := boolean(a["readOnlyHint"]), a["idempotentHint"] != nil
-		if want := !named("mutations", name) && name != "whoami"; readOnly != want {
+		if want := !named("mutations", name) && name != "whoami" && name != "webhook_test"; readOnly != want {
 			t.Errorf("%s: readOnlyHint is %v, want %v", name, readOnly, want)
 		}
 		if want := destructive[name]; boolean(a["destructiveHint"]) != want {
