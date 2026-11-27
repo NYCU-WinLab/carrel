@@ -316,7 +316,8 @@ func (e *Execution) planPluginObject(pl PluginInfo, op PluginOperation, a, t, m 
 		if row.State != "ready" {
 			fail("conflict", fmt.Sprintf("The %s %s is %s", op.ObjectKind, name, row.State), D{"recovery": "resolve_prerequisite"})
 		}
-		if op.Rewinds && row.Configuration != nil && !equal(row.Configuration, diskConfiguration(m)) {
+		// A record with no configuration cannot show the machine unchanged.
+		if op.Rewinds && (row.Configuration == nil || !equal(row.Configuration, diskConfiguration(m))) {
 			fail("conflict", fmt.Sprintf("Resources or NICs changed since this %s; administrator review required", op.ObjectKind))
 		}
 	}

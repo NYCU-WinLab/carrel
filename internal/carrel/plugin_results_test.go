@@ -107,6 +107,15 @@ func TestARewindRefusesAChangedMachine(t *testing.T) {
 	if f := failure(r); f["code"] != "conflict" || f["message"] != "Resources or NICs changed since this copy; administrator review required" {
 		t.Fatalf("restore: %s", encoded(r))
 	}
+	// A record made without the configuration is refused as well.
+	m["cpu"] = num(m["cpu"]) - 1
+	p.Store.Put("machines", 10100, 1, m)
+	row, _ := copyRow(p, "a")
+	row.Configuration = nil
+	p.Store.Put(pluginObjectRows, row.ID, 1, decode(string(encoded(row))))
+	if f := failure(member(p, "copies_restore", D{"machine": "web", "name": "a", "dry_run": true})); f["code"] != "conflict" {
+		t.Fatalf("no configuration: %s", encoded(f))
+	}
 }
 
 // A kind whose result keys would be carrel's is not a tool.
