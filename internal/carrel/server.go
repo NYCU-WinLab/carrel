@@ -292,7 +292,7 @@ func (a *App) Call(ctx context.Context, name string, args, who D) D {
 
 func (a *App) call(ctx context.Context, name string, args, who D) D {
 	schema := a.schemas[name]
-	if schema == nil && a.Platform.pluginTools()[name] != nil {
+	if schema == nil && (a.Platform.pluginTools()[name] != nil || a.Platform.rememberedTool(name) != nil) {
 		// A plugin tool: Execute checks its arguments against its schema.
 		return memberResponse(name, args, a.Platform.Execute(ctx, name, without(args, "detail"), who))
 	}
@@ -594,6 +594,11 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 				if _, core := listed[c.Params.Name]; !core && !coreTools[c.Params.Name] {
 					if pt := a.Platform.pluginTools()[c.Params.Name]; pt != nil && shows(pt) {
 						return call(ctx, pt.Name, c.Params.Arguments), nil
+					}
+					// A tool a node reported before answers that its plugin
+					// is not reported now, not that it is unknown.
+					if r := a.Platform.rememberedTool(c.Params.Name); r != nil && shows(&pluginTool{Member: boolean(r["member"]), ReadOnly: boolean(r["read_only"])}) {
+						return call(ctx, c.Params.Name, c.Params.Arguments), nil
 					}
 				}
 			}

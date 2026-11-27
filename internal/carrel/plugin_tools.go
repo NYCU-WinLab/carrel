@@ -55,6 +55,8 @@ type pluginTool struct {
 	// The object the operation acts on, and its declaration as the first
 	// node reports it (pluginObjectSpec).
 	ObjectKind, ObjectEffect, Spec string
+	// Dims are the quota dimensions the operation's object kind charges.
+	Dims []string
 	// Nodes report the plugin supported with this operation, in
 	// configuration order.
 	Nodes []string
@@ -127,7 +129,8 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 					left[name] = fmt.Sprintf("toolset %s is not one of the tool contract", op.Toolset)
 				} else {
 					delete(left, name)
-					tools[name] = &pluginTool{Name: name, Plugin: pl.Name, Operation: op.Name, Description: op.Description,
+					kind, _ := pl.kind(op.ObjectKind)
+					tools[name] = &pluginTool{Dims: pluginKindDims(kind), Name: name, Plugin: pl.Name, Operation: op.Name, Description: op.Description,
 						Schema: op.Params, Member: op.Member, ReadOnly: op.ReadOnly, Destructive: op.Destructive,
 						Idempotent: op.Idempotent, Toolset: op.Toolset, ObjectKind: op.ObjectKind, ObjectEffect: op.ObjectEffect,
 						Spec: pluginObjectSpec(pl, op), Nodes: []string{n.Name}}
@@ -135,6 +138,7 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 			}
 		}
 	}
+	p.rememberPluginTools(tools, p.reportedQuota(now))
 	return tools, left
 }
 
@@ -831,9 +835,10 @@ func pluginListing(tools map[string]*pluginTool, shows func(*pluginTool) bool) [
 		} else {
 			description += " Runs as an operation: poll operation_get until done; dry_run answers at once."
 		}
-		destructive := pt.Destructive
+		// A plugin acts on carrel's own machines, as a core tool does.
+		destructive, openWorld := pt.Destructive, false
 		out = append(out, &mcp.Tool{Name: pt.Name, Description: description, InputSchema: pluginInputSchema(pt.Schema),
-			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: pt.ReadOnly, DestructiveHint: &destructive, IdempotentHint: pt.Idempotent}})
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: pt.ReadOnly, DestructiveHint: &destructive, IdempotentHint: pt.Idempotent, OpenWorldHint: &openWorld}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

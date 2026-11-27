@@ -664,8 +664,8 @@ func (e *Execution) pluginObjectsFreed(n int, m D, delta D) {
 }
 
 // quotaStorage adds to a quota_get answer the storage view of each object
-// kind charged to a measured dimension: the kinds a node reports now, and the
-// kinds the tenant holds records of. A key the core answers already stays.
+// kind charged to a measured dimension: the kinds a node reports now, those
+// a node reported before, and the kinds the tenant holds records of. A key the core answers already stays.
 func (e *Execution) quotaStorage(t D, out D) D {
 	kinds := map[string][]string{}
 	now := time.Now()
@@ -676,6 +676,13 @@ func (e *Execution) quotaStorage(t D, out D) D {
 			}
 			for _, k := range pl.Objects {
 				kinds[k.Name] = append(kinds[k.Name], pluginKindDims(k)...)
+			}
+		}
+	}
+	for _, r := range e.S.SiteRows(pluginToolRows) {
+		if kind := str(r["kind"]); kind != "" {
+			for _, d := range arr(r["dims"]) {
+				kinds[kind] = append(kinds[kind], str(d))
 			}
 		}
 	}

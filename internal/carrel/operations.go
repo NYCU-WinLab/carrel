@@ -164,6 +164,9 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	o.p.writer.Lock()
 	defer o.p.writer.Unlock()
 	op := o.Find(t, id)
+	if op["plugin"] == nil && !coreTools[str(op["tool"])] {
+		fail("conflict", "carrel no longer runs this operation's tool itself; submit the action again", D{"recovery": "revise_request", "tool": op["tool"]})
+	}
 	if op["unfenced"] != nil {
 		fail("conflict", "An admin cleared this operation's fence with machine_unfence; submit the action again", D{"recovery": "revise_request"})
 	}
