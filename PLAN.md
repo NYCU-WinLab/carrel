@@ -1502,8 +1502,11 @@ returns it as `env_box` and only the host opens it. When a host registers its fi
 seals that host's values under `function_env_key` again to the key, in the same transaction, and
 drops the old copies. A different key later is refused until an operator runs
 `carrel -trust-function-host-key <host>=<fingerprint>`; values sealed to the old key then fail
-their build, and members upload them again. Registry credentials and webhook secrets stay under
-`function_env_key` for now.
+their build, and members upload them again. `function_registry` credentials take the same path:
+sealed to the host's key, bound to the function's host id and the registry, returned as `auth_box`
+with the registry, and moved from `function_env_key` when the host registers. Each start of the
+host's agent also moves values sealed under `function_env_key` since. Webhook secrets stay under
+`function_env_key`: carrel opens them to sign each delivery.
 
 **Limits and quota**
 

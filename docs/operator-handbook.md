@@ -829,7 +829,8 @@ them again with `function_registry`, then deploys again.
 ### Function host keys
 
 Each function host's `carrel-fnd` makes its own key on the first start (`/etc/carrel-fn/env.key`)
-and registers the public key. From then on function environments are sealed to that key, and
+and registers the public key. From then on function environments and registry credentials are
+sealed to that key, and
 carrel cannot open them; `-reseal-function-values` counts them under `host` and leaves them alone.
 The first registration seals the host's older values again, then runs `VACUUM` and empties the
 write-ahead log, so the database files keep no copy under `function_env_key`. Backups taken before

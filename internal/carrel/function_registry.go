@@ -33,7 +33,9 @@ func registryOf(image string) string {
 func (e *Execution) functionRegistry(a, w, t D) D {
 	n, dry := integer(t["n"]), boolean(a["dry_run"])
 	f := e.Function(t, a["function"])
-	e.P.functionEnvAEAD()
+	if e.P.hostEnvKey(e.S, str(f["host"])) == "" {
+		e.P.functionEnvAEAD()
+	}
 	if boolean(a["clear"]) {
 		cleared := f["registry"]
 		if !dry {
@@ -123,7 +125,7 @@ func (p *Platform) ReceiveFunctionRegistry(ctx context.Context, token string, bo
 	}
 	registry := str(link["registry"])
 	f["registry"] = registry
-	f["registry_auth"] = p.sealValue(str(f["id"])+"#registry", D{"registry": registry, "username": auth.Username, "password": auth.Password})
+	f["registry_auth"] = p.sealRegistryFor(e.S, f, D{"registry": registry, "username": auth.Username, "password": auth.Password})
 	e.Transaction(func(tx *Execution) {
 		tx.Put("functions", f["id"], n, f)
 		tx.S.Remove("function_env_links", link["id"])
@@ -167,6 +169,10 @@ func (p *Platform) FunctionAuthFor(token, source, function, version string) D {
 			continue
 		}
 		v := p.Store.Get("function_versions", functionVersionID(str(f["id"]), version))
+		if sealed := str(f["registry_auth"]); v != nil && hostSealed(sealed) && hasFunctionAuth(f, v) {
+			// Only the host opens it.
+			return D{"auth_box": strings.TrimPrefix(sealed, hostEnvPrefix), "registry": f["registry"]}
+		}
 		if auth := p.functionAuthFor(f, obj(v)); v != nil && auth != nil {
 			return D{"auth": pick(auth, "registry", "username", "password")}
 		}
