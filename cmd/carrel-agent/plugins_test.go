@@ -449,7 +449,8 @@ func TestADryRunReachesOnlyAPluginThatTakesOne(t *testing.T) {
 func TestAnObjectOperationStartsOnlyOnItsReservation(t *testing.T) {
 	dir := pluginDir(t)
 	p := newFake("copies", 1)
-	p.types = []*pluginpb.OperationType{{Name: "take", ParamsSchema: `{"type":"object"}`, ObjectKind: "copy", ObjectEffect: "create", ObjectParam: "name"}}
+	p.types = []*pluginpb.OperationType{{Name: "take", ParamsSchema: `{"type":"object"}`, ObjectKind: "copy", ObjectEffect: "create", ObjectParam: "name"},
+		{Name: "list", ParamsSchema: `{"type":"object"}`, ReadOnly: true, ObjectKind: "copy", ObjectEffect: "list"}}
 	p.quota = []*pluginpb.QuotaDimension{{Name: "copies", DefaultLimit: 2}}
 	p.objects = []*pluginpb.ObjectKind{{Name: "copy", Holds: []string{"freeze"}, Charges: []*pluginpb.Charge{{Dimension: "copies", Amount: 1}}}}
 	serve(t, dir, p)
@@ -467,13 +468,18 @@ func TestAnObjectOperationStartsOnlyOnItsReservation(t *testing.T) {
 	if r := call(t, a, reserved); r["ok"] != true || p.started.Load() != 1 || p.reservations[0] != "copies/copy/10100/a" {
 		t.Fatalf("reserved: %v, %v", r, p.reservations)
 	}
+	// A list names no record.
+	list := `{"op":"plugin","plugin":"copies","call":"start","operation":"list","idempotency_key":"k4","operation_spec":"` + carrel.PluginOperationSpec(info, info.Operations[1]) + `"}`
+	if r := call(t, a, list); r["ok"] != true || p.started.Load() != 2 {
+		t.Fatalf("list: %v", r)
+	}
 	// The plugin changed what a copy holds since the control plane charged
 	// by its report: the start is refused.
 	p.mu.Lock()
 	p.objects[0].Holds = nil
 	p.mu.Unlock()
 	again := strings.Replace(reserved, `"k2"`, `"k3"`, 1)
-	if r := call(t, a, again); r["ok"] != false || p.started.Load() != 1 {
+	if r := call(t, a, again); r["ok"] != false || p.started.Load() != 2 {
 		t.Fatalf("a changed declaration started: %v", r)
 	}
 

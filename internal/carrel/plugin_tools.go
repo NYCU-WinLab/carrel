@@ -349,11 +349,20 @@ var pluginReserved = []string{"ok", "error", "operation", "dry_run", "reserved",
 	"plugin", "node", "task", "suggestions", "next_action", "object", "quota_after", "machine", "power_state",
 	"power_state_restored", "downtime_expected"}
 
+// pluginCarrelKeys are the keys carrel's quota accounting adds to an object
+// operation's answer, as to a core action's.
+var pluginCarrelKeys = []string{"delta", "quota_before", "limit_delta", "requirements", "ready_to_apply"}
+
 // pluginResult is what a plugin's result adds to carrel's answer: the keys
-// of a JSON object but carrel's own, or the value under "result".
-func pluginResult(v any) D {
+// of a JSON object but carrel's own, or the value under "result". An object
+// operation's kind names more of carrel's keys.
+func pluginResult(v any, kind string) D {
 	if m, ok := v.(map[string]any); ok {
-		return without(D(m), pluginReserved...)
+		out := without(D(m), append(pluginReserved, pluginCarrelKeys...)...)
+		if kind != "" {
+			out = without(out, pluginResultKeys(kind)...)
+		}
+		return out
 	}
 	if v == nil {
 		return D{}
@@ -426,32 +435,68 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 		}
 		planned["downtime_expected"], planned["power_state"] = true, "restored_to_previous"
 	}
+	// before is the quota a dry run of an object operation is counted from.
+	var before D
 	if op.ObjectKind != "" {
 		pl, _ := e.P.pluginInfo(node, pt.Plugin)
 		if pluginObjectProblem(pl, op) != "" || m == nil {
 			fail("unsupported", fmt.Sprintf("Node %s no longer reports plugin %s with operation %s as it was listed", node, pt.Plugin, pt.Operation),
 				D{"recovery": "retry_infrastructure"})
 		}
-		id, row, charge := e.planPluginObject(pl, op, a, t, m)
-		// A read of an object names the record and the declaration, as a
-		// start does; a dry run reserves nothing.
-		job["reservation"] = id
-		object := D{"kind": op.ObjectKind, "name": a[op.ObjectParam], "state": "planned"}
-		if row != nil {
-			object["state"] = row.State
+		k, _ := pl.kind(op.ObjectKind)
+		n := integer(t["n"])
+		if op.ObjectEffect == "list" {
+			views := []D{}
+			for _, o := range e.pluginObjects(n, m["vmid"]) {
+				if o.Plugin == pl.Name && o.Kind == op.ObjectKind {
+					views = append(views, pluginObjectView(o))
+				}
+			}
+			planned[op.ObjectKind+"s"] = views
+		} else {
+			id, row, charge := e.planPluginObject(pl, op, a, t, m)
+			// A read of an object names the record and the declaration, as
+			// a start does; a dry run reserves nothing.
+			job["reservation"] = id
+			object := D{"kind": op.ObjectKind, "name": a[op.ObjectParam], "state": "planned"}
+			view := D{"name": a[op.ObjectParam], "machine": m["name"], "state": "planned"}
+			if k.Disk {
+				view["disk_gb"] = m["disk_gb"]
+			}
+			if row != nil {
+				object["state"], view = row.State, pluginObjectView(*row)
+			}
+			if dry {
+				before = e.Quota(t)
+				planned["quota_after"] = before
+			}
+			switch {
+			case charge != nil:
+				object["charge"] = charge
+				planned["quota_after"] = e.Quota(t, e.pluginDelta(n, charge))
+			case dry && op.ObjectEffect == "delete":
+				planned["quota_after"] = e.Quota(t, e.pluginFreed(n, []pluginObject{*row}))
+			}
+			planned["object"], planned[op.ObjectKind] = object, view
 		}
-		if charge != nil {
-			object["charge"] = charge
-			planned["quota_after"] = e.Quota(t, charge)
+		if s := e.objectStorage(t, pluginKindDims(k)); s != nil {
+			planned[op.ObjectKind+"_storage"] = s
 		}
-		planned["object"] = object
+	}
+	// dryRun is a dry run's answer: an object operation's counts its quota
+	// as a core action's does.
+	dryRun := func(out D) D {
+		out = merge(out, D{"dry_run": true, "reserved": false, "resource_changes": false})
+		if before != nil {
+			out = mutationResult(before, out, true)
+		}
+		return out
 	}
 	// A plugin that does not say it honours dry_run is never sent one: it
 	// would run the operation. carrel plans it without the plugin.
 	if dry && !op.DryRun {
 		e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "ok")
-		return merge(planned, D{"ok": true, "dry_run": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation,
-			"node": node, "reserved": false, "resource_changes": false})
+		return dryRun(merge(planned, D{"ok": true, "state": "planned", "plugin": pt.Plugin, "operation": pt.Operation, "node": node}))
 	}
 	v, err := e.P.Backend.Call(e.Ctx, job, e.P.nodeTarget(node))
 	if err != nil {
@@ -470,9 +515,9 @@ func (e *Execution) pluginInline(pt *pluginTool, a, w, t D) D {
 	default:
 		pluginFailure(pt.Plugin, r)
 	}
-	out := merge(pluginResult(r["result"]), merge(planned, D{"ok": true}))
+	out := merge(pluginResult(r["result"], op.ObjectKind), merge(planned, D{"ok": true}))
 	if dry {
-		out = merge(out, D{"dry_run": true, "reserved": false, "resource_changes": false})
+		out = dryRun(out)
 	}
 	e.S.Log(str(w["sub"]), t["n"], pt.Name, a, "ok")
 	return out
@@ -588,8 +633,14 @@ func (p *Platform) nodeTarget(name string) string {
 // done, outside the writer. A restart asks again with the same key, which
 // returns the same operation.
 func (e *Execution) PerformPlugin() {
-	if !boolean(obj(e.Op["plugin"])["succeeded"]) {
+	plug := obj(e.Op["plugin"])
+	if !boolean(plug["succeeded"]) {
 		e.runPlugin()
+		if plug["object"] != nil {
+			// What the tenant's objects hold changed: the result counts it.
+			e.P.invalidateInventory()
+			e.RefreshStorage()
+		}
 	}
 	// Only once the run has succeeded: a failed one restores in runPlugin.
 	e.restorePluginPower()
@@ -722,16 +773,30 @@ func (e *Execution) FinishPlugin() D {
 	out := obj(e.Op["plugin_outcome"])
 	e.settlePluginObject(true)
 	// The plugin's result keys at the top, as a core tool's; carrel's own win.
-	r := merge(pluginResult(out["result"]), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
+	r := merge(pluginResult(out["result"], str(plug["object_kind"])), D{"plugin": plug["plugin"], "operation": plug["operation"], "node": plug["node"],
 		"task": out["task"], "resource_changes": !boolean(plug["read_only"])})
+	e.pluginPowerResult(r)
 	if plug["object"] != nil {
+		kind := str(plug["object_kind"])
 		state := "deleted"
 		if row, ok := rowOf[pluginObject](e.S, pluginObjectRows, str(plug["object"])); ok {
-			state = row.State
+			state, r[kind] = row.State, pluginObjectView(row)
+		} else if v := obj(plug["object_view"]); len(v) > 0 {
+			r[kind] = merge(v, D{"state": "deleted"})
 		}
-		r["object"] = D{"kind": plug["object_kind"], "name": plug["object_name"], "state": state}
+		r["object"] = D{"kind": kind, "name": plug["object_name"], "state": state}
+		t := e.S.TenantN(integer(e.Op["tenant_n"]))
+		dims := []string{}
+		for _, d := range arr(plug["object_dims"]) {
+			dims = append(dims, str(d))
+		}
+		if s := e.objectStorage(t, dims); s != nil {
+			r[kind+"_storage"] = s
+		}
+		if before := obj(plug["quota_before"]); len(before) > 0 {
+			r = mutationResult(before, merge(r, D{"quota_after": e.Quota(t)}), false)
+		}
 	}
-	e.pluginPowerResult(r)
 	return r
 }
 

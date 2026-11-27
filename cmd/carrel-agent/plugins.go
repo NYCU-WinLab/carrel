@@ -160,7 +160,7 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 			Stopped: op.Stopped, Rewinds: op.Rewinds})
 	}
 	for _, q := range d.Quota {
-		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit)})
+		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit), Measured: q.Measured})
 	}
 	for _, k := range d.Objects {
 		kind := carrel.PluginObjectKind{Name: clip(k.Name), Disk: k.Disk}
@@ -314,11 +314,11 @@ func (a *agent) pluginCall(ctx context.Context, request []byte) ([]byte, bool) {
 		// An object operation runs only on the record the control plane
 		// reserved for it, and a reserved one only on a plugin that, now,
 		// says it acts on an object: either way round the count would be
-		// wrong.
+		// wrong. A list acts on no one record.
 		spec, object := "", false
 		for _, op := range info.Operations {
 			if op.Name == j.Operation {
-				spec, object = carrel.PluginOperationSpec(info, op), op.ObjectKind != ""
+				spec, object = carrel.PluginOperationSpec(info, op), op.ObjectKind != "" && op.ObjectEffect != "list"
 			}
 		}
 		if !j.DryRun && (spec != j.OperationSpec || object != (j.Reservation != "")) {

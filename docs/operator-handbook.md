@@ -340,8 +340,20 @@ once, as they read carrel's own rows. The records are in the `plugin_objects` ro
   names what one object charges: an amount per object, or times the machine's `cpu`, `memory_mb`
   or `disk_gb`. A dimension may not have the name of one carrel counts itself, such as
   `snapshots`; the operations are then left out, with the reason.
-- An operation names its `object_kind`, its `object_effect` (`create`, `delete` or `use`) and
-  the required string parameter that names the object. It must also require `machine`.
+- An operation names its `object_kind`, its `object_effect` (`create`, `delete`, `use` or
+  `list`) and the required string parameter that names the object. It must also require
+  `machine`. A `list` is `read_only`, names no parameter and answers with the machine's records
+  of the kind.
+- A dimension marked `measured` counts, once the nodes have sampled the tenant's storage, what
+  the tenant's disk objects hold, as `snapshot_gb` does. A create then adds nothing yet, and a
+  tenant already over the limit gets no more. Without a fresh sample it counts what was charged.
+- An object operation answers as a core action does. carrel adds `delta`, `quota_before` and
+  `quota_after`, the record under the kind's name (`snapshot`), the list under its plural
+  (`snapshots`) and, for a kind charged to a measured dimension, the storage sample under
+  `<kind>_storage` with `<dimension>_counts` (`held` or `declared`). A kind whose keys would be
+  carrel's own is left out.
+- A disk kind's record keeps the machine's resources and NICs at creation. A `rewinds`
+  operation on it is refused once they changed, and while a resize is pending.
 - Before a create starts, carrel checks the name is free, charges the tenant's quota and, for a
   kind with `disk`, checks the node's storage as for a snapshot. It records the object as
   `creating` and sends the record's id to the plugin as `reservation`. A plugin must refuse a
