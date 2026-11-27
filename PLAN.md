@@ -246,7 +246,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
 | | `function_env` | `function`, `clear`; a single-use link for the environment file (section 7.11) |
 | | `function_registry` | `function`, `registry`, `clear`; a single-use link for a private registry's credentials (section 7.11) |
-| | `function_link` | `function`, `repo`, `branch`, `clear`; deploy on every push with GitHub OIDC (section 7.11) |
+| | `function_link` | `function`, `repo`, `branch`, `previews`, `clear`; deploy on every push with GitHub OIDC, and each pull request to its own preview (section 7.11) |
 | | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
 | | `function_logs` | `function`, `since`; the output the platform captured |
 | | `function_rollback` | `function`; switches back to the previous version |
@@ -1609,6 +1609,20 @@ to tenant networks, one instance per `reuse` function.
    superseded by a newer one. The workflow runs one deploy at a time per function. The gateway
    sends the public function paths (`env`, `registry`, `deploy`) to carrel, never the host
    agents' paths.
+
+   Pull request previews (#645) are built on this path. With `previews: true`, a
+   `pull_request` token from the linked repository (same name and pinned id, event exactly
+   `pull_request`, so `pull_request_target` is refused) deploys to the function
+   `pr-<number>-<name>`, with `preview_of` naming the parent. Its first version takes only the
+   parent's settings: no environment, schedules or registry credentials, since a pull request
+   runs code nobody merged. It is served at `pr-<number>-<name>.<tenant>.winlab.tw` under the
+   tenant's wildcard certificate: carrel writes a queued domain and wakes the maintenance loop,
+   which publishes it. The closing run calls `DELETE /functions/v1/deploy/<tenant>/<name>/preview`
+   with the number it closes. A merged pull request's close token carries the base branch as
+   `ref` and no number, so the preview must match both that number and the token's `head_ref`; a
+   late close of an older pull request on a reused branch name never removes a newer preview. A preview with no deploy for 7 days
+   is removed, and so are a function's previews when it is removed, unlinked or linked without
+   previews. A function has at most 5, counted against the functions and domains quota.
 4. Schedules, logs, quota and sensorium spans.
 5. The AIntern job runner as the first tenant, in `fresh` mode.
 

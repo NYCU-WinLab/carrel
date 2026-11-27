@@ -8,12 +8,19 @@ there. A first install needs only /etc/carrel/config.json written in CT 100
 (sites/<site>/config.example.json lists the keys); every later run keeps the
 database, configuration, OAuth state and certificates.
 
-A failed health check restores the previous binary, units and node programs, never the
-database. `install-control.py rollback` does the same on request for the last deploy,
-and with --database also restores the copy made before the schema migration (#768).
+A failed health check restores the previous binary, units and node programs. Older
+databases are never restored by a failed upgrade.
+
+`install-control.py rollback` undoes the newest upgrade on purpose (#768): the previous
+binary, units, configuration and node programs. A release that migrated the database
+leaves a schema the previous binary refuses; then rollback stops unless it is given
+--database, which also puts back the database copy taken before that upgrade and loses
+every write since.
 """
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -44,9 +51,9 @@ AGENT_TOKEN = Path("/etc/carrel/agent-token")
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
 KEEP = 5
 DATABASE = Path("/var/lib/carrel/carrel.db")
+# Upgrade stages on the first exit node, and control plane archives in CT 100.
+STAGES = Path("/var/lib/carrel")
 ROLLBACK = Path("/opt/carrel/rollback")
-# On the node: where deploy-go.py stages a release.
-DEPLOYS = Path("/var/lib/carrel")
 # Inside CT 100.
 ETC = Path("/etc/carrel")
 UNIT_DIR = Path("/etc/systemd/system")
@@ -193,93 +200,78 @@ def ct_activate():
     manifest.unlink()
 
 
-def ct_restore(stamp, names):
+def ct_schema(stamp):
+    """Print the schema version of the database and of the copy taken before upgrade stamp."""
+    import sqlite3
+
+    def version(path):
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return db.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            db.close()
+
+    out = {"current": version(DATABASE) if DATABASE.exists() else None, "before": None}
     with tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive:
+        if "var/lib/carrel/carrel.db" in archive.getnames():
+            scratch = ROLLBACK / f"schema-{stamp}.db"
+            with archive.extractfile("var/lib/carrel/carrel.db") as source, open(scratch, "wb") as target:
+                shutil.copyfileobj(source, target)
+            try:
+                out["before"] = version(scratch)
+            finally:
+                scratch.unlink()
+    print(json.dumps(out))
+
+
+def ct_prepare_database(stamp, schema):
+    """Unpack the database copy of upgrade stamp beside the database, while
+    carrel still runs, and check it is whole and at schema."""
+    import sqlite3
+
+    pending = DATABASE.with_name("carrel.db.rollback")
+    with (
+        tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive,
+        archive.extractfile("var/lib/carrel/carrel.db") as source,
+        os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as target,
+    ):
+        shutil.copyfileobj(source, target)
+    db = sqlite3.connect(f"file:{pending}?mode=ro", uri=True)
+    try:
+        check = db.execute("PRAGMA integrity_check").fetchone()[0]
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        db.close()
+    if check != "ok" or version != int(schema):
+        pending.unlink()
+        raise SystemExit(f"The database copy of upgrade {stamp} is damaged or at schema {version}, not {schema}")
+    if os.geteuid() == 0:
+        shutil.chown(pending, "carrel", "carrel")
+    print(json.dumps({"prepared": str(pending)}))
+
+
+def ct_restore_database(stamp):
+    """Put the prepared copy of upgrade stamp in place. carrel must be stopped."""
+    if subprocess.run(["systemctl", "is-active", "--quiet", "carrel"], check=False, capture_output=True).returncode == 0:
+        raise SystemExit("Stop carrel before restoring its database")
+    pending = DATABASE.with_name("carrel.db.rollback")
+    if not pending.exists():
+        raise SystemExit(f"No prepared database copy: run ct prepare-database {stamp} first")
+    # The copy is whole: a write-ahead log of the newer database must not be
+    # replayed onto it.
+    for suffix in ("-wal", "-shm"):
+        Path(str(DATABASE) + suffix).unlink(missing_ok=True)
+    os.replace(pending, DATABASE)
+    print(json.dumps({"database": str(DATABASE), "restored_from": f"go-{stamp}"}))
+
+
+def ct_restore(stamp, names):
+    with tarfile.open(f"/opt/carrel/rollback/go-{stamp}.tar.gz") as archive:
         present = set(archive.getnames())
         for name in names:
             if name in present:
                 archive.extract(name, "/", filter="data")
     Path("/etc/carrel/templates.next.json").unlink(missing_ok=True)
-
-
-def archived_version(stamp):
-    """PRAGMA user_version of the database inside a deploy's archive: what the release before it reads."""
-    import sqlite3
-    import tempfile
-
-    with tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive:
-        try:
-            member = archive.getmember("var/lib/carrel/carrel.db")
-        except KeyError:
-            return None
-        with tempfile.TemporaryDirectory(dir=ROLLBACK) as work:
-            target = Path(work) / "carrel.db"
-            with archive.extractfile(member) as source, open(target, "wb") as out:
-                shutil.copyfileobj(source, out)
-            db = sqlite3.connect(target)
-            try:
-                return db.execute("PRAGMA user_version").fetchone()[0]
-            finally:
-                db.close()
-
-
-def schema_copy(version):
-    """The newest copy carrel made before it migrated from this schema version."""
-    copies = sorted(DATABASE.parent.glob(f"{DATABASE.name}.schema-{version}-*"))
-    return copies[-1] if copies else None
-
-
-def ct_schema(stamp):
-    """Print the current schema, the one the previous release reads and the copy that could restore it."""
-    import sqlite3
-
-    current = None
-    if DATABASE.exists():
-        db = sqlite3.connect(f"file:{DATABASE}?mode=ro", uri=True)
-        current = db.execute("PRAGMA user_version").fetchone()[0]
-        db.close()
-    previous = archived_version(stamp)
-    copy = schema_copy(previous) if previous is not None else None
-    print(json.dumps({"current": current, "previous": previous, "copy": str(copy) if copy else None,
-                      "copy_time": copy.stat().st_mtime if copy else None,
-                      "copy_intact": intact(copy, previous) if copy else False}))
-
-
-def intact(copy, version):
-    """True when the copy passes SQLite's integrity check and is at this schema version."""
-    import sqlite3
-
-    check = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
-    try:
-        problems = check.execute("PRAGMA integrity_check").fetchall()
-        found = check.execute("PRAGMA user_version").fetchone()[0]
-    except sqlite3.DatabaseError:
-        return False
-    finally:
-        check.close()
-    return problems == [("ok",)] and found == version
-
-
-def ct_restore_database(version):
-    """Put the pre-migration copy in place of the database. carrel must be stopped."""
-    copy = schema_copy(int(version))
-    if copy is None:
-        raise SystemExit(f"No {DATABASE}.schema-{version}-* copy to restore")
-    if not intact(copy, int(version)):
-        raise SystemExit(f"{copy} is not an intact schema {version} database")
-    # Beside the database, then renamed. The copy stays: it is the way back.
-    # Created 0600 and never through a link: the directory belongs to carrel.
-    pending = DATABASE.with_name(DATABASE.name + ".restore")
-    pending.unlink(missing_ok=True)
-    stat = DATABASE.parent.stat()
-    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as out, open(copy, "rb") as source:
-        shutil.copyfileobj(source, out)
-        os.fchown(out.fileno(), stat.st_uid, stat.st_gid)
-    for suffix in ("-wal", "-shm"):
-        Path(str(DATABASE) + suffix).unlink(missing_ok=True)
-    os.replace(pending, DATABASE)
-    print(json.dumps({"database_restored": str(copy)}))
 
 
 # --- on the first exit node -----------------------------------------------
@@ -353,17 +345,23 @@ def agent_connected(since, wait=60):
     return False
 
 
-def saved_paths():
-    """The node files a deploy saves as stage/before-<name> and a rollback puts back."""
-    return {"templates.json": TEMPLATES, "release.json": LIB / "release.json", "agent-token": AGENT_TOKEN,
-            **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
+@contextlib.contextmanager
+def exclusive(directory):
+    """The node's deploy lock: one deploy or rollback at a time, from choosing
+    the upgrade to the health check."""
+    fd = os.open(directory / "deploy.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise SystemExit("Another deploy or rollback is running on this node") from None
+        yield
+    finally:
+        os.close(fd)
 
 
-def undo(stage, stamp, before, had_release, configured, activated, database=None):
-    """Put the previous release back: units, binary, configuration and node programs.
-
-    database is a schema version whose pre-migration copy replaces the database while
-    carrel is stopped. Every step runs even if one fails: the service must come back."""
+def undo(stage, stamp, before, had_release, configured, activated):
+    """Put back what upgrade stamp replaced, and start carrel again."""
     # Every step runs even if one fails: the service must come back.
     subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", "carrel"], check=False)
     if configured or activated:
@@ -397,20 +395,15 @@ def undo(stage, stamp, before, had_release, configured, activated, database=None
                   "certs writes (including revokes) are refused if the restored carrel predates gen. "
                   "Run in CT 102: rm -f " + " ".join(JUMP_GENS), file=sys.stderr)
     subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
-    try:
-        if database is not None:
-            # No backup may read the database while it is swapped, and carrel must be down.
-            for unit in ("carrel-backup.timer", "carrel-backup.service"):
-                subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], check=False)
-            if subprocess.run(["pct", "exec", CT, "--", "systemctl", "is-active", "--quiet", "carrel"],
-                              check=False).returncode == 0:
-                raise SystemExit("carrel did not stop: the database was not restored")
-            ct_command("restore-database", str(database))
-    finally:
-        subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
+    subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
 
 
 def host(stage, version):
+    with exclusive(stage.parent):
+        install(stage, version)
+
+
+def install(stage, version):
     stamp = stage.name.removeprefix("go-upgrade-")
     for name, expected in json.loads((stage / "hashes.json").read_text()).items():
         if hashlib.sha256((stage / name).read_bytes()).hexdigest() != expected:
@@ -433,7 +426,8 @@ def host(stage, version):
     # A first install has no units yet; stopping them is then a no-op.
     for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], capture_output=True, check=False)
-    before = saved_paths()
+    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json", "agent-token": AGENT_TOKEN,
+              **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
     # Read before anything can fail: only a record this run created may be removed.
     had_release = (LIB / "release.json").exists()
     configured = activated = False
@@ -521,57 +515,100 @@ def agents(stage):
                          "plugins and deploy again. The control plane and the agents are up.")
 
 
-def rollback(stage, with_database):
-    """Go back one release: the last deploy's saved binary, units and node programs, and the database on request."""
+def previous_stage(release):
+    """The newest kept stage that staged this release, with its configure-nodes.py intact."""
+    for stage in sorted(STAGES.glob("go-upgrade-*"), reverse=True):
+        script = stage / "configure-nodes.py"
+        try:
+            staged = json.loads((stage / "release.json").read_text())
+            hashes = json.loads((stage / "hashes.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if (staged == release and script.exists()
+                and hashlib.sha256(script.read_bytes()).hexdigest() == hashes.get("configure-nodes.py")):
+            return stage
+    return None
+
+
+def rollback(database):
+    """Undo the upgrade that installed the running release: binaries, units,
+    configuration and node programs, and with database, the database copy
+    taken before it."""
+    with exclusive(STAGES):
+        roll_back(database)
+
+
+def roll_back(database):
+    installed = LIB / "release.json"
+    current = json.loads(installed.read_text()) if installed.exists() else None
+    # The newest stage is not always the release in effect: a failed upgrade
+    # leaves its stage behind after it put the previous release back.
+    # A deploy of the release already running changed nothing to go back to.
+    stages = [s for s in sorted(STAGES.glob("go-upgrade-*"))
+              if (s / "release.json").exists() and json.loads((s / "release.json").read_text()) == current
+              and not ((s / "before-release.json").exists()
+                       and json.loads((s / "before-release.json").read_text()) == current)]
+    if not stages:
+        raise SystemExit("No kept upgrade installed the running release (" + str(LIB / "release.json") +
+                         "): deploy the release you want instead")
+    stage = stages[-1]
     stamp = stage.name.removeprefix("go-upgrade-")
-    if not stage.is_dir() or not any(stage.glob("before-*")):
-        raise SystemExit(f"{stage} holds no saved node files: nothing to roll back to")
-    # The copy in CT 100 is the one the last deploy left, which may predate these commands.
-    push(Path(__file__).resolve(), "/usr/local/lib/carrel/install-control.py", "755")
-    state = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py", "ct",
-                               "schema", stamp))
-    current, previous = state["current"], state["previous"]
-    migrated = current is not None and previous is not None and current > previous
-    if migrated and not with_database:
-        raise SystemExit(f"The database has schema {current}; the previous release reads up to {previous}. "
-                         "It would refuse to start. Run again with --database to restore the copy made before the "
-                         "migration, which loses every write since the upgrade.")
-    if with_database and not migrated:
-        raise SystemExit(f"The database is at schema {current} and the previous release read {previous}: the last "
-                         "deploy migrated nothing, so there is no copy to restore. Run without --database.")
-    restore = None
-    if with_database:
-        if not state["copy"]:
-            raise SystemExit(f"No pre-migration copy {DATABASE}.schema-{previous}-* in CT {CT}")
-        if not state.get("copy_intact"):
-            raise SystemExit(f"{state['copy']} in CT {CT} is not an intact schema {previous} database: nothing changed")
-        when = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(state["copy_time"]))
-        print(f"LOST: every write to the database since {when}, when {state['copy']} was made. "
-              f"The database goes back to schema {previous}; that copy stays.")
-        restore = previous
-    release = json.loads((stage / "before-release.json").read_text()) if (stage / "before-release.json").exists() else {}
+    if not (stage / "before-release.json").exists():
+        raise SystemExit(f"The upgrade {stamp} kept no previous node programs: it was a first install")
+    previous = json.loads((stage / "before-release.json").read_text())["version"]
+    schema = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py",
+                                "ct", "schema", stamp))
+    migrated = schema["before"] is not None and schema["current"] != schema["before"]
+    if migrated and not database:
+        raise SystemExit(f"The upgrade {stamp} moved the database from schema version {schema['before']} to "
+                         f"{schema['current']}, which {previous} refuses. Run again with --database to also put "
+                         "back the copy taken before it. That loses every write since the upgrade.")
+    if database:
+        if schema["before"] is None:
+            raise SystemExit(f"The upgrade {stamp} kept no database copy")
+        # Unpacked and checked while carrel still runs: a full disk or a bad
+        # copy stops here, with nothing stopped.
+        ct_command("prepare-database", stamp, str(schema["before"]))
+    host_name = origin_host()
+    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json", "agent-token": AGENT_TOKEN,
+              **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
+    for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
+        subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], check=False)
     try:
-        undo(stage, stamp, saved_paths(), (stage / "before-release.json").exists(), True, True, restore)
+        if database:
+            print(f"Restoring the database copy of upgrade {stamp}: writes since then are lost", file=sys.stderr)
+            try:
+                ct_command("restore-database", stamp)
+            except BaseException:
+                # Nothing was replaced: the running release comes back as it was.
+                subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
+                raise
+        undo(stage, stamp, before, False, True, True)
+        (stage / "rolled-back").write_text(json.dumps({"at": int(time.time()), "database": bool(database)}) + "\n")
+        try:
+            health = healthy(previous, host_name)
+        except SystemExit as error:
+            raise SystemExit(f"Rolled back to {previous}, database {'restored' if database else 'kept'}, but "
+                             f"{previous} failed its health check ({error}). Do not run rollback again: it would "
+                             "go one more upgrade back. See journalctl -u carrel in CT 100.") from None
     finally:
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
-    # The same node step a deploy runs, now from the restored programs: the other
-    # nodes get them and release.json, and config.json gets the node list and
-    # agent token digests again. carrel reads config.json at start, so it restarts.
-    run("python3", stage / "configure-nodes.py")
+    print(json.dumps({"rolled_back": stamp, "version": previous, "database_restored": bool(database), "health": health}))
+    # The other nodes and every carrel-agent go back too, through the previous
+    # release's own node step: a newer configure-nodes.py may write config keys
+    # the restored carrel refuses.
+    older = previous_stage(json.loads((stage / "before-release.json").read_text()))
+    if older is None:
+        print("No kept stage of " + previous + " with its configure-nodes.py: deploy " + previous +
+              " again, so every node has the same programs.", file=sys.stderr)
+        return
+    run("python3", older / "configure-nodes.py")
+    # carrel reads config.json, which configure-nodes.py rewrote, only at start.
     ct("systemctl", "restart", "carrel")
-    if release.get("version"):
-        healthy(release["version"], origin_host())
+    healthy(previous, host_name)
     ct("systemctl", "is-active", "carrel")
-    # Every agent restarts on the restored carrel-agent, as after a deploy.
-    agents(stage)
-    print(json.dumps({"rolled_back": str(stage), "database": bool(with_database), "version": release.get("version")}))
-
-
-def latest_stage():
-    stages = sorted(DEPLOYS.glob("go-upgrade-*"))
-    if not stages:
-        raise SystemExit(f"No {DEPLOYS}/go-upgrade-* directory: nothing to roll back")
-    return stages[-1]
+    agents(older)
+    print(json.dumps({"nodes_rolled_back": str(older)}))
 
 
 def main():
@@ -580,13 +617,12 @@ def main():
     h = sub.add_parser("host")
     h.add_argument("--stage", type=Path, required=True)
     h.add_argument("--version", required=True)
-    r = sub.add_parser("rollback", help="restore the release before the last deploy")
-    r.add_argument("--stage", type=Path, help="the deploy to undo (default: the newest go-upgrade-*)")
+    r = sub.add_parser("rollback", help="undo the upgrade that installed the running release")
     r.add_argument("--database", action="store_true",
-                   help="also restore the copy made before the schema migration; loses every write since")
+                   help="also restore the database copy taken before it; writes since are lost")
     c = sub.add_parser("ct")
     c.add_argument("command", choices=["setup", "preflight", "backup", "activate", "restore", "schema",
-                                       "restore-database"])
+                                       "prepare-database", "restore-database"])
     c.add_argument("args", nargs="*")
     a = parser.parse_args()
     if os.geteuid() != 0:
@@ -594,15 +630,17 @@ def main():
     if a.where == "host":
         host(a.stage, a.version)
     elif a.where == "rollback":
-        rollback(a.stage or latest_stage(), a.database)
-    elif a.command == "schema":
-        ct_schema(a.args[0])
-    elif a.command == "restore-database":
-        ct_restore_database(a.args[0])
+        rollback(a.database)
     elif a.command == "backup":
         ct_backup(a.args[0])
     elif a.command == "restore":
         ct_restore(a.args[0], json.loads(a.args[1]))
+    elif a.command == "schema":
+        ct_schema(a.args[0])
+    elif a.command == "prepare-database":
+        ct_prepare_database(a.args[0], a.args[1])
+    elif a.command == "restore-database":
+        ct_restore_database(a.args[0])
     else:
         {"setup": ct_setup, "preflight": ct_preflight, "activate": ct_activate}[a.command]()
 

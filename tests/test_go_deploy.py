@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -157,7 +158,6 @@ class Node:
     def __init__(self, module, monkeypatch, tmp_path, fail_on=None, jump=False, clear_fails=False):
         self.calls, self.fail_on = [], fail_on
         self.agent_stdout, self.journal = '{"agent": "absent"}', ""
-        self.carrel_active = False
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
         for name in ("node-agent.py", "guest-report.py", "gateway-sync.py", "jump-sync.py", "jump-cert.py"):
@@ -181,9 +181,6 @@ class Node:
     def subprocess_run(self, args, clear_fails):
         self.calls.append(tuple(args))
         failed = clear_fails and tuple(args[:5]) == ("pct", "exec", "102", "--", "rm")
-        if "is-active" in args:
-            # systemctl is-active: 3 means inactive, 0 active.
-            return SimpleNamespace(returncode=0 if self.carrel_active else 3, stdout="", stderr="")
         stdout = (
             self.agent_stdout
             if "--agent-service" in args
@@ -546,247 +543,188 @@ def test_a_plugin_that_fails_to_install_still_has_the_agents_checked(tmp_path, m
         module.host(staged(tmp_path / "again"), "1.0.0")
 
 
-def schema_state(current, previous, copy="/var/lib/carrel/carrel.db.schema-1-20261020-000000.000000000"):
-    return json.dumps(
-        {
-            "current": current,
-            "previous": previous,
-            "copy": copy if previous is not None else None,
-            "copy_time": 1_700_000_000,
-            "copy_intact": previous is not None,
-        }
-    )
-
-
-def rollback_node(module, monkeypatch, tmp_path, state):
+def rolled(tmp_path, module, monkeypatch, schema):
+    """A node whose newest upgrade kept its previous programs, and a CT that reports schema."""
     node = Node(module, monkeypatch, tmp_path)
     stage = staged(tmp_path)
-    (stage / "before-node-agent.py").write_text("old node-agent.py")
     (stage / "before-release.json").write_text('{"version": "0.9.0"}')
+    (stage / "before-node-agent.py").write_text("old node-agent.py")
     (node.lib / "node-agent.py").write_text("new node-agent.py")
-    monkeypatch.setattr(module, "capture", lambda *a: state if a[-2] == "schema" else "carrel.test\n")
+    (stage / "release.json").write_text('{"version": "1.0.0"}')
+    (node.lib / "release.json").write_text('{"version": "1.0.0"}')
+    (stage / "before-release.json").write_text('{"version": "0.9.0"}')
+    monkeypatch.setattr(module, "STAGES", tmp_path)
+    monkeypatch.setattr(
+        module, "capture", lambda *a: json.dumps(schema) if "schema" in a else "carrel.test\n"
+    )
     return node, stage
 
 
-def test_a_rollback_restores_the_binary_units_and_node_programs_but_not_the_database(tmp_path, monkeypatch):
+def test_rollback_puts_the_previous_release_back(tmp_path, monkeypatch):
     module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
-    module.rollback(stage, False)
-    restore = next(c for c in node.calls if c[6:8] == ("ct", "restore"))
-    assert set(module.ACTIVATED) <= set(json.loads(restore[9]))
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    module.rollback(database=False)
+    names = json.loads(next(c for c in node.calls if c[6:8] == ("ct", "restore"))[9])
+    assert set(module.CONFIGURED + module.ACTIVATED) <= set(names)
     assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
-    assert not any("restore-database" in c for c in node.ct() for c in c)
+    assert not any(c[6:8] == ("ct", "restore-database") for c in node.ct())
     assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
+    assert (node.lib / "release.json").read_text() == '{"version": "0.9.0"}'
+    # The rolled-back upgrade no longer matches the running release.
+    with pytest.raises(SystemExit, match="No kept upgrade installed the running release"):
+        module.rollback(database=False)
 
 
-def test_a_rollback_refuses_a_newer_database_without_the_database_flag(tmp_path, monkeypatch):
+def older_stage(tmp_path, script="old configure-nodes.py", recorded=None):
+    """A kept stage of 0.9.0, the release the rolled-back upgrade replaced."""
+    older = tmp_path / "go-upgrade-20261019-000000"
+    older.mkdir()
+    (older / "release.json").write_text('{"version": "0.9.0"}')
+    (older / "configure-nodes.py").write_text(script)
+    digest = hashlib.sha256((recorded or script).encode()).hexdigest()
+    (older / "hashes.json").write_text(json.dumps({"configure-nodes.py": digest}))
+    return older
+
+
+def test_rollback_puts_the_previous_node_step_on_every_node(tmp_path, monkeypatch):
     module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 1))
-    with pytest.raises(SystemExit, match="--database"):
-        module.rollback(stage, False)
-    assert (node.lib / "node-agent.py").read_text() == "new node-agent.py"
-    assert not any(c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop") for c in node.calls)
+    node, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    older = older_stage(tmp_path)
+    module.rollback(database=False)
+    nodes = node.calls.index(("python3", str(older / "configure-nodes.py")))
+    restart = node.calls.index(("pct", "exec", "100", "--", "systemctl", "restart", "carrel"))
+    agent = node.calls.index(("python3", str(older / "configure-nodes.py"), "--agent-service"))
+    assert nodes < restart < agent
+    # The newer release's node step never runs on the way back.
+    assert not any(str(stage / "configure-nodes.py") in c for c in node.calls)
 
 
-def test_a_rollback_with_the_database_prints_the_loss_and_restores_the_copy_while_carrel_is_stopped(
+def test_rollback_without_an_intact_previous_stage_leaves_the_other_nodes_and_says_so(
     tmp_path, monkeypatch, capsys
 ):
     module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 1))
-    module.rollback(stage, True)
-    assert "LOST: every write" in capsys.readouterr().out
-    restored = [c for c in node.calls if c[-2:] == ("restore-database", "1")]
-    assert len(restored) == 1
-    stop = max(
-        i
-        for i, c in enumerate(node.calls)
-        if c == ("pct", "exec", "100", "--", "systemctl", "stop", "carrel")
-    )
-    start = node.calls.index(("pct", "exec", "100", "--", "systemctl", "start", "carrel"))
-    assert stop < node.calls.index(restored[0]) < start
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    older_stage(tmp_path, recorded="something else")
+    module.rollback(database=False)
+    assert not any(c[:1] == ("python3",) and c[1].endswith("configure-nodes.py") for c in node.calls)
+    assert not any("--agent-service" in c for c in node.calls)
+    assert "deploy 0.9.0 again" in capsys.readouterr().err
 
 
-def test_a_rollback_will_not_restore_a_database_the_last_deploy_did_not_migrate(tmp_path, monkeypatch):
+def test_rollback_skips_a_newer_failed_upgrade(tmp_path, monkeypatch):
     module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
-    with pytest.raises(SystemExit, match="migrated nothing"):
-        module.rollback(stage, True)
-    assert not any(c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop") for c in node.calls)
+    _, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    failed = tmp_path / "go-upgrade-20261021-000000"
+    failed.mkdir()
+    (failed / "release.json").write_text('{"version": "1.1.0"}')
+    (failed / "before-release.json").write_text('{"version": "1.0.0"}')
+    module.rollback(database=False)
+    assert (stage / "rolled-back").exists()
+    assert not (failed / "rolled-back").exists()
 
 
-def test_a_rollback_with_the_database_needs_the_premigration_copy(tmp_path, monkeypatch):
+def test_rollback_skips_a_deploy_of_the_running_release(tmp_path, monkeypatch):
     module = load("install-control.py")
-    state = json.loads(schema_state(2, 1))
-    state["copy"] = None
-    _, stage = rollback_node(module, monkeypatch, tmp_path, json.dumps(state))
-    with pytest.raises(SystemExit, match="No pre-migration copy"):
-        module.rollback(stage, True)
+    node, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    again = tmp_path / "go-upgrade-20261021-000000"
+    again.mkdir()
+    (again / "release.json").write_text('{"version": "1.0.0"}')
+    (again / "before-release.json").write_text('{"version": "1.0.0"}')
+    module.rollback(database=False)
+    assert (stage / "rolled-back").exists()
+    assert not (again / "rolled-back").exists()
+    assert (node.lib / "release.json").read_text() == '{"version": "0.9.0"}'
 
 
-def make_database(path, version):
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE t(x)")
-    db.execute(f"PRAGMA user_version={version}")
-    db.commit()
-    db.close()
-
-
-def test_the_archived_database_names_the_schema_the_previous_release_reads(tmp_path, monkeypatch, capsys):
-    import tarfile
+def test_rollback_waits_for_no_other_deploy(tmp_path, monkeypatch):
+    import fcntl
 
     module = load("install-control.py")
-    root = tmp_path / "rb"
-    root.mkdir()
-    old = tmp_path / "old.db"
-    make_database(old, 1)
-    with tarfile.open(root / "go-20261020-000000.tar.gz", "w:gz") as archive:
-        archive.add(old, arcname="var/lib/carrel/carrel.db")
-    database = tmp_path / "carrel.db"
-    make_database(database, 2)
-    make_database(tmp_path / "carrel.db.schema-1-20261020-000000.000000000", 1)
-    monkeypatch.setattr(module, "DATABASE", database)
-    monkeypatch.setattr(module, "ROLLBACK", root)
-    module.ct_schema("20261020-000000")
-    state = json.loads(capsys.readouterr().out)
-    assert (
-        state["current"] == 2
-        and state["previous"] == 1
-        and state["copy"].endswith("20261020-000000.000000000")
-    )
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    held = os.open(tmp_path / "deploy.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        # flock is per open file, so a second open in this process conflicts too.
+        with pytest.raises(SystemExit, match="Another deploy or rollback"):
+            module.rollback(database=False)
+    finally:
+        os.close(held)
+    assert not any(c[4:6] == ("systemctl", "stop") for c in node.calls)
 
 
-def test_restoring_the_database_replaces_it_with_the_premigration_copy_and_keeps_the_copy(
-    tmp_path, monkeypatch
-):
+def test_a_failed_database_restore_restarts_the_running_release(tmp_path, monkeypatch):
     module = load("install-control.py")
-    database = tmp_path / "carrel.db"
-    make_database(database, 2)
-    (tmp_path / "carrel.db-wal").write_text("stale")
-    copy = tmp_path / "carrel.db.schema-1-20261020-000000.000000000"
-    make_database(copy, 1)
-    monkeypatch.setattr(module, "DATABASE", database)
-    module.ct_restore_database("1")
-    assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 1
-    assert copy.exists() and not (tmp_path / "carrel.db-wal").exists()
-    assert oct(database.stat().st_mode & 0o777) == "0o600"
-
-
-def test_restoring_the_database_refuses_a_copy_of_another_schema(tmp_path, monkeypatch):
-    module = load("install-control.py")
-    database = tmp_path / "carrel.db"
-    make_database(database, 2)
-    make_database(tmp_path / "carrel.db.schema-1-20261020-000000.000000000", 0)
-    monkeypatch.setattr(module, "DATABASE", database)
-    with pytest.raises(SystemExit, match="not an intact schema 1"):
-        module.ct_restore_database("1")
-    assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 2
-
-
-def test_a_rollback_puts_the_restored_node_programs_on_every_node_and_restarts_the_agents(
-    tmp_path, monkeypatch
-):
-    module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
-    order = []
-    monkeypatch.setattr(
-        module, "healthy", lambda version, host: order.append("health") or {"version": version}
-    )
-    real_run, real_sub = node.run, node.subprocess_run
-
-    def run(*args, **kwargs):
-        if str(args[-1]).endswith("configure-nodes.py"):
-            order.append("nodes")
-        if args[-3:] == ("systemctl", "restart", "carrel"):
-            order.append("restart")
-        return real_run(*args, **kwargs)
-
-    def sub(args, **kwargs):
-        if "--agent-service" in args:
-            order.append("agents")
-        return real_sub(args, False)
-
-    monkeypatch.setattr(module, "run", run)
-    monkeypatch.setattr(module.subprocess, "run", sub)
-    module.rollback(stage, False)
-    # configure-nodes.py copies the restored programs to the peers, carrel rereads
-    # config.json, and the agents restart on the restored binary once it is healthy.
-    assert order == ["nodes", "restart", "health", "agents"]
-    assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
-
-
-def test_a_rollback_whose_agent_does_not_connect_fails(tmp_path, monkeypatch):
-    module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 2))
-    monkeypatch.setattr(module.time, "sleep", lambda s: None)
-    node.agent_stdout = '{"agent": "started"}'
-    with pytest.raises(SystemExit, match="did not reach the control plane"):
-        module.rollback(stage, False)
-
-
-def test_a_rollback_refuses_a_damaged_copy_before_anything_changes(tmp_path, monkeypatch):
-    module = load("install-control.py")
-    state = json.loads(schema_state(2, 1))
-    state["copy_intact"] = False
-    node, stage = rollback_node(module, monkeypatch, tmp_path, json.dumps(state))
-    with pytest.raises(SystemExit, match="not an intact schema 1"):
-        module.rollback(stage, True)
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 1})
+    node.fail_on = lambda args: "restore-database" in args
+    with pytest.raises(RuntimeError):
+        module.rollback(database=True)
+    calls = [c for c in node.calls if c[:4] == ("pct", "exec", "100", "--")]
+    prepare = next(i for i, c in enumerate(calls) if c[6:8] == ("ct", "prepare-database"))
+    stop = calls.index(("pct", "exec", "100", "--", "systemctl", "stop", "carrel"))
+    assert prepare < stop
+    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in calls[stop:]
+    # The node programs of the running release stay.
     assert (node.lib / "node-agent.py").read_text() == "new node-agent.py"
-    assert not any(c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop") for c in node.calls)
 
 
-def test_a_rollback_stops_the_backup_and_restores_nothing_while_carrel_runs(tmp_path, monkeypatch):
+def test_rollback_across_a_migration_needs_the_database_flag(tmp_path, monkeypatch):
     module = load("install-control.py")
-    node, stage = rollback_node(module, monkeypatch, tmp_path, schema_state(2, 1))
-    node.carrel_active = True
-    with pytest.raises(SystemExit, match="carrel did not stop"):
-        module.rollback(stage, True)
-    assert not [c for c in node.calls if "restore-database" in c]
-    stops = [c[-1] for c in node.calls if c[:6] == ("pct", "exec", "100", "--", "systemctl", "stop")]
-    assert {"carrel-backup.timer", "carrel-backup.service"} <= set(stops)
-    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
-
-    node.carrel_active = False
-    node.calls.clear()
-    module.rollback(stage, True)
-    stop_backup = node.calls.index(("pct", "exec", "100", "--", "systemctl", "stop", "carrel-backup.service"))
-    restored = next(i for i, c in enumerate(node.calls) if "restore-database" in c)
-    assert stop_backup < restored
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 1})
+    with pytest.raises(SystemExit, match="--database"):
+        module.rollback(database=False)
+    assert ("pct", "exec", "100", "--", "systemctl", "stop", "carrel") not in node.calls
+    module.rollback(database=True)
+    calls = [c for c in node.calls if c[:4] == ("pct", "exec", "100", "--")]
+    restore_db = next(i for i, c in enumerate(calls) if c[6:8] == ("ct", "restore-database"))
+    stop = calls.index(("pct", "exec", "100", "--", "systemctl", "stop", "carrel"))
+    start = calls.index(("pct", "exec", "100", "--", "systemctl", "start", "carrel"))
+    assert stop < restore_db < start
 
 
-def test_the_schema_step_reports_whether_the_copy_is_intact(tmp_path, monkeypatch, capsys):
+def test_rollback_of_a_first_install_is_refused(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node = Node(module, monkeypatch, tmp_path)
+    (staged(tmp_path) / "release.json").write_text('{"version": "1.0.0"}')
+    (node.lib / "release.json").write_text('{"version": "1.0.0"}')
+    monkeypatch.setattr(module, "STAGES", tmp_path)
+    with pytest.raises(SystemExit, match="first install"):
+        module.rollback(database=False)
+
+
+def test_the_database_copy_replaces_the_database_and_its_log(tmp_path, monkeypatch):
     import tarfile
 
     module = load("install-control.py")
-    root = tmp_path / "rb"
-    root.mkdir()
+    monkeypatch.setattr(module, "ROLLBACK", tmp_path)
+    monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
     old = tmp_path / "old.db"
-    make_database(old, 1)
-    with tarfile.open(root / "go-20261020-000000.tar.gz", "w:gz") as archive:
+    db = sqlite3.connect(old)
+    db.execute("PRAGMA user_version=1")
+    db.close()
+    with tarfile.open(tmp_path / "go-1.tar.gz", "w:gz") as archive:
         archive.add(old, arcname="var/lib/carrel/carrel.db")
-    database = tmp_path / "carrel.db"
-    make_database(database, 2)
-    copy = tmp_path / "carrel.db.schema-1-20261020-000000.000000000"
-    make_database(copy, 1)
-    monkeypatch.setattr(module, "DATABASE", database)
-    monkeypatch.setattr(module, "ROLLBACK", root)
-    module.ct_schema("20261020-000000")
-    assert json.loads(capsys.readouterr().out)["copy_intact"] is True
-    copy.write_bytes(b"not a database" * 100)
-    module.ct_schema("20261020-000000")
-    assert json.loads(capsys.readouterr().out)["copy_intact"] is False
-
-
-def test_restoring_the_database_never_writes_through_a_link(tmp_path, monkeypatch):
-    module = load("install-control.py")
-    database = tmp_path / "carrel.db"
-    make_database(database, 2)
-    make_database(tmp_path / "carrel.db.schema-1-20261020-000000.000000000", 1)
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.write_text("untouched")
-    (tmp_path / "carrel.db.restore").symlink_to(elsewhere)
-    monkeypatch.setattr(module, "DATABASE", database)
-    monkeypatch.setattr(module.os, "fchown", lambda fd, uid, gid: None)
+    db = sqlite3.connect(tmp_path / "carrel.db")
+    db.execute("PRAGMA user_version=2")
+    db.close()
+    (tmp_path / "carrel.db-wal").write_text("newer log")
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="")
+    )
+    module.ct_schema("1")
+    with pytest.raises(SystemExit, match="No prepared database copy"):
+        module.ct_restore_database("1")
+    with pytest.raises(SystemExit, match="at schema 1, not 2"):
+        module.ct_prepare_database("1", "2")
+    module.ct_prepare_database("1", "1")
+    assert (tmp_path / "carrel.db-wal").exists()
     module.ct_restore_database("1")
-    assert elsewhere.read_text() == "untouched"
-    assert not database.is_symlink()
-    assert sqlite3.connect(database).execute("PRAGMA user_version").fetchone()[0] == 1
+    assert not (tmp_path / "carrel.db-wal").exists()
+    db = sqlite3.connect(tmp_path / "carrel.db")
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+    db.close()
+    # Refused while carrel runs.
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
+    with pytest.raises(SystemExit, match="Stop carrel"):
+        module.ct_restore_database("1")

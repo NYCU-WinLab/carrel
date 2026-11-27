@@ -36,6 +36,11 @@ type CIClaims struct {
 	SHA          string
 	Event        string // GitHub event_name or GitLab pipeline_source
 	RunURL       string
+	// HeadRef is GitHub's head_ref on a pull_request run: the branch the
+	// pull request comes from. It is the one claim that names the pull
+	// request on every activity: the close of a merged pull request
+	// carries the base branch as ref (#645).
+	HeadRef string
 	// RefProtected is GitLab's ref_protected: the ref is a protected branch
 	// or tag. GitHub's token has no such claim.
 	RefProtected bool
@@ -101,7 +106,7 @@ func (v *GitHubVerifier) Verify(ctx context.Context, token string) (CIClaims, er
 	if err != nil {
 		return CIClaims{}, err
 	}
-	c := CIClaims{Issuer: githubIssuer, Repository: strings.ToLower(str(claims["repository"])), RepositoryID: str(claims["repository_id"]), Ref: str(claims["ref"]), SHA: str(claims["sha"]), Event: str(claims["event_name"])}
+	c := CIClaims{Issuer: githubIssuer, Repository: strings.ToLower(str(claims["repository"])), RepositoryID: str(claims["repository_id"]), Ref: str(claims["ref"]), SHA: str(claims["sha"]), Event: str(claims["event_name"]), HeadRef: str(claims["head_ref"])}
 	if c.Repository == "" || c.RepositoryID == "" || c.Ref == "" {
 		return CIClaims{}, errors.New("missing repository claims")
 	}

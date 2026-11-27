@@ -164,23 +164,31 @@ database:
   pre-migration copy (see [Database schema](#database-schema)) loses every write since the upgrade.
   The release notes of such a release say so.
 
-To go back one release, run on the first exit node (the deploy's stage directory stays there):
+### Roll back the running release
 
-```sh
-python3 /var/lib/carrel/go-upgrade-<stamp>/install-control.py rollback [--database]
-```
+On the first exit node, run `python3 /var/lib/carrel/<newest go-upgrade-*>/install-control.py rollback`.
+It undoes the upgrade that installed the running release:
 
-It restores the binary, units, configuration and node programs the last deploy saved, as a failed
-health check does, and defaults to the newest `go-upgrade-*`. Then it runs the deploy's node step
-from the restored programs: `configure-nodes.py` copies them and `release.json` to the other nodes,
-carrel restarts, and once it is healthy every carrel-agent restarts on the restored binary and must
-reach the control plane. With `--database` it also restores the newest `<database>.schema-<N>-*`
-copy, `N` being the schema the archived database had, and first prints what is lost: every write
-since the upgrade. The copy must pass SQLite's integrity check at schema `N` before anything
-changes, and it is put in place only with the backup timer stopped and carrel inactive. The copy
-stays. Without `--database` it refuses when the database's schema is newer than the one the
-previous release reads, before anything changes; with it, it refuses when the last deploy migrated
-nothing.
+- It picks the newest stage whose `release.json` matches the installed one and whose previous
+  release differs. A newer upgrade that failed and put the previous release back is skipped, and so
+  is a deploy of the release that was already running.
+- It puts back the previous binary, units, configuration and node programs, and waits for the
+  previous version's health check.
+- When that upgrade migrated the database, it stops and names `--database`. With `--database`, it
+  first unpacks and checks the database copy taken before the upgrade while carrel still runs. Then
+  it stops carrel and puts the copy in place, and every write since is lost. If that step fails,
+  carrel starts again on the running release.
+- It holds the node's deploy lock, so no deploy or second rollback runs beside it. Running it again
+  goes one more upgrade back.
+- Once the previous version is healthy, it runs the previous release's own node step from the
+  newest kept stage of that release whose `configure-nodes.py` matches its recorded hash.
+  `configure-nodes.py` copies the restored node programs and `release.json` to the other nodes and
+  rewrites `config.json`, carrel restarts and must pass the health check again, and every
+  `carrel-agent` restarts on the restored binary and must reach the control plane, as after a
+  deploy. Without such a stage it says so and leaves the other nodes and the agents at the newer
+  release: deploy the previous release again so every node matches.
+- It leaves `carrel-deployd` in CT 100 and `carrel-fetch` in CT 103 at the newer release. Deploy the
+  previous release again when those must match too.
 
 ## Node agent
 

@@ -86,7 +86,16 @@ func (e *Execution) functionHostState(name string) string {
 }
 
 func (e *Execution) PublicFunction(f D) D {
-	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry", "repo", "branch", "schedules")
+	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry", "repo", "branch", "schedules", "previews", "pr", "head_ref")
+	if parent := str(f["preview_of"]); parent != "" {
+		_, out["preview_of"], _ = strings.Cut(parent, "-")
+	} else if boolean(f["previews"]) {
+		names := []any{}
+		for _, pf := range e.previewsOf(f) {
+			names = append(names, pf["name"])
+		}
+		out["open_previews"] = names
+	}
 	versions := e.FunctionVersions(f)
 	public := []D{}
 	for _, v := range versions {
@@ -281,16 +290,34 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 		if a["confirm"] != f["name"] {
 			fail("invalid", "confirm must equal the function name")
 		}
-		if names := e.functionDomains(f, false); len(names) > 0 {
+		// A preview's own domain goes with it; a parent's previews go with
+		// the parent.
+		if names := e.functionDomains(f, false); len(names) > 0 && f["preview_of"] == nil {
 			fail("conflict", "Domains still point at this function; remove them with domain_remove first", D{"domains": names, "recovery": "resolve_prerequisite"})
 		}
+		previews := append([]D{f}, e.previewsOf(f)...)
+		if f["preview_of"] != nil {
+			previews = []D{f}
+		}
 		// A dry run counts the removal; a real one counts what is left.
-		after := D{"functions": -1}
+		after := D{"functions": -len(previews)}
+		removed := D{"name": f["name"]}
+		if len(previews) > 1 {
+			names := []any{}
+			for _, pf := range previews[1:] {
+				names = append(names, pf["name"])
+			}
+			removed["previews"] = names
+		}
 		if !dry {
-			e.removeFunctions([]D{f})
+			if len(previews) > 1 || f["preview_of"] != nil {
+				e.removePreviews(previews)
+			} else {
+				e.removeFunctions(previews)
+			}
 			after = nil
 		}
-		return D{"dry_run": dry, "quota_after": e.Quota(t, after), "removed": D{"name": f["name"]}}
+		return D{"dry_run": dry, "quota_after": e.Quota(t, after), "removed": removed}
 	}
 	fail("invalid", "Unknown tool")
 	return nil
@@ -360,21 +387,24 @@ func (e *Execution) pruneFunctionVersions(f D) {
 // removeFunctions deletes function records and their versions. The hosts
 // delete the files on their next pass.
 func (e *Execution) removeFunctions(fs []D) {
-	e.Transaction(func(tx *Execution) {
-		for _, f := range fs {
-			for _, v := range tx.FunctionVersions(f) {
-				tx.S.Remove("function_versions", v["id"])
-			}
-			tx.S.Remove("functions", f["id"])
-			// A link must not outlive its function into one of the same name.
-			for _, l := range tx.S.Objects("function_env_links", integer(f["tenant_n"])) {
-				if l["function"] == f["id"] {
-					tx.S.Remove("function_env_links", l["id"])
-				}
+	e.Transaction(func(tx *Execution) { tx.dropFunctions(fs) })
+}
+
+// dropFunctions is removeFunctions inside the caller's transaction.
+func (tx *Execution) dropFunctions(fs []D) {
+	for _, f := range fs {
+		for _, v := range tx.FunctionVersions(f) {
+			tx.S.Remove("function_versions", v["id"])
+		}
+		tx.S.Remove("functions", f["id"])
+		// A link must not outlive its function into one of the same name.
+		for _, l := range tx.S.Objects("function_env_links", integer(f["tenant_n"])) {
+			if l["function"] == f["id"] {
+				tx.S.Remove("function_env_links", l["id"])
 			}
 		}
-		tx.bumpFunctions()
-	})
+	}
+	tx.bumpFunctions()
 }
 
 // functionDomains are the names of the domains that point at a function,

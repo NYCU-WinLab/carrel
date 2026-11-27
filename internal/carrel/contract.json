@@ -4241,7 +4241,7 @@
     },
     {
       "name": "function_link",
-      "description": "Deploy a function on every push to a GitHub repository branch (PLAN 7.11). Returns workflow (commit to .github/workflows/carrel.yml): GitHub Actions builds the image, pushes it to ghcr.io and sends its digest to carrel with the job's OIDC token, so the repository holds no carrel secret. Each push builds a new version with the function's current settings and environment; deploy once with function_deploy first. Only the linked repository and branch, on push or workflow_dispatch, can deploy. clear unlinks.",
+      "description": "Deploy a function on every push to a GitHub repository branch (PLAN 7.11). Returns workflow (commit to .github/workflows/carrel.yml): GitHub Actions builds the image, pushes it to ghcr.io and sends its digest to carrel with the job's OIDC token, so the repository holds no carrel secret. Each push builds a new version with the function's current settings and environment; deploy once with function_deploy first. Only the linked repository and branch, on push or workflow_dispatch, can deploy; with previews, each pull request from the repository itself also deploys to its own preview. clear unlinks and removes the previews.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4260,6 +4260,11 @@
             "maxLength": 255,
             "pattern": "^[A-Za-z0-9._/-]+$",
             "default": "main"
+          },
+          "previews": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also deploy each pull request from the repository itself to its own preview, pr-<number>-<function>, at https://pr-<number>-<function>.<tenant>.winlab.tw, removed when the pull request closes. A preview starts from the function's settings without its environment, schedules or registry credentials. At most 5 at once; they count against the functions and domains quota. Needs one push deploy first."
           },
           "clear": {
             "type": "boolean",
