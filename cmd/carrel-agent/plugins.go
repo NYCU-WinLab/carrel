@@ -160,7 +160,7 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 			Stopped: op.Stopped, Rewinds: op.Rewinds})
 	}
 	for _, q := range d.Quota {
-		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit)})
+		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit), Measured: q.Measured})
 	}
 	for _, k := range d.Objects {
 		kind := carrel.PluginObjectKind{Name: clip(k.Name), Disk: k.Disk}

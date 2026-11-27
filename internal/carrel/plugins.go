@@ -59,6 +59,9 @@ type PluginQuota struct {
 	Name         string  `json:"name"`
 	DefaultLimit float64 `json:"default_limit"`
 	Unit         string  `json:"unit,omitempty"`
+	// Measured: a fresh storage sample counts what the tenant's disk
+	// objects hold, not what they were charged.
+	Measured bool `json:"measured,omitempty"`
 }
 
 // PluginCharge is what one object charges to a dimension: Amount, or

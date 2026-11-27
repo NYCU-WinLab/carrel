@@ -92,9 +92,10 @@ type OperationType struct {
 	// before the field would run the operation for real.
 	DryRun bool `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	// An operation on an object carrel keeps a record of (#663): object_kind
-	// names one of DescribeResponse.objects, object_effect is create, delete
-	// or use, and object_param names the required string parameter that
-	// names the object. The schema must also require a top-level "machine":
+	// names one of DescribeResponse.objects, object_effect is create, delete,
+	// use or list, and object_param names the required string parameter that
+	// names the object (none for list, which is read_only and lists the
+	// machine's objects of the kind). The schema must also require a top-level "machine":
 	// an object belongs to one machine. carrel charges the tenant's quota and
 	// reserves the record before the start, and sends its id as
 	// StartRequest.reservation.
@@ -251,8 +252,13 @@ type QuotaDimension struct {
 	// a-z, 0-9 and _, and not a dimension carrel counts itself.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// The limit of a tenant whose quota does not set it.
-	DefaultLimit  float64 `protobuf:"fixed64,2,opt,name=default_limit,json=defaultLimit,proto3" json:"default_limit,omitempty"`
-	Unit          string  `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`
+	DefaultLimit float64 `protobuf:"fixed64,2,opt,name=default_limit,json=defaultLimit,proto3" json:"default_limit,omitempty"`
+	Unit         string  `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`
+	// measured: once the nodes have sampled the tenant's storage, the
+	// dimension counts what the tenant's disk objects hold on it, not what
+	// they were charged. A create then adds nothing yet, and a tenant already
+	// over the limit gets no more.
+	Measured      bool `protobuf:"varint,4,opt,name=measured,proto3" json:"measured,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -306,6 +312,13 @@ func (x *QuotaDimension) GetUnit() string {
 		return x.Unit
 	}
 	return ""
+}
+
+func (x *QuotaDimension) GetMeasured() bool {
+	if x != nil {
+		return x.Measured
+	}
+	return false
 }
 
 // What one object charges: amount of a dimension the plugin declares, per
@@ -954,11 +967,12 @@ const file_plugin_proto_rawDesc = "" +
 	"\robject_effect\x18\v \x01(\tR\fobjectEffect\x12!\n" +
 	"\fobject_param\x18\f \x01(\tR\vobjectParam\x12\x18\n" +
 	"\astopped\x18\r \x01(\bR\astopped\x12\x18\n" +
-	"\arewinds\x18\x0e \x01(\bR\arewinds\"]\n" +
+	"\arewinds\x18\x0e \x01(\bR\arewinds\"y\n" +
 	"\x0eQuotaDimension\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rdefault_limit\x18\x02 \x01(\x01R\fdefaultLimit\x12\x12\n" +
-	"\x04unit\x18\x03 \x01(\tR\x04unit\"P\n" +
+	"\x04unit\x18\x03 \x01(\tR\x04unit\x12\x1a\n" +
+	"\bmeasured\x18\x04 \x01(\bR\bmeasured\"P\n" +
 	"\x06Charge\x12\x1c\n" +
 	"\tdimension\x18\x01 \x01(\tR\tdimension\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x01R\x06amount\x12\x10\n" +

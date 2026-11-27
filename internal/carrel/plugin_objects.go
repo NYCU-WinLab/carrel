@@ -20,6 +20,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -33,7 +34,7 @@ const pluginQuotaRows = "plugin_quota"
 
 var (
 	pluginHolds   = []string{"freeze", "migrate", "backfill", "delete"}
-	pluginEffects = []string{"create", "delete", "use"}
+	pluginEffects = []string{"create", "delete", "use", "list"}
 	// pluginPer are the machine facts a charge may be counted per.
 	pluginPer = []string{"", "cpu", "memory_mb", "disk_gb"}
 )
@@ -63,7 +64,42 @@ type pluginObject struct {
 	// the state it had before, which a refused delete gives back.
 	DeletingBy string `json:"deleting_by,omitempty"`
 	Was        string `json:"was,omitempty"`
+	// Configuration is the machine's resources and NICs when a disk object
+	// was made: a rewind to it is refused once they changed.
+	Configuration D `json:"configuration,omitempty"`
 }
+
+// diskConfiguration is what a disk rewind must find unchanged. iso_volume: a
+// rewind brings the guest's ide2 back, so the record must match.
+func diskConfiguration(m D) D { return pick(m, "cpu", "memory_mb", "disk_gb", "nics", "iso_volume") }
+
+// titled is s with its first letter in upper case.
+func titled(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// pluginObjectView is a record as a member sees it.
+func pluginObjectView(o pluginObject) D {
+	v := D{"id": fmt.Sprintf("%d-%s", o.VMID, o.Name), "vmid": o.VMID, "name": o.Name, "disk_gb": o.DiskGB}
+	if o.Configuration != nil {
+		v["configuration"] = o.Configuration
+	}
+	if o.OperationID != "" {
+		v["operation_id"] = o.OperationID
+	}
+	if o.State != "" {
+		v["state"] = o.State
+	}
+	return v
+}
+
+// pluginResultKeys are the keys carrel adds to an object operation's result
+// for kind: the record, the list and the storage. A kind whose keys would be
+// one of carrel's own cannot be declared.
+func pluginResultKeys(kind string) []string { return []string{kind, kind + "s", kind + "_storage"} }
 
 func (k PluginObjectKind) holds(action string) bool { return slices.Contains(k.Holds, action) }
 
@@ -87,17 +123,25 @@ func pluginObjectProblem(pl PluginInfo, op PluginOperation) string {
 		return fmt.Sprintf("object kind %q is not one the plugin declares", op.ObjectKind)
 	}
 	if !slices.Contains(pluginEffects, op.ObjectEffect) {
-		return fmt.Sprintf("object effect %q is not create, delete or use", op.ObjectEffect)
+		return fmt.Sprintf("object effect %q is not create, delete, use or list", op.ObjectEffect)
 	}
-	if op.ReadOnly && op.ObjectEffect != "use" {
+	if op.ReadOnly && op.ObjectEffect != "use" && op.ObjectEffect != "list" {
 		return "a read_only operation cannot create or delete an object"
+	}
+	for _, key := range pluginResultKeys(k.Name) {
+		if slices.Contains(pluginReserved, key) || slices.Contains(pluginCarrelKeys, key) {
+			return fmt.Sprintf("object kind %s would name the result key %s, which is carrel's", k.Name, key)
+		}
 	}
 	var s map[string]any
 	_ = json.Unmarshal(op.Params, &s)
 	props, _ := s["properties"].(map[string]any)
 	required, _ := s["required"].([]any)
-	param, _ := props[op.ObjectParam].(map[string]any)
-	if op.ObjectParam == "machine" || param == nil || param["type"] != "string" || !contains(required, op.ObjectParam) {
+	if op.ObjectEffect == "list" {
+		if !op.ReadOnly || op.ObjectParam != "" || op.Rewinds || op.Stopped {
+			return "a list of objects is read_only and names no object_param"
+		}
+	} else if param, _ := props[op.ObjectParam].(map[string]any); op.ObjectParam == "machine" || param == nil || param["type"] != "string" || !contains(required, op.ObjectParam) {
 		return fmt.Sprintf("object_param %q must be a required string parameter other than machine", op.ObjectParam)
 	}
 	if _, ok := props["machine"]; !ok || !contains(required, "machine") {
@@ -182,7 +226,7 @@ func (p *Platform) pluginInfo(node, plugin string) (PluginInfo, bool) {
 func (e *Execution) pluginDims() map[string]PluginQuota {
 	out := map[string]PluginQuota{}
 	for _, r := range e.S.SiteRows(pluginQuotaRows) {
-		out[str(r["name"])] = PluginQuota{Name: str(r["name"]), DefaultLimit: num(r["default_limit"]), Unit: str(r["unit"])}
+		out[str(r["name"])] = PluginQuota{Name: str(r["name"]), DefaultLimit: num(r["default_limit"]), Unit: str(r["unit"]), Measured: boolean(r["measured"])}
 	}
 	now := time.Now()
 	for _, n := range e.P.Config.Nodes {
@@ -219,11 +263,15 @@ func pluginObjectID(plugin, kind string, vmid any, name string) string {
 
 // planPluginObject checks an object operation against the record, the quota
 // and the node, and changes nothing. It returns the record's id, the record
-// if there is one, and what a create charges.
+// if there is one, and what a create charges the record.
 func (e *Execution) planPluginObject(pl PluginInfo, op PluginOperation, a, t, m D) (string, *pluginObject, D) {
 	name := str(a[op.ObjectParam])
 	if name == "" || WireLen(name) > MaxPluginObjectName {
 		fail("invalid", fmt.Sprintf("%s must name the %s in at most %d bytes", op.ObjectParam, op.ObjectKind, MaxPluginObjectName))
+	}
+	k, _ := pl.kind(op.ObjectKind)
+	if m["resize_from"] != nil && (k.Disk && op.ObjectEffect == "create" || op.Rewinds) {
+		fail("conflict", fmt.Sprintf("Finish the pending machine_resize before %s operations", op.ObjectKind), D{"recovery": "resolve_prerequisite"})
 	}
 	id := pluginObjectID(pl.Name, op.ObjectKind, m["vmid"], name)
 	row, found := rowOf[pluginObject](e.S, pluginObjectRows, id)
@@ -240,25 +288,36 @@ func (e *Execution) planPluginObject(pl PluginInfo, op PluginOperation, a, t, m 
 				}
 				return id, &row, nil
 			}
-			fail("conflict", fmt.Sprintf("The machine has a %s named %s", op.ObjectKind, name), D{"recovery": "revise_request", "state": row.State})
+			fail("conflict", titled(op.ObjectKind)+" exists", D{"recovery": "revise_request", "state": row.State})
 		}
-		k, _ := pl.kind(op.ObjectKind)
 		charge := pluginCharge(k, m)
-		e.Quota(t, charge)
+		q := e.Quota(t, e.pluginDelta(integer(t["n"]), charge))
+		// A measured dimension holds nothing new yet, so there is no size to
+		// check: a tenant already over its limit gets no more.
+		measured, _ := e.measuredNow(integer(t["n"]))
+		for _, d := range slices.Sorted(maps.Keys(charge)) {
+			if used, limit := obj(q["used"])[d], obj(q["limit"])[d]; measured[d] && num(used) > num(limit) {
+				over := D{"dimension": d, "used": used, "limit": limit}
+				fail("quota_exceeded", "Tenant quota would be exceeded", merge(over, D{"violations": []D{over}, "quota_after": q}))
+			}
+		}
 		if k.Disk {
 			e.Admission(e.P.nodeOf(m), 0, 0, num(m["disk_gb"]), nil, true)
 		}
 		return id, nil, charge
 	case "delete":
 		if !found {
-			fail("not_found", fmt.Sprintf("The machine has no %s named %s", op.ObjectKind, name))
+			fail("not_found", titled(op.ObjectKind)+" not found")
 		}
 	default:
 		if !found {
-			fail("not_found", fmt.Sprintf("The machine has no %s named %s", op.ObjectKind, name))
+			fail("not_found", titled(op.ObjectKind)+" not found")
 		}
 		if row.State != "ready" {
 			fail("conflict", fmt.Sprintf("The %s %s is %s", op.ObjectKind, name, row.State), D{"recovery": "resolve_prerequisite"})
+		}
+		if op.Rewinds && row.Configuration != nil && !equal(row.Configuration, diskConfiguration(m)) {
+			fail("conflict", fmt.Sprintf("Resources or NICs changed since this %s; administrator review required", op.ObjectKind))
 		}
 	}
 	return id, &row, nil
@@ -272,11 +331,17 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 	plug["object"], plug["object_effect"], plug["object_kind"], plug["object_name"] = id, op.ObjectEffect, op.ObjectKind, a[op.ObjectParam]
 	plug["operation_spec"] = PluginOperationSpec(pl, op)
 	n := integer(t["n"])
+	k, _ := pl.kind(op.ObjectKind)
+	plug["object_dims"] = pluginKindDims(k)
+	if plug["quota_before"] == nil {
+		// The quota before the first run changed anything: the result's
+		// delta is counted from it, as a core action's is.
+		plug["quota_before"] = e.Quota(t)
+	}
 	switch {
 	case op.ObjectEffect == "create" && row == nil:
-		k, _ := pl.kind(op.ObjectKind)
 		for _, q := range pl.Quota {
-			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "plugin": pl.Name})
+			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "measured": q.Measured, "plugin": pl.Name})
 		}
 		rec := pluginObject{ID: id, Plugin: pl.Name, Kind: op.ObjectKind, Name: str(a[op.ObjectParam]), VMID: integer(m["vmid"]),
 			State: "creating", Holds: k.Holds, Run: str(plug["key"]), Spec: PluginOperationSpec(pl, op)}
@@ -287,10 +352,12 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 			rec.Charge[d] = num(v)
 		}
 		if k.Disk {
-			rec.DiskGB = integer(m["disk_gb"])
+			rec.DiskGB, rec.Configuration = integer(m["disk_gb"]), diskConfiguration(m)
 		}
 		e.Put(pluginObjectRows, id, n, rec)
 	case op.ObjectEffect == "delete":
+		// What a member saw last, for the result once the record is gone.
+		plug["object_view"] = pluginObjectView(*row)
 		if row.State != "deleting" {
 			row.Was = row.State
 		}
@@ -381,11 +448,127 @@ func (e *Execution) pluginUsage(n int, used D) {
 			used[name] = 0
 		}
 	}
+	measured, held := e.measuredNow(n)
+	holders := map[string]bool{}
 	for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows, n) {
 		for d, v := range o.Charge {
+			if measured[d] {
+				holders[d] = true
+				continue
+			}
 			used[d] = math.Round((num(used[d])+v)*100) / 100
 		}
 	}
+	for d := range holders {
+		used[d] = held
+	}
+}
+
+// heldSample is what a fresh storage sample says the tenant's disk objects
+// hold, in GiB, and whether there is one.
+func (e *Execution) heldSample(n int) (float64, bool) {
+	u, ok := rowOf[storageUsage](e.S, "storage_usage", fmt.Sprint(n))
+	// RefreshStorage dates a sample by this clock. One dated ahead of it was
+	// not: it would stay fresh for as long as it is ahead.
+	age := now() - u.SampledAt
+	if !ok || !u.Available || age <= -60 || age >= snapshotSampleMaxAge {
+		return 0, false
+	}
+	return math.Round(float64(u.RetainedSnapshotBytes)/GiB*100) / 100, true
+}
+
+// measuredNow are the plugin dimensions a fresh sample counts for tenant n,
+// and what it says is held; none without one.
+func (e *Execution) measuredNow(n int) (map[string]bool, float64) {
+	out := map[string]bool{}
+	held, ok := e.heldSample(n)
+	if !ok {
+		return out, 0
+	}
+	for name, q := range e.pluginDims() {
+		if q.Measured {
+			out[name] = true
+		}
+	}
+	return out, held
+}
+
+// pluginDelta is what charging charge changes in the quota now: a measured
+// dimension holds nothing new until the next sample.
+func (e *Execution) pluginDelta(n int, charge D) D {
+	measured, _ := e.measuredNow(n)
+	out := D{}
+	for d, v := range charge {
+		if !measured[d] {
+			out[d] = v
+		}
+	}
+	return out
+}
+
+// pluginFreed is what dropping the records leaving frees now. What a
+// measured dimension frees is known only after the next sample, unless they
+// are all the tenant's records that charge it.
+func (e *Execution) pluginFreed(n int, leaving []pluginObject) D {
+	measured, held := e.measuredNow(n)
+	gone := map[string]bool{}
+	for _, o := range leaving {
+		gone[o.ID] = true
+	}
+	out := D{}
+	for _, o := range leaving {
+		for _, d := range slices.Sorted(maps.Keys(o.Charge)) {
+			if !measured[d] {
+				out[d] = math.Round((num(out[d])-o.Charge[d])*100) / 100
+			}
+		}
+	}
+	for d := range measured {
+		charged, all := false, true
+		for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows, n) {
+			if _, ok := o.Charge[d]; ok {
+				charged = charged || gone[o.ID]
+				all = all && gone[o.ID]
+			}
+		}
+		if charged && all {
+			out[d] = -held
+		}
+	}
+	return out
+}
+
+// pluginKindDims are the dimensions a kind charges.
+func pluginKindDims(k PluginObjectKind) []string {
+	out := []string{}
+	for _, c := range k.Charges {
+		if !slices.Contains(out, c.Dimension) {
+			out = append(out, c.Dimension)
+		}
+	}
+	return out
+}
+
+// objectStorage is the tenant's storage sample, for a kind charged to a
+// measured dimension, with what each such dimension counts now: "held" from
+// a fresh sample, "declared" without; nil for any other kind.
+func (e *Execution) objectStorage(t D, dims []string) D {
+	known := e.pluginDims()
+	measured := []string{}
+	for _, d := range dims {
+		if known[d].Measured {
+			measured = append(measured, d)
+		}
+	}
+	if len(measured) == 0 {
+		return nil
+	}
+	_, fresh := e.heldSample(integer(t["n"]))
+	out := e.storageView(t)
+	for _, d := range measured {
+		out[d+"_counts"] = map[bool]string{true: "held", false: "declared"}[fresh]
+	}
+	return out
 }
 
 // pluginLimits fills in the default limit of each plugin dimension the
@@ -403,9 +586,7 @@ func (e *Execution) pluginLimits(limit, units D) {
 
 // pluginObjectsFreed is what deleting machine m frees of its plugin objects.
 func (e *Execution) pluginObjectsFreed(n int, m D, delta D) {
-	for _, o := range e.pluginObjects(n, m["vmid"]) {
-		for _, d := range slices.Sorted(maps.Keys(o.Charge)) {
-			delta[d] = num(delta[d]) - o.Charge[d]
-		}
+	for d, v := range e.pluginFreed(n, e.pluginObjects(n, m["vmid"])) {
+		delta[d] = num(delta[d]) + num(v)
 	}
 }

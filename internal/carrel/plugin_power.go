@@ -40,6 +40,9 @@ func (e *Execution) preparePluginStop(op PluginOperation, m D) {
 	}
 	status := obj(e.Call(D{"op": "status", "machine": m}))
 	state := powerState(status)
+	if state == "paused" && op.Rewinds {
+		fail("conflict", "Resume or shut down the VM before disk rollback; rollback cannot preserve paused memory", D{"recovery": "resolve_prerequisite"})
+	}
 	if state == "paused" {
 		fail("conflict", "Resume or shut down the machine first: a paused guest cannot be stopped without losing its memory", D{"recovery": "resolve_prerequisite"})
 	}
@@ -146,7 +149,7 @@ func (e *Execution) restorePluginPower() {
 	e.P.writer.Lock()
 	m = e.S.Get("machines", str(m["vmid"]))
 	if m != nil {
-		m["state"], m["power_state"], m["ssh_ready"] = bootState(m), "running", false
+		m["state"], m["power_state"], m["ssh_ready"], m["onboot"] = bootState(m), "running", false, true
 		if boolean(plug["rewinds"]) || m["ca_sync"] == "push" && !equal(m["ca_applied"], caPrincipals(m)) {
 			e.caRestored(m, true)
 		}
@@ -201,6 +204,6 @@ func (e *Execution) pluginPowerResult(r D) {
 	}
 	r["power_state"], r["power_state_restored"] = state, true
 	if m != nil {
-		r["machine"] = D{"name": m["name"]}
+		r["machine"] = e.PublicMachine(m, e.ports(integer(e.Op["tenant_n"])))
 	}
 }

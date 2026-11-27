@@ -54,9 +54,10 @@ message OperationType {
   // before the field would run the operation for real.
   bool dry_run = 9;
   // An operation on an object carrel keeps a record of (#663): object_kind
-  // names one of DescribeResponse.objects, object_effect is create, delete
-  // or use, and object_param names the required string parameter that
-  // names the object. The schema must also require a top-level "machine":
+  // names one of DescribeResponse.objects, object_effect is create, delete,
+  // use or list, and object_param names the required string parameter that
+  // names the object (none for list, which is read_only and lists the
+  // machine's objects of the kind). The schema must also require a top-level "machine":
   // an object belongs to one machine. carrel charges the tenant's quota and
   // reserves the record before the start, and sends its id as
   // StartRequest.reservation.
@@ -84,6 +85,11 @@ message QuotaDimension {
   // The limit of a tenant whose quota does not set it.
   double default_limit = 2;
   string unit = 3;
+  // measured: once the nodes have sampled the tenant's storage, the
+  // dimension counts what the tenant's disk objects hold on it, not what
+  // they were charged. A create then adds nothing yet, and a tenant already
+  // over the limit gets no more.
+  bool measured = 4;
 }
 
 // What one object charges: amount of a dimension the plugin declares, per

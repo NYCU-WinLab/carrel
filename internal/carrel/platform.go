@@ -378,17 +378,13 @@ const snapshotSampleMaxAge = 900
 // snapshots hold. Without a fresh sample each snapshot counts at the size of
 // its disk, the most it can ever hold.
 func (e *Execution) snapshotGB(n int) (float64, bool) {
-	u, ok := rowOf[storageUsage](e.S, "storage_usage", fmt.Sprint(n))
-	// RefreshStorage dates a sample by this clock. One dated ahead of it was
-	// not: it would stay fresh for as long as it is ahead.
-	age := now() - u.SampledAt
-	measured := ok && u.Available && age > -60 && age < snapshotSampleMaxAge
+	held, measured := e.heldSample(n)
 	snaps := e.snapshots(n)
 	if len(snaps) == 0 {
 		return 0, measured
 	}
 	if measured {
-		return math.Round(float64(u.RetainedSnapshotBytes)/GiB*100) / 100, true
+		return held, true
 	}
 	declared := 0.0
 	for _, s := range snaps {
@@ -401,10 +397,15 @@ func (e *Execution) SnapshotUsage(t D) D {
 	if _, measured := e.snapshotGB(integer(t["n"])); measured {
 		counts = "held"
 	}
+	return merge(e.storageView(t), D{"snapshot_gb_counts": counts})
+}
+
+// storageView is the tenant's last storage sample as a member sees it.
+func (e *Execution) storageView(t D) D {
 	if u, ok := rowOf[storageUsage](e.S, "storage_usage", str(t["n"])); ok {
-		return D{"accounting": u.Accounting, "available": u.Available, "retained_snapshot_bytes": u.RetainedSnapshotBytes, "sampled_at": u.SampledAt, "unique_total_bytes": u.UniqueTotalBytes, "snapshot_gb_counts": counts}
+		return D{"accounting": u.Accounting, "available": u.Available, "retained_snapshot_bytes": u.RetainedSnapshotBytes, "sampled_at": u.SampledAt, "unique_total_bytes": u.UniqueTotalBytes}
 	}
-	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample", "snapshot_gb_counts": counts}
+	return D{"available": false, "retained_snapshot_bytes": nil, "accounting": "pending_sample"}
 }
 
 const maxBootstrapArgumentBytes = 64 * 1024
