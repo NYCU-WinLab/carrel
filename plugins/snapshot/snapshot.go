@@ -266,7 +266,7 @@ func (s *server) send(ctx context.Context, r *run, first bool) (refused bool, er
 	case errors.As(err, &api):
 		// A refusal of a request sent again says nothing of the first: only
 		// a guest that shows the work done ends the run.
-		if s.shows(ctx, r) {
+		if done, _ := s.shows(ctx, r); done {
 			r.Done, r.State = true, "succeeded"
 		}
 	case err != nil:
@@ -282,12 +282,16 @@ func (s *server) send(ctx context.Context, r *run, first bool) (refused bool, er
 
 // shows says whether the guest shows the run's work done: the snapshot is
 // there after a create, gone after a delete. A rollback shows nothing.
-func (s *server) shows(ctx context.Context, r *run) bool {
+// An error: the list could not be read, and nothing is known.
+func (s *server) shows(ctx context.Context, r *run) (bool, error) {
 	if r.Operation == "rollback" {
-		return false
+		return false, nil
 	}
 	snaps, err := s.pve.snapshots(ctx, r.Kind, r.VMID)
-	return err == nil && snaps[r.Name] == (r.Operation == "create")
+	if err != nil {
+		return false, err
+	}
+	return snaps[r.Name] == (r.Operation == "create"), nil
 }
 
 // settle ends a run whose task failed or was refused, by what the guest
@@ -362,10 +366,16 @@ func (s *server) follow(ctx context.Context, r *run) {
 		return
 	}
 	if exit == "OK" {
-		r.Done, r.State = true, "succeeded"
 		// A task that ended well and a guest that shows otherwise: the
-		// task was not this run's work, and it did not happen.
-		if r.Operation != "rollback" && !s.shows(ctx, r) {
+		// task was not this run's work, and it did not happen. A list that
+		// cannot be read says nothing: asked again on the next call.
+		done, err := s.shows(ctx, r)
+		if err != nil {
+			slog.Warn("snapshot_list_failed", "key", r.Key, "error", err)
+			return
+		}
+		r.Done, r.State = true, "succeeded"
+		if r.Operation != "rollback" && !done {
 			r.State, r.Error = "failed", "the PVE task ended OK, but the snapshot is not as it should be"
 		}
 		return
