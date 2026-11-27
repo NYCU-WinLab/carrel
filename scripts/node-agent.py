@@ -246,11 +246,17 @@ def targets(grant, m, state):
 
 
 def site_public_address():
-    """The site's public IPv4 address from site.json, or None."""
-    if not SITE.exists():
+    """The site's public IPv4 address from site.json.
+
+    None when the file, the key or a well-formed string address is missing:
+    a bad site.json grants no exemption and never stops the firewall.
+    """
+    try:
+        public = site().get("public") if SITE.exists() else None
+        address = public.get("address") if isinstance(public, dict) else None
+        return ipaddress.IPv4Interface(address).ip if isinstance(address, str) else None
+    except (OSError, ValueError):
         return None
-    address = (site().get("public") or {}).get("address")
-    return ipaddress.ip_interface(address).ip if address else None
 
 
 def guest_firewall(m, state, config):
@@ -338,7 +344,6 @@ def guest_firewall(m, state, config):
         rules.append("IN ACCEPT -source ::/0 -p ipv6-icmp -icmp-type echo-request")
     # Public entry points on protected hosts (the public HTTPS gateway): the internet can
     # already reach them, so tenants may too. Management ports on the same host stay dropped.
-    own = site_public_address()
     for entry in config.get("public_entries", []):
         dest = ipaddress.ip_network(entry["address"], strict=False)
         # Only a protected public host (issue #28): an entry for a private
@@ -346,7 +351,7 @@ def guest_firewall(m, state, config):
         protected = [ipaddress.ip_network(a, strict=False) for a in config["protected_addresses"]]
         # The site's own public address is the installer's choice and may sit
         # in a non-global range, such as staging's 198.18.0.0/15 (PLAN 10.5).
-        routable = dest.network_address.is_global or dest.network_address == own
+        routable = dest.network_address.is_global or dest.network_address == site_public_address()
         if dest.version != 4 or dest.prefixlen != 32 or not routable or not any(p.version == 4 and dest.subnet_of(p) for p in protected):
             raise ValueError(f"public entry {entry['address']} is not a protected public address")
         port = integer(entry["port"], 1, 65535)
