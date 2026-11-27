@@ -407,7 +407,10 @@ type ObjectKind struct {
 	Holds []string `protobuf:"bytes,3,rep,name=holds,proto3" json:"holds,omitempty"`
 	// disk: an object may hold up to its machine's disk on the node's
 	// storage, as a disk snapshot does; admission checks the node for it.
-	Disk          bool `protobuf:"varint,4,opt,name=disk,proto3" json:"disk,omitempty"`
+	Disk bool `protobuf:"varint,4,opt,name=disk,proto3" json:"disk,omitempty"`
+	// gone: a record of this kind stands for a machine that has left the
+	// cluster (a frozen machine), not for an object on a live one.
+	Gone          bool `protobuf:"varint,5,opt,name=gone,proto3" json:"gone,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -466,6 +469,13 @@ func (x *ObjectKind) GetHolds() []string {
 func (x *ObjectKind) GetDisk() bool {
 	if x != nil {
 		return x.Disk
+	}
+	return false
+}
+
+func (x *ObjectKind) GetGone() bool {
+	if x != nil {
+		return x.Gone
 	}
 	return false
 }
@@ -990,13 +1000,14 @@ const file_plugin_proto_rawDesc = "" +
 	"\x06Charge\x12\x1c\n" +
 	"\tdimension\x18\x01 \x01(\tR\tdimension\x12\x16\n" +
 	"\x06amount\x18\x02 \x01(\x01R\x06amount\x12\x10\n" +
-	"\x03per\x18\x03 \x01(\tR\x03per\"~\n" +
+	"\x03per\x18\x03 \x01(\tR\x03per\"\x92\x01\n" +
 	"\n" +
 	"ObjectKind\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x122\n" +
 	"\acharges\x18\x02 \x03(\v2\x18.carrel.plugin.v1.ChargeR\acharges\x12\x14\n" +
 	"\x05holds\x18\x03 \x03(\tR\x05holds\x12\x12\n" +
-	"\x04disk\x18\x04 \x01(\bR\x04disk\"\x8d\x02\n" +
+	"\x04disk\x18\x04 \x01(\bR\x04disk\x12\x12\n" +
+	"\x04gone\x18\x05 \x01(\bR\x04gone\"\x8d\x02\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1a\n" +

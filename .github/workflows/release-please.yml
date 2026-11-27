@@ -28,6 +28,9 @@ jobs:
       snapshot_created: ${{ steps.release.outputs['plugins/snapshot--release_created'] }}
       snapshot_tag: ${{ steps.release.outputs['plugins/snapshot--tag_name'] }}
       snapshot_version: ${{ steps.release.outputs['plugins/snapshot--version'] }}
+      freeze_created: ${{ steps.release.outputs['plugins/freeze--release_created'] }}
+      freeze_tag: ${{ steps.release.outputs['plugins/freeze--tag_name'] }}
+      freeze_version: ${{ steps.release.outputs['plugins/freeze--version'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -121,6 +124,41 @@ jobs:
           tar -czf snapshot.tar.gz -C artifact plugin
           sha256sum snapshot.tar.gz > SHA256SUMS
           gh release upload "$TAG" snapshot.tar.gz SHA256SUMS --clobber
+          # A plugin release is never the latest: the newest carrel release is.
+          latest=$(gh release list --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))] | first')
+          test -n "$latest"
+          gh release edit "$latest" --latest
+
+  # The freeze plugin has its own release (freeze-v<version>). Its
+  # artifact is what a site file lists: a .tar.gz with the executable
+  # "plugin" at its top (docs/operator-handbook.md, "Installing plugins").
+  build-freeze:
+    needs: release-please
+    if: needs.release-please.outputs.freeze_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.freeze_tag }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.1"
+      - name: Build and upload the plugin artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.freeze_tag }}
+          VERSION: ${{ needs.release-please.outputs.freeze_version }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")"
+          mkdir artifact
+          CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$VERSION" \
+            -o artifact/plugin ./plugins/freeze/cmd/freeze
+          tar -czf freeze.tar.gz -C artifact plugin
+          sha256sum freeze.tar.gz > SHA256SUMS
+          gh release upload "$TAG" freeze.tar.gz SHA256SUMS --clobber
           # A plugin release is never the latest: the newest carrel release is.
           latest=$(gh release list --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))] | first')
           test -n "$latest"
