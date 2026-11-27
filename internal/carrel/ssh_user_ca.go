@@ -177,11 +177,6 @@ func (e *Execution) backfillOne(t, m D, owner, ca string, dry, alias bool, looku
 	case e.machineBusy(n, m):
 		return "skipped", "An operation on this machine is queued or running; backfill once it has finished"
 	}
-	for _, s := range e.snapshots(n) {
-		if s.VMID == integer(vmid) {
-			return "skipped", "Has snapshots: delete them first, a rollback would undo the backfill"
-		}
-	}
 	if held := e.pluginHeld(n, vmid, "backfill"); len(held) > 0 {
 		return "skipped", heldBackfill(held)
 	}

@@ -98,6 +98,18 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 	r.mu.Unlock()
 	m := obj(req["machine"])
 	switch req["op"] {
+	case "plugin":
+		// The snapshot plugin, as an agent relays it: a dry run or a list
+		// answers at once, a run is running at its start and done when
+		// asked after. What exists is the ledger's to say.
+		key := str(req["idempotency_key"])
+		if req["call"] == "start" && (boolean(req["dry_run"]) || req["operation"] == "list") {
+			return D{"idempotency_key": key, "state": "succeeded", "done": true, "result": D{}}, nil
+		}
+		if req["call"] == "start" {
+			return D{"idempotency_key": key, "state": "running", "done": false, "task": "UPID:golden:" + key}, nil
+		}
+		return D{"idempotency_key": key, "state": "succeeded", "done": true, "progress": 100, "result": D{}, "task": "UPID:golden:" + key}, nil
 	case "create":
 		if m["name"] == "boom" {
 			return nil, errors.New("create failed")
@@ -320,6 +332,7 @@ func goldenText(t *testing.T, scenario func(*goldenRun), everyTool bool, wrap fu
 	if wrap != nil {
 		p.Backend = wrap(p, rec)
 	}
+	goldenSnapshotPlugin(t, p)
 	rec.startGuests(t)
 	runQueue(p)
 	g := &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}

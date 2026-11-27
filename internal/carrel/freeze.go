@@ -226,9 +226,6 @@ func (e *Execution) freezeChecks(n int, m D) {
 	if status := obj(e.Call(D{"op": "status", "machine": m})); powerState(status) != "stopped" {
 		fail("conflict", "Shut the machine down with machine_power before freezing it", D{"recovery": "resolve_prerequisite", "requirements": []string{"machine_stopped"}})
 	}
-	if snaps := filter(toDicts(e.snapshots(n)), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) }); len(snaps) > 0 {
-		fail("conflict", "Delete the machine's disk snapshots first; they are not part of the backup", D{"recovery": "resolve_prerequisite", "snapshots": len(snaps)})
-	}
 	e.refusePluginHeld(n, m["vmid"], "freeze", "a frozen machine")
 	if held := e.freezeHeld(n, m); len(held) > 0 {
 		fail("conflict", "Release "+str(held[0]["name"])+" first: it is a shared resource that a frozen machine cannot keep", D{"recovery": "resolve_prerequisite", "held": held})

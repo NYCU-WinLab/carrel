@@ -138,12 +138,6 @@ func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []diskHold) {
 		}
 	}
 	holds := []diskHold{}
-	for _, s := range e.snapshots() {
-		m := e.S.Get("machines", str(s.VMID))
-		if m == nil && node == e.P.Nodes()[0] || m != nil && on(m) {
-			holds = append(holds, diskHold{DiskGB: s.DiskGB, State: s.State})
-		}
-	}
 	// A plugin object that holds disk space counts as a snapshot does.
 	for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows) {
 		m := e.S.Get("machines", str(o.VMID))

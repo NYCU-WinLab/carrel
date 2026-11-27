@@ -80,7 +80,7 @@ func TestFreezeRefusals(t *testing.T) {
 			}
 		}, "conflict", "Shut the machine down"},
 		{"snapshot", func(p *Platform, b *fakeBackend) {
-			p.Store.Put("snapshots", "10100-s", 1, D{"id": "10100-s", "vmid": 10100, "name": "s", "disk_gb": 20})
+			putSnapshotRecord(p, 1, 10100, "s", 20, "", nil)
 		}, "conflict", "snapshots"},
 		{"public ip", func(p *Platform, b *fakeBackend) {
 			p.Store.Put("public_ips", "ip1", 1, D{"id": "ip1", "address": "140.113.1.1", "tenant_n": 1, "vmid": 10100})
