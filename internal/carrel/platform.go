@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
@@ -154,6 +155,14 @@ func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)
 	p.Hub = NewAgentHub()
+	if len(c.WebhookBlockedRanges) > 0 {
+		webhookBlocked = nil
+		for _, r := range c.WebhookBlockedRanges {
+			if prefix, err := netip.ParsePrefix(r); err == nil {
+				webhookBlocked = append(webhookBlocked, prefix.Masked())
+			}
+		}
+	}
 	return p
 }
 func (p *Platform) execution(ctx context.Context) *Execution {

@@ -37,6 +37,9 @@ const (
 	// webhookPassBudget bounds one endpoint's share of a delivery pass.
 	webhookPassBudget = 20 * time.Second
 	eventStreamLife   = 30 * time.Minute
+	// eventStreamRecheck is how often a stream checks its member still
+	// belongs to the tenant.
+	eventStreamRecheck = 2 * time.Minute
 )
 
 // webhookBackoff is the wait before each attempt at one event; after the
@@ -121,8 +124,8 @@ func webhookSignature(secret, id string, ts int64, body []byte) string {
 
 func checkWebhookURL(raw string) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || len(raw) > 2048 {
-		fail("invalid", "url must be an https URL with no user or fragment", D{"recovery": "revise_request"})
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || strings.Contains(raw, "?") || len(raw) > 2048 {
+		fail("invalid", "url must be an https URL with no user, query or fragment; the signature proves a delivery, so do not put a token in the URL", D{"recovery": "revise_request"})
 	}
 	if ip, err := netip.ParseAddr(strings.Trim(u.Hostname(), "[]")); err == nil && !webhookAddrAllowed(ip) {
 		fail("invalid", "url must reach a public address", D{"recovery": "revise_request"})
@@ -132,12 +135,17 @@ func checkWebhookURL(raw string) {
 // publicAddr tells whether a webhook may reach ip: never a private,
 // loopback, link-local, tailnet (CGNAT) or reserved address, so a member
 // cannot make the control plane call into the site's internal networks.
-// Public addresses, the lab's own included, are allowed: nothing in the
-// site trusts a request for coming from the control plane.
+// Other public addresses are allowed; webhook_blocked_ranges lists the
+// site's own public ranges that services may trust by source address.
 func publicAddr(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 		return false
+	}
+	for _, p := range webhookBlocked {
+		if p.Contains(ip) {
+			return false
+		}
 	}
 	for _, p := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "2001:db8::/32", "fec0::/10", "::/96"} {
 		if netip.MustParsePrefix(p).Contains(ip) {
@@ -146,6 +154,10 @@ func publicAddr(ip netip.Addr) bool {
 	}
 	return true
 }
+
+// webhookBlocked are extra ranges webhooks must not reach, from the
+// webhook_blocked_ranges setting (the site's public pool and IPv6 prefix).
+var webhookBlocked []netip.Prefix
 
 // webhookAddrAllowed is publicAddr; tests let loopback through.
 var webhookAddrAllowed = publicAddr
@@ -365,6 +377,10 @@ func (p *Platform) deliverTo(ctx context.Context, h D, slugs map[int]string) {
 		if h = p.Store.Get("webhooks", id); h == nil {
 			break
 		}
+		// Once the overlap is over, the previous secret is of no use.
+		if str(h["previous_secret"]) != "" && num(h["previous_until"]) <= now() {
+			p.saveDelivery(h, D{"previous_secret": "", "previous_until": 0})
+		}
 		cursor = int64(integer(h["cursor"]))
 		rows := p.Store.eventsAfter(n, cursor, 1)
 		if len(rows) == 0 {
@@ -456,6 +472,8 @@ func (a *App) eventStream(origin string) http.HandlerFunc {
 		w.WriteHeader(200)
 		flusher.Flush()
 		end := time.After(eventStreamLife)
+		recheck := time.NewTicker(eventStreamRecheck)
+		defer recheck.Stop()
 		for {
 			wake := p.events.changed()
 			for _, row := range p.Store.eventsAfter(n, after, 100) {
@@ -467,6 +485,11 @@ func (a *App) eventStream(origin string) http.HandlerFunc {
 			case <-wake:
 			case <-time.After(25 * time.Second):
 				fmt.Fprint(w, ": keepalive\n\n")
+			case <-recheck.C:
+				// A member removed from the project loses the stream.
+				if err := attempt(func() { p.execution(r.Context()).Tenant(who, str(t["slug"])) }); err != nil {
+					return
+				}
 			case <-r.Context().Done():
 				return
 			case <-end:

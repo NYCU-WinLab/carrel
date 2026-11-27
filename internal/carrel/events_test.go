@@ -332,3 +332,18 @@ func TestBrokenWebhookDoesNotStopTheOthers(t *testing.T) {
 }
 
 func itoa(v int64) string { return string(encoded(v)) }
+
+func TestWebhookURLRefusesQueryAndBlockedRanges(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	a, alice := NewApp(p, nil), person("alice", false)
+	if r := a.Call(context.Background(), "webhook_add", D{"url": "https://example.com/hook?token=abc"}, alice); r["ok"] != false {
+		t.Errorf("query accepted: %s", encoded(r))
+	}
+	old := webhookBlocked
+	t.Cleanup(func() { webhookBlocked = old })
+	webhookBlocked = []netip.Prefix{netip.MustParsePrefix("8.8.8.0/24")}
+	if publicAddr(netip.MustParseAddr("8.8.8.8")) || !publicAddr(netip.MustParseAddr("1.1.1.1")) {
+		t.Error("configured range not blocked, or too much blocked")
+	}
+}
