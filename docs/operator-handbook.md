@@ -85,6 +85,9 @@ Step 4 and the release stay separate. The steps one by one (PLAN 8.1):
    for a site whose network already uses those numbers.
 3. Every node: `scripts/build-templates.py` imports the prepared images (below).
 4. CT 100: write `/etc/carrel/config.json` from `sites/<site>/config.example.json`, mode 0640.
+   `domain` is the site's own DNS zone, where tenants get `*.<slug>.<domain>` (default
+   `winlab.tw`); `public_host` is the name members reach SSH ports and the jump host at (default
+   `carrel.<domain>`). Both are fixed for the life of a site: names already handed out keep them.
 5. Workstation, with binaries built on the sandbox:
 
 ```sh

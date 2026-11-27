@@ -26,9 +26,15 @@ type Config struct {
 	Database      string     `json:"database"`
 	PublicAddress string     `json:"public_address"`
 	// Site names this control plane's site in catalog_get, such as b09.
-	Site      string       `json:"site,omitempty"`
-	Nodes     []NodeConfig `json:"nodes"`
-	SSHConfig string       `json:"ssh_config,omitempty"`
+	Site string `json:"site,omitempty"`
+	// Domain is the site's own DNS zone: tenants get *.<slug>.<domain>.
+	// Empty: winlab.tw.
+	Domain string `json:"domain,omitempty"`
+	// PublicHost is the name members reach SSH ports and the jump host
+	// at. Empty: carrel.<domain>.
+	PublicHost string       `json:"public_host,omitempty"`
+	Nodes      []NodeConfig `json:"nodes"`
+	SSHConfig  string       `json:"ssh_config,omitempty"`
 
 	CloudflareZone  string `json:"cloudflare_zone,omitempty"`
 	CloudflareToken string `json:"cloudflare_token,omitempty"`
@@ -146,6 +152,7 @@ type NodeConfig struct {
 // Defaults that the readers used to supply at each call site.
 const (
 	defaultCloudflareAPI  = "https://api.cloudflare.com/client/v4"
+	defaultDomain         = "winlab.tw"
 	defaultCertificateDir = "/var/lib/carrel/certificates"
 	defaultZoneDir        = "/var/lib/carrel/zones"
 	defaultAppsDir        = "/var/lib/carrel/apps"
@@ -185,6 +192,8 @@ func (c Config) WithDefaults() Config {
 		}
 	}
 	def(&c.CloudflareAPI, defaultCloudflareAPI)
+	def(&c.Domain, defaultDomain)
+	def(&c.PublicHost, "carrel."+c.Domain)
 	def(&c.CertificateDir, defaultCertificateDir)
 	def(&c.ZoneDir, defaultZoneDir)
 	def(&c.AppsDir, defaultAppsDir)
@@ -217,6 +226,12 @@ func (c Config) Validate() error {
 	}
 	if c.OriginHost() == "" {
 		return errors.New("origin is required")
+	}
+	if c.Domain != "" && !zonePattern.MatchString(c.Domain) {
+		return errors.New("domain must be a lower-case DNS name, such as winlab.tw")
+	}
+	if c.PublicHost != "" && !zonePattern.MatchString(c.PublicHost) {
+		return errors.New("public_host must be a lower-case DNS name, such as carrel.winlab.tw")
 	}
 	if err := c.OIDC.Validate(); err != nil {
 		return err

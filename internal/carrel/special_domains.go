@@ -95,13 +95,18 @@ func (e *Execution) grantCovering(n int, name string) domainGrant {
 	return domainGrant{}
 }
 
-// specialZone is the site's own zone. Tenant slugs and platform names live in
-// it; other zones are added with zone_add (zones.go).
-const specialZone = "winlab.tw"
+// specialZone is the site's own zone (config "domain"). Tenant slugs and
+// platform names live in it; other zones are added with zone_add
+// (zones.go). publicHost is the control plane's public name (config
+// "public_host"). NewPlatform sets both once, before anything reads them.
+var (
+	specialZone = defaultDomain
+	publicHost  = "carrel." + defaultDomain
+)
 
 // siteHost is the lab website. Its label stays reserved for tenant slugs,
 // but the name itself may be granted as an exact name (PLAN 6.10).
-const siteHost = "www." + specialZone
+func siteHostName() string { return "www." + specialZone }
 
 var specialLabel = `[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?`
 
@@ -192,7 +197,7 @@ func (e *Execution) checkName(t D, kind, name, ignore, ignoreGrant string) (stri
 	}
 	labels := relativeLabels(name)
 	top := labels[len(labels)-1]
-	site := kind == "exact" && name == siteHost
+	site := kind == "exact" && name == siteHostName()
 	if (contains(reservedLabels, top) && !site) || name == e.P.Config.OriginHost() || under(name, e.P.Config.OriginHost()) {
 		fail("conflict", "This name is reserved for the platform", D{"recovery": "revise_request"})
 	}
@@ -686,7 +691,7 @@ func (e *Execution) srvRecord(g domainGrant, remove bool) {
 		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", r["content"], "type", "SRV")
 	}
-	data := D{"priority": 0, "weight": 0, "port": port, "target": e.P.Config.OriginHost()}
+	data := D{"priority": 0, "weight": 0, "port": port, "target": publicHost}
 	for i, r := range ours {
 		if i == 0 {
 			if current := obj(r["data"]); integer(current["port"]) != port || current["target"] != data["target"] {

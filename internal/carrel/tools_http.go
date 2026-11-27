@@ -142,13 +142,17 @@ func writeToolResult(w http.ResponseWriter, result D) {
 
 var (
 	openAPIOnce sync.Once
-	openAPIDoc  []byte
+	openAPIDoc  D
+	openAPIMu   sync.Mutex
+	// openAPIByOrigin caches the document per origin: one in production,
+	// a few in tests.
+	openAPIByOrigin = map[string][]byte{}
 )
 
 // servedOpenAPI is openapi.json with a path per core tool, made from the
 // contract, so the document never lags the tools. Plugin tools come and go
 // with the nodes, so GET /v1/tools lists them instead.
-func servedOpenAPI() []byte {
+func servedOpenAPI(origin string) []byte {
 	openAPIOnce.Do(func() {
 		var doc D
 		must(json.Unmarshal(openAPI, &doc))
@@ -166,7 +170,19 @@ func servedOpenAPI() []byte {
 				"responses":          D{"200": D{"$ref": "#/components/responses/Json"}, "default": D{"$ref": "#/components/responses/Error"}},
 			}}
 		}
-		openAPIDoc = encoded(doc)
+		openAPIDoc = doc
 	})
-	return openAPIDoc
+	openAPIMu.Lock()
+	defer openAPIMu.Unlock()
+	if out, ok := openAPIByOrigin[origin]; ok {
+		return out
+	}
+	// The site's own origin, so a client of another site never calls this one.
+	doc := clone(openAPIDoc)
+	if origin != "" {
+		doc["servers"] = []any{D{"url": origin}}
+	}
+	out := encoded(doc)
+	openAPIByOrigin[origin] = out
+	return out
 }

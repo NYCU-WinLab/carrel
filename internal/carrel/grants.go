@@ -31,7 +31,7 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 	switch kind {
 	case "ports":
 		if g["public_port"] != nil {
-			g["endpoint"] = fmt.Sprintf("carrel.winlab.tw:%d", integer(g["public_port"]))
+			g["endpoint"] = fmt.Sprintf("%s:%d", publicHost, integer(g["public_port"]))
 			g["verification"] = "recorded_route"
 		}
 	case "domains":

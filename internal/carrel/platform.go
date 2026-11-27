@@ -165,6 +165,9 @@ type Execution struct {
 func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1), maintainKick: make(chan struct{}, 1), domainKick: make(chan struct{}, 1)}
+	// One site per process: the zone and the public name are fixed at start.
+	specialZone = or(c.Domain, defaultDomain)
+	publicHost = or(c.PublicHost, "carrel."+specialZone)
 	p.Operations = NewOperations(p)
 	p.Hub = NewAgentHub()
 	if len(c.WebhookBlockedRanges) > 0 {
@@ -616,7 +619,7 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 			for _, p := range ports {
 				forwards += fmt.Sprintf(" -L %d:%s:%d", p, str(m["ip"]), p)
 			}
-			safe["tunnel"] = "ssh -N" + forwards + " jump@carrel.winlab.tw"
+			safe["tunnel"] = "ssh -N" + forwards + " jump@" + publicHost
 		}
 		return safe
 	}
@@ -634,25 +637,25 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	t := e.S.TenantN(integer(m["tenant_n"]))
 	alias := str(m["name"]) + "." + str(t["slug"])
 	if ssh != nil {
-		safe["ssh"] = fmt.Sprintf("ssh -p %d %s@carrel.winlab.tw", ssh.PublicPort, user)
+		safe["ssh"] = fmt.Sprintf("ssh -p %d %s@%s", ssh.PublicPort, user, publicHost)
 		safe["ssh_short"] = "ssh " + alias
-		safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName carrel.winlab.tw\n  User %s\n  Port %d\n", alias, alias, user, ssh.PublicPort)
+		safe["ssh_config"] = fmt.Sprintf("Host %s %s.%s\n  HostName %s\n  User %s\n  Port %d\n", alias, alias, specialZone, publicHost, user, ssh.PublicPort)
 		safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
 	}
 	if e.jumpEnabled() {
 		// Through the platform jump host (issue #98): no public port needed.
-		jump := fmt.Sprintf("ssh -J jump@carrel.winlab.tw %s@%s", user, str(m["ip"]))
+		jump := fmt.Sprintf("ssh -J jump@%s %s@%s", publicHost, user, str(m["ip"]))
 		safe["ssh_jump"] = jump
 		if ssh == nil {
 			safe["ssh"] = jump
 			safe["ssh_short"] = "ssh " + alias
-			safe["ssh_config"] = fmt.Sprintf("Host %s %s.winlab.tw\n  HostName %s\n  User %s\n  ProxyJump jump@carrel.winlab.tw\n", alias, alias, str(m["ip"]), user)
+			safe["ssh_config"] = fmt.Sprintf("Host %s %s.%s\n  HostName %s\n  User %s\n  ProxyJump jump@%s\n", alias, alias, specialZone, str(m["ip"]), user, publicHost)
 			safe["ssh_short_requires"] = "Install ssh_config on the connecting client once; this is an SSH alias, not a DNS route."
 		}
 		// With a lab certificate (step ssh login) and no saved key: the
 		// jump host's certificate user forwards to machines that trust it.
 		if str(m["ssh_user_ca"]) != "" && len(servicePortsOf(m)) == 0 {
-			safe["ssh_jump_certificate"] = fmt.Sprintf("ssh -J ca@carrel.winlab.tw %s@%s", user, str(m["ip"]))
+			safe["ssh_jump_certificate"] = fmt.Sprintf("ssh -J ca@%s %s@%s", publicHost, user, str(m["ip"]))
 		}
 	}
 	return safe

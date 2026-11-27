@@ -89,7 +89,7 @@ func operationSummary(op D) D {
 	if port, ok := result["port"]; ok {
 		pub := grantSummary("ports", obj(port))
 		if op["tool"] == "port_open" {
-			pub["endpoint"] = fmt.Sprintf("carrel.winlab.tw:%d", integer(pub["public_port"]))
+			pub["endpoint"] = fmt.Sprintf("%s:%d", publicHost, integer(pub["public_port"]))
 			pub["verification"] = "routing_configured"
 		}
 		result["port"] = pub

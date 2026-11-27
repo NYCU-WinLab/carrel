@@ -64,13 +64,15 @@ func (e *Execution) Reserved() map[string]bool {
 		labels[l] = true
 	}
 	for _, r := range dicts(data["result"]) {
-		parts := strings.Split(strings.TrimSuffix(str(r["name"]), ".winlab.tw"), ".")
+		parts := strings.Split(strings.TrimSuffix(str(r["name"]), "."+specialZone), ".")
 		labels[parts[len(parts)-1]] = true
 	}
 	return labels
 }
 func (e *Execution) DomainRecord(t D, remove bool) {
-	name := "*." + str(t["slug"]) + ".winlab.tw"
+	name := "*." + str(t["slug"]) + "." + specialZone
+	// The owner tag is fixed: records already carry it, and each site has
+	// its own zone, so tags of two sites never meet.
 	owner := fmt.Sprintf("carrel:b09:tenant:%d", integer(t["n"]))
 	records := dicts(e.CF("GET", "?name="+url.QueryEscape(name), nil)["result"])
 	if len(records) > 0 && (len(records) != 1 || records[0]["comment"] != owner) {
@@ -121,7 +123,7 @@ func (e *Execution) EnsureCertificate(t D) D {
 	if crt, _, ok := e.livePair(str(t["slug"])); has && ok && !renewalDue(crt) {
 		return D{"state": "ready"}
 	}
-	e.issueCertificate(str(t["slug"]), "*."+str(t["slug"])+".winlab.tw")
+	e.issueCertificate(str(t["slug"]), "*."+str(t["slug"])+"."+specialZone)
 	if !has {
 		e.Put("certificates", str(n), n, D{"id": str(n), "tenant_n": n, "slug": t["slug"], "issued_at": time.Now().Unix()})
 	}
@@ -214,7 +216,7 @@ func (e *Execution) domainName(a, t D, vmid int, vip vipRecord, function string)
 	}
 	// sub names a domain in the tenant's subtree; name a special domain
 	// under one of its grants (PLAN 6.10).
-	name = str(a["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
+	name = str(a["sub"]) + "." + str(t["slug"]) + "." + specialZone
 	if a["name"] == nil {
 		return name, ""
 	}

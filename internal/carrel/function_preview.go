@@ -89,7 +89,7 @@ func (e *Execution) previewFor(t, f D, pr int, headRef string) (D, bool) {
 		"preview_of": f["id"], "pr": pr, "head_ref": headRef}, true
 }
 
-func previewHost(t D, name string) string { return name + "." + str(t["slug"]) + ".winlab.tw" }
+func previewHost(t D, name string) string { return name + "." + str(t["slug"]) + "." + specialZone }
 
 // receivePreview builds a version of pull request pr's preview from the
 // image its job pushed. The first version takes only the parent's settings.
