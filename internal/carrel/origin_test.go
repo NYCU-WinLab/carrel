@@ -402,22 +402,76 @@ func TestASiteWithoutTenantsReconcilesOnlyForItsOrigin(t *testing.T) {
 	}
 }
 
-// The revision is recorded before the node is asked, so a lost reply does not
-// leave the node holding a revision this database never recorded (#806).
-func TestReconcileRecordsRevisionBeforeSending(t *testing.T) {
+// On a site with no tenant, a failed send and a lost reply both leave the
+// node at a revision the gate accepts, while a revision this database never
+// sent stays refused (#806).
+func TestReconcileGateAcceptsTheAcknowledgedAndThePendingRevision(t *testing.T) {
 	p, b, _ := originFixture(t)
+	p.Store.Exec("DELETE FROM objects")
+	p.Store.Exec("DELETE FROM tenants")
 	e := p.execution(context.Background())
+	held := any(nil)
+	// How the node answers a reconcile: apply then reply, fail before
+	// applying, or apply and lose the reply.
+	mode := "ok"
 	b.call = func(r D, target string) (any, error) {
-		if r["op"] == "reconcile" {
-			if obj(p.Store.SiteGet("reconcile", "sent"))["revision"] != r["revision"] {
-				t.Error("the revision was not recorded before the send")
+		switch {
+		case r["op"] == "inventory":
+			return D{"desired": D{"revision": held}}, nil
+		case r["op"] == "reconcile" && target == p.Nodes()[0].Target:
+			if mode == "refused" {
+				return nil, errors.New("connection refused")
 			}
-			return nil, errors.New("reply lost")
+			held = r["revision"]
+			if mode == "lost" {
+				return nil, errors.New("reply lost")
+			}
 		}
+		// The gateway never confirms the pair, so the origin always awaits it.
 		return D{}, nil
 	}
+	sent := func() D { return obj(p.Store.SiteGet("reconcile", "sent")) }
+	e.Reconcile()
+	a := held
+	if a == nil || sent()["revision"] != a || sent()["previous"] != nil {
+		t.Fatal("an acknowledged reconcile must record only its revision: " + string(encoded(sent())))
+	}
+	// (a) The state changes and the send fails before the node applies it.
+	p.Config.Fetch = true
+	mode = "refused"
 	attempt(func() { e.Reconcile() })
-	if obj(p.Store.SiteGet("reconcile", "sent"))["revision"] == nil {
-		t.Fatal("no revision recorded after a failed reconcile")
+	if held != a || sent()["revision"] == a || sent()["previous"] != a {
+		t.Fatal("a failed send must keep the acknowledged revision: " + string(encoded(sent())))
+	}
+	if !e.maintenanceReconciles() {
+		t.Fatal("a failed send blocked the gate")
+	}
+	// A second failed send keeps the revision the node acknowledged.
+	p.Config.Fetch = false
+	attempt(func() { e.Reconcile() })
+	p.Config.Fetch = true
+	attempt(func() { e.Reconcile() })
+	if sent()["previous"] != a || !e.maintenanceReconciles() {
+		t.Fatal("repeated failed sends lost the acknowledged revision: " + string(encoded(sent())))
+	}
+	// (b) The node applies the new state and the reply is lost.
+	mode = "lost"
+	attempt(func() { e.Reconcile() })
+	if held == a || held != sent()["revision"] {
+		t.Fatal("the node did not apply the new state")
+	}
+	if !e.maintenanceReconciles() {
+		t.Fatal("a lost reply blocked the gate")
+	}
+	// (c) A revision this database never sent stays refused.
+	held = "f00d"
+	if e.maintenanceReconciles() {
+		t.Fatal("reconciled over nodes this database did not configure")
+	}
+	// A later acknowledged reconcile drops the pending marker.
+	mode = "ok"
+	e.Reconcile()
+	if _, pending := sent()["previous"]; pending || sent()["revision"] != held {
+		t.Fatal("an acknowledged reconcile kept the previous revision: " + string(encoded(sent())))
 	}
 }

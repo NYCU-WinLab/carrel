@@ -475,12 +475,22 @@ func (e *Execution) Reconcile() D {
 	}
 	// The database that sent this state, so a site with no tenant can later
 	// tell its own nodes from nodes another database configured (#569).
-	// Recorded before sending: a lost reply or a restart in between must not
-	// leave the node holding a revision this database never recorded (#806).
-	if str(obj(e.S.SiteGet("reconcile", "sent"))["revision"]) != revision {
-		e.S.SitePut("reconcile", "sent", D{"revision": revision})
+	// Recorded before sending, beside the last revision the first node
+	// acknowledged: a lost reply leaves the node at the new revision, a
+	// failed send leaves it at the previous one, and both stay accepted
+	// (#806). previous holds until a reply acknowledges a revision.
+	sent := obj(e.S.SiteGet("reconcile", "sent"))
+	if str(sent["revision"]) != revision {
+		previous, pending := sent["previous"]
+		if !pending {
+			previous = sent["revision"]
+		}
+		e.S.SitePut("reconcile", "sent", D{"revision": revision, "previous": previous})
 	}
 	result := D{"node": e.Call(request, nodes[0].Target)}
+	if _, pending := obj(e.S.SiteGet("reconcile", "sent"))["previous"]; pending {
+		e.S.SitePut("reconcile", "sent", D{"revision": revision})
+	}
 	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.
