@@ -25,6 +25,8 @@ type run struct {
 	// Before are the tasks of the same type on the guest that were there
 	// before the request: none of them is the run's.
 	Before []string `json:"before,omitempty"`
+	// Ambiguous: more than one task could be the run's; a person must look.
+	Ambiguous bool `json:"ambiguous,omitempty"`
 	// Done runs keep their outcome: a later call answers the same.
 	Done      bool   `json:"done,omitempty"`
 	State     string `json:"state,omitempty"`

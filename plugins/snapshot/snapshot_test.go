@@ -143,7 +143,7 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.sent++
-		upid := fmt.Sprintf("UPID:pve:%08d:%s:%d:root@pam!carrel-snapshot:", f.sent, taskTypes[kind][op], vmid)
+		upid := fmt.Sprintf("UPID:pve:%08X:%08X:%08X:%s:%d:root@pam!carrel-snapshot:", f.sent, f.sent, f.sent, taskTypes[kind][op], vmid)
 		exit := f.exit
 		if exit == "" {
 			exit = "OK"
@@ -482,5 +482,26 @@ func TestTheProbeChecksTheTokensPrivileges(t *testing.T) {
 	f.mu.Unlock()
 	if p, _ := s.Probe(context.Background(), &pluginpb.ProbeRequest{}); p.Supported || !strings.Contains(p.Reason, "VM.Snapshot, VM.Snapshot.Rollback") {
 		t.Fatalf("missing: %v", p)
+	}
+}
+
+// A task that appears between follow's check and a resend is the first
+// request's: the resend adopts it and sends nothing more.
+func TestAResendAdoptsATaskThatAppearedLate(t *testing.T) {
+	s, f := fixture(t)
+	f.lose, f.hold = true, true
+	if _, err := start(s, "k1", "create", take, "running"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.runs.load("k1")
+	r.UPID = ""
+	if err := s.runs.save(r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.send(context.Background(), r, false); err != nil {
+		t.Fatal(err)
+	}
+	if r.UPID == "" || f.sent != 1 {
+		t.Fatalf("upid %q, sent %d", r.UPID, f.sent)
 	}
 }
