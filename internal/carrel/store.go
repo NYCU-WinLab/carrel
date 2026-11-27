@@ -22,6 +22,9 @@ type sqlAccess interface {
 type Store struct {
 	DB *sql.DB
 	q  sqlAccess
+	// Schema is what opening did to the schema: the version, and the
+	// version it started from and the copy it took when it migrated.
+	Schema D
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -35,15 +38,12 @@ func OpenStore(path string) (*Store, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db, db}
-	_, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000;
-CREATE TABLE IF NOT EXISTS tenants(n INTEGER PRIMARY KEY AUTOINCREMENT,subject TEXT UNIQUE NOT NULL,slug TEXT UNIQUE NOT NULL,quota TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active');
-CREATE TABLE IF NOT EXISTS objects(kind TEXT NOT NULL,id TEXT NOT NULL,tenant INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id),FOREIGN KEY(tenant) REFERENCES tenants(n));
-CREATE INDEX IF NOT EXISTS objects_tenant ON objects(tenant,kind);
-CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,actor TEXT NOT NULL,tenant INTEGER,tool TEXT NOT NULL,args TEXT NOT NULL,outcome TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS oauth(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,expires INTEGER NOT NULL,PRIMARY KEY(kind,id));
-CREATE TABLE IF NOT EXISTS site(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(kind,id));`)
-	if e != nil {
+	s := &Store{DB: db, q: db}
+	if _, e = db.Exec(`PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); e != nil {
+		db.Close()
+		return nil, e
+	}
+	if s.Schema, e = migrateSchema(db, path); e != nil {
 		db.Close()
 		return nil, e
 	}
@@ -91,7 +91,7 @@ func (s *Store) Transaction(f func(*Store)) {
 	tx, e := s.DB.BeginTx(context.Background(), nil)
 	must(e)
 	defer tx.Rollback()
-	f(&Store{s.DB, tx})
+	f(&Store{DB: s.DB, q: tx, Schema: s.Schema})
 	must(tx.Commit())
 }
 func decode(s string) D { var d D; must(json.Unmarshal([]byte(s), &d)); return d }

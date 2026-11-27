@@ -71,6 +71,9 @@ func main() {
 		slog.Error("open database", "error", err)
 		fatal()
 	}
+	if store.Schema["backup"] != nil {
+		slog.Info("schema_migrated", "schema", store.Schema)
+	}
 	defer store.DB.Close()
 	if unplaced := carrel.UnplacedMachines(store, cfg); len(unplaced) > 0 {
 		slog.Error("machines without a configured node", "machines", unplaced)
