@@ -194,3 +194,21 @@ func TestAFailingMigrationKeepsOneCopy(t *testing.T) {
 		t.Fatal("copies", copies)
 	}
 }
+
+// An earlier copy from the same version is kept; no newer copy replaces it.
+func TestTheOldestCopyIsKept(t *testing.T) {
+	saved, savedVersion := schemaMigrations, SchemaVersion
+	defer func() { schemaMigrations, SchemaVersion = saved, savedVersion }()
+	schemaMigrations = append(append([]func(*sql.Tx) error{}, saved...), func(tx *sql.Tx) error { return errors.New("broken") })
+	SchemaVersion = len(schemaMigrations)
+	path := atVersion(t, savedVersion)
+	first := fmt.Sprintf("%s.schema-%d-20000101-000000.000000000", path, savedVersion)
+	if err := os.WriteFile(first, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	OpenStore(path)
+	copies, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, savedVersion))
+	if data, err := os.ReadFile(first); len(copies) != 1 || err != nil || string(data) != "old" {
+		t.Fatal("copies", copies, err)
+	}
+}
