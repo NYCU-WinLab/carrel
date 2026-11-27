@@ -269,11 +269,21 @@ func (a *Agent) fetchEnv(ctx context.Context, id, version string) ([]string, err
 // fetchAuth asks the control plane for the credentials of a version's image.
 func (a *Agent) fetchAuth(ctx context.Context, id, version string) (*RegistryAuth, error) {
 	var answer struct {
-		Auth *RegistryAuth `json:"auth"`
+		Auth     *RegistryAuth `json:"auth"`
+		AuthBox  *string       `json:"auth_box"`
+		Registry string        `json:"registry"`
 	}
 	query := url.Values{"function": {id}, "version": {version}}
 	if err := a.call(ctx, http.MethodGet, "/functions/v1/agent/auth?"+query.Encode(), nil, &answer); err != nil {
 		return nil, err
+	}
+	if answer.AuthBox != nil {
+		auth, err := a.openAuth(id, answer.Registry, *answer.AuthBox)
+		if err != nil {
+			// The same box never opens on a later try: fail the version.
+			return nil, &statusError{code: http.StatusConflict, message: err.Error()}
+		}
+		answer.Auth = auth
 	}
 	if answer.Auth == nil || answer.Auth.Registry == "" || answer.Auth.Username == "" || answer.Auth.Password == "" {
 		return nil, errors.New("the answer lacks credentials")

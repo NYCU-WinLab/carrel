@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTheHostKeyIsMadeOnceAndKeptPrivate(t *testing.T) {
@@ -61,6 +62,9 @@ func TestAgentOpensAnEnvironmentSealedToItsKey(t *testing.T) {
 			return build(ctx, f, image, env, auth)
 		}}
 	a.registerKey(context.Background())
+	if a.keyRetryAt.Before(time.Now().Add(50 * time.Minute)) {
+		t.Fatal("the key is not sent again within the hour")
+	}
 	if !a.keyRegistered || registered["public"] != base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()) {
 		t.Fatalf("registered %v", registered)
 	}
@@ -72,5 +76,28 @@ func TestAgentOpensAnEnvironmentSealedToItsKey(t *testing.T) {
 	}
 	if !strings.Contains(a.failed["t1-api/v2"], "does not open") {
 		t.Fatalf("failed %v", a.failed)
+	}
+}
+
+func TestAgentOpensRegistryCredentialsSealedToItsKey(t *testing.T) {
+	key, _ := LoadEnvKey(filepath.Join(t.TempDir(), "env.key"))
+	seal := func(id, registry string, auth RegistryAuth) string {
+		plain, _ := json.Marshal(auth)
+		box, _ := hpke.Seal(key.PublicKey(), envKDF, envAEAD, append([]byte("carrel-fn-registry/v1\x00"+id+"\x00"), registry...), plain)
+		return base64.StdEncoding.EncodeToString(box)
+	}
+	box := seal("t1-api", "ghcr.io", RegistryAuth{Registry: "ghcr.io", Username: "u", Password: "p"})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"auth_box":"` + box + `","registry":"` + r.URL.Query().Get("version") + `"}`))
+	}))
+	defer server.Close()
+	a := &Agent{Control: server.URL, Token: "cfh_test", EnvKey: key}
+	auth, err := a.fetchAuth(context.Background(), "t1-api", "ghcr.io")
+	if err != nil || auth.Password != "p" {
+		t.Fatalf("%+v %v", auth, err)
+	}
+	// Claimed for another registry, the same box does not open.
+	if _, err := a.fetchAuth(context.Background(), "t1-api", "registry.example.org"); err == nil {
+		t.Fatal("opened for another registry")
 	}
 }
