@@ -167,7 +167,7 @@ Tool annotations follow one rule, and `TestContractAnnotations` checks it over t
 registers an eligible tenant, and `webhook_test`, which sends a request out but changes nothing in
 Carrel, so it runs without the write lock and stays off the read-only endpoint. `destructiveHint` is true when the call removes something the member
 cannot get back with one call: deleted data (`machine_delete`, `snapshot_delete`, `image_delete`,
-`function_remove`, `app_unlink`), state that is overwritten (`snapshot_rollback`), a resource
+`function_remove`, `app_unlink`, `env_remove`), state that is overwritten (`snapshot_rollback`), a resource
 returned to a pool (`vip_remove`, `public_ip_release`) and a secret replaced (`app_webhook_rotate`, `webhook_rotate`).
 Removing a grant, key, route or client that one add call restores is not destructive.
 `idempotentHint` is true on a write whose repeat with the same arguments changes nothing more.
@@ -1293,6 +1293,18 @@ private ones share 3,000 minutes per month.
 
 - Runtime secrets live in `/srv/apps/<app>/env` (mode `0600`), written by the member's agent over
   SSH. They never pass through carrel or GitHub.
+- Or in an environment set (#639), stored once and granted to several apps. On its first start
+  `carrel-deployd` makes an HPKE key pair (ML-KEM-768 with X25519, HKDF-SHA256, AES-256-GCM) in
+  `/var/lib/carrel-deployd/<app>/env.key` and registers only the public key. `env_upload` gives a
+  single-use link; the upload is sealed to each granted app's key, bound to the app, set and
+  version, and the plain values are dropped. carrel's database and configuration together open
+  none of them. The agent opens its copy, writes `/var/lib/carrel-deployd/<app>/env` (root,
+  `0600`), adds it to the unit with a drop-in after the member's own file, and restarts the app;
+  if the health check fails, the previous file goes back. A revoked app gets no later version and
+  drops the set at its next poll. A granted app gets the values at the next upload, since carrel
+  holds nothing to seal for it before. The first key an agent registers is taken; a changed key
+  waits for `env_trust` with its fingerprint, which the agent logs. Known limit: a control plane
+  under an attacker's control can register a false key and read values uploaded after that.
 - Application logs stay in the machine's journal. `carrel-deployd` reports only release state, the
   health check result and, on failure, the last 50 lines of `carrel-app-<app>`.
 - The member may stop or remove `carrel-deployd` at any time. The app then shows `agent_offline`.

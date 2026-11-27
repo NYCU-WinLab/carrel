@@ -683,6 +683,120 @@
         }
       }
     },
+    "/apps/v1/agent/key": {
+      "post": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Register the public key environment sets are sealed to",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/agent/env": {
+      "post": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Report which revision of the environment sets the agent applied",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/v1/env/{token}": {
+      "put": {
+        "x-carrel-audience": "member",
+        "summary": "Upload an environment set's file through an env_upload link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "x-carrel-audience": "member",
+        "summary": "Upload an environment set's file through an env_upload link",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/v1/tools": {
       "get": {
         "x-carrel-audience": "member",

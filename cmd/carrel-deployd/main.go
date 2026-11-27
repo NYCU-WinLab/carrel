@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/hpke"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -72,6 +73,13 @@ type agent struct {
 	inv invocations
 	// reading bounds how many log requests run at once.
 	reading chan struct{}
+	// Environment sets (env.go).
+	envKey        hpke.PrivateKey
+	envRegistered bool
+	envRetryAt    time.Time
+	units         string
+	reload        func(ctx context.Context) error
+	restart       func(ctx context.Context) error
 }
 
 const (
@@ -101,6 +109,11 @@ func main() {
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
 	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second, steadyFor: 3 * time.Second, every: time.Minute, wake: make(chan bool, 1), reading: make(chan struct{}, 2)}
+	a.units, a.reload, a.restart = "/etc/systemd/system", systemdReload, a.restartAndCheck
+	if err := a.loadEnvKey(); err != nil {
+		// The app still deploys; only environment sets wait for a key.
+		slog.Error("env_key_unavailable", "error", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("carrel_deployd_started", "app", cfg.App)
@@ -115,7 +128,11 @@ func (a *agent) loop(ctx context.Context) {
 	go func() { a.builder(ctx); close(built) }()
 	defer func() { <-built }()
 	for ctx.Err() == nil {
-		r, pull, logs, status, err := a.next(ctx)
+		a.registerEnvKey(ctx)
+		r, pull, logs, env, status, err := a.next(ctx)
+		if env != nil {
+			a.applyEnv(ctx, *env)
+		}
 		for _, req := range logs {
 			a.startLogs(ctx, req)
 		}
@@ -181,29 +198,30 @@ func (a *agent) request(ctx context.Context, method, path string, body any) (*ht
 
 // next long-polls carrel for a release to deploy, for a webhook call
 // that asks a pull-mode agent to check its branch now, or for log requests.
-func (a *agent) next(ctx context.Context) (*release, bool, []logRequest, int, error) {
+func (a *agent) next(ctx context.Context) (*release, bool, []logRequest, *envUpdate, int, error) {
 	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	resp, err := a.request(poll, "POST", "/apps/v1/agent/next", nil)
 	if err != nil {
-		return nil, false, nil, 0, err
+		return nil, false, nil, nil, 0, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case 204:
-		return nil, false, nil, 204, nil
+		return nil, false, nil, nil, 204, nil
 	case 200:
 		var out struct {
 			Release *release
 			Pull    bool
 			Logs    []logRequest
+			Env     *envUpdate
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || (out.Release == nil && !out.Pull && len(out.Logs) == 0) {
-			return nil, false, nil, 200, errors.New("invalid release response")
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || (out.Release == nil && !out.Pull && len(out.Logs) == 0 && out.Env == nil) {
+			return nil, false, nil, nil, 200, errors.New("invalid release response")
 		}
-		return out.Release, out.Pull, out.Logs, 200, nil
+		return out.Release, out.Pull, out.Logs, out.Env, 200, nil
 	}
-	return nil, false, nil, resp.StatusCode, nil
+	return nil, false, nil, nil, resp.StatusCode, nil
 }
 
 func (a *agent) report(ctx context.Context, id, state, message, log string) {
