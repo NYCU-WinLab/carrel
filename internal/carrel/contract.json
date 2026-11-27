@@ -3097,7 +3097,7 @@
     },
     {
       "name": "machine_unfence",
-      "description": "Admin: clear a machine's plugin fence. A plugin operation whose run may still be writing the guest's disk leaves the machine fenced: nothing else runs on it, and a retry of that operation is the usual way out. Use this when the retry cannot settle the run. carrel reads the node first and refuses while the guest holds a Proxmox lock or has an active task; a lock with no task is named with the unlock command to run after checking the guest. The fenced operation stays as it is. confirm must equal the machine name. dry_run shows the node's answer without clearing the fence.",
+      "description": "Admin: clear a machine's plugin fence. A plugin operation whose run may still be writing the guest's disk leaves the machine fenced: nothing else runs on it, and a retry of that operation is the usual way out. Use this when the retry cannot settle the run. carrel reads the node first and refuses while the guest holds a Proxmox lock or has an active task; a lock with no task is named with the unlock command to run after checking the guest. The fenced operation ends: operation_retry refuses it, and the action must be submitted again. confirm must equal the machine name. dry_run shows the node's answer without clearing the fence.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -7,7 +7,7 @@ import "fmt"
 // plugin answer can prove the run ended. An admin clears it here once the
 // node shows neither a guest lock nor an active task on the guest. It runs
 // under the writer lock, so nothing starts on the machine in between.
-func (e *Execution) UnfenceMachine(a D) D {
+func (e *Execution) UnfenceMachine(a, w D) D {
 	t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
 	if t == nil {
 		fail("not_found", "Tenant not found")
@@ -29,7 +29,11 @@ func (e *Execution) UnfenceMachine(a D) D {
 	status := obj(e.Call(D{"op": "status", "machine": m}))
 	tasks := []D{}
 	for _, task := range dicts(e.Call(D{"op": "guest_tasks", "machine": m})) {
-		tasks = append(tasks, pick(task, "upid", "type", "user", "starttime", "status"))
+		// The active list keeps a task that ended until PVE archives it; one
+		// without a status counts as running.
+		if status := str(task["status"]); status == "" || status == "RUNNING" {
+			tasks = append(tasks, pick(task, "upid", "type", "user", "starttime", "status"))
+		}
 	}
 	out := D{"machine": m["name"], "node": node, "operation": fence, "lock": status["lock"], "active_tasks": tasks}
 	if len(tasks) > 0 {
@@ -48,5 +52,16 @@ func (e *Execution) UnfenceMachine(a D) D {
 	}
 	delete(m, "plugin_fence")
 	e.Put("machines", m["vmid"], integer(t["n"]), m)
+	// The fenced operation is over: a retry would resume it with the power
+	// it recorded before the fence, on a guest someone may have started
+	// since. It must be submitted again.
+	if op := e.S.Get("operations", fence); op != nil {
+		op["unfenced"] = D{"by": w["sub"], "at": now()}
+		if failure := obj(op["error"]); len(failure) > 0 {
+			failure["recovery"] = "revise_request"
+			op["error"] = failure
+		}
+		e.P.Operations.Save(op)
+	}
 	return merge(out, D{"dry_run": false, "fenced": false})
 }

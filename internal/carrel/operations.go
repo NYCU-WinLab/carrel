@@ -164,6 +164,9 @@ func (o *Operations) Retry(t D, id string, w D) D {
 	o.p.writer.Lock()
 	defer o.p.writer.Unlock()
 	op := o.Find(t, id)
+	if op["unfenced"] != nil {
+		fail("conflict", "An admin cleared this operation's fence with machine_unfence; submit the action again", D{"recovery": "revise_request"})
+	}
 	if contains(terminal, op["state"]) && op["state"] != "succeeded" {
 		if next, _ := recoveryAction(op); next == "revise_request" {
 			return D{"operation": publicOperation(op)}

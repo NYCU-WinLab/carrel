@@ -2767,7 +2767,9 @@ def test_guest_tasks_reads_the_guests_active_tasks(monkeypatch, tmp_path, capsys
     # machine_unfence (#682) reads them before it clears a plugin fence.
     module, _ = freezer(monkeypatch, tmp_path, listing=lambda c: [])
     reads = []
-    monkeypatch.setattr(module, "pve_get", lambda resource, **params: reads.append((resource, params)) or [{"upid": "U"}])
+    monkeypatch.setattr(
+        module, "pve_get", lambda resource, **params: reads.append((resource, params)) or [{"upid": "U"}]
+    )
     request = json.dumps({"op": "guest_tasks", "machine": MACHINE}).encode() + b"\n"
     monkeypatch.setattr(module.sys, "stdin", type("In", (), {"buffer": __import__("io").BytesIO(request)})())
     module.main()

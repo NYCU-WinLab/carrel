@@ -389,7 +389,9 @@ what a disk rewind must find unchanged (#663).
   no record), clear the fence with `machine_unfence`. It reads the node first and refuses while
   the guest has an active Proxmox task or holds a lock. A lock with no task is stale: check the
   guest, run the `qm unlock` or `pct unlock` the error names, then run it again. The fenced
-  operation stays failed, and the guest stays stopped until someone starts it.
+  operation ends there: `operation_retry` refuses it, because a retry would resume it with the
+  power it recorded before the fence. Submit the action again. The guest stays stopped until
+  someone starts it.
 - Each new run reads the guest's power again, so a retry never runs on a guest the last run
   brought back.
 - A run that succeeded is not repeated: when the guest does not come back, a retry only starts it.

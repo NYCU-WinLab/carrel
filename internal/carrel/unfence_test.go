@@ -76,3 +76,46 @@ func TestUnfenceRefusesWhileTheFencedOperationRuns(t *testing.T) {
 		t.Fatal("the fence went")
 	}
 }
+
+// Once unfenced, the fenced operation is over: a retry would resume it with
+// the power it recorded before the fence.
+func TestAnUnfencedOperationIsNotRetried(t *testing.T) {
+	p, f, _ := withRewindPlugin(t, "running")
+	f.mu.Lock()
+	f.forget = true
+	f.mu.Unlock()
+	r := member(p, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
+	id := str(obj(r["operation"])["id"])
+	if p.Store.Get("machines", "10100")["plugin_fence"] != id {
+		t.Fatalf("not fenced: %s", encoded(r))
+	}
+	if r := p.Execute(context.Background(), "machine_unfence", D{"tenant": "alice", "machine": "web", "confirm": "web"}, person("root", true)); r["fenced"] != false {
+		t.Fatalf("unfence: %s", encoded(r))
+	}
+	if f := failure(member(p, "operation_retry", D{"id": id})); f["code"] != "conflict" || f["recovery"] != "revise_request" {
+		t.Fatalf("a retry of the unfenced operation: %s", encoded(f))
+	}
+	op := p.Store.Get("operations", id)
+	if op["state"] != "failed" || obj(op["error"])["recovery"] != "revise_request" || obj(op["unfenced"])["by"] != "root" {
+		t.Fatalf("the operation: %s", encoded(op))
+	}
+}
+
+// A task the active list keeps after it ended does not hold the fence.
+func TestUnfenceSkipsTasksThatEnded(t *testing.T) {
+	p, b := fixture(t)
+	runQueue(p)
+	seedMachine(p, "web", 10100)
+	m := p.Store.Get("machines", "10100")
+	m["plugin_fence"] = "op-1"
+	p.Store.Put("machines", 10100, 1, m)
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "guest_tasks" {
+			return []any{map[string]any{"upid": "U", "status": "OK"}}, nil
+		}
+		return D{"status": "stopped"}, nil
+	}
+	if r := p.Execute(context.Background(), "machine_unfence", D{"tenant": "alice", "machine": "web", "confirm": "web"}, person("root", true)); r["fenced"] != false {
+		t.Fatalf("unfence: %s", encoded(r))
+	}
+}

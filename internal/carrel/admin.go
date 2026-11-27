@@ -96,7 +96,7 @@ func (e *Execution) Admin(tool string, a, w D) D {
 	case "machine_ca_backfill":
 		return e.CABackfill(a, w)
 	case "machine_unfence":
-		return e.UnfenceMachine(a)
+		return e.UnfenceMachine(a, w)
 	case "platform_power":
 		return e.PlatformPower(a, w)
 	case "reconcile_run":
