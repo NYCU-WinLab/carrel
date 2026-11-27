@@ -63,6 +63,12 @@ func (o *Operations) Find(t D, id string) D {
 	}
 	return op
 }
+
+// adminOnly reports whether op was run by an admin tool, which a member must
+// not see.
+func adminOnly(op D) bool {
+	return named("admin_tools", str(op["tool"])) || boolean(obj(op["plugin"])["admin_only"])
+}
 func (o *Operations) CheckQueue(t D, tool string) {
 	pending := o.p.Store.ActiveOperations()
 	mine := filter(pending, func(v D) bool { return integer(v["tenant_n"]) == integer(t["n"]) })

@@ -160,3 +160,24 @@ func TestOnlyAnAdminCancelsAnAdminJob(t *testing.T) {
 	p.Store.Put("operations", "suspend", 1, D{"id": "suspend", "tenant_n": 1, "tool": "tenant_suspend", "args": D{}, "who": person("admin", true), "state": "queued", "phase": "awaiting_capacity_check", "attempts": 0, "dispatched": false, "resource_changes": false})
 	assertCode(t, p.Execute(context.Background(), "operation_cancel", D{"id": "suspend"}, person("admin", true)), "conflict")
 }
+
+// A member must not read an admin's operation on their tenant, by id or in
+// the list; the admin still can (#758).
+func TestOperationGetHidesAdminOperationsFromMembers(t *testing.T) {
+	p, _ := fixture(t)
+	p.Store.Put("operations", "suspend", 1, D{"id": "suspend", "tenant_n": 1, "tool": "tenant_suspend", "state": "succeeded", "created_at": 100.0, "updated_at": 101.0})
+	app := NewApp(p, nil)
+	alice, admin := person("alice", false), person("admin", true)
+	byID := app.Call(context.Background(), "operation_get", D{"id": "suspend", "wait_seconds": 0}, alice)
+	if boolean(byID["ok"]) || str(obj(byID["error"])["code"]) != "not_found" {
+		t.Fatalf("member read an admin operation: %s", encoded(byID))
+	}
+	list := app.Call(context.Background(), "operation_get", D{}, alice)
+	if len(dicts(list["operations"])) != 0 {
+		t.Fatalf("member listed an admin operation: %s", encoded(list))
+	}
+	seen := app.Call(context.Background(), "operation_get", D{"id": "suspend", "wait_seconds": 0}, admin)
+	if len(dicts(seen["operations"])) != 1 {
+		t.Fatalf("admin lost the operation: %s", encoded(seen))
+	}
+}
