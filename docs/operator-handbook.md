@@ -519,6 +519,19 @@ the file holds its read key, mode 600. carrel asks for one username at a time, t
 when the call arrives, and keeps the key type and key only. Without these two settings nothing
 changes.
 
+The portal key goes into the machine once, at creation. A retried creation (`operation_retry`,
+by anyone) uses the key the first attempt read. A key removed from the portal later stays on the
+machines made with it, and carrel-keys and the jump host follow the tenant's saved keys only.
+
+## How fast access ends
+
+A member or key that loses access keeps it for at most 24 hours. This is the accepted limit
+(#358, #282): a lab certificate stays valid until it expires, on the jump host and on the
+machine, and nothing checks a revocation list. A saved key removed with `ssh_key_remove` stops
+working on the jump host at its next sync, and on a machine that runs carrel-keys at its next
+pull. A machine without carrel-keys keeps the keys it was created with. To end access at once,
+remove the key from the machine itself or stop the machine.
+
 ## Lab SSH CA
 
 With `ssh_user_ca` in `config.json`, every new VM and CT trusts SSH user certificates from the

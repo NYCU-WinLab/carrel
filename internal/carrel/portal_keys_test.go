@@ -95,13 +95,17 @@ func TestSavedKeysComeBeforeThePortal(t *testing.T) {
 	p, _ := fixture(t)
 	app := NewApp(p, nil)
 	ctx := context.Background()
-	portal(t, p, http.StatusOK)
+	reads := portal(t, p, http.StatusOK)
 	alice := person("alice", false)
 	assertOK(t, app.Call(ctx, "ssh_key_add", D{"key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAsavedKeyOfTheTenant saved"}, alice))
 	e := p.execution(ctx)
 	m := e.MachineSpec(p.Store.Tenant("user:alice"), e.withPortalKeys("machine_create", D{"name": "box"}, alice), false)
 	if keys := string(encoded(m["ssh_keys"])); !strings.Contains(keys, "savedKeyOfTheTenant") || strings.Contains(keys, "PortalKey") {
 		t.Fatalf("machine keys: %s", keys)
+	}
+	// The portal is not read when the tenant's saved keys will be used.
+	if reads.Load() != 0 {
+		t.Fatalf("the portal was read %d times for a tenant with saved keys", reads.Load())
 	}
 }
 
@@ -153,6 +157,7 @@ func TestPortalKeysURLMustBeHTTPS(t *testing.T) {
 		"http://portal.test/api/ssh-keys/services/carrel":      false,
 		"https://u:p@portal.test/api/ssh-keys/services/carrel": false,
 		"https://portal.test/api/ssh-keys/services/carrel?x=1": false,
+		"https://portal.test/api/ssh-keys/services/carrel?":    false,
 		"portal.test": false,
 	} {
 		c := base

@@ -224,7 +224,7 @@ func (c Config) Validate() error {
 	if c.PortalKeysURL != "" {
 		// https only: the request carries the read key, and the answer
 		// decides which keys a machine trusts.
-		if u, err := url.Parse(c.PortalKeysURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		if u, err := url.Parse(c.PortalKeysURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 			return errors.New("portal_keys_url must be an https URL with no query")
 		}
 		if c.PortalKeysTokenFile == "" {
