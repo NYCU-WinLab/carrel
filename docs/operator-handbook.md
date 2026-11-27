@@ -164,6 +164,20 @@ database:
   pre-migration copy (see [Database schema](#database-schema)) loses every write since the upgrade.
   The release notes of such a release say so.
 
+### Roll back the newest upgrade
+
+On the first exit node, run `python3 /var/lib/carrel/<newest go-upgrade-*>/install-control.py rollback`.
+It undoes the newest upgrade:
+
+- It puts back the previous binary, units, configuration and node programs, and waits for the
+  previous version's health check.
+- When that upgrade migrated the database, it stops and names `--database`. With
+  `--database`, it also puts back the database copy taken before the upgrade, and every write
+  since is lost.
+- It rolls an upgrade back once. To go further back, deploy the release you want.
+- It restores the node programs on the first exit node only. Run `configure-nodes.py` from the
+  previous release's stage, or deploy that release again, so every node matches.
+
 ## Node agent
 
 A node reaches the control plane over SSH by default. On the agent transport (PLAN 8.6),

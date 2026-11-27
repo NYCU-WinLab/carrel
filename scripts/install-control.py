@@ -9,7 +9,13 @@ there. A first install needs only /etc/carrel/config.json written in CT 100
 database, configuration, OAuth state and certificates.
 
 A failed health check restores the previous binary, units and node programs. Older
-databases are never restored here: that is a disaster-recovery decision.
+databases are never restored by a failed upgrade.
+
+`install-control.py rollback` undoes the newest upgrade on purpose (#768): the previous
+binary, units, configuration and node programs. A release that migrated the database
+leaves a schema the previous binary refuses; then rollback stops unless it is given
+--database, which also puts back the database copy taken before that upgrade and loses
+every write since.
 """
 
 import argparse
@@ -43,6 +49,9 @@ AGENT_TOKEN = Path("/etc/carrel/agent-token")
 TERMINAL = ("succeeded", "failed", "rolled_back", "cleanup_failed")
 KEEP = 5
 DATABASE = Path("/var/lib/carrel/carrel.db")
+# Upgrade stages on the first exit node, and control plane archives in CT 100.
+STAGES = Path("/var/lib/carrel")
+ROLLBACK = Path("/opt/carrel/rollback")
 # Inside CT 100.
 ETC = Path("/etc/carrel")
 UNIT_DIR = Path("/etc/systemd/system")
@@ -189,6 +198,51 @@ def ct_activate():
     manifest.unlink()
 
 
+def ct_schema(stamp):
+    """Print the schema version of the database and of the copy taken before upgrade stamp."""
+    import sqlite3
+
+    def version(path):
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return db.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            db.close()
+
+    out = {"current": version(DATABASE) if DATABASE.exists() else None, "before": None}
+    with tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive:
+        if "var/lib/carrel/carrel.db" in archive.getnames():
+            scratch = ROLLBACK / f"schema-{stamp}.db"
+            with archive.extractfile("var/lib/carrel/carrel.db") as source, open(scratch, "wb") as target:
+                shutil.copyfileobj(source, target)
+            try:
+                out["before"] = version(scratch)
+            finally:
+                scratch.unlink()
+    print(json.dumps(out))
+
+
+def ct_restore_database(stamp):
+    """Put back the database copy of upgrade stamp. carrel must be stopped."""
+    if subprocess.run(["systemctl", "is-active", "--quiet", "carrel"], check=False, capture_output=True).returncode == 0:
+        raise SystemExit("Stop carrel before restoring its database")
+    pending = DATABASE.with_name("carrel.db.rollback")
+    with (
+        tarfile.open(ROLLBACK / f"go-{stamp}.tar.gz") as archive,
+        archive.extractfile("var/lib/carrel/carrel.db") as source,
+        os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as target,
+    ):
+        shutil.copyfileobj(source, target)
+    if os.geteuid() == 0:
+        shutil.chown(pending, "carrel", "carrel")
+    # The copy is whole: a write-ahead log of the newer database must not be
+    # replayed onto it.
+    for suffix in ("-wal", "-shm"):
+        Path(str(DATABASE) + suffix).unlink(missing_ok=True)
+    os.replace(pending, DATABASE)
+    print(json.dumps({"database": str(DATABASE), "restored_from": f"go-{stamp}"}))
+
+
 def ct_restore(stamp, names):
     with tarfile.open(f"/opt/carrel/rollback/go-{stamp}.tar.gz") as archive:
         present = set(archive.getnames())
@@ -269,6 +323,44 @@ def agent_connected(since, wait=60):
     return False
 
 
+def undo(stage, stamp, before, had_release, configured, activated):
+    """Put back what upgrade stamp replaced, and start carrel again."""
+    # Every step runs even if one fails: the service must come back.
+    subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", "carrel"], check=False)
+    if configured or activated:
+        names = json.dumps(CONFIGURED + (ACTIVATED if activated else []))
+        subprocess.run(["pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py", "ct",
+                        "restore", stamp, names], check=False)
+    for name, path in before.items():
+        saved = stage / ("before-" + name)
+        try:
+            if saved.exists():
+                # Beside the target, then renamed: a running carrel-agent
+                # keeps its file busy (ETXTBSY) against a copy in place.
+                # Created 0600, so the token is never readable on the way.
+                pending = Path(str(path) + ".restore")
+                pending.unlink(missing_ok=True)
+                with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                    stream.write(saved.read_bytes())
+                shutil.copystat(saved, pending)
+                os.replace(pending, path)
+            elif name == "release.json" and not had_release and path.exists():
+                # An install before #555 had no release record: none is truer than the new one.
+                path.unlink()
+        except OSError as error:
+            print(f"WARNING: could not restore {path}: {error}", file=sys.stderr)
+    # The restored binary may send no "gen", which jump-sync.py refuses once a
+    # generation is recorded; carrel is stopped, so no write races this.
+    if (configured or activated) and jump_site():
+        cleared = subprocess.run(["pct", "exec", "102", "--", "rm", "-f", *JUMP_GENS], check=False)
+        if cleared.returncode:
+            print("WARNING: could not remove the jump generations; until they are removed, jump sync and "
+                  "certs writes (including revokes) are refused if the restored carrel predates gen. "
+                  "Run in CT 102: rm -f " + " ".join(JUMP_GENS), file=sys.stderr)
+    subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
+    subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
+
+
 def host(stage, version):
     stamp = stage.name.removeprefix("go-upgrade-")
     for name, expected in json.loads((stage / "hashes.json").read_text()).items():
@@ -335,40 +427,7 @@ def host(stage, version):
         print(json.dumps({"health": health, "node_backup": str(stage),
                           "control_backup": f"/opt/carrel/rollback/go-{stamp}.tar.gz"}))
     except BaseException:
-        # Every step runs even if one fails: the service must come back.
-        subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", "carrel"], check=False)
-        if configured or activated:
-            names = json.dumps(CONFIGURED + (ACTIVATED if activated else []))
-            subprocess.run(["pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py", "ct",
-                            "restore", stamp, names], check=False)
-        for name, path in before.items():
-            saved = stage / ("before-" + name)
-            try:
-                if saved.exists():
-                    # Beside the target, then renamed: a running carrel-agent
-                    # keeps its file busy (ETXTBSY) against a copy in place.
-                    # Created 0600, so the token is never readable on the way.
-                    pending = Path(str(path) + ".restore")
-                    pending.unlink(missing_ok=True)
-                    with os.fdopen(os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
-                        stream.write(saved.read_bytes())
-                    shutil.copystat(saved, pending)
-                    os.replace(pending, path)
-                elif name == "release.json" and not had_release and path.exists():
-                    # An install before #555 had no release record: none is truer than the new one.
-                    path.unlink()
-            except OSError as error:
-                print(f"WARNING: could not restore {path}: {error}", file=sys.stderr)
-        # The restored binary may send no "gen", which jump-sync.py refuses once a
-        # generation is recorded; carrel is stopped, so no write races this.
-        if (configured or activated) and jump_site():
-            cleared = subprocess.run(["pct", "exec", "102", "--", "rm", "-f", *JUMP_GENS], check=False)
-            if cleared.returncode:
-                print("WARNING: could not remove the jump generations; until they are removed, jump sync and "
-                      "certs writes (including revokes) are refused if the restored carrel predates gen. "
-                      "Run in CT 102: rm -f " + " ".join(JUMP_GENS), file=sys.stderr)
-        subprocess.run(["pct", "exec", CT, "--", "systemctl", "daemon-reload"], check=False)
-        subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
+        undo(stage, stamp, before, had_release, configured, activated)
         raise
     finally:
         # Absent only when a first install failed before its units existed.
@@ -409,24 +468,73 @@ def host(stage, version):
         shutil.rmtree(old)
 
 
+def rollback(database):
+    """Undo the newest upgrade: binaries, units, configuration and node programs,
+    and with database, the database copy taken before it."""
+    stages = sorted(STAGES.glob("go-upgrade-*"))
+    if not stages:
+        raise SystemExit("No upgrade to roll back: /var/lib/carrel/go-upgrade-* is empty")
+    stage = stages[-1]
+    stamp = stage.name.removeprefix("go-upgrade-")
+    done = stage / "rolled-back"
+    if done.exists():
+        raise SystemExit(f"The upgrade {stamp} was already rolled back; deploy the release you want instead")
+    if not (stage / "before-release.json").exists():
+        raise SystemExit(f"The upgrade {stamp} kept no previous node programs: it was a first install")
+    previous = json.loads((stage / "before-release.json").read_text())["version"]
+    schema = json.loads(capture("pct", "exec", CT, "--", "python3", "/usr/local/lib/carrel/install-control.py",
+                                "ct", "schema", stamp))
+    migrated = schema["before"] is not None and schema["current"] != schema["before"]
+    if migrated and not database:
+        raise SystemExit(f"The upgrade {stamp} moved the database from schema version {schema['before']} to "
+                         f"{schema['current']}, which {previous} refuses. Run again with --database to also put "
+                         "back the copy taken before it. That loses every write since the upgrade.")
+    host_name = origin_host()
+    before = {"templates.json": TEMPLATES, "release.json": LIB / "release.json", "agent-token": AGENT_TOKEN,
+              **{h: LIB / h for h in [*HELPERS, *EXECUTABLES]}}
+    for unit in ("carrel-backup.timer", "carrel-backup.service", "carrel"):
+        subprocess.run(["pct", "exec", CT, "--", "systemctl", "stop", unit], check=False)
+    try:
+        if database:
+            print(f"Restoring the database copy of upgrade {stamp}: writes since then are lost", file=sys.stderr)
+            ct_command("restore-database", stamp)
+        undo(stage, stamp, before, False, True, True)
+        health = healthy(previous, host_name)
+    finally:
+        subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
+    done.write_text(json.dumps({"at": int(time.time()), "database": bool(database)}) + "\n")
+    print(json.dumps({"rolled_back": stamp, "version": previous, "database_restored": bool(database), "health": health}))
+    print("Run configure-nodes.py from the previous release's stage on the other nodes, or deploy "
+          f"{previous} again, so every node has the same programs.", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="where", required=True)
     h = sub.add_parser("host")
     h.add_argument("--stage", type=Path, required=True)
     h.add_argument("--version", required=True)
+    r = sub.add_parser("rollback", help="undo the newest upgrade")
+    r.add_argument("--database", action="store_true",
+                   help="also restore the database copy taken before it; writes since are lost")
     c = sub.add_parser("ct")
-    c.add_argument("command", choices=["setup", "preflight", "backup", "activate", "restore"])
+    c.add_argument("command", choices=["setup", "preflight", "backup", "activate", "restore", "schema", "restore-database"])
     c.add_argument("args", nargs="*")
     a = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Run as root")
     if a.where == "host":
         host(a.stage, a.version)
+    elif a.where == "rollback":
+        rollback(a.database)
     elif a.command == "backup":
         ct_backup(a.args[0])
     elif a.command == "restore":
         ct_restore(a.args[0], json.loads(a.args[1]))
+    elif a.command == "schema":
+        ct_schema(a.args[0])
+    elif a.command == "restore-database":
+        ct_restore_database(a.args[0])
     else:
         {"setup": ct_setup, "preflight": ct_preflight, "activate": ct_activate}[a.command]()
 

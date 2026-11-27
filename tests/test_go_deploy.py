@@ -540,3 +540,87 @@ def test_a_plugin_that_fails_to_install_still_has_the_agents_checked(tmp_path, m
     (tmp_path / "again").mkdir()
     with pytest.raises(SystemExit, match="plugins were not installed .plugin snap: bad artifact"):
         module.host(staged(tmp_path / "again"), "1.0.0")
+
+
+def rolled(tmp_path, module, monkeypatch, schema):
+    """A node whose newest upgrade kept its previous programs, and a CT that reports schema."""
+    node = Node(module, monkeypatch, tmp_path)
+    stage = staged(tmp_path)
+    (stage / "before-release.json").write_text('{"version": "0.9.0"}')
+    (stage / "before-node-agent.py").write_text("old node-agent.py")
+    (node.lib / "node-agent.py").write_text("new node-agent.py")
+    monkeypatch.setattr(module, "STAGES", tmp_path)
+    monkeypatch.setattr(
+        module, "capture", lambda *a: json.dumps(schema) if "schema" in a else "carrel.test\n"
+    )
+    return node, stage
+
+
+def test_rollback_puts_the_previous_release_back(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    module.rollback(database=False)
+    names = json.loads(next(c for c in node.calls if c[6:8] == ("ct", "restore"))[9])
+    assert set(module.CONFIGURED + module.ACTIVATED) <= set(names)
+    assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
+    assert not any(c[6:8] == ("ct", "restore-database") for c in node.ct())
+    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
+    # The same upgrade is not rolled back twice.
+    with pytest.raises(SystemExit, match="already rolled back"):
+        module.rollback(database=False)
+
+
+def test_rollback_across_a_migration_needs_the_database_flag(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 1})
+    with pytest.raises(SystemExit, match="--database"):
+        module.rollback(database=False)
+    assert ("pct", "exec", "100", "--", "systemctl", "stop", "carrel") not in node.calls
+    module.rollback(database=True)
+    calls = [c for c in node.calls if c[:4] == ("pct", "exec", "100", "--")]
+    restore_db = next(i for i, c in enumerate(calls) if c[6:8] == ("ct", "restore-database"))
+    stop = calls.index(("pct", "exec", "100", "--", "systemctl", "stop", "carrel"))
+    start = calls.index(("pct", "exec", "100", "--", "systemctl", "start", "carrel"))
+    assert stop < restore_db < start
+
+
+def test_rollback_of_a_first_install_is_refused(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    Node(module, monkeypatch, tmp_path)
+    staged(tmp_path)
+    monkeypatch.setattr(module, "STAGES", tmp_path)
+    with pytest.raises(SystemExit, match="first install"):
+        module.rollback(database=False)
+
+
+def test_the_database_copy_replaces_the_database_and_its_log(tmp_path, monkeypatch):
+    import tarfile
+
+    module = load("install-control.py")
+    monkeypatch.setattr(module, "ROLLBACK", tmp_path)
+    monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
+    old = tmp_path / "old.db"
+    db = sqlite3.connect(old)
+    db.execute("PRAGMA user_version=1")
+    db.close()
+    with tarfile.open(tmp_path / "go-1.tar.gz", "w:gz") as archive:
+        archive.add(old, arcname="var/lib/carrel/carrel.db")
+    db = sqlite3.connect(tmp_path / "carrel.db")
+    db.execute("PRAGMA user_version=2")
+    db.close()
+    (tmp_path / "carrel.db-wal").write_text("newer log")
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="")
+    )
+    module.ct_schema("1")
+    module.ct_restore_database("1")
+    assert not (tmp_path / "carrel.db-wal").exists()
+    db = sqlite3.connect(tmp_path / "carrel.db")
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+    db.close()
+    # Refused while carrel runs.
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
+    with pytest.raises(SystemExit, match="Stop carrel"):
+        module.ct_restore_database("1")
