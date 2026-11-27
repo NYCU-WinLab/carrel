@@ -826,6 +826,22 @@ and the control plane logs `function_value_open_failed`. The member uploads the 
 with `function_env`, which builds a new version. For registry credentials, the member uploads
 them again with `function_registry`, then deploys again.
 
+### Function host keys
+
+Each function host's `carrel-fnd` makes its own key on the first start (`/etc/carrel-fn/env.key`)
+and registers the public key. From then on function environments are sealed to that key, and
+carrel cannot open them; `-reseal-function-values` counts them under `host` and leaves them alone.
+
+After a function host is rebuilt, its agent logs `the control plane holds another key for this
+host` with the new fingerprint, and versions sealed to the old key fail. Check the fingerprint on
+the host's log, then on the control plane run:
+
+```sh
+carrel -trust-function-host-key fn01=SHA256:...
+```
+
+Members then upload each function's environment again with `function_env`.
+
 ## NetBox sync
 
 carrel can push machines, networks, addresses, published ports and virtual addresses to NetBox. It

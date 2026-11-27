@@ -120,6 +120,7 @@ func serve(args []string) error {
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
 	control := flags.String("control", "", "control plane URL; with it the host builds and removes functions as the control plane asks")
 	tokenFile := flags.String("token-file", "/etc/carrel-fn/token", "file that holds the host's token for -control")
+	envKeyFile := flags.String("env-key", "/etc/carrel-fn/env.key", "the host's private key for sealed environments, made on the first start")
 	_ = flags.Parse(args)
 	if *slots < 1 || *slots > maxSlots {
 		return fmt.Errorf("-slots must be 1 to %d", maxSlots)
@@ -171,7 +172,13 @@ func serve(args []string) error {
 		if *control == "" {
 			return
 		}
+		key, err := fn.LoadEnvKey(*envKeyFile)
+		if err != nil {
+			// Functions still run; only sealed environments wait for a key.
+			slog.Error("host key unavailable", "error", err)
+		}
 		agent := &fn.Agent{
+			EnvKey:  key,
 			Control: strings.TrimRight(*control, "/"), Token: token, Root: c.root,
 			Client: &http.Client{Timeout: 2 * time.Minute},
 			Build: func(ctx context.Context, f fn.Function, image string, env []string, auth *fn.RegistryAuth) error {

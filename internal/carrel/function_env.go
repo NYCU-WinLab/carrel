@@ -185,7 +185,9 @@ func (p *Platform) openFunctionEnv(fid, sealed string) []string {
 func (e *Execution) functionEnv(a, w, t D) D {
 	n, dry := integer(t["n"]), boolean(a["dry_run"])
 	f := e.Function(t, a["function"])
-	e.P.functionEnvAEAD()
+	if e.P.hostEnvKey(e.S, str(f["host"])) == "" {
+		e.P.functionEnvAEAD()
+	}
 	if boolean(a["clear"]) {
 		return e.newFunctionVersion(t, f, nil, "", dry)
 	}
@@ -258,7 +260,7 @@ func (p *Platform) ReceiveFunctionEnv(ctx context.Context, token string, body io
 		e.S.Remove("function_env_links", link["id"])
 		fail("not_found", "The function was removed")
 	}
-	sealed := p.sealFunctionEnv(str(f["id"]), pairs)
+	sealed := p.sealFunctionEnvFor(e.S, f, pairs)
 	// The link goes in the same transaction as the version: no crash
 	// between them leaves a used link that still works.
 	r := e.newFunctionVersion(t, f, envKeys(pairs), sealed, false, func(tx *Execution) {
@@ -279,6 +281,10 @@ func (p *Platform) FunctionEnvFor(token, source, function, version string) D {
 		v := p.Store.Get("function_versions", functionVersionID(str(f["id"]), version))
 		if v == nil {
 			break
+		}
+		if sealed := str(v["env"]); hostSealed(sealed) {
+			// Only the host opens it.
+			return D{"env_box": strings.TrimPrefix(sealed, hostEnvPrefix)}
 		}
 		env := p.openFunctionEnv(str(f["id"]), str(v["env"]))
 		if env == nil {
@@ -330,6 +336,11 @@ func (p *Platform) resealFunctionValues(dry bool) D {
 	reseal := func(s *Store, kind string, id any, n int, rec D, field, aad string) {
 		sealed := str(rec[field])
 		if sealed == "" {
+			return
+		}
+		if hostSealed(sealed) {
+			// Sealed to a function host's key: no configured key is involved.
+			counts["host"] = integer(counts["host"]) + 1
 			return
 		}
 		which := p.sealedKey(aad, sealed)

@@ -26,6 +26,7 @@ func main() {
 	backup := flag.Bool("backup", false, "Create a consistent backup and send it to the backup target")
 	reseal := flag.Bool("reseal-function-values", false, "Seal stored function values again with function_env_key and print how many each key opened")
 	moveBack := flag.Bool("move-snapshots-back", false, "Move the snapshot plugin's records back to core rows, for a rollback to a release before #663; run with carrel stopped")
+	trustHost := flag.String("trust-function-host-key", "", "Accept the new key a function host registered, as host=SHA256:fingerprint (#639)")
 	dryRun := flag.Bool("dry-run", false, "With -reseal-function-values: only count, change nothing")
 	flag.Parse()
 	stderr := slog.NewJSONHandler(os.Stderr, nil)
@@ -55,7 +56,7 @@ func main() {
 	// The service holds this lock for its whole life, and the move back
 	// takes it too: neither runs while the other writes the snapshot rows.
 	// The backup and reseal modes run beside the service and skip it.
-	if !*backup && !*reseal {
+	if !*backup && !*reseal && *trustHost == "" {
 		lock, err := os.OpenFile(cfg.Database+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 		if err == nil {
 			err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -96,6 +97,17 @@ func main() {
 		result, err := carrel.MoveSnapshotsBack(store)
 		if err != nil {
 			slog.Error("snapshot_move_back_failed", "error", err)
+			fatal()
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(result)
+		telemetry.Close()
+		return
+	}
+	if *trustHost != "" {
+		host, fingerprint, _ := strings.Cut(*trustHost, "=")
+		result, err := platform.TrustFunctionHostKey(host, fingerprint)
+		if err != nil {
+			slog.Error("trust_function_host_key_failed", "error", err)
 			fatal()
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(result)
