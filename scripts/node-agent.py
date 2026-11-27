@@ -3629,6 +3629,33 @@ def main():
         print(response)
 
 
+def answer_failure(e: BaseException) -> dict:
+    """The answer for a failed action, after writing its cause to the node journal.
+
+    The answer stays generic: it travels to the control plane and from there
+    to tenants. The traceback goes to syslog as carrel-node-agent, because
+    neither the SSH forced command nor carrel-agent keeps stderr.
+    """
+    code = "adapter_internal"
+    if isinstance(e, ValueError):
+        code = "invalid_request"
+    elif isinstance(e, StorageUnavailable):
+        code = "storage_unavailable"
+    elif isinstance(e, subprocess.TimeoutExpired):
+        code = "command_timeout"
+    elif isinstance(e, (subprocess.CalledProcessError, CommandFailure)):
+        code = "command_failed"
+    import syslog
+    import traceback
+
+    try:
+        syslog.openlog("carrel-node-agent", 0, syslog.LOG_DAEMON)
+        syslog.syslog(syslog.LOG_ERR, f"{code}: " + "".join(traceback.format_exception(e)).rstrip())
+    except OSError:
+        pass  # a node without /dev/log still answers
+    return {"ok": False, "error_code": code, "error": "Node action failed"}
+
+
 if __name__ == "__main__":
     # Only the systemd unit passes an argument; the SSH forced command cannot.
     if sys.argv[1:] == ["vip-probe"]:
@@ -3643,14 +3670,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:  # noqa: BLE001  the adapter's only error boundary: every failure becomes a JSON error line
-        code = "adapter_internal"
-        if isinstance(e, ValueError):
-            code = "invalid_request"
-        elif isinstance(e, StorageUnavailable):
-            code = "storage_unavailable"
-        elif isinstance(e, subprocess.TimeoutExpired):
-            code = "command_timeout"
-        elif isinstance(e, (subprocess.CalledProcessError, CommandFailure)):
-            code = "command_failed"
-        print(json.dumps({"ok": False, "error_code": code, "error": "Node action failed"}))
+        print(json.dumps(answer_failure(e)))
         sys.exit(1)
