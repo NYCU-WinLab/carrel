@@ -5271,7 +5271,7 @@
     },
     {
       "name": "operation_cancel",
-      "description": "Cancel an operation that has changed nothing yet: one still queued, or one waiting its turn behind another job. It ends failed with error code cancelled and frees its queue place; operation_retry runs it again. Anything that has started changing resources answers conflict with its state.",
+      "description": "Cancel an operation that has changed nothing yet: one still queued, or one waiting its turn behind another job. It ends failed with error code cancelled and frees its queue place; operation_retry runs it again. A running plugin operation is asked to cancel: it ends failed with code cancelled, or answers conflict and keeps running if the plugin refuses. Anything else that has started changing resources answers conflict with its state.",
       "inputSchema": {
         "type": "object",
         "properties": {
