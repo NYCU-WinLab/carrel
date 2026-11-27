@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.16.0](https://github.com/NYCU-WinLab/carrel/compare/v0.15.0...v0.16.0) (2026-11-27)
+
+
+### Features
+
+* machine_unfence clears a plugin fence after checking the node ([#694](https://github.com/NYCU-WinLab/carrel/issues/694)) ([0f6daff](https://github.com/NYCU-WinLab/carrel/commit/0f6daff32f62af8b6c91b3739948bdcceac32ad4))
+* **snapshot:** tools read as the core snapshot tools do ([#692](https://github.com/NYCU-WinLab/carrel/issues/692)) ([bb8671b](https://github.com/NYCU-WinLab/carrel/commit/bb8671b373abe2367b9f7fa500c6fcc75aa660f6))
+
 ## [0.15.0](https://github.com/NYCU-WinLab/carrel/compare/v0.14.1...v0.15.0) (2026-11-27)
 
 

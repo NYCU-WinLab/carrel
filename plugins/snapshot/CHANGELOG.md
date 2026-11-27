@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/NYCU-WinLab/carrel/compare/snapshot-v0.1.0...snapshot-v0.2.0) (2026-11-27)
+
+
+### Features
+
+* **snapshot:** tools read as the core snapshot tools do ([#692](https://github.com/NYCU-WinLab/carrel/issues/692)) ([bb8671b](https://github.com/NYCU-WinLab/carrel/commit/bb8671b373abe2367b9f7fa500c6fcc75aa660f6))
+
 ## 0.1.0 (2026-11-27)
 
 
