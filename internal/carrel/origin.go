@@ -14,8 +14,9 @@ import (
 //
 // The live pair "_origin" is the state: it belongs to no tenant, so it has no
 // database object, and no tenant slug can take its name. Which pairs the
-// gateway holds is kept in memory; after a restart the first reconcile
-// delivers them again before any record can move.
+// gateway holds is kept in memory and confirmed against the gateway's status
+// before a record moves; after a restart the first reconcile delivers them
+// again.
 
 const originOwner = "carrel:origin"
 
@@ -26,12 +27,22 @@ func (e *Execution) originFiles() (string, string, bool) {
 	return e.livePair(originLineage)
 }
 
-// gatewayHolds reports whether the gateway confirmed the certificate in path
-// under name on its last reconcile.
+// gatewayHolds reports whether the gateway holds the certificate in path under
+// name. The fingerprint acknowledged on the last reconcile is only a first
+// filter: a gateway restored from a snapshot has lost it, so the gateway's own
+// status must agree before a record can move. An unreachable gateway or an
+// older one that does not report certificates counts as not holding.
 func (e *Execution) gatewayHolds(name, path string) bool {
 	held, _ := e.P.delivered.Load().(map[string]any)
 	b, err := os.ReadFile(path)
-	return err == nil && held != nil && held[name] == fingerprint(string(b))
+	if err != nil || held == nil || held[name] != fingerprint(string(b)) {
+		return false
+	}
+	var status any
+	if attempt(func() { status = e.Call(D{"op": "status"}, "carrel-gateway") }) != nil {
+		return false
+	}
+	return obj(obj(status)["certificates"])[name] == fingerprint(string(b))
 }
 
 // EnsureOriginCertificate issues or renews carrel's own certificate. A first

@@ -76,7 +76,7 @@ func TestGatewayRefusesInvalidGrants(t *testing.T) {
 // A record someone else wrote moves only for a grant approved with adopt,
 // and only once the gateway holds the grant's certificate.
 func TestGrantRecordAdoptsOnlyWhenAllowed(t *testing.T) {
-	p, _, _ := originFixture(t)
+	p, b, _ := originFixture(t)
 	dns := &statefulDNS{records: map[string][]D{}}
 	p.Config.CloudflareAPI = dns.serve(t).URL
 	e := p.execution(context.Background())
@@ -89,6 +89,9 @@ func TestGrantRecordAdoptsOnlyWhenAllowed(t *testing.T) {
 		t.Fatal("moved a record before the gateway held the certificate")
 	}
 	p.delivered.Store(map[string]any{g.lineage(): fingerprint(string(crt))})
+	b.call = func(D, string) (any, error) {
+		return D{"certificates": D{g.lineage(): fingerprint(string(crt))}}, nil
+	}
 	if err := attempt(func() { e.GrantRecord(g, false) }); err == nil || len(dns.log) != 0 {
 		t.Fatalf("replaced a foreign record without adopt: %v %v", err, dns.log)
 	}
