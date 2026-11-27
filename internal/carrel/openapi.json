@@ -1149,6 +1149,35 @@
         }
       }
     },
+    "/functions/v1/agent/key": {
+      "post": {
+        "x-carrel-audience": "internal",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Register the public key function environments are sealed to",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/functions/v1/agent/auth": {
       "get": {
         "x-carrel-audience": "internal",

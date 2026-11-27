@@ -5,6 +5,7 @@ package fn
 import (
 	"bytes"
 	"context"
+	"crypto/hpke"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -111,6 +112,11 @@ type Agent struct {
 	Forget func(name string)
 	// Scheduler fires the functions' schedules; nil fires none.
 	Scheduler *Scheduler
+	// EnvKey opens environments sealed to this host (envkey.go); nil
+	// takes only environments carrel sends open.
+	EnvKey        hpke.PrivateKey
+	keyRegistered bool
+	keyRetryAt    time.Time
 	// failed holds the error of a version that did not build, so the agent
 	// does not build it again while the control plane still names it.
 	failed map[string]string
@@ -166,6 +172,7 @@ func (a *Agent) Run(ctx context.Context) {
 	defer func() { <-logs }()
 	var since int64 = -1
 	for ctx.Err() == nil {
+		a.registerKey(ctx)
 		desired, err := a.fetch(ctx, since)
 		if err == nil && desired.Revision < since {
 			// An older state than one already applied comes from a control
@@ -235,11 +242,20 @@ func checkEnv(env []string) error {
 // fetchEnv asks the control plane for a version's environment.
 func (a *Agent) fetchEnv(ctx context.Context, id, version string) ([]string, error) {
 	var answer struct {
-		Env *[]string `json:"env"`
+		Env    *[]string `json:"env"`
+		EnvBox *string   `json:"env_box"`
 	}
 	query := url.Values{"function": {id}, "version": {version}}
 	if err := a.call(ctx, http.MethodGet, "/functions/v1/agent/env?"+query.Encode(), nil, &answer); err != nil {
 		return nil, err
+	}
+	if answer.EnvBox != nil {
+		env, err := a.openEnv(id, *answer.EnvBox)
+		if err != nil {
+			// The same box never opens on a later try: fail the version.
+			return nil, &statusError{code: http.StatusConflict, message: err.Error()}
+		}
+		answer.Env = &env
 	}
 	if answer.Env == nil {
 		return nil, errors.New("the answer lacks env")

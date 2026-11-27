@@ -1494,6 +1494,17 @@ function hosts and are deleted with their version. `function_env_old_keys` lists
 still open values; new values are sealed with `function_env_key` only. A value no key opens
 answers 409, and the host fails that version instead of asking again.
 
+Sealed to the host (#639): `carrel-fnd` makes an HPKE key pair (the suite of environment sets,
+7.9) in `-env-key` (default `/etc/carrel-fn/env.key`, root, `0600`) and registers only the public
+key at `POST /functions/v1/agent/key`. Once a host has a key, `function_env` seals to it, bound to
+the function's host id, and stores `hpke1:<base64>` in the version's `env`; the agent endpoint
+returns it as `env_box` and only the host opens it. When a host registers its first key, carrel
+seals that host's values under `function_env_key` again to the key, in the same transaction, and
+drops the old copies. A different key later is refused until an operator runs
+`carrel -trust-function-host-key <host>=<fingerprint>`; values sealed to the old key then fail
+their build, and members upload them again. Registry credentials and webhook secrets stay under
+`function_env_key` for now.
+
 **Limits and quota**
 
 - Per function: 128 to 2,048 MiB of memory (default 512), 1 vCPU, `timeout_seconds` default 300

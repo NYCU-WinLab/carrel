@@ -164,6 +164,10 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 		// The agent reads the state as is: no ok wrapper.
 		jsonResponse(w, 200, result)
 	})
+	// A function host registers the public key its environments are sealed to (#639).
+	mux.Handle("POST /functions/v1/agent/key", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.AgentHostKey(r.Context(), bearer(r), remoteIP(r), readJSON(r))
+	}))
 	mux.Handle("POST /functions/v1/agent/report", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		var body D
 		if json.NewDecoder(r.Body).Decode(&body) != nil {
