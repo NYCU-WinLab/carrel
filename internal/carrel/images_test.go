@@ -151,11 +151,14 @@ func TestAMachineInstalledFromAnISO(t *testing.T) {
 		t.Fatal(m)
 	}
 	var create D
+	settleGateway(t, p)
+	mu.Lock()
 	for _, s := range sent {
 		if s["op"] == "create" {
 			create = obj(s["machine"])
 		}
 	}
+	mu.Unlock()
 	if create["iso_volume"] != vol || create["firmware"] != "uefi" || create["tpm"] != true || len(arr(create["ssh_keys"])) != 0 {
 		t.Fatal(create)
 	}

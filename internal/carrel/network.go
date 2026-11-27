@@ -494,14 +494,11 @@ func (e *Execution) Reconcile() D {
 	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.
-	var held map[string]any
-	var gatewayFailure any
+	// The build reads the store, so it stays under the writer and a failure
+	// panics here as before. The send runs off the lock (#800): Reconcile does
+	// not report delivery failures; the maintenance pass retries them.
 	var gatewayDone sync.WaitGroup
-	gatewayDone.Add(1)
-	go func() {
-		defer gatewayDone.Done()
-		gatewayFailure = attempt(func() { held = e.SyncGateway(state) })
-	}()
+	e.P.gateway.Submit(e.BuildGatewaySync(state))
 	var jump any
 	if e.jumpEnabled() && !e.deferJump {
 		// Store reads stay on this goroutine; only the request runs beside.
@@ -546,15 +543,9 @@ func (e *Execution) Reconcile() D {
 		}
 	}
 	gatewayDone.Wait()
-	if gatewayFailure != nil {
-		panic(gatewayFailure)
-	}
 	if jump != nil {
 		result["jump"] = jump
 	}
-	// Fingerprints of the pairs the gateway holds: records point here only
-	// for those (MaintainOrigin, DomainRecord).
-	e.P.delivered.Store(held)
 	return result
 }
 

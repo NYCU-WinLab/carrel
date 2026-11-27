@@ -143,7 +143,10 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	}
 	// A gateway that refuses the pair holds nothing.
 	confirm = false
-	if attempt(func() { e.Reconcile() }) == nil {
+	fastGatewayRetries(t)
+	e.Reconcile()
+	settleGateway(t, p)
+	if p.gateway.Status().Err == nil {
 		t.Fatal("a failed gateway sync passed")
 	}
 	e.MaintainOrigin()
@@ -152,6 +155,7 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	}
 	confirm = true
 	e.Reconcile()
+	settleGateway(t, p)
 	if obj(obj(sent["certificates"])["_origin"])["privkey"] == nil {
 		t.Fatal("the gateway did not receive the origin pair")
 	}
@@ -169,6 +173,7 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 		t.Fatal("moved the record although the gateway no longer serves the pair")
 	}
 	e.Reconcile()
+	settleGateway(t, p)
 	e.MaintainOrigin()
 	if len(dns.writes) != before+1 {
 		t.Fatal("did not move the record once the gateway served the pair again")
@@ -382,6 +387,7 @@ func TestASiteWithoutTenantsReconcilesOnlyForItsOrigin(t *testing.T) {
 	// The node holds what this database sent: safe again.
 	held = nil
 	e.Reconcile()
+	settleGateway(t, p)
 	if e.maintenanceReconciles() {
 		t.Fatal("the gateway holds the pair: nothing to do")
 	}

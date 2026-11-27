@@ -15,6 +15,7 @@ func TestAFailedVIPRemovalCanBeRetried(t *testing.T) {
 	if obj(r["operation"])["state"] != "succeeded" {
 		t.Fatal(r)
 	}
+	settleGateway(t, p)
 	b.call = func(r D, _ string) (any, error) {
 		if r["op"] == "reconcile" {
 			return nil, errors.New("node down")
@@ -28,6 +29,7 @@ func TestAFailedVIPRemovalCanBeRetried(t *testing.T) {
 	if r := p.Execute(ctx, "vip_add", D{"name": "api", "machines": []any{"cp1"}}, who); obj(obj(r["operation"])["error"])["recovery"] != "finish_cleanup" {
 		t.Fatal("the name came back while it was being removed", r)
 	}
+	settleGateway(t, p)
 	b.call = nil
 	r = p.Execute(ctx, "vip_remove", D{"name": "api"}, who)
 	if obj(r["operation"])["state"] != "succeeded" || len(p.Store.Objects("vips", 1)) != 0 {

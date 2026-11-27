@@ -23,7 +23,11 @@ func freezeSite(t *testing.T) (*Platform, *fakeBackend, *[]string) {
 		if op == "action" {
 			op += ":" + str(r["action"])
 		}
-		*seen = append(*seen, op)
+		// The gateway sync runs on the sender's goroutine (#800), so tests
+		// that read seen cannot see it without a race.
+		if op != "sync" {
+			*seen = append(*seen, op)
+		}
 		switch r["op"] {
 		case "status":
 			return D{"status": "stopped"}, nil
@@ -244,6 +248,9 @@ func TestFreezeReleaseListComesFromTheConfig(t *testing.T) {
 
 // intercept answers an adapter request itself or leaves it to the site's fake.
 func intercept(b *fakeBackend, answer func(r D) (any, error, bool)) {
+	// The gateway sender may still be calling the fake (#800).
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	inner := b.call
 	b.call = func(r D, target string) (any, error) {
 		if v, err, ok := answer(r); ok {
@@ -554,6 +561,7 @@ func TestDeleteForgetsWhatHangsOffTheMachineWhenReconcileFails(t *testing.T) {
 // succeeds and the record is gone, since the next reconcile pass catches up.
 func TestDeleteRemovesTheRecordWhenOnlyTheGatewayFails(t *testing.T) {
 	p, b, _ := freezeSite(t)
+	fastGatewayRetries(t)
 	var mu sync.Mutex
 	reconciled, gatewayTried := 0, 0
 	intercept(b, func(r D) (any, error, bool) {
@@ -573,6 +581,9 @@ func TestDeleteRemovesTheRecordWhenOnlyTheGatewayFails(t *testing.T) {
 	if op := obj(r["operation"]); op["state"] != "succeeded" || op["error"] != nil {
 		t.Fatalf("a tolerated gateway failure failed the delete: %s", encoded(r))
 	}
+	settleGateway(t, p)
+	mu.Lock()
+	defer mu.Unlock()
 	if reconciled == 0 || gatewayTried == 0 {
 		t.Fatalf("setup: the node reconciled %d times and the gateway was tried %d times", reconciled, gatewayTried)
 	}
@@ -970,6 +981,7 @@ func TestReconcileAfterAFailedDeleteReconcileLeavesNothingForTheOldMachine(t *te
 	b.calls = nil
 	b.mu.Unlock()
 	p.execution(context.Background()).Reconcile()
+	settleGateway(t, p)
 
 	b.mu.Lock()
 	defer b.mu.Unlock()

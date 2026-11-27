@@ -265,6 +265,7 @@ func (g *goldenRun) submit(step, tool string, args, who D) D {
 
 func (g *goldenRun) record(step, tool string, r D) {
 	g.tools[tool] = true
+	settleGateway(g.t, g.p)
 	g.lines = append(g.lines, step+" mcp "+normalize(encoded(r)))
 	for _, sent := range g.rec.take() {
 		g.lines = append(g.lines, step+" adapter "+sent)
@@ -277,6 +278,7 @@ func (g *goldenRun) do(step string, f func()) {
 	if err := attempt(f); err != nil {
 		g.lines = append(g.lines, step+" failure "+normalize(encoded(failureResult(err))))
 	}
+	settleGateway(g.t, g.p)
 	for _, sent := range g.rec.take() {
 		g.lines = append(g.lines, step+" adapter "+sent)
 	}
