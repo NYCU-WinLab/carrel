@@ -656,7 +656,9 @@ type StartRequest struct {
 	// reservation: the id of the record carrel holds for an operation with an
 	// object_kind. A plugin must refuse such a start without one, as
 	// INVALID_ARGUMENT: an agent built before the field drops it, and carrel
-	// would then not have counted the object.
+	// would then not have counted the object. A dry run carries the id the
+	// record would get, but carrel holds no record for it: a plugin must not
+	// read it as an object that exists (#680).
 	Reservation string `protobuf:"bytes,5,opt,name=reservation,proto3" json:"reservation,omitempty"`
 	// machine: JSON facts of the machine the operation acts on, for an
 	// operation whose schema requires "machine": vmid, kind ("vm" or "ct"),

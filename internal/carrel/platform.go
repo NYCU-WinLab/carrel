@@ -54,6 +54,10 @@ type Platform struct {
 	Telemetry *Telemetry
 	HTTP      *http.Client
 	writer    sync.Mutex
+	// remembered is the digest of the plugin tools last written to the
+	// site table (rememberPluginTools).
+	rememberMu sync.Mutex
+	remembered string
 	// backfilling holds the VMIDs whose disk machine_ca_backfill is writing
 	// with the writer released. Dry runs read it without the writer, so it
 	// has its own lock: use markBackfill, isBackfilling and backfillVMIDs.

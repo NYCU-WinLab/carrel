@@ -24,6 +24,7 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 		if pt := p.pluginTools()[tool]; pt != nil {
 			return e.submitPlugin(pt, a, w)
 		}
+		e.refuseUnreported(tool, w)
 	}
 	if named("async_tools", tool) && !boolean(a["dry_run"]) {
 		var t D
