@@ -69,6 +69,9 @@ type Platform struct {
 	certificates sync.Mutex
 	registration sync.Mutex
 	delivered    atomic.Value
+	// gateway sends gateway configs off the writer lock (#800). Nil until it is
+	// wired in.
+	gateway *gatewaySender
 	// desired holds, per node name, the revision of the last reconcile the
 	// node took (#603); node_list compares what the node reports with it.
 	desired sync.Map
