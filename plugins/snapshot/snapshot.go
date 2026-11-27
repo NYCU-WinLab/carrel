@@ -214,11 +214,23 @@ func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest)
 		return done(req.IdempotencyKey, "succeeded"), nil
 	}
 	if r.op == "list" {
-		// A read: it proves the API answers for the guest.
-		if _, err := s.pve.snapshots(ctx, r.kind, r.vmid); err != nil {
+		// A read: PVE's answer is the result. An error is never an empty list.
+		snaps, err := s.pve.snapshots(ctx, r.kind, r.vmid)
+		if err != nil {
 			return nil, refuse(codes.Unavailable, "list the snapshots: %v", err)
 		}
-		return done(req.IdempotencyKey, "succeeded"), nil
+		names := make([]string, 0, len(snaps))
+		for name := range snaps {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		result, err := json.Marshal(map[string][]string{"snapshots": names})
+		if err != nil {
+			return nil, refuse(codes.Internal, "encode the snapshots: %v", err)
+		}
+		op := done(req.IdempotencyKey, "succeeded")
+		op.Result = string(result)
+		return op, nil
 	}
 	// Checked before anything is sent: a refusal proves nothing ran.
 	snaps, err := s.pve.snapshots(ctx, r.kind, r.vmid)
