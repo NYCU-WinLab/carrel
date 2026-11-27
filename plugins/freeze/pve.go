@@ -104,18 +104,23 @@ func (p *pve) version(ctx context.Context) error {
 
 // needed are the privileges the token must hold, by the path they are held on.
 // VM.Config.Options clears a guest's onboot; Sys.Audit on the node lists the
-// starts of a guest by any user, not only the token's own.
-func needed(storage, node string) map[string][]string {
-	return map[string][]string{
+// starts of a guest by any user, not only the token's own; a thaw restores
+// the disks to the guest storage.
+func needed(storage, guestStorage, node string) map[string][]string {
+	need := map[string][]string{
 		"/vms":                {"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"},
 		"/storage/" + storage: {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"},
 		"/nodes/" + node:      {"Sys.Audit"},
 	}
+	if guestStorage != storage {
+		need["/storage/"+guestStorage] = []string{"Datastore.AllocateSpace"}
+	}
+	return need
 }
 
 // missing are the needed privileges the token does not hold, as "<priv> on <path>".
-func (p *pve) missing(ctx context.Context, storage string) ([]string, error) {
-	need := needed(storage, p.node)
+func (p *pve) missing(ctx context.Context, storage, guestStorage string) ([]string, error) {
+	need := needed(storage, guestStorage, p.node)
 	paths := make([]string, 0, len(need))
 	for path := range need {
 		paths = append(paths, path)
@@ -283,9 +288,10 @@ func (p *pve) start(ctx context.Context, r *run) (string, error) {
 	case "destroy", "discard":
 		data, err = p.do(ctx, http.MethodDelete, p.guest(r.Kind, r.VMID)+"?"+url.Values{"purge": {"1"}}.Encode(), nil)
 	case "restore":
-		// No target storage is named: PVE restores each disk to the storage
-		// its config names, as the backup holds it.
-		form := url.Values{"vmid": {fmt.Sprint(r.VMID)}}
+		// The disks go to the site's guest storage, as the node agent restores
+		// them: without one PVE puts a container's every mount point on
+		// "local", which is not the guest storage and often cannot hold one.
+		form := url.Values{"vmid": {fmt.Sprint(r.VMID)}, "storage": {r.Target}}
 		if r.Kind == "ct" {
 			form.Set("ostemplate", r.Volid)
 			form.Set("restore", "1")

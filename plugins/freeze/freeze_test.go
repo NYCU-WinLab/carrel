@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/NYCU-WinLab/carrel/internal/pluginpb"
@@ -65,6 +66,7 @@ func fixtureWith(t *testing.T, storage string, h http.HandlerFunc) *server {
 	t.Setenv("CARREL_PVE_NODE", "pve")
 	t.Setenv("CARREL_PVE_CA", ca)
 	t.Setenv("CARREL_BACKUP_STORAGE", storage)
+	t.Setenv("CARREL_GUEST_STORAGE", "tank")
 	return newServer()
 }
 
@@ -146,18 +148,33 @@ func TestProbeWithNoBackupStorageIsUnsupported(t *testing.T) {
 
 func TestProbeNeedsThePrivilegesOnTheStorage(t *testing.T) {
 	vms := []string{"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"}
-	all := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
+	all := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"},
+		"/storage/tank": {"Datastore.AllocateSpace"}, "/nodes/pve": {"Sys.Audit"}}
 	if p := probe(t, fixture(t, "pbs", all)); !p.Supported {
 		t.Fatalf("probe: %+v", p)
 	}
-	short := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
+	short := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}, "/storage/tank": all["/storage/tank"], "/nodes/pve": {"Sys.Audit"}}
 	p := probe(t, fixture(t, "pbs", short))
 	if p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/pbs" {
 		t.Fatalf("probe: %+v", p)
 	}
 	// Without Sys.Audit the token sees only its own tasks, not the starts of others.
-	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"]}
+	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"], "/storage/tank": all["/storage/tank"]}
 	if p := probe(t, fixture(t, "pbs", noAudit)); p.Supported || p.Reason != "the token lacks Sys.Audit on /nodes/pve" {
+		t.Fatalf("probe: %+v", p)
+	}
+	// A thaw restores the disks to the guest storage.
+	noGuest := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"], "/nodes/pve": {"Sys.Audit"}}
+	if p := probe(t, fixture(t, "pbs", noGuest)); p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/tank" {
+		t.Fatalf("probe: %+v", p)
+	}
+}
+
+func TestProbeWithNoGuestStorageIsUnsupported(t *testing.T) {
+	s := fixture(t, "pbs", nil)
+	t.Setenv("CARREL_GUEST_STORAGE", "")
+	s = newServer()
+	if p := probe(t, s); p.Supported || !strings.Contains(p.Reason, "CARREL_GUEST_STORAGE") {
 		t.Fatalf("probe: %+v", p)
 	}
 }

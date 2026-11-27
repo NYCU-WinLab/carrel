@@ -14,6 +14,7 @@
 //	CARREL_PVE_CA         /etc/carrel/plugins/freeze-ca.pem unless set
 //	CARREL_BACKUP_STORAGE the backup storage; with none the site cannot freeze
 //	CARREL_FREEZE_VERIFY_WAIT seconds to wait for a backup's verification, 1800 unless set
+//	CARREL_GUEST_STORAGE  the site's guest storage, where a thaw restores the disks
 package freeze
 
 import (
@@ -47,6 +48,9 @@ type server struct {
 	pve *pve
 	// storage is the backup storage, from CARREL_BACKUP_STORAGE.
 	storage string
+	// guestStorage is the site's guest storage, from CARREL_GUEST_STORAGE:
+	// a thaw restores the disks there, as the node agent does.
+	guestStorage string
 	// problem says why the plugin cannot run here, or "".
 	problem string
 	// verifyWait is how long to wait for the backup server to verify a backup.
@@ -99,7 +103,7 @@ func (s *server) Probe(ctx context.Context, _ *pluginpb.ProbeRequest) (*pluginpb
 	}
 	// A token that signs in but lacks a privilege fails only when a member
 	// uses it: the probe says so first.
-	missing, err := s.pve.missing(ctx, s.storage)
+	missing, err := s.pve.missing(ctx, s.storage, s.guestStorage)
 	if err != nil {
 		return &pluginpb.ProbeResponse{Reason: "the token's permissions cannot be read: " + err.Error()}, nil
 	}
@@ -617,7 +621,8 @@ func NewServer() pluginpb.PluginServer { return newServer() }
 
 func newServer() *server {
 	s := &server{runs: store{dir: os.Getenv("STATE_DIRECTORY")}, now: time.Now,
-		storage: strings.TrimSpace(os.Getenv("CARREL_BACKUP_STORAGE")), verifyWait: defaultVerifyWait}
+		storage:      strings.TrimSpace(os.Getenv("CARREL_BACKUP_STORAGE")),
+		guestStorage: strings.TrimSpace(os.Getenv("CARREL_GUEST_STORAGE")), verifyWait: defaultVerifyWait}
 	if v := strings.TrimSpace(os.Getenv("CARREL_FREEZE_VERIFY_WAIT")); v != "" {
 		// Seconds; at most an hour, as the node agent bounded it.
 		n, err := strconv.Atoi(v)
@@ -640,6 +645,8 @@ func newServer() *server {
 	case s.problem != "":
 	case s.storage == "":
 		s.problem = noStorage
+	case s.guestStorage == "":
+		s.problem = "CARREL_GUEST_STORAGE must name the site's guest storage, where a thaw restores the disks"
 	case s.runs.dir == "":
 		s.problem = "no STATE_DIRECTORY"
 	case token == "" || node == "":

@@ -31,6 +31,8 @@ type run struct {
 	// Phase is where a freeze stands: backup, verify or destroy.
 	Phase   string `json:"phase,omitempty"`
 	Storage string `json:"storage,omitempty"`
+	// Target is the guest storage a restore puts the disks on.
+	Target string `json:"target,omitempty"`
 	// Note names the backup this run made; PVE keeps it as the backup's notes.
 	Note string `json:"note,omitempty"`
 	// VerifyBy is when the wait for the backup's verification ends, in Unix seconds.

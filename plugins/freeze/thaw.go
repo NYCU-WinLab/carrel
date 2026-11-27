@@ -130,7 +130,7 @@ func (s *server) parseThaw(req *pluginpb.StartRequest) (*run, error) {
 		return nil, err
 	}
 	return &run{Key: req.IdempotencyKey, Operation: req.Operation, Kind: f.Kind, VMID: f.VMID, Name: f.Name,
-		Volid: f.Volid, Storage: s.storage, Note: strings.TrimSpace(f.Note)}, nil
+		Volid: f.Volid, Storage: s.storage, Target: s.guestStorage, Note: strings.TrimSpace(f.Note)}, nil
 }
 
 // parseDelete reads a start of frozen_delete.
@@ -328,7 +328,17 @@ func (s *server) followDiscard(ctx context.Context, r *run) bool {
 		return false
 	}
 	if state != guestAbsent {
-		s.lose(r, "the half restored machine was not removed ("+exit+"); "+r.Error)
+		message := "the half restored machine was not removed (" + exit + ")"
+		if state == guestHalf {
+			// PVE destroys a locked guest only with skiplock, which only
+			// root@pam may set, never an API token.
+			message += "; it is locked: an admin on the node runs `" + map[string]string{"vm": "qm", "ct": "pct"}[r.Kind] +
+				" unlock " + strconv.Itoa(r.VMID) + "` and asks again"
+		}
+		if r.Error != "" {
+			message += "; " + r.Error
+		}
+		s.lose(r, message)
 		return false
 	}
 	switch {

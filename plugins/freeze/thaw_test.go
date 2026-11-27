@@ -29,6 +29,7 @@ type thawNode struct {
 	removeFails       bool   // the backup cannot be removed
 	discardExit       string
 	running           bool // the restore task has not ended
+	refuseLocked      bool // PVE refuses to destroy a locked guest, as it does for a token
 	calls             []string
 	backups           map[string]*thawBackup
 	tasks             []taskEntry
@@ -92,7 +93,7 @@ func (n *thawNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(c)
 	case r.Method == "POST" && path == "/nodes/pve/qemu":
 		n.restoreForm = r.Form
-		if r.Form.Get("vmid") != "10100" || r.Form.Get("archive") != volid {
+		if r.Form.Get("vmid") != "10100" || r.Form.Get("archive") != volid || r.Form.Get("storage") != "tank" {
 			http.Error(w, "bad request", 400)
 			return
 		}
@@ -105,8 +106,12 @@ func (n *thawNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(upid)
 	case r.Method == "DELETE" && path == "/nodes/pve/qemu/10100":
-		upid := n.task("qmdestroy", n.discardExit)
-		if n.discardExit == "" || n.discardExit == "OK" {
+		exit := n.discardExit
+		if n.refuseLocked && n.guest != nil && n.guest.lock != "" {
+			exit = "VM is locked (" + n.guest.lock + ")"
+		}
+		upid := n.task("qmdestroy", exit)
+		if exit == "" || exit == "OK" {
 			n.guest = nil
 		}
 		reply(upid)
@@ -213,7 +218,7 @@ func TestThawRestoresTheMachineThenRemovesTheBackup(t *testing.T) {
 			del = i
 		}
 	}
-	if restore < 0 || del < restore || n.restoreForm.Get("archive") != volid {
+	if restore < 0 || del < restore || n.restoreForm.Get("archive") != volid || n.restoreForm.Get("storage") != "tank" {
 		t.Fatalf("calls %v", n.calls)
 	}
 }
@@ -277,6 +282,36 @@ func TestACutOffRestoreIsRemovedBeforeTheNextOne(t *testing.T) {
 	op := finish(t, s, start(t, s, thawReq("t1")).IdempotencyKey)
 	if op.State != "succeeded" || n.called("DELETE /nodes/pve/qemu/10100") != 1 || n.called("POST /nodes/pve/qemu") != 1 || n.guest == nil || n.guest.lock != "" {
 		t.Fatalf("op %+v calls %v", op, n.calls)
+	}
+}
+
+// A token cannot destroy a locked half: the thaw fails, keeps the backup and
+// says how a person unlocks it.
+func TestALockedHalfThatCannotBeRemovedKeepsTheBackup(t *testing.T) {
+	s, n := thawSite(t)
+	n.guest, n.refuseLocked = &guestEntry{name: "box", lock: "create"}, true
+	op := finish(t, s, start(t, s, thawReq("t1")).IdempotencyKey)
+	if op.State != "failed" || !strings.Contains(op.Error, "`qm unlock 10100`") || !strings.Contains(op.Error, "backup "+volid+" is kept") ||
+		n.guest == nil || n.backups[volid] == nil || n.called("POST /nodes/pve/qemu") != 0 {
+		t.Fatalf("op %+v calls %v", op, n.calls)
+	}
+}
+
+// A container goes back to the guest storage too: without storage PVE puts
+// its mount points on "local".
+func TestAContainerRestoreNamesTheGuestStorage(t *testing.T) {
+	var form url.Values
+	s := fixtureWith(t, "pbs", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		form = r.Form
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve:1:1:1:vzrestore:10100:root@pam!carrel-freeze:"})
+	})
+	ct := "pbs:backup/ct/10100/2026-11-27T00:00:00Z"
+	if _, err := s.pve.start(context.Background(), &run{Phase: "restore", Kind: "ct", VMID: 10100, Volid: ct, Target: s.guestStorage}); err != nil {
+		t.Fatal(err)
+	}
+	if form.Get("storage") != "tank" || form.Get("ostemplate") != ct || form.Get("restore") != "1" {
+		t.Fatalf("form %v", form)
 	}
 }
 
