@@ -312,3 +312,22 @@ func TestStoreRowsReportsReadFailureAsFailure(t *testing.T) {
 		t.Fatalf("unexpected failure: %v", f.Result)
 	}
 }
+
+// The maintenance loop reconciles a site with no tenant while the gateway
+// lacks the origin pair, and stops once it holds it (#569).
+func TestOriginAwaitsGatewayUntilItHoldsThePair(t *testing.T) {
+	p, b, _ := originFixture(t)
+	e := p.execution(context.Background())
+	if !e.originAwaitsGateway() {
+		t.Fatal("a pair the gateway never received must wait for it")
+	}
+	b.call = func(r D, target string) (any, error) { return D{}, nil }
+	e.Reconcile()
+	if e.originAwaitsGateway() {
+		t.Fatal("the gateway holds the pair after a reconcile")
+	}
+	must(os.RemoveAll(filepath.Join(p.Config.CertificateDir, "live", originLineage)))
+	if e.originAwaitsGateway() {
+		t.Fatal("no pair yet: nothing to send")
+	}
+}

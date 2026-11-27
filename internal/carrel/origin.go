@@ -56,6 +56,14 @@ func (e *Execution) EnsureOriginCertificate() D {
 	return D{"state": "ready"}
 }
 
+// originAwaitsGateway reports a live origin pair the gateway does not hold
+// yet. Only a reconcile sends it, and on a site with no tenant nothing else
+// reconciles, so carrel's record would never be written (#569).
+func (e *Execution) originAwaitsGateway() bool {
+	crt, _, ok := e.originFiles()
+	return ok && !e.gatewayHolds("_origin", crt)
+}
+
 // MaintainOrigin keeps the origin certificate fresh and moves carrel's record
 // to the site's address once the gateway holds a valid certificate for it.
 func (e *Execution) MaintainOrigin() {
