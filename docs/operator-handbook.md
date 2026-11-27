@@ -164,17 +164,21 @@ database:
   pre-migration copy (see [Database schema](#database-schema)) loses every write since the upgrade.
   The release notes of such a release say so.
 
-### Roll back the newest upgrade
+### Roll back the running release
 
 On the first exit node, run `python3 /var/lib/carrel/<newest go-upgrade-*>/install-control.py rollback`.
-It undoes the newest upgrade:
+It undoes the upgrade that installed the running release:
 
+- It picks the stage whose `release.json` matches the installed one, so a newer upgrade that failed
+  and put the previous release back is skipped.
 - It puts back the previous binary, units, configuration and node programs, and waits for the
   previous version's health check.
-- When that upgrade migrated the database, it stops and names `--database`. With
-  `--database`, it also puts back the database copy taken before the upgrade, and every write
-  since is lost.
-- It rolls an upgrade back once. To go further back, deploy the release you want.
+- When that upgrade migrated the database, it stops and names `--database`. With `--database`, it
+  first unpacks and checks the database copy taken before the upgrade while carrel still runs. Then
+  it stops carrel and puts the copy in place, and every write since is lost. If that step fails,
+  carrel starts again on the running release.
+- It holds the node's deploy lock, so no deploy or second rollback runs beside it. Running it again
+  goes one more upgrade back.
 - It restores the node programs on the first exit node only. Run `configure-nodes.py` from the
   previous release's stage, or deploy that release again, so every node matches.
 

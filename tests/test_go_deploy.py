@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -549,6 +550,9 @@ def rolled(tmp_path, module, monkeypatch, schema):
     (stage / "before-release.json").write_text('{"version": "0.9.0"}')
     (stage / "before-node-agent.py").write_text("old node-agent.py")
     (node.lib / "node-agent.py").write_text("new node-agent.py")
+    (stage / "release.json").write_text('{"version": "1.0.0"}')
+    (node.lib / "release.json").write_text('{"version": "1.0.0"}')
+    (stage / "before-release.json").write_text('{"version": "0.9.0"}')
     monkeypatch.setattr(module, "STAGES", tmp_path)
     monkeypatch.setattr(
         module, "capture", lambda *a: json.dumps(schema) if "schema" in a else "carrel.test\n"
@@ -565,9 +569,53 @@ def test_rollback_puts_the_previous_release_back(tmp_path, monkeypatch):
     assert (node.lib / "node-agent.py").read_text() == "old node-agent.py"
     assert not any(c[6:8] == ("ct", "restore-database") for c in node.ct())
     assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in node.calls
-    # The same upgrade is not rolled back twice.
-    with pytest.raises(SystemExit, match="already rolled back"):
+    assert (node.lib / "release.json").read_text() == '{"version": "0.9.0"}'
+    # The rolled-back upgrade no longer matches the running release.
+    with pytest.raises(SystemExit, match="No kept upgrade installed the running release"):
         module.rollback(database=False)
+
+
+def test_rollback_skips_a_newer_failed_upgrade(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    _, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    failed = tmp_path / "go-upgrade-20261021-000000"
+    failed.mkdir()
+    (failed / "release.json").write_text('{"version": "1.1.0"}')
+    (failed / "before-release.json").write_text('{"version": "1.0.0"}')
+    module.rollback(database=False)
+    assert (stage / "rolled-back").exists()
+    assert not (failed / "rolled-back").exists()
+
+
+def test_rollback_waits_for_no_other_deploy(tmp_path, monkeypatch):
+    import fcntl
+
+    module = load("install-control.py")
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    held = os.open(tmp_path / "deploy.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        # flock is per open file, so a second open in this process conflicts too.
+        with pytest.raises(SystemExit, match="Another deploy or rollback"):
+            module.rollback(database=False)
+    finally:
+        os.close(held)
+    assert not any(c[4:6] == ("systemctl", "stop") for c in node.calls)
+
+
+def test_a_failed_database_restore_restarts_the_running_release(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, _ = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 1})
+    node.fail_on = lambda args: "restore-database" in args
+    with pytest.raises(RuntimeError):
+        module.rollback(database=True)
+    calls = [c for c in node.calls if c[:4] == ("pct", "exec", "100", "--")]
+    prepare = next(i for i, c in enumerate(calls) if c[6:8] == ("ct", "prepare-database"))
+    stop = calls.index(("pct", "exec", "100", "--", "systemctl", "stop", "carrel"))
+    assert prepare < stop
+    assert ("pct", "exec", "100", "--", "systemctl", "start", "carrel") in calls[stop:]
+    # The node programs of the running release stay.
+    assert (node.lib / "node-agent.py").read_text() == "new node-agent.py"
 
 
 def test_rollback_across_a_migration_needs_the_database_flag(tmp_path, monkeypatch):
@@ -586,8 +634,9 @@ def test_rollback_across_a_migration_needs_the_database_flag(tmp_path, monkeypat
 
 def test_rollback_of_a_first_install_is_refused(tmp_path, monkeypatch):
     module = load("install-control.py")
-    Node(module, monkeypatch, tmp_path)
-    staged(tmp_path)
+    node = Node(module, monkeypatch, tmp_path)
+    (staged(tmp_path) / "release.json").write_text('{"version": "1.0.0"}')
+    (node.lib / "release.json").write_text('{"version": "1.0.0"}')
     monkeypatch.setattr(module, "STAGES", tmp_path)
     with pytest.raises(SystemExit, match="first install"):
         module.rollback(database=False)
@@ -613,6 +662,12 @@ def test_the_database_copy_replaces_the_database_and_its_log(tmp_path, monkeypat
         module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=3, stdout="", stderr="")
     )
     module.ct_schema("1")
+    with pytest.raises(SystemExit, match="No prepared database copy"):
+        module.ct_restore_database("1")
+    with pytest.raises(SystemExit, match="at schema 1, not 2"):
+        module.ct_prepare_database("1", "2")
+    module.ct_prepare_database("1", "1")
+    assert (tmp_path / "carrel.db-wal").exists()
     module.ct_restore_database("1")
     assert not (tmp_path / "carrel.db-wal").exists()
     db = sqlite3.connect(tmp_path / "carrel.db")
