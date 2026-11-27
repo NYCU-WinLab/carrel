@@ -709,8 +709,19 @@ func (e *Execution) runPlugin() {
 			// Only a refused first start proves the run never began; any
 			// other failure leaves its fate unknown, so a retry asks after
 			// the same key.
-			if call == "start" && first && (code == "invalid" || code == "conflict" || code == "plugin_refused") {
+			switch {
+			case call == "start" && first && (code == "invalid" || code == "conflict" || code == "plugin_refused"):
 				plug["ended"], plug["refused"] = true, true
+			case call == "start" && (code == "invalid" || code == "conflict"):
+				// A plugin answers a key it knows with that key's operation,
+				// so a start refused again holds no run of the key: none
+				// goes on (#682). The first start may have done its work,
+				// so this is no refusal of the run that made a record.
+				plug["ended"] = true
+			case call == "get" && code == "not_found":
+				// The plugin holds no run of the key: none goes on.
+				plug["ended"] = true
+				fail("plugin_failed", fmt.Sprintf("Plugin %s lost the operation", name), D{"recovery": "retry"})
 			}
 			first = false
 			pluginRefusal(code, name, str(plug["node"]))

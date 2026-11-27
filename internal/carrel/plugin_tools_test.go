@@ -26,6 +26,9 @@ type fakePlugins struct {
 	inline, failure D
 	// result, when set, is the result of every operation that succeeds.
 	result D
+	// forget: a start answers running and keeps nothing, as a plugin that
+	// lost its state.
+	forget bool
 }
 
 func (f *fakePlugins) call(r D, target string) (any, error) {
@@ -50,6 +53,9 @@ func (f *fakePlugins) call(r D, target string) (any, error) {
 	switch r["call"] {
 	case "start":
 		f.starts = append(f.starts, clone(r))
+		if f.forget {
+			return D{"idempotency_key": key, "state": "running", "done": false}, nil
+		}
 		if f.ops[key] == nil {
 			f.ops[key] = D{"idempotency_key": key, "state": "running", "done": false, "progress": 10, "task": "UPID:test:" + key, "message": "copying"}
 		}

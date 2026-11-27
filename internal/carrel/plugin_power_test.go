@@ -196,6 +196,40 @@ func TestAStoppedGuestComesBackOnlyOnceTheRunEnded(t *testing.T) {
 	}
 }
 
+// A fence ends when the plugin shows it holds no run of the key: a retry
+// whose start the plugin refuses, or a get it answers not_found (#682).
+func TestAFenceEndsWhenThePluginHoldsNoRun(t *testing.T) {
+	p, f, g := withRewindPlugin(t, "running")
+	f.mu.Lock()
+	f.fail = "plugin_unavailable"
+	f.mu.Unlock()
+	r := member(p, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
+	id := str(obj(r["operation"])["id"])
+	if p.Store.Get("machines", "10100")["plugin_fence"] != id {
+		t.Fatalf("not fenced: %s", encoded(r))
+	}
+	f.mu.Lock()
+	f.fail = "conflict"
+	f.mu.Unlock()
+	p.Operations.Retry(p.Store.TenantN(1), id, person("alice", false))
+	op := awaitState(t, p, id, "failed")
+	if calls := g.seen(); calls[len(calls)-1] != "start" || p.Store.Get("machines", "10100")["plugin_fence"] != nil {
+		t.Fatalf("a refused retry: calls %v, op %s", calls, encoded(op))
+	}
+
+	p2, f2, g2 := withRewindPlugin(t, "running")
+	f2.mu.Lock()
+	f2.forget = true
+	f2.mu.Unlock()
+	r = member(p2, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
+	if f := failure(r); f["code"] != "plugin_failed" || f["recovery"] != "retry" {
+		t.Fatalf("a lost run: %s", encoded(r))
+	}
+	if calls := g2.seen(); calls[len(calls)-1] != "start" || p2.Store.Get("machines", "10100")["plugin_fence"] != nil {
+		t.Fatalf("a lost run: calls %v", calls)
+	}
+}
+
 // A run that succeeded is never repeated: when the guest does not come back,
 // a retry only starts it again.
 func TestARetryAfterSuccessOnlyRestoresPower(t *testing.T) {

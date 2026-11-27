@@ -45,9 +45,12 @@ type PluginClient interface {
 	// Probe says whether this node can run the plugin, and why not.
 	Probe(ctx context.Context, in *ProbeRequest, opts ...grpc.CallOption) (*ProbeResponse, error)
 	// StartOperation starts an operation once per idempotency key; the same
-	// key again returns the same operation.
+	// key again returns the same operation. A plugin keeps every operation it
+	// started across restarts, so carrel takes a refusal of a key it sent
+	// before as proof that no operation of that key goes on.
 	StartOperation(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (*Operation, error)
 	// GetOperation reads an operation by its key. Ask again until done.
+	// NOT_FOUND says no operation of the key goes on.
 	GetOperation(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*Operation, error)
 	// Cancel stops an operation that is not done; a done one is returned as is.
 	Cancel(ctx context.Context, in *CancelRequest, opts ...grpc.CallOption) (*Operation, error)
@@ -121,9 +124,12 @@ type PluginServer interface {
 	// Probe says whether this node can run the plugin, and why not.
 	Probe(context.Context, *ProbeRequest) (*ProbeResponse, error)
 	// StartOperation starts an operation once per idempotency key; the same
-	// key again returns the same operation.
+	// key again returns the same operation. A plugin keeps every operation it
+	// started across restarts, so carrel takes a refusal of a key it sent
+	// before as proof that no operation of that key goes on.
 	StartOperation(context.Context, *StartRequest) (*Operation, error)
 	// GetOperation reads an operation by its key. Ask again until done.
+	// NOT_FOUND says no operation of the key goes on.
 	GetOperation(context.Context, *GetRequest) (*Operation, error)
 	// Cancel stops an operation that is not done; a done one is returned as is.
 	Cancel(context.Context, *CancelRequest) (*Operation, error)
