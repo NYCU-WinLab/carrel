@@ -82,16 +82,43 @@ func TestToolRoutesKeepTheirGates(t *testing.T) {
 	if w.Code != 401 || w.Header().Get("WWW-Authenticate") == "" {
 		t.Fatalf("bad token: %d", w.Code)
 	}
-	// The listing shows only what the caller may run.
+	// The listing shows only what the caller may run, and is the list /mcp gives
+	// item by item: name, description, schema and annotations.
+	for _, app := range []*App{member, admin} {
+		w = requestApp(app, "GET", "/v1/tools", "", map[string]string{"Authorization": "Bearer test"})
+		var list struct{ Tools []D }
+		if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+			t.Fatal(err)
+		}
+		mcp, _ := listedTools(t, app, "/mcp", nil)
+		if len(list.Tools) < 50 || len(list.Tools) != len(mcp) {
+			t.Fatalf("GET /v1/tools has %d tools, tools/list has %d", len(list.Tools), len(mcp))
+		}
+		byName := map[string]D{}
+		for _, tool := range mcp {
+			byName[str(tool["name"])] = tool
+		}
+		for _, tool := range list.Tools {
+			want := byName[str(tool["name"])]
+			if want == nil {
+				t.Fatalf("%s is listed over HTTP only", tool["name"])
+			}
+			for _, key := range []string{"description", "inputSchema", "annotations"} {
+				if !equal(tool[key], want[key]) {
+					t.Fatalf("%s: %s differs: %s vs %s", tool["name"], key, encoded(tool[key]), encoded(want[key]))
+				}
+			}
+		}
+	}
+	names := map[string]bool{}
 	w = requestApp(member, "GET", "/v1/tools", "", map[string]string{"Authorization": "Bearer test"})
 	var list struct{ Tools []D }
 	_ = json.Unmarshal(w.Body.Bytes(), &list)
-	names := map[string]bool{}
 	for _, tool := range list.Tools {
 		names[str(tool["name"])] = true
 	}
-	if !names["machine_create"] || names["node_list"] || len(names) < 50 {
-		t.Fatalf("listing: %d tools", len(names))
+	if !names["machine_create"] || names["node_list"] {
+		t.Fatalf("member listing wrong")
 	}
 }
 

@@ -488,9 +488,15 @@ func TestPluginToolsOverHTTP(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &v)
 		return w.Code, v
 	}
-	code, v := do("GET", "/plugins/v1/tools", "", headers)
-	if tools := dicts(v["tools"]); code != 200 || len(tools) != 1 || tools[0]["name"] != "backup_take" || obj(tools[0]["input_schema"])["type"] != "object" {
-		t.Fatalf("list: %d %v", code, v)
+	code, v := do("GET", "/v1/tools", "", headers)
+	var plugin []D
+	for _, tool := range dicts(v["tools"]) {
+		if tool["plugin"] == true {
+			plugin = append(plugin, tool)
+		}
+	}
+	if code != 200 || len(plugin) != 1 || plugin[0]["name"] != "backup_take" || obj(plugin[0]["inputSchema"])["type"] != "object" {
+		t.Fatalf("list: %d %v", code, plugin)
 	}
 	code, v = do("POST", "/plugins/v1/tools/backup_take", `{"machine":"web","idempotency_key":"http-call-1","wait_seconds":5}`, headers)
 	if code != 200 || obj(v["operation"])["state"] != "succeeded" {
