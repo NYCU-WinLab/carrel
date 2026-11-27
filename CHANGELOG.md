@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.15.0](https://github.com/NYCU-WinLab/carrel/compare/v0.14.1...v0.15.0) (2026-11-27)
+
+
+### Features
+
+* **agent:** plugin contract v1 and the node plugin runtime ([#667](https://github.com/NYCU-WinLab/carrel/issues/667)) ([9c51181](https://github.com/NYCU-WinLab/carrel/commit/9c511817ce43dc822f86daaf94dcc2034df003e6))
+* **carrel:** plugin operations as tools, gated and run as operations ([#671](https://github.com/NYCU-WinLab/carrel/issues/671)) ([44a3867](https://github.com/NYCU-WinLab/carrel/commit/44a38679f5be62a707490889ad72650036893e89))
+* **carrel:** plugin tools over HTTP ([#672](https://github.com/NYCU-WinLab/carrel/issues/672)) ([e0df505](https://github.com/NYCU-WinLab/carrel/commit/e0df50546f4177c3dbaa50ef79af15d40151fe6a))
+* **deploy:** install the plugins a site lists on every agent node ([#675](https://github.com/NYCU-WinLab/carrel/issues/675)) ([245028c](https://github.com/NYCU-WinLab/carrel/commit/245028c05a2110322e00ede5d812c4fb3e42b598))
+* **plugins:** an operation can run on a stopped guest, and gets the machine's facts ([#681](https://github.com/NYCU-WinLab/carrel/issues/681)) ([81cf099](https://github.com/NYCU-WinLab/carrel/commit/81cf099203827dd40d2fe4bd47c71692c9a4f677))
+* **plugins:** carrel keeps a record of plugin objects, charges and holds them ([#678](https://github.com/NYCU-WinLab/carrel/issues/678)) ([3a82575](https://github.com/NYCU-WinLab/carrel/commit/3a8257575c64697258835a8ccb3045cc7f5d3780))
+* **plugins:** object operations answer as core actions do ([#683](https://github.com/NYCU-WinLab/carrel/issues/683)) ([24154c4](https://github.com/NYCU-WinLab/carrel/commit/24154c44e26f02b1eef6d2d212fb06739038c781))
+* **plugins:** reads and dry runs answer at once, errors carry codes ([#677](https://github.com/NYCU-WinLab/carrel/issues/677)) ([c9044c5](https://github.com/NYCU-WinLab/carrel/commit/c9044c5340c736cef21f42c7e8215ea78987978a))
+* **snapshot:** the snapshot plugin, its token script and release ([#684](https://github.com/NYCU-WinLab/carrel/issues/684)) ([ea8c596](https://github.com/NYCU-WinLab/carrel/commit/ea8c596a8ff3e99999506e491742192f1ab54034))
+
+
+### Bug fixes
+
+* **plugins:** a plugin's no-record answer keeps the fence and can be retried ([#686](https://github.com/NYCU-WinLab/carrel/issues/686)) ([37d503b](https://github.com/NYCU-WinLab/carrel/commit/37d503b7edbc02fc1c2c7208246a2935857cd562))
+* **snapshot:** a list that fails decides nothing ([#687](https://github.com/NYCU-WinLab/carrel/issues/687)) ([f6ab0b7](https://github.com/NYCU-WinLab/carrel/commit/f6ab0b70dbed6c873d53ca5a2de6d3e4f02a0b17))
+
 ## [0.14.1](https://github.com/NYCU-WinLab/carrel/compare/v0.14.0...v0.14.1) (2026-11-26)
 
 
