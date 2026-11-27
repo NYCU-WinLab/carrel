@@ -705,3 +705,21 @@ func TestAPluginToolNamesItsToolsetAndHints(t *testing.T) {
 		t.Fatalf("left out: %s", left)
 	}
 }
+
+func TestAPluginOperationRunLimitIsClamped(t *testing.T) {
+	p, b := fixture(t)
+	withPlugin(t, p, b)
+	schema := json.RawMessage(`{"type":"object"}`)
+	reportPlugins(p, []PluginInfo{{Name: "snapshot", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "short", ReadOnly: true, Params: schema, MaxSeconds: 60},
+		{Name: "long", ReadOnly: true, Params: schema, MaxSeconds: 86400},
+		{Name: "none", ReadOnly: true, Params: schema},
+		{Name: "neg", ReadOnly: true, Params: schema, MaxSeconds: -5},
+	}}})
+	tools := p.pluginTools()
+	for name, want := range map[string]time.Duration{"snapshot_short": time.Minute, "snapshot_long": pluginMaxRun, "snapshot_none": pluginMaxRun, "snapshot_neg": pluginMaxRun} {
+		if tools[name] == nil || tools[name].MaxRun != want {
+			t.Fatalf("%s: %+v, want %v", name, tools[name], want)
+		}
+	}
+}
