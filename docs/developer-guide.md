@@ -31,3 +31,18 @@ callable by name for clients that allow it. `/mcp/read-only` registers and lists
 `/mcp/read-only` only filters the tool list and the call set. It is not a credential boundary: both endpoints accept the
 same bearer token (audience `carrel-mcp`, no resource check), so a token obtained for `/mcp/read-only` also works on
 `/mcp`. Do not use it to delegate read-only access to another party.
+
+## Plugin contract
+
+A plugin runs one operation under one idempotency key. Carrel sends the same key on every start and every `get` of that run, also across its own restarts, a re-queue and a retry whose run may still be going. Only a run known to have ended gives way to a new key.
+
+Keep operations by key:
+
+- A plugin must keep each operation by its key, also across the plugin's own restarts. Save the run under the key before you send the work, and keep it until the run has ended and carrel has read the outcome.
+- If a plugin loses a key, `get` answers `not_found`, and carrel treats that as "no record of the run". The operation fails with `plugin_failed` and the recovery `retry`, and a retry starts the same key again. The work can then run twice, so a plugin that cannot keep its keys cannot promise a single run.
+
+Retry after a migrate:
+
+- A retry of an operation whose last run's fate is unknown accepts only the node that ran it (the `plug["node"] != node` branch in `internal/carrel/plugin_tools.go`). Reason: running it on another node could run the work twice.
+- While the machine is on another node, the retry waits for the first node to report the plugin again, then fails with `unsupported` and the recovery `retry_infrastructure`.
+- A run known to have ended (refused at its first start, or finished) does not have this limit: the next run takes a new key and any node that has the plugin.

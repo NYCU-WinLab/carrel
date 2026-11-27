@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.18.0](https://github.com/NYCU-WinLab/carrel/compare/v0.17.0...v0.18.0) (2026-11-27)
+
+
+### Features
+
+* cancel a running plugin operation through operation_cancel ([#721](https://github.com/NYCU-WinLab/carrel/issues/721)) ([2b6dea4](https://github.com/NYCU-WinLab/carrel/commit/2b6dea4a163bdce8f831ac2075d9f8c44a0ef94a))
+* **plugins:** let a plugin declare a maximum run time for an operation ([#724](https://github.com/NYCU-WinLab/carrel/issues/724)) ([9175d61](https://github.com/NYCU-WinLab/carrel/commit/9175d614978d775e300d284bf94b950edac29c5b))
+* snapshots run on the snapshot plugin ([#699](https://github.com/NYCU-WinLab/carrel/issues/699)) ([83ee859](https://github.com/NYCU-WinLab/carrel/commit/83ee85933f5811000f588ec3d04a1488039e38c0))
+
+
+### Bug fixes
+
+* **agent:** check every parent of plugin_dir ([#702](https://github.com/NYCU-WinLab/carrel/issues/702)) ([ddc8fbf](https://github.com/NYCU-WinLab/carrel/commit/ddc8fbff58b69f7a2087751428587be007677ef8))
+* check a new plugin version answers before removing the old one ([#714](https://github.com/NYCU-WinLab/carrel/issues/714)) ([6079883](https://github.com/NYCU-WinLab/carrel/commit/6079883df64e46066215c1b60232ec7517ac0fa8))
+* machine_unfence follow-ups from the [#694](https://github.com/NYCU-WinLab/carrel/issues/694) review ([#700](https://github.com/NYCU-WinLab/carrel/issues/700)) ([2315b33](https://github.com/NYCU-WinLab/carrel/commit/2315b337497eff0505e1d7b66a01cba946e23020))
+* **plugins:** cap plugin services with TasksMax, MemoryMax and CPUQuota ([#712](https://github.com/NYCU-WinLab/carrel/issues/712)) ([0c8edfb](https://github.com/NYCU-WinLab/carrel/commit/0c8edfb4c3fc52362764fa0f38e575c4f7de6e8d))
+* report plugin install errors and clean refused artifacts ([#722](https://github.com/NYCU-WinLab/carrel/issues/722)) ([ddd33f8](https://github.com/NYCU-WinLab/carrel/commit/ddd33f8851034455f498da083ec87a37d883d788))
+
 ## [0.17.0](https://github.com/NYCU-WinLab/carrel/compare/v0.16.0...v0.17.0) (2026-11-27)
 
 

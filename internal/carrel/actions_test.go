@@ -153,8 +153,8 @@ func TestLiveStatusDoesNotConfusePausedProcessWithReadyGuest(t *testing.T) {
 func TestPausedRollbackCannotDestroyInMemorySession(t *testing.T) {
 	p, b := fixture(t)
 	m := seedMachine(p, "dev", 10100)
-	p.Store.Put("snapshots", "10100-before", 1, D{"id": "10100-before", "vmid": 10100, "name": "before", "disk_gb": 20, "configuration": pick(m, "cpu", "memory_mb", "disk_gb", "nics")})
-	b.call = func(D, string) (any, error) { return D{"status": "running", "qmpstatus": "paused"}, nil }
+	putSnapshotRecord(p, 1, 10100, "before", 20, "", pick(m, "cpu", "memory_mb", "disk_gb", "nics"))
+	withSnapshotPlugin(t, p, b, func(D, string) (any, error) { return D{"status": "running", "qmpstatus": "paused"}, nil })
 	runQueue(p)
 	r := p.Execute(context.Background(), "snapshot_rollback", D{"machine": "dev", "name": "before", "confirm": "before"}, person("alice", false))
 	op := obj(r["operation"])

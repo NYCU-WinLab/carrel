@@ -275,11 +275,11 @@ func TestPluginQuotaDimensionsOutliveTheReport(t *testing.T) {
 	}
 
 	claim := copyPlugin()
-	claim[0].Quota[1].Name = "snapshot_gb"
-	claim[0].Objects[0].Charges[1].Dimension = "snapshot_gb"
+	claim[0].Quota[1].Name = "disk_gb"
+	claim[0].Objects[0].Charges[1].Dimension = "disk_gb"
 	reportPlugins(p, claim)
 	tools, left := p.pluginRegistry()
-	if tools["copies_take"] != nil || left["copies_take"] != "quota dimension snapshot_gb is one carrel counts itself" {
+	if tools["copies_take"] != nil || left["copies_take"] != "quota dimension disk_gb is one carrel counts itself" {
 		t.Fatalf("a core dimension: %v", left)
 	}
 }
