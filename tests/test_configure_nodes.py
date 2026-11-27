@@ -1131,6 +1131,7 @@ def test_apply_refuses_an_artifact_without_a_top_level_program(tmp_path):
     result, _, units, *_ = apply(module, tmp_path, [(p, blob)])
     assert result.returncode != 0 and "no plugin program" in result.stderr
     assert not (units / "carrel-plugin-snap.socket").exists()
+    assert not (tmp_path / "lib/snap/1.0.0.next").exists()
 
 
 def test_apply_leaves_units_whose_name_is_not_a_plugin_name(tmp_path):
@@ -1172,6 +1173,27 @@ def test_apply_refuses_a_link_in_the_artifact_and_touches_nothing_outside(tmp_pa
         assert result.returncode != 0 and "only files and directories" in result.stderr
         assert oct(secret.stat().st_mode & 0o777) == "0o600" and calls == []
         assert not (units / "carrel-plugin-snap.socket").exists()
+        assert not (tmp_path / "lib/snap/1.0.0.next").exists()
+
+
+def test_a_failed_restart_is_reported_and_keeps_the_mark(tmp_path):
+    module = load("configure-nodes.py")
+    snap = plugin()
+    apply(module, tmp_path, [snap])
+    systemctl = tmp_path / "systemctl"
+    systemctl.write_text('#!/bin/sh\ncase "$1" in try-restart) exit 1;; esac\n')
+    again = plugin(body=b"#!/bin/sh\necho fixed\n")
+    (tmp_path / "artifacts" / module.plugin_artifact(again[0])).write_bytes(again[1])
+    script = module.plugin_apply(
+        [again[0]],
+        str(tmp_path / "units"),
+        str(tmp_path / "lib"),
+        str(tmp_path / "artifacts"),
+        str(systemctl),
+    )
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode != 0 and "the restart failed" in result.stderr
+    assert (tmp_path / "lib/snap/.restart").exists()
 
 
 def test_a_run_that_fails_halfway_still_restarts_the_next_time(tmp_path):
