@@ -161,3 +161,45 @@ func TestIdlePreviewsAreReaped(t *testing.T) {
 		t.Fatal("the parent was reaped")
 	}
 }
+
+// A special-domain grant domain added to a preview (domain_add with name:)
+// goes with the preview, and the grant is left to MaintainGrants to release.
+func TestClosingPreviewRemovesItsGrantDomain(t *testing.T) {
+	p, a := functionFixture(t)
+	a.forges = fakeForge{"good": push("alice/hook", "42", "main"), "pr7": pullToken("alice/hook", "42", 7, "feature")}
+	alice, ctx := person("alice", false), context.Background()
+	assertOK(t, a.Call(ctx, "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}, alice))
+	report(t, a, `{"revision":1,"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"}]}]}`)
+	assertOK(t, a.Call(ctx, "function_link", D{"function": "hook", "repo": "alice/hook", "previews": true}, alice))
+	img := "ghcr.io/alice/hook@sha256:" + strings.Repeat("a", 64)
+	do(t, a, "POST", "/functions/v1/deploy/alice/hook", "good", strings.NewReader(`{"image":"`+img+`"}`))
+	report(t, a, `{"revision":2,"functions":[{"id":"t1-hook","current":"v2","versions":[{"version":"v2","state":"ready"}]}]}`)
+	if code, _ := do(t, a, "POST", "/functions/v1/deploy/alice/hook", "pr7", strings.NewReader(`{"image":"`+img+`"}`)); code != 200 {
+		t.Fatalf("preview: %d", code)
+	}
+	// What domain_add name: leaves behind: a grant and a domain under it that
+	// points at the preview.
+	grant := domainGrant{ID: "g1", Kind: "exact", Name: "demo.winlab.tw", RequestID: "r1", TenantN: 1, GrantedAt: time.Now().Unix()}
+	p.Store.Put("domain_grants", grant.ID, 1, grant.D())
+	extra := domainRecord{ID: "d1", TenantN: 1, Function: functionID(1, "pr-7-hook"), Grant: grant.ID, Slug: "alice", Name: grant.Name, State: "ready"}
+	p.Store.Put("domains", extra.ID, 1, extra.D())
+
+	if code, out := do(t, a, "DELETE", "/functions/v1/deploy/alice/hook/preview", "pr7", strings.NewReader(`{"pr":7}`)); code != 200 || len(arr(out["removed"])) != 1 {
+		t.Fatalf("close: %d %s", code, encoded(out))
+	}
+	e := p.execution(ctx)
+	if _, found := domainNamed(e.domains(1), grant.Name); found {
+		t.Fatal("the grant domain outlived the preview")
+	}
+	for _, d := range e.domains(1) {
+		if d.Function != "" && p.Store.Get("functions", d.Function) == nil {
+			t.Fatalf("domain %s points at the deleted function %s", d.Name, d.Function)
+		}
+	}
+	// The grant has no live domain now, so maintenance marks it unused.
+	e.MaintainGrants()
+	g, ok := rowOf[domainGrant](p.Store, "domain_grants", grant.ID)
+	if !ok || g.UnusedSince == 0 {
+		t.Fatalf("grant not marked unused: %+v %v", g, ok)
+	}
+}
