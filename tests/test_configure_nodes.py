@@ -1004,6 +1004,9 @@ def plugin(name="snap", version="1.0.0", body=b"#!/bin/sh\necho hi\n", **flags):
         {"url": "http://example.org/x"},
         {"url": "https://x/'a"},
         {"network": "yes"},
+        {"memory_max": "lots"},
+        {"tasks_max": "0"},
+        {"cpu_quota": "100"},
         {"extra": 1},
     ],
 )
@@ -1043,6 +1046,16 @@ def test_the_units_keep_the_sandbox_and_open_only_what_a_plugin_asks_for():
     _, service = module.plugin_units(plugin(network=True, env_file=True)[0])
     assert "IPAddressDeny" not in service and "AF_INET6" in service
     assert "EnvironmentFile=/etc/carrel/plugins/snap.env" in service
+
+
+def test_the_service_has_resource_limits_a_site_file_can_raise():
+    module = load("configure-nodes.py")
+    _, service = module.plugin_units(plugin()[0])
+    assert "TasksMax=256\n" in service and "MemoryMax=512M\n" in service and "CPUQuota=100%\n" in service
+    p = {**plugin()[0], "tasks_max": 1024, "memory_max": "2G", "cpu_quota": "200%"}
+    assert module.plugin_list({"plugins": [p]}) == [p]
+    _, service = module.plugin_units(p)
+    assert "TasksMax=1024\n" in service and "MemoryMax=2G\n" in service and "CPUQuota=200%\n" in service
 
 
 def apply(module, tmp_path, plugins):
