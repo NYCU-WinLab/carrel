@@ -113,6 +113,13 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		if gone := e.SweepDeletedMachines(); len(gone) > 0 {
 			out["deleted_records_removed"] = gone
 		}
+		// Also a side task: a plugin that does not answer keeps every record.
+		var dropped []D
+		if problem := attempt(func() { dropped = e.SweepMissingSnapshots() }); problem != nil {
+			out["snapshot_records_error"] = describe(problem)
+		} else if len(dropped) > 0 {
+			out["snapshot_records_dropped"] = dropped
+		}
 		// The sweep is a side task: a backup server that does not answer
 		// must not fail a reconcile that already ran.
 		var swept D
