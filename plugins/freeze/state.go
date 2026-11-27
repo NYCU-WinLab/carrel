@@ -28,6 +28,15 @@ type run struct {
 	// Ambiguous: more than one task could be the run's; a person must look.
 	Ambiguous bool `json:"ambiguous,omitempty"`
 	// Done runs keep their outcome: a later call answers the same.
+	// Phase is where a freeze stands: backup, verify or destroy.
+	Phase   string `json:"phase,omitempty"`
+	Storage string `json:"storage,omitempty"`
+	// Note names the backup this run made; PVE keeps it as the backup's notes.
+	Note string `json:"note,omitempty"`
+	// VerifyBy is when the wait for the backup's verification ends, in Unix seconds.
+	VerifyBy  int64  `json:"verify_by,omitempty"`
+	Volid     string `json:"volid,omitempty"`
+	Size      int64  `json:"size,omitempty"`
 	Done      bool   `json:"done,omitempty"`
 	State     string `json:"state,omitempty"`
 	Error     string `json:"error,omitempty"`

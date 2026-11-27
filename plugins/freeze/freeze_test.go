@@ -43,7 +43,12 @@ func fakePVE(privs map[string][]string) http.HandlerFunc {
 // fixture is a server of a site with this storage and these privileges.
 func fixture(t *testing.T, storage string, privs map[string][]string) *server {
 	t.Helper()
-	ts := httptest.NewTLSServer(fakePVE(privs))
+	return fixtureWith(t, storage, fakePVE(privs))
+}
+
+func fixtureWith(t *testing.T, storage string, h http.HandlerFunc) *server {
+	t.Helper()
+	ts := httptest.NewTLSServer(h)
 	t.Cleanup(ts.Close)
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca.pem")
@@ -132,20 +137,20 @@ func TestProbeWithNoBackupStorageIsUnsupported(t *testing.T) {
 }
 
 func TestProbeNeedsThePrivilegesOnTheStorage(t *testing.T) {
-	all := map[string][]string{"/vms": {"VM.Audit", "VM.Backup"}, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace"}}
+	all := map[string][]string{"/vms": {"VM.Audit", "VM.Backup", "VM.Allocate"}, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}}
 	if p := probe(t, fixture(t, "pbs", all)); !p.Supported {
 		t.Fatalf("probe: %+v", p)
 	}
-	short := map[string][]string{"/vms": {"VM.Audit", "VM.Backup"}, "/storage/pbs": {"Datastore.Audit"}}
+	short := map[string][]string{"/vms": {"VM.Audit", "VM.Backup", "VM.Allocate"}, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}}
 	p := probe(t, fixture(t, "pbs", short))
 	if p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/pbs" {
 		t.Fatalf("probe: %+v", p)
 	}
 }
 
-func TestNoOperationRunsYet(t *testing.T) {
+func TestThawDoesNotRunYet(t *testing.T) {
 	s := fixture(t, "pbs", nil)
-	if _, err := s.StartOperation(context.Background(), &pluginpb.StartRequest{Operation: "machine_freeze"}); err == nil {
+	if _, err := s.StartOperation(context.Background(), &pluginpb.StartRequest{Operation: "machine_thaw"}); err == nil {
 		t.Fatal("started")
 	}
 }
