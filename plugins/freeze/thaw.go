@@ -205,7 +205,14 @@ func (s *server) startThaw(ctx context.Context, req *pluginpb.StartRequest) (*pl
 	if req.Operation == "machine_thaw" {
 		switch {
 		case state == guestForeign:
-			return nil, refuse(codes.FailedPrecondition, "the VMID %d is in use by another guest", r.VMID)
+			return nil, refuse(codes.FailedPrecondition, "the VMID %d is in use by another guest; if it is an unlocked cut-off restore of this machine, %s",
+				r.VMID, destroyHint(r.Kind, r.VMID, false))
+		case state == guestWhole && b != nil:
+			// No run of this key restored it: an unlocked cut-off restore
+			// also looks whole. Never remove the only backup on that guess.
+			return nil, refuse(codes.FailedPrecondition, "the VMID %d holds a guest named %s while the backup %s is still on the storage; "+
+				"it may be a cut-off restore that was unlocked, so the backup is kept: if it is, %s; if it is the restored machine, remove the backup with frozen_delete",
+				r.VMID, r.Name, r.Volid, destroyHint(r.Kind, r.VMID, false))
 		case state == guestWhole && b == nil:
 			// A thaw that finished and removed its backup, asked again.
 			r.Done, r.State, r.Result = true, "succeeded", thawResult(r, nil)
@@ -237,13 +244,30 @@ func (s *server) startThaw(ctx context.Context, req *pluginpb.StartRequest) (*pl
 				return nil, refuse(codes.Unavailable, "%v", err)
 			}
 			// PVE refused the request and started no task: nothing ran.
-			s.fail(r, "PVE refused the "+r.Phase+": "+api.Error()+"; the backup is kept")
+			message := "PVE refused the " + r.Phase + ": " + api.Error()
+			if r.Phase == "discard" {
+				message += "; " + destroyHint(r.Kind, r.VMID, true)
+			}
+			s.fail(r, message+"; the backup is kept")
 		}
 	}
 	if err := s.runs.save(r); err != nil {
 		return nil, refuse(codes.Unavailable, "save the run: %v", err)
 	}
 	return s.answer(ctx, r), nil
+}
+
+// destroyHint tells an admin how to remove a cut-off restore by hand. PVE
+// destroys a locked guest only with skiplock, which only root@pam may set.
+// Unlocking alone is not enough: an unlocked half looks whole or foreign, and
+// a thaw refuses both while the backup is there.
+func destroyHint(kind string, vmid int, locked bool) string {
+	cmd, id := map[string]string{"vm": "qm", "ct": "pct"}[kind], strconv.Itoa(vmid)
+	run := cmd + " destroy " + id + " --purge"
+	if locked {
+		run = cmd + " unlock " + id + " && " + run
+	}
+	return "an admin on the node removes it with `" + run + "` and asks again"
 }
 
 // thawResult is what a thaw ends with. A backup that could not be removed is
@@ -313,7 +337,7 @@ func (s *server) followRestore(ctx context.Context, r *run) bool {
 	r.Phase, r.UPID, r.Before, r.SentAt = "discard", "", nil, 0
 	var api *apiError
 	if err := s.launch(ctx, r); errors.As(err, &api) {
-		s.lose(r, message+"; PVE refused to remove the half restored machine: "+api.Error())
+		s.lose(r, message+"; PVE refused to remove the half restored machine: "+api.Error()+"; "+destroyHint(r.Kind, r.VMID, true))
 	}
 	return false
 }
@@ -332,8 +356,7 @@ func (s *server) followDiscard(ctx context.Context, r *run) bool {
 		if state == guestHalf {
 			// PVE destroys a locked guest only with skiplock, which only
 			// root@pam may set, never an API token.
-			message += "; it is locked: an admin on the node runs `" + map[string]string{"vm": "qm", "ct": "pct"}[r.Kind] +
-				" unlock " + strconv.Itoa(r.VMID) + "` and asks again"
+			message += "; it is locked: " + destroyHint(r.Kind, r.VMID, true)
 		}
 		if r.Error != "" {
 			message += "; " + r.Error

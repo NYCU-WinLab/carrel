@@ -30,6 +30,7 @@ type thawNode struct {
 	discardExit       string
 	running           bool // the restore task has not ended
 	refuseLocked      bool // PVE refuses to destroy a locked guest, as it does for a token
+	refuseLockedNow   bool // the same, but before a task starts, as for a container
 	calls             []string
 	backups           map[string]*thawBackup
 	tasks             []taskEntry
@@ -106,6 +107,10 @@ func (n *thawNode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(upid)
 	case r.Method == "DELETE" && path == "/nodes/pve/qemu/10100":
+		if n.refuseLockedNow && n.guest != nil && n.guest.lock != "" {
+			http.Error(w, "CT is locked ("+n.guest.lock+")", 500)
+			return
+		}
 		exit := n.discardExit
 		if n.refuseLocked && n.guest != nil && n.guest.lock != "" {
 			exit = "VM is locked (" + n.guest.lock + ")"
@@ -267,12 +272,23 @@ func TestAThawAskedAgainAfterItFinishedChangesNothing(t *testing.T) {
 	}
 }
 
-func TestARetryAfterTheRestoreFinishedRemovesTheBackup(t *testing.T) {
+// An unlocked cut-off restore looks whole once PVE wrote its name. A thaw
+// that did not restore it in its own run must not take it for the machine
+// and remove the only backup.
+func TestAWholeGuestWithTheBackupStillThereIsRefused(t *testing.T) {
 	s, n := thawSite(t)
 	n.guest = &guestEntry{name: "box"}
-	op := finish(t, s, start(t, s, thawReq("t1")).IdempotencyKey)
-	if op.State != "succeeded" || n.called("POST /nodes/pve/qemu") != 0 || len(n.backups) != 0 {
-		t.Fatalf("op %+v calls %v", op, n.calls)
+	_, err := s.StartOperation(context.Background(), thawReq("t1"))
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "`qm destroy 10100 --purge`") ||
+		n.backups[volid] == nil || n.called("DELETE") != 0 || n.called("POST") != 0 {
+		t.Fatalf("err %v calls %v backups %+v", err, n.calls, n.backups)
+	}
+	// An unlocked half with no name yet is refused with the same guidance.
+	n.guest = &guestEntry{}
+	_, err = s.StartOperation(context.Background(), thawReq("t2"))
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "`qm destroy 10100 --purge`") ||
+		n.backups[volid] == nil || n.called("DELETE") != 0 {
+		t.Fatalf("err %v calls %v", err, n.calls)
 	}
 }
 
@@ -291,8 +307,20 @@ func TestALockedHalfThatCannotBeRemovedKeepsTheBackup(t *testing.T) {
 	s, n := thawSite(t)
 	n.guest, n.refuseLocked = &guestEntry{name: "box", lock: "create"}, true
 	op := finish(t, s, start(t, s, thawReq("t1")).IdempotencyKey)
-	if op.State != "failed" || !strings.Contains(op.Error, "`qm unlock 10100`") || !strings.Contains(op.Error, "backup "+volid+" is kept") ||
+	if op.State != "failed" || !strings.Contains(op.Error, "`qm unlock 10100 && qm destroy 10100 --purge`") || !strings.Contains(op.Error, "backup "+volid+" is kept") ||
 		n.guest == nil || n.backups[volid] == nil || n.called("POST /nodes/pve/qemu") != 0 {
+		t.Fatalf("op %+v calls %v", op, n.calls)
+	}
+}
+
+// PVE can refuse the destroy of a locked guest before any task starts: the
+// thaw fails at once with the same guidance and the backup kept.
+func TestALockedHalfRefusedAtOnceSaysHowToRemoveIt(t *testing.T) {
+	s, n := thawSite(t)
+	n.guest, n.refuseLockedNow = &guestEntry{name: "box", lock: "create"}, true
+	op := finish(t, s, start(t, s, thawReq("t1")).IdempotencyKey)
+	if op.State != "failed" || !strings.Contains(op.Error, "`qm unlock 10100 && qm destroy 10100 --purge`") ||
+		!strings.Contains(op.Error, "the backup is kept") || n.guest == nil || n.backups[volid] == nil || n.called("POST /nodes/pve/qemu") != 0 {
 		t.Fatalf("op %+v calls %v", op, n.calls)
 	}
 }

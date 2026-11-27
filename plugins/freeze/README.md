@@ -19,8 +19,12 @@ says, and only then removes the backup. carrel sends the frozen record's facts a
 `vmid`, `kind`, `name`, `backup_volid`, `backup_storage` and `backup_note`. A restore that fails
 keeps the backup, and a half it left locked is removed. PVE destroys a locked guest only with
 `skiplock`, which only `root@pam` may set and never an API token: when it refuses, the thaw fails
-with the backup kept and says so, and an admin on the node runs `qm unlock <vmid>` (or
-`pct unlock <vmid>`) and asks again. A backup that cannot be removed after the
+with the backup kept and says so, and an admin on the node removes the half with
+`qm unlock <vmid> && qm destroy <vmid> --purge` (`pct` for a container) and asks again. Unlocking
+alone is not enough: an unlocked half looks like the machine or like another guest. A thaw that
+finds a guest with the machine's name while the backup is still on the storage, and did not restore
+it in its own run, refuses and keeps the backup; an admin removes the guest as above if it is a
+half, or removes the backup with `frozen_delete` if it is the machine. A backup that cannot be removed after the
 restore does not fail the thaw: the result carries `thaw_backup` (`volid`, `note`) so `machine_delete`
 can remove it later with `frozen_delete`. A thaw asked again after it finished changes nothing.
 
