@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: "1.27.1"
-      - run: test -z "$(gofmt -l cmd internal)"
+      - run: test -z "$(gofmt -l cmd internal plugins)"
       - run: go vet ./...
       # The race detector doubles the test time (127 s against 63 s on the sandbox):
       # pull requests skip it, every push to main still runs it.
@@ -23,7 +23,10 @@ jobs:
       # The latest release's agent against this control plane (#561).
       - run: |
           mkdir -p /tmp/previous
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'carrel-*-linux-amd64.tar.gz' --dir /tmp/previous
+          # The newest carrel release, by tag: a plugin's release (snapshot-v*) can be the latest.
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName \
+            --jq '[.[].tagName | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))][0]')
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'carrel-*-linux-amd64.tar.gz' --dir /tmp/previous
           tar -xzf /tmp/previous/carrel-*-linux-amd64.tar.gz -C /tmp/previous --strip-components=2 --wildcards '*/dist/carrel-agent'
           CARREL_PREVIOUS_AGENT=/tmp/previous/carrel-agent go test -count=1 -v -run TestThePreviousReleaseAgent ./cmd/carrel-agent/ | tee /tmp/previous/test.log
           grep -q -- '--- PASS: TestThePreviousReleaseAgentRunsANodeCall' /tmp/previous/test.log

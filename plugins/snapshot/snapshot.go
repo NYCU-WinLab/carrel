@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -35,6 +36,10 @@ import (
 
 // Version is set at build time.
 var Version = "0.0.0-dev"
+
+// taskWindow is how far before a request, in seconds, the tasks it may be
+// told apart from are looked for: PVE dates a task by its start second.
+const taskWindow = 5
 
 // resendAfter is how long a start request whose answer was lost may take to
 // show as a task, before it is sent again.
@@ -215,7 +220,7 @@ func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest)
 			return nil, refuse(codes.FailedPrecondition, "the machine is %s; a rollback runs on a stopped machine", power)
 		}
 	}
-	refused, err := s.send(ctx, run)
+	refused, err := s.send(ctx, run, true)
 	if err != nil {
 		return nil, refuse(codes.Unavailable, "%v", err)
 	}
@@ -228,19 +233,31 @@ func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest)
 
 // send saves the run, then starts its task and saves the UPID. A request
 // whose answer is lost leaves no UPID: answer finds the task or sends again.
-// refused: PVE answered the request with an error and the guest shows it
-// did nothing. An error: the run could not be saved, and nothing was sent.
-func (s *server) send(ctx context.Context, r *run) (refused bool, err error) {
-	r.SentAt = s.now().Unix()
+// refused: PVE answered the first request with an error and the guest shows
+// it did nothing. An error: nothing was sent.
+func (s *server) send(ctx context.Context, r *run, first bool) (refused bool, err error) {
+	now := s.now().Unix()
+	// The tasks already there are told apart from the one this sends.
+	before, err := s.pve.tasks(ctx, r.Operation, r.Kind, r.VMID, now-taskWindow)
+	if err != nil {
+		return false, fmt.Errorf("list the guest's tasks: %w", err)
+	}
+	r.SentAt, r.Before = now, append(r.Before, before...)
 	if err := s.runs.save(r); err != nil {
 		return false, fmt.Errorf("save the run: %w", err)
 	}
 	upid, err := s.pve.start(ctx, r.Operation, r.Kind, r.VMID, r.Name)
 	var api *apiError
 	switch {
-	case errors.As(err, &api):
+	case errors.As(err, &api) && first:
 		s.settle(ctx, r, api.Error())
 		refused = r.Done && r.State == "failed"
+	case errors.As(err, &api):
+		// A refusal of a request sent again says nothing of the first: only
+		// a guest that shows the work done ends the run.
+		if s.shows(ctx, r) {
+			r.Done, r.State = true, "succeeded"
+		}
 	case err != nil:
 		slog.Warn("snapshot_start_unanswered", "key", r.Key, "error", err)
 	default:
@@ -250,6 +267,16 @@ func (s *server) send(ctx context.Context, r *run) (refused bool, err error) {
 		slog.Warn("snapshot_run_not_saved", "key", r.Key, "error", err)
 	}
 	return refused, nil
+}
+
+// shows says whether the guest shows the run's work done: the snapshot is
+// there after a create, gone after a delete. A rollback shows nothing.
+func (s *server) shows(ctx context.Context, r *run) bool {
+	if r.Operation == "rollback" {
+		return false
+	}
+	snaps, err := s.pve.snapshots(ctx, r.Kind, r.VMID)
+	return err == nil && snaps[r.Name] == (r.Operation == "create")
 }
 
 // settle ends a run whose task failed or was refused, by what the guest
@@ -284,9 +311,9 @@ func (s *server) answer(ctx context.Context, r *run) *pluginpb.Operation {
 
 // follow learns how far the run's task got.
 func (s *server) follow(ctx context.Context, r *run) {
-	before := *r
+	before, _ := json.Marshal(r)
 	defer func() {
-		if *r != before {
+		if after, _ := json.Marshal(r); string(after) != string(before) {
 			if err := s.runs.save(r); err != nil {
 				slog.Warn("snapshot_run_not_saved", "key", r.Key, "error", err)
 			}
@@ -294,19 +321,30 @@ func (s *server) follow(ctx context.Context, r *run) {
 	}()
 	if r.UPID == "" {
 		// The start was sent, or was about to be, and its answer lost.
-		upid, err := s.pve.findTask(ctx, r.Operation, r.Kind, r.VMID, r.SentAt-2)
+		found, err := s.pve.tasks(ctx, r.Operation, r.Kind, r.VMID, r.SentAt-taskWindow)
 		if err != nil {
 			return
 		}
-		if upid == "" {
-			if s.now().Sub(time.Unix(r.SentAt, 0)) >= resendAfter {
-				// A refusal now says nothing of the first request: settle
-				// has judged it by what the guest shows.
-				_, _ = s.send(ctx, r)
+		fresh := []string{}
+		for _, upid := range found {
+			if !slices.Contains(r.Before, upid) {
+				fresh = append(fresh, upid)
 			}
+		}
+		switch {
+		case len(fresh) == 1:
+			r.UPID = fresh[0]
+		case len(fresh) > 1:
+			// Not one task: which is the run's is unknown, so it stays
+			// running until a person looks.
+			slog.Warn("snapshot_run_ambiguous", "key", r.Key, "tasks", len(fresh))
+			return
+		case s.now().Sub(time.Unix(r.SentAt, 0)) >= resendAfter:
+			_, _ = s.send(ctx, r, false)
+			return
+		default:
 			return
 		}
-		r.UPID = upid
 	}
 	ended, exit, err := s.pve.taskStatus(ctx, r.UPID)
 	if err != nil || !ended {
@@ -314,6 +352,11 @@ func (s *server) follow(ctx context.Context, r *run) {
 	}
 	if exit == "OK" {
 		r.Done, r.State = true, "succeeded"
+		// A task that ended well and a guest that shows otherwise: the
+		// task was not this run's work, and it did not happen.
+		if r.Operation != "rollback" && !s.shows(ctx, r) {
+			r.State, r.Error = "failed", "the PVE task ended OK, but the snapshot is not as it should be"
+		}
 		return
 	}
 	s.settle(ctx, r, "the PVE task failed: "+exit)

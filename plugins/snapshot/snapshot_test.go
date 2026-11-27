@@ -65,6 +65,10 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 3 {
 			out := []map[string]any{}
 			for _, t := range f.tasks {
+				// PVE lists only ended tasks unless asked for all.
+				if t.running && r.URL.Query().Get("source") != "all" {
+					continue
+				}
 				if t.id == r.URL.Query().Get("vmid") && t.typ == r.URL.Query().Get("typefilter") {
 					out = append(out, map[string]any{"upid": t.upid, "type": t.typ, "id": t.id, "starttime": t.start})
 				}
@@ -120,7 +124,7 @@ func (f *fakePVE) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.sent++
-		upid := fmt.Sprintf("UPID:pve:%08d:%s:%d:", f.sent, taskTypes[kind][op], vmid)
+		upid := fmt.Sprintf("UPID:pve:%08d:%s:%d:root@pam!carrel-snapshot:", f.sent, taskTypes[kind][op], vmid)
 		exit := f.exit
 		if exit == "" {
 			exit = "OK"
@@ -330,5 +334,48 @@ func TestAPluginWithoutItsTokenSaysWhy(t *testing.T) {
 	}
 	if _, err := start(s, "k", "create", take, "running"); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("start: %v", err)
+	}
+}
+
+// A task still running when its lost answer is overdue is found, not sent
+// again.
+func TestARunningTaskIsNotSentAgain(t *testing.T) {
+	s, f := fixture(t)
+	resendAfter = 0
+	t.Cleanup(func() { resendAfter = 30 * time.Second })
+	f.lose, f.hold = true, true
+	if _, err := start(s, "k1", "create", take, "running"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.runs.load("k1")
+	r.UPID = ""
+	if err := s.runs.save(r); err != nil {
+		t.Fatal(err)
+	}
+	if op := get(t, newServer(), "k1"); op.State != "running" || op.Task == "" || f.sent != 1 {
+		t.Fatalf("overdue: %v, sent %d", op, f.sent)
+	}
+}
+
+// An earlier task on the same guest is not taken for the run's: a delete
+// whose answer was lost and whose task failed is failed, though the delete
+// before it succeeded.
+func TestAnEarlierTaskIsNotTheRuns(t *testing.T) {
+	s, f := fixture(t)
+	f.snaps[10100]["s1"], f.snaps[10100]["s2"] = true, true
+	if _, err := start(s, "k1", "delete", take, "running"); err != nil || get(t, s, "k1").State != "succeeded" {
+		t.Fatalf("first delete: %v", err)
+	}
+	f.lose, f.exit = true, "snapshot is locked"
+	if _, err := start(s, "k2", "delete", `{"machine":"10100","name":"s2"}`, "running"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.runs.load("k2")
+	r.UPID = ""
+	if err := s.runs.save(r); err != nil {
+		t.Fatal(err)
+	}
+	if op := get(t, newServer(), "k2"); op.State != "failed" || !f.snaps[10100]["s2"] {
+		t.Fatalf("second delete: %v", op)
 	}
 }

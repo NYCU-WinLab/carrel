@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -169,13 +170,14 @@ var taskTypes = map[string]map[string]string{
 	"ct": {"create": "vzsnapshot", "delete": "vzdelsnapshot", "rollback": "vzrollback"},
 }
 
-// findTask is the task of type op on the guest that this token started at
-// or after since, or "".
-func (p *pve) findTask(ctx context.Context, op, kind string, vmid int, since int64) (string, error) {
-	q := url.Values{"vmid": {fmt.Sprint(vmid)}, "typefilter": {taskTypes[kind][op]}, "since": {fmt.Sprint(since)}, "limit": {"50"}}
+// tasks are the UPIDs of the tasks of type op on the guest that this token
+// started at or after since, running or ended, oldest first.
+func (p *pve) tasks(ctx context.Context, op, kind string, vmid int, since int64) ([]string, error) {
+	// source=all: the default lists only tasks that have ended.
+	q := url.Values{"vmid": {fmt.Sprint(vmid)}, "typefilter": {taskTypes[kind][op]}, "since": {fmt.Sprint(since)}, "limit": {"500"}, "source": {"all"}}
 	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/tasks?%s", url.PathEscape(p.node), q.Encode()), nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var tasks []struct {
 		UPID      string `json:"upid"`
@@ -184,17 +186,27 @@ func (p *pve) findTask(ctx context.Context, op, kind string, vmid int, since int
 		StartTime int64  `json:"starttime"`
 	}
 	if err := json.Unmarshal(data, &tasks); err != nil {
-		return "", err
+		return nil, err
 	}
-	best := ""
-	var at int64
+	// A UPID ends with the user that started the task.
+	mine := ":" + p.tokenID() + ":"
+	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].StartTime < tasks[j].StartTime })
+	out := []string{}
 	for _, t := range tasks {
-		// The oldest one since: a later one is not the request we lost.
-		if t.Type == taskTypes[kind][op] && t.ID == fmt.Sprint(vmid) && t.StartTime >= since && (best == "" || t.StartTime < at) {
-			best, at = t.UPID, t.StartTime
+		if t.Type == taskTypes[kind][op] && t.ID == fmt.Sprint(vmid) && t.StartTime >= since && strings.HasSuffix(t.UPID, mine) {
+			out = append(out, t.UPID)
 		}
 	}
-	return best, nil
+	return out, nil
+}
+
+// tokenID is the user part of the token, such as root@pam!carrel-snapshot.
+func (p *pve) tokenID() string {
+	id := strings.TrimPrefix(p.token, "PVEAPIToken=")
+	if i := strings.LastIndex(id, "="); i >= 0 {
+		id = id[:i]
+	}
+	return id
 }
 
 // taskStatus says whether a task has ended and, if so, its exit status.
