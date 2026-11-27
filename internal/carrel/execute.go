@@ -335,6 +335,8 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.functionLink(a, t)
 	case "runner_add", "runner_list", "runner_remove":
 		return e.RunnerTool(tool, a, t)
+	case "env_list", "env_upload", "env_access", "env_trust", "env_remove":
+		return e.EnvTool(tool, a, w, t)
 	case "webhook_add", "webhook_list", "webhook_remove", "webhook_rotate", "webhook_test":
 		return e.WebhookTool(tool, a, t)
 	}

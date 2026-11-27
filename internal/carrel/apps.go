@@ -81,6 +81,9 @@ func (e *Execution) PublicApp(app D) D {
 		out["agent"] = "connected"
 	}
 	out["repository_pinned"] = app["repo_id"] != nil
+	if env := publicAppEnv(app); env != nil {
+		out["env"] = env
+	}
 	rs := []D{}
 	for _, r := range e.Releases(app) {
 		rs = append(rs, publicRelease(r))
@@ -226,6 +229,7 @@ func (e *Execution) removeApps(apps []D) {
 				tx.S.Remove("releases", r["id"])
 			}
 			tx.S.Remove("apps", app["id"])
+			tx.dropEnvRecipients(integer(app["tenant_n"]), map[string]bool{str(app["id"]): true})
 		}
 	})
 	for _, app := range apps {
@@ -514,6 +518,10 @@ func (p *Platform) AgentNext(ctx context.Context, token string) D {
 		if app["mode"] == "pull" && num(app["poked_at"]) > 0 {
 			p.clearPoke(app)
 			return D{"pull": true}
+		}
+		// A new environment goes first: a release then starts with it.
+		if env := p.pendingEnv(app); env != nil {
+			return D{"env": env}
 		}
 		if id := str(app["pending"]); id != "" {
 			r := p.Store.Get("releases", id)

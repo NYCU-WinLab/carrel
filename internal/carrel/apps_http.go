@@ -117,6 +117,20 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 		}
 		return p.AgentReport(r.Context(), bearer(r), body)
 	}))
+	// carrel-deployd registers the public key environment sets are sealed
+	// to, and reports which revision of them it applied (#639).
+	mux.Handle("POST /apps/v1/agent/key", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.AgentEnvKey(r.Context(), bearer(r), readJSON(r))
+	}))
+	mux.Handle("POST /apps/v1/agent/env", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.AgentEnvReport(r.Context(), bearer(r), readJSON(r))
+	}))
+	// A member's agent uploads an environment file to an env_upload link.
+	envSet := appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		return p.ReceiveEnvSet(r.Context(), r.PathValue("token"), r.Body)
+	})
+	mux.Handle("PUT /apps/v1/env/{token}", envSet)
+	mux.Handle("POST /apps/v1/env/{token}", envSet)
 	mux.Handle("POST /apps/v1/agent/logs", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		var body D
 		if json.NewDecoder(r.Body).Decode(&body) != nil {
@@ -217,4 +231,13 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 		}
 		return p.FunctionLogAnswer(bearer(r), remoteIP(r), body)
 	}))
+}
+
+// readJSON decodes a small JSON body from an agent.
+func readJSON(r *http.Request) D {
+	var body D
+	if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body) != nil {
+		fail("invalid", "Invalid JSON body")
+	}
+	return body
 }

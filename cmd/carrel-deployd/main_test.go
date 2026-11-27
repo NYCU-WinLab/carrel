@@ -231,8 +231,8 @@ func TestALogRequestAloneIsAValidPoll(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := &agent{cfg: config{Origin: srv.URL, Token: "t"}, http: srv.Client()}
-	r, pull, logs, status, err := a.next(context.Background())
-	if err != nil || status != 200 || r != nil || pull || len(logs) != 1 || logs[0] != (logRequest{ID: "q1", Lines: 20, Since: 5}) {
+	r, pull, logs, env, status, err := a.next(context.Background())
+	if err != nil || status != 200 || r != nil || pull || env != nil || len(logs) != 1 || logs[0] != (logRequest{ID: "q1", Lines: 20, Since: 5}) {
 		t.Fatalf("%v %v %v %d %v", r, pull, logs, status, err)
 	}
 }

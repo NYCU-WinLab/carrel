@@ -483,6 +483,12 @@ func goldenScenario(g *goldenRun) {
 	call("apps", "app_link", D{"machine": "web", "name": "site", "repo": "alice/site", "start": "./run", "port": 8080}, alice)
 	call("apps", "app_list", D{}, alice)
 	call("apps", "app_get", D{"app": "site"}, alice)
+	// Environment sets: an upload link is random, so only its preview runs here.
+	call("apps", "env_upload", D{"set": "shared", "dry_run": true}, alice)
+	call("apps", "env_access", D{"set": "shared", "grant": []any{"site"}}, alice)
+	call("apps", "env_list", D{}, alice)
+	call("apps", "env_trust", D{"app": "site", "fingerprint": "SHA256:" + strings.Repeat("A", 43)}, alice)
+	call("apps", "env_remove", D{"set": "shared", "confirm": "shared"}, alice)
 	// No agent polls here: the request times out at once.
 	logWait := functionLogWait
 	functionLogWait = time.Millisecond
