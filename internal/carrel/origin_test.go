@@ -79,7 +79,7 @@ func originFixture(t *testing.T) (*Platform, *fakeBackend, *fakeDNS) {
 }
 
 func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
-	p, _, dns := originFixture(t)
+	p, b, dns := originFixture(t)
 	tenant := p.Store.TenantN(1)
 	name := "*." + str(tenant["slug"]) + ".winlab.tw"
 	dns.records[name] = []D{{"id": "r1", "content": "140.113.194.229", "comment": "carrel:b09:tenant:1"}}
@@ -92,6 +92,9 @@ func TestDomainRecordsFollowTheSitesAddress(t *testing.T) {
 		t.Fatal("moved a tenant record before the gateway confirmed its certificate")
 	}
 	p.delivered.Store(map[string]any{str(tenant["slug"]): fingerprint(string(chain))})
+	b.call = func(r D, _ string) (any, error) {
+		return D{"certificates": D{str(tenant["slug"]): fingerprint(string(chain))}}, nil
+	}
 	e.DomainRecord(tenant, false)
 	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
 		t.Fatal(encoded(dns.writes))
@@ -108,12 +111,21 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	dns.records["carrel.winlab.tw"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": originOwner}}
 	sent := D{}
 	confirm := true
+	// What the fake gateway serves: the fingerprints of the last pairs it took.
+	served := D{}
 	b.call = func(r D, target string) (any, error) {
 		if r["op"] == "sync" && target == "carrel-gateway" {
 			sent = r
 			if !confirm {
 				return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable"}}}
 			}
+			served = D{}
+			for name, pair := range obj(r["certificates"]) {
+				served[name] = fingerprint(obj(pair)["fullchain"])
+			}
+		}
+		if r["op"] == "status" && target == "carrel-gateway" {
+			return D{"certificates": served}, nil
 		}
 		return D{}, nil
 	}
@@ -146,6 +158,20 @@ func TestOriginRecordMovesOnlyAfterTheGatewayHasTheCertificate(t *testing.T) {
 	e.MaintainOrigin()
 	if len(dns.writes) != 1 || dns.writes[0]["method"] != "PATCH" || obj(dns.writes[0]["body"])["content"] != "140.113.60.184" {
 		t.Fatal(encoded(dns.writes))
+	}
+	// A gateway restored from an older snapshot no longer serves the pair,
+	// although the acknowledgement kept in memory still matches (issue #801).
+	dns.records["carrel.winlab.tw"] = []D{{"id": "o1", "content": "140.113.194.229", "comment": originOwner}}
+	served = D{}
+	before := len(dns.writes)
+	e.MaintainOrigin()
+	if len(dns.writes) != before {
+		t.Fatal("moved the record although the gateway no longer serves the pair")
+	}
+	e.Reconcile()
+	e.MaintainOrigin()
+	if len(dns.writes) != before+1 {
+		t.Fatal("did not move the record once the gateway served the pair again")
 	}
 	dns.records["carrel.winlab.tw"] = []D{{"id": "o1", "content": "1.2.3.4", "comment": "someone else"}}
 	if err := attempt(func() { e.MaintainOrigin() }); err == nil {

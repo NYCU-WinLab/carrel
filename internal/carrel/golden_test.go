@@ -90,10 +90,24 @@ type recorder struct {
 	p    *Platform
 	mu   sync.Mutex
 	sent []string
+	// served is what the gateway answers to status: the pairs of its last sync.
+	served D
 }
 
 func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) {
+	if req["op"] == "status" && target == "carrel-gateway" {
+		// Not recorded: a check before a record moves, not a change.
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return D{"certificates": clone(r.served)}, nil
+	}
 	r.mu.Lock()
+	if req["op"] == "sync" && target == "carrel-gateway" {
+		r.served = D{}
+		for name, pair := range obj(req["certificates"]) {
+			r.served[name] = fingerprint(obj(pair)["fullchain"])
+		}
+	}
 	r.sent = append(r.sent, target+" "+normalize(encoded(req)))
 	r.mu.Unlock()
 	m := obj(req["machine"])

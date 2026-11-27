@@ -4,6 +4,7 @@ The control plane renders the Caddyfile and checks the certificates (Go tests);
 this script only writes the files, validates with Caddy and reloads.
 """
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -62,6 +63,7 @@ def test_gateway_sync_accepts_certificates_only_as_an_extra_key():
 def test_the_forced_command_answers_sync_and_status_only(tmp_path, monkeypatch, capsys):
     module = load("gateway-sync.py")
     monkeypatch.setattr(module, "STATE", tmp_path)
+    monkeypatch.setattr(module, "CERTS", tmp_path / "certs")
     applied = []
     monkeypatch.setattr(module, "apply", lambda state: applied.append(state) or {"changed": []})
 
@@ -72,7 +74,12 @@ def test_the_forced_command_answers_sync_and_status_only(tmp_path, monkeypatch, 
     assert call({"op": "sync", "hosts": "", "caddy": ""}) == {"changed": []}
     assert applied == [{"hosts": "", "caddy": ""}]
     (tmp_path / "caddy.sha256").write_text("abc")
-    assert call({"op": "status"}) == {"hosts": None, "caddy": "abc"}
+    assert call({"op": "status"}) == {"hosts": None, "caddy": "abc", "certificates": {}}
+    # The digest of each fullchain the gateway holds, for the control plane to compare.
+    (tmp_path / "certs/zyx1121").mkdir(parents=True)
+    (tmp_path / "certs/zyx1121/fullchain.pem").write_text("A")
+    (tmp_path / "certs/empty").mkdir()
+    assert call({"op": "status"})["certificates"] == {"zyx1121": hashlib.sha256(b"A").hexdigest()}
     for bad in ({"hosts": "", "caddy": ""}, {"op": "reload"}, {"op": "status", "path": "/etc/shadow"}, []):
         with pytest.raises((ValueError, AttributeError)):
             call(bad)

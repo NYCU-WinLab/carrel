@@ -71,8 +71,19 @@ def certificates(bundles):
 
 
 def status():
-    return {name: (STATE / (name + ".sha256")).read_text() if (STATE / (name + ".sha256")).exists() else None
-            for name in ("hosts", "caddy")}
+    """Receipts of the hosts and routes, and a digest of each certificate held."""
+    result = {
+        name: (STATE / (name + ".sha256")).read_text() if (STATE / (name + ".sha256")).exists() else None
+        for name in ("hosts", "caddy")
+    }
+    held = {}
+    if CERTS.is_dir():
+        for directory in CERTS.iterdir():
+            chain = directory / "fullchain.pem"
+            if directory.is_dir() and chain.is_file():
+                held[directory.name] = hashlib.sha256(chain.read_bytes()).hexdigest()
+    result["certificates"] = held
+    return result
 
 
 def apply(state):
