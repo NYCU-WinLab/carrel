@@ -483,6 +483,11 @@ func goldenScenario(g *goldenRun) {
 	call("apps", "app_link", D{"machine": "web", "name": "site", "repo": "alice/site", "start": "./run", "port": 8080}, alice)
 	call("apps", "app_list", D{}, alice)
 	call("apps", "app_get", D{"app": "site"}, alice)
+	// No agent polls here: the request times out at once.
+	logWait := functionLogWait
+	functionLogWait = time.Millisecond
+	call("apps", "app_logs", D{"app": "site"}, alice)
+	functionLogWait = logWait
 	call("apps", "app_deploy", D{"app": "site", "release": "0000000000000000"}, alice)
 	call("apps", "app_rollback", D{"app": "site"}, alice)
 	call("apps", "app_unlink", D{"app": "site", "confirm": "site"}, alice)

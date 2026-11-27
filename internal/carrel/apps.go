@@ -100,6 +100,8 @@ func (e *Execution) AppTool(tool string, a, t D) D {
 		return D{"apps": out}
 	case "app_get":
 		return D{"app": e.PublicApp(e.App(t, a["app"]))}
+	case "app_logs":
+		return e.appLogs(e.App(t, a["app"]), a)
 	case "app_link":
 		m := e.Machine(t, a["machine"])
 		name := str(a["name"])
@@ -518,6 +520,10 @@ func (p *Platform) AgentNext(ctx context.Context, token string) D {
 			if r != nil {
 				return D{"release": D{"id": r["id"], "sha": r["sha"], "sha256": r["sha256"], "size": r["size"], "url": p.appOrigin() + "/apps/v1/agent/releases/" + id}}
 			}
+		}
+		// app_logs requests ride on the same poll (app_logs.go).
+		if asks := p.appLogs.collect(ctx, appLogKey(app), 0); len(asks) > 0 {
+			return D{"logs": asks}
 		}
 		if time.Now().After(deadline) || !sleep(ctx, time.Second) {
 			return nil

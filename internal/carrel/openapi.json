@@ -683,6 +683,35 @@
         }
       }
     },
+    "/apps/v1/agent/logs": {
+      "post": {
+        "x-carrel-audience": "agent",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "summary": "Answer an app_logs request with the end of the app unit's journal",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/functions/v1/deploy/{tenant}/{function}": {
       "post": {
         "x-carrel-audience": "ci",

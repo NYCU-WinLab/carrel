@@ -3496,6 +3496,45 @@
       }
     },
     {
+      "name": "app_logs",
+      "description": "Read the end of a running app's output: what its unit wrote to the journal, each line with its time and the release that wrote it (empty when the agent did not record it). Asks the app's agent on the machine and waits up to 15 seconds for it; an agent installed before app_logs existed must be installed again. app_get shows the logs of failed releases.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "since_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2592000,
+            "description": "Only lines written in the last this many seconds."
+          },
+          "lines": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 200,
+            "description": "Return at most this many lines from the end."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "app_deploy",
       "description": "Deploy a stored release again. The agent switches to it on its next poll.",
       "inputSchema": {
@@ -5392,6 +5431,7 @@
       "app_link",
       "app_list",
       "app_get",
+      "app_logs",
       "app_deploy",
       "app_rollback",
       "app_unlink",

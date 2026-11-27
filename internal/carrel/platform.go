@@ -90,6 +90,7 @@ type Platform struct {
 	platformMu    sync.Mutex
 	platformCodes map[string]D
 	fnLogs        functionLogs
+	appLogs       functionLogs
 	reportMu      sync.Mutex
 	// jumpMu makes a jump sync read the store and send under one lock.
 	jumpMu sync.Mutex
