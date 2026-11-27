@@ -764,3 +764,37 @@ func TestAPluginOperationRunLimitIsClamped(t *testing.T) {
 		}
 	}
 }
+
+// A plugin that never finishes fails its operation after the limit, frees
+// the machine for the next operation, and leaves a run that finishes in time
+// alone (#709).
+func TestAPluginOperationFailsPastItsRunLimit(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	plugins := testPlugin()
+	plugins[0].Operations[0].MaxSeconds = 1
+	reportPlugins(p, plugins)
+	seedMachine(p, "web", 10100)
+	f.mu.Lock()
+	f.hold = true
+	f.mu.Unlock()
+	r := member(p, "backup_take", D{"machine": "web", "wait_seconds": 0})
+	id := str(obj(r["operation"])["id"])
+	runQueue(p)
+	op := awaitState(t, p, id, "failed")
+	e := obj(op["error"])
+	if e["code"] != "plugin_failed" || e["recovery"] != "retry" || !strings.Contains(str(e["message"]), "backup") || !strings.Contains(str(e["message"]), "1s") {
+		t.Fatalf("error %s", encoded(op))
+	}
+	if obj(op["plugin"])["started_at"] != nil {
+		t.Fatalf("retry window not reset: %s", encoded(op))
+	}
+
+	// The machine is free: another operation on it runs, and one that
+	// finishes within the limit is unaffected.
+	f.mu.Lock()
+	f.hold = false
+	f.mu.Unlock()
+	r = member(p, "backup_take", D{"machine": "web", "wait_seconds": 0})
+	awaitState(t, p, str(obj(r["operation"])["id"]), "succeeded")
+}
