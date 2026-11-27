@@ -52,6 +52,8 @@ type PluginOperation struct {
 	// the disk back to an earlier state.
 	Stopped bool `json:"stopped,omitempty"`
 	Rewinds bool `json:"rewinds,omitempty"`
+	// Confirm: the caller repeats the object's name in "confirm".
+	Confirm bool `json:"confirm,omitempty"`
 }
 
 // PluginQuota is a quota dimension a plugin's objects are charged to.

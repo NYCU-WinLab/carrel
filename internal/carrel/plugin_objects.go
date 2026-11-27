@@ -139,6 +139,12 @@ func pluginObjectProblem(pl PluginInfo, op PluginOperation) string {
 	_ = json.Unmarshal(op.Params, &s)
 	props, _ := s["properties"].(map[string]any)
 	required, _ := s["required"].([]any)
+	if op.Confirm {
+		c, _ := props["confirm"].(map[string]any)
+		if op.ObjectParam == "" || c == nil || c["type"] != "string" || !contains(required, "confirm") {
+			return `an operation that asks to confirm must name its object and require a string "confirm"`
+		}
+	}
 	if op.Rewinds && !k.Disk {
 		return fmt.Sprintf("an operation that rewinds to a %s needs a kind with disk", k.Name)
 	}
@@ -334,6 +340,10 @@ func (e *Execution) planPluginObject(pl PluginInfo, op PluginOperation, a, t, m 
 		if op.Rewinds && (row.Configuration == nil || !equal(row.Configuration, diskConfiguration(m))) {
 			fail("conflict", fmt.Sprintf("Resources or NICs changed since this %s; administrator review required", op.ObjectKind))
 		}
+	}
+	// After the record, as a core rollback checks it.
+	if op.Confirm && a["confirm"] != a[op.ObjectParam] {
+		fail("invalid", fmt.Sprintf("confirm must equal %s name", op.ObjectKind))
 	}
 	return id, &row, nil
 }

@@ -354,6 +354,8 @@ once, as they read carrel's own rows. The records are in the `plugin_objects` ro
   carrel's own is left out.
 - A disk kind's record keeps the machine's resources and NICs at creation. A `rewinds`
   operation on it is refused once they changed, and while a resize is pending.
+- An operation that declares `confirm` requires a string `confirm` that repeats the object's
+  name. carrel checks it before anything changes, as a core rollback does.
 - Before a create starts, carrel checks the name is free, charges the tenant's quota and, for a
   kind with `disk`, checks the node's storage as for a snapshot. It records the object as
   `creating` and sends the record's id to the plugin as `reservation`. A plugin must refuse a
@@ -423,6 +425,28 @@ removes every plugin the list no longer names:
 
 The artifact is a `.tar.gz` with an executable `plugin` at its top. It serves the contract on the
 socket systemd passes it as fd 3 (`LISTEN_FDS=1`), and keeps its state in `$STATE_DIRECTORY`.
+
+#### The snapshot plugin
+
+`plugins/snapshot` takes, deletes and rolls back disk snapshots through the PVE HTTP API (#663).
+It has its own release, tagged `snapshot-v<version>`, whose `snapshot.tar.gz` a site file lists
+with `network: true` and `env_file: true`. Until the core snapshot tools are removed, their
+names win and the plugin's tools are left out.
+
+1. Run `scripts/configure-snapshot-plugin.py` as root on every node that runs the plugin. It
+   makes the token `root@pam!carrel-snapshot` with `VM.Audit`, `VM.Snapshot` and
+   `VM.Snapshot.Rollback` on `/vms`, and nothing else: power stays with carrel. The secret is
+   kept in `/etc/pve/priv/carrel-snapshot.json`, so every node uses one token.
+2. The script writes `/etc/carrel/plugins/snapshot.env` (root's, mode 0600) with the API URL, the
+   token and this node's PVE name, read from `/etc/pve/local`: it can differ from the host name.
+3. It copies the cluster CA to `/etc/carrel/plugins/snapshot-ca.pem`, mode 0644. The plugin's
+   dynamic user cannot read `/etc/pve/pve-root-ca.pem`. A second run keeps the token; one that
+   finds the token without its secret replaces it. `--remove` takes all of it away.
+
+The plugin saves each run under its idempotency key before it sends the request, and the task's
+UPID once PVE answers. A plugin that restarts follows the same task; one whose answer was lost
+finds the task by its type and start time, and sends the request again only when PVE has none.
+A snapshot name has at least 2 characters: PVE refuses a one-character name.
 
 ## Keys from the portal
 

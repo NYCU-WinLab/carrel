@@ -112,7 +112,11 @@ type OperationType struct {
 	// rewinds: the operation may bring the machine's disk back to an earlier
 	// state, as a snapshot rollback does. carrel then treats the guest's
 	// access files as unknown and waits for a report from a new boot.
-	Rewinds       bool `protobuf:"varint,14,opt,name=rewinds,proto3" json:"rewinds,omitempty"`
+	Rewinds bool `protobuf:"varint,14,opt,name=rewinds,proto3" json:"rewinds,omitempty"`
+	// confirm: an operation on an object takes a required string parameter
+	// "confirm" that must repeat the object's name. carrel checks it before
+	// anything changes, as a core rollback does.
+	Confirm       bool `protobuf:"varint,15,opt,name=confirm,proto3" json:"confirm,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -241,6 +245,13 @@ func (x *OperationType) GetStopped() bool {
 func (x *OperationType) GetRewinds() bool {
 	if x != nil {
 		return x.Rewinds
+	}
+	return false
+}
+
+func (x *OperationType) GetConfirm() bool {
+	if x != nil {
+		return x.Confirm
 	}
 	return false
 }
@@ -948,7 +959,7 @@ var File_plugin_proto protoreflect.FileDescriptor
 const file_plugin_proto_rawDesc = "" +
 	"\n" +
 	"\fplugin.proto\x12\x10carrel.plugin.v1\"\x11\n" +
-	"\x0fDescribeRequest\"\xb1\x03\n" +
+	"\x0fDescribeRequest\"\xcb\x03\n" +
 	"\rOperationType\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rparams_schema\x18\x02 \x01(\tR\fparamsSchema\x12 \n" +
@@ -967,7 +978,8 @@ const file_plugin_proto_rawDesc = "" +
 	"\robject_effect\x18\v \x01(\tR\fobjectEffect\x12!\n" +
 	"\fobject_param\x18\f \x01(\tR\vobjectParam\x12\x18\n" +
 	"\astopped\x18\r \x01(\bR\astopped\x12\x18\n" +
-	"\arewinds\x18\x0e \x01(\bR\arewinds\"y\n" +
+	"\arewinds\x18\x0e \x01(\bR\arewinds\x12\x18\n" +
+	"\aconfirm\x18\x0f \x01(\bR\aconfirm\"y\n" +
 	"\x0eQuotaDimension\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\rdefault_limit\x18\x02 \x01(\x01R\fdefaultLimit\x12\x12\n" +
