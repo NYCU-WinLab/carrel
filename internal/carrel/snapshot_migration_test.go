@@ -1,6 +1,7 @@
 package carrel
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -92,5 +93,21 @@ func TestSnapshotMigrationWritesWhatThePluginReports(t *testing.T) {
 	p.pluginRegistry()
 	if after := rows(); !equal(decode(`{"v":`+before+`}`), decode(`{"v":`+after+`}`)) {
 		t.Fatalf("migration wrote\n%s\nthe report wrote\n%s", before, after)
+	}
+}
+
+// A core snapshot operation that failed before the switch is not retried
+// as a plugin run: it names no plugin, and the core no longer runs it.
+func TestACoreSnapshotOperationIsNotRetriedAfterTheSwitch(t *testing.T) {
+	p, b := fixture(t)
+	withSnapshotPlugin(t, p, b, nil)
+	p.Store.Put("operations", "op1", 1, D{"id": "op1", "tenant_n": 1, "tool": "snapshot_create", "state": "failed",
+		"args": D{"machine": "web", "name": "s1"}, "next_action": "operation_retry", "error": D{"code": "internal"}})
+	r := p.Execute(context.Background(), "operation_retry", D{"id": "op1"}, person("alice", false))
+	if f := failure(r); f["code"] != "conflict" || f["recovery"] != "revise_request" || !strings.Contains(str(f["message"]), "no longer runs") {
+		t.Fatal(string(encoded(r)))
+	}
+	if op := p.Store.Get("operations", "op1"); op["state"] != "failed" || len(p.Store.Objects(pluginObjectRows)) != 0 {
+		t.Fatal("the refused retry changed something")
 	}
 }
