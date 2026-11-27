@@ -12,7 +12,7 @@ func pullToken(repo, id string, pr int, head string) CIClaims {
 	if pr > 0 {
 		ref = "refs/pull/" + itoa(int64(pr)) + "/merge"
 	}
-	return CIClaims{Issuer: githubIssuer, Repository: repo, RepositoryID: id, Ref: ref, SHA: "pr" + head, Event: "pull_request", HeadRef: head}
+	return CIClaims{Issuer: githubIssuer, Repository: repo, RepositoryID: id, Ref: ref, SHA: "pr" + head, Event: "pull_request", HeadRef: head, BaseRef: "main"}
 }
 
 func TestPullRequestPreviews(t *testing.T) {
@@ -125,6 +125,25 @@ func TestPullRequestPreviews(t *testing.T) {
 	}
 	if _, found := domainNamed(p.execution(ctx).domains(1), "pr-7-hook.alice.winlab.tw"); found {
 		t.Fatal("preview domain kept")
+	}
+	// Two previews from one head branch to different bases: a merged close
+	// naming one base removes only that one (#779).
+	a.forges.(fakeForge)["dev11"] = CIClaims{Issuer: githubIssuer, Repository: "alice/hook", RepositoryID: "42", Ref: "refs/pull/11/merge", Event: "pull_request", HeadRef: "shared", BaseRef: "dev"}
+	a.forges.(fakeForge)["main12"] = CIClaims{Issuer: githubIssuer, Repository: "alice/hook", RepositoryID: "42", Ref: "refs/pull/12/merge", Event: "pull_request", HeadRef: "shared", BaseRef: "main"}
+	a.forges.(fakeForge)["mergedMain"] = CIClaims{Issuer: githubIssuer, Repository: "alice/hook", RepositoryID: "42", Ref: "refs/heads/main", Event: "pull_request", HeadRef: "shared", BaseRef: "main"}
+	for _, token := range []string{"dev11", "main12"} {
+		if code, _ := deploy(token, image("e")); code != 200 {
+			t.Fatalf("deploy %s: %d", token, code)
+		}
+	}
+	if code, out := closePR("mergedMain", 11); code != 200 || len(arr(out["removed"])) != 0 {
+		t.Fatalf("wrong base closed: %d %s", code, encoded(out))
+	}
+	if code, out := closePR("mergedMain", 12); code != 200 || len(arr(out["removed"])) != 1 {
+		t.Fatalf("right base: %d %s", code, encoded(out))
+	}
+	if p.Store.Get("functions", functionID(1, "pr-11-hook")) == nil {
+		t.Fatal("the other base's preview was removed")
 	}
 	// Another repository's token removes nothing.
 	if code, _ := closePR("mallory7", 8); code != 403 && code != 404 {

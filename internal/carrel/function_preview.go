@@ -126,6 +126,7 @@ func (e *Execution) receivePreview(t, f D, c CIClaims, image string) D {
 		domain = domainRecord{ID: randomID()[:16], TenantN: n, Function: str(pf["id"]), Sub: name, Slug: str(t["slug"]), Name: previewHost(t, name), State: "queued", ReadyAt: now()}
 	}
 	pf["head_ref"] = c.HeadRef
+	pf["base_ref"] = c.BaseRef
 	r := e.startFunctionVersion(t, pf, spec, delta, env, false, func(tx *Execution) {
 		if created {
 			tx.Put("domains", domain.ID, n, domain)
@@ -172,11 +173,19 @@ func (e *Execution) removePreviews(previews []D) {
 	e.P.kickMaintenance()
 }
 
+// baseMatches is the merged close's base branch check: a preview deployed
+// with a base_ref is closed only by a token naming the same base. An older
+// preview without one keeps the head branch rule alone (#779).
+func baseMatches(pf D, c CIClaims) bool {
+	stored := str(pf["base_ref"])
+	return stored == "" || stored == c.BaseRef
+}
+
 // ClosePreview removes the preview of the pull request a closing job names.
 // The job sends the number it closes (the action's github.event.pull_request
 // .number). An unmerged close's token names the same number; a merged one's
 // names only the base branch, so the preview must also have been deployed
-// from the token's head branch. A late close of an older pull request on a
+// from the token's head branch and against its base branch. A late close of an older pull request on a
 // reused branch name names its own number, and so never removes a newer
 // pull request's preview.
 func (p *Platform) ClosePreview(ctx context.Context, slug, name string, c CIClaims, body io.Reader) D {
@@ -195,7 +204,7 @@ func (p *Platform) ClosePreview(ctx context.Context, slug, name string, c CIClai
 		fail("forbidden", "The token names another pull request")
 	}
 	gone := filter(e.previewsOf(f), func(pf D) bool {
-		return integer(pf["pr"]) == in.PR && (pullNumber(c) != 0 || (c.HeadRef != "" && pf["head_ref"] == c.HeadRef))
+		return integer(pf["pr"]) == in.PR && (pullNumber(c) != 0 || (c.HeadRef != "" && pf["head_ref"] == c.HeadRef && baseMatches(pf, c)))
 	})
 	e.removePreviews(gone)
 	removed := []any{}
