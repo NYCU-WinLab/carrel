@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,6 +52,20 @@ func main() {
 		telemetry.Close()
 		os.Exit(1)
 	}
+	// The service holds this lock for its whole life, and the move back
+	// takes it too: neither runs while the other writes the snapshot rows.
+	// The backup and reseal modes run beside the service and skip it.
+	if !*backup && !*reseal {
+		lock, err := os.OpenFile(cfg.Database+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+		if err == nil {
+			err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		}
+		if err != nil {
+			slog.Error("store_lock_held", "error", err, "reason", "another carrel process uses this database")
+			fatal()
+		}
+		defer lock.Close()
+	}
 	store, err := carrel.OpenStore(cfg.Database)
 	if err != nil {
 		slog.Error("open database", "error", err)
@@ -67,6 +83,13 @@ func main() {
 	platform := carrel.NewPlatform(store, backend, cfg)
 	platform.Telemetry = telemetry
 	if *moveBack {
+		// The lock above already keeps a running service out; systemd's
+		// view also catches one that is starting or set to restart.
+		state, _ := exec.Command("systemctl", "is-active", "carrel").Output()
+		if s := strings.TrimSpace(string(state)); s != "inactive" && s != "failed" {
+			slog.Error("snapshot_move_back_refused", "carrel_service", s, "reason", "stop carrel.service first")
+			fatal()
+		}
 		result, err := carrel.MoveSnapshotsBack(store)
 		if err != nil {
 			slog.Error("snapshot_move_back_failed", "error", err)
@@ -112,7 +135,7 @@ func main() {
 	if migrated, err := carrel.MigrateSnapshots(store); err != nil {
 		slog.Error("snapshot_migration_failed", "error", err)
 		fatal()
-	} else if migrated["moved"] != 0 {
+	} else if migrated["moved"] != 0 || migrated["dropped"] != nil {
 		slog.Info("snapshot_migration", "result", migrated)
 	}
 	platform.UseAgents()
