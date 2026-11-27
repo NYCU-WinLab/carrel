@@ -434,7 +434,12 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "measured": q.Measured, "plugin": pl.Name})
 		}
 		rec := pluginObject{ID: id, Plugin: pl.Name, Kind: op.ObjectKind, Name: str(a[op.ObjectParam]), VMID: integer(m["vmid"]),
-			State: "creating", Holds: k.Holds, Gone: k.Gone, TenantN: n, Run: str(plug["key"]), Spec: PluginOperationSpec(pl, op)}
+			State: "creating", Holds: k.Holds, Gone: k.Gone, Run: str(plug["key"]), Spec: PluginOperationSpec(pl, op)}
+		if k.Gone {
+			// Only a gone record names its tenant: the gateway reads it
+			// without the row's tenant key. Other records stay as they were.
+			rec.TenantN = n
+		}
 		for d, v := range charge {
 			if rec.Charge == nil {
 				rec.Charge = map[string]float64{}
