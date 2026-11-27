@@ -471,7 +471,7 @@ func (a *App) eventStream(origin string) http.HandlerFunc {
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(200)
 		flusher.Flush()
-		end := time.After(eventStreamLife)
+		end := time.After(streamLife(who, time.Now()))
 		recheck := time.NewTicker(eventStreamRecheck)
 		defer recheck.Stop()
 		for {
@@ -486,7 +486,8 @@ func (a *App) eventStream(origin string) http.HandlerFunc {
 			case <-time.After(25 * time.Second):
 				fmt.Fprint(w, ": keepalive\n\n")
 			case <-recheck.C:
-				// A member removed from the project loses the stream.
+				// A deleted or renamed tenant ends the stream; a member removed
+				// from a project loses it when the token expires (streamLife).
 				if err := attempt(func() { p.execution(r.Context()).Tenant(who, str(t["slug"])) }); err != nil {
 					return
 				}
@@ -497,4 +498,16 @@ func (a *App) eventStream(origin string) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// streamLife is how long an event stream may stay open: eventStreamLife, or
+// less when the member's access token expires sooner. Carrel has no server
+// side membership list, so the token's end is when a removal from a project
+// takes effect; the client reconnects with a fresh token.
+func streamLife(who D, now time.Time) time.Duration {
+	life := eventStreamLife
+	if exp, ok := who["exp"].(int64); ok {
+		life = min(life, max(time.Unix(exp, 0).Sub(now), 0))
+	}
+	return life
 }

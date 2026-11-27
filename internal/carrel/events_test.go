@@ -246,6 +246,38 @@ func TestEventStreamSendsBacklogAndChecksTenant(t *testing.T) {
 	}
 }
 
+func TestEventStreamEndsWithTheToken(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	if got := streamLife(D{}, now); got != eventStreamLife {
+		t.Fatalf("no exp: %v", got)
+	}
+	if got := streamLife(D{"exp": now.Add(5 * time.Minute).Unix()}, now); got != 5*time.Minute {
+		t.Fatalf("token expires first: %v", got)
+	}
+	if got := streamLife(D{"exp": now.Add(time.Hour).Unix()}, now); got != eventStreamLife {
+		t.Fatalf("stream life first: %v", got)
+	}
+	if got := streamLife(D{"exp": now.Add(-time.Minute).Unix()}, now); got != 0 {
+		t.Fatalf("expired: %v", got)
+	}
+	// A stream whose token has expired closes on its own, long before the
+	// request's own deadline.
+	p, _ := fixture(t)
+	who := merge(person("alice", false), D{"exp": time.Now().Add(-time.Second).Unix()})
+	app := NewApp(p, testVerifier{who: who})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r := httptest.NewRequestWithContext(ctx, "GET", "https://carrel.test/v1/events", nil)
+	r.RemoteAddr = "10.200.0.2:12345"
+	r.Header.Set("Authorization", "Bearer test")
+	w := httptest.NewRecorder()
+	start := time.Now()
+	app.ServeHTTP(w, r)
+	if w.Code != 200 || time.Since(start) > 5*time.Second {
+		t.Fatalf("stream with an expired token: %d after %v", w.Code, time.Since(start))
+	}
+}
+
 func TestEventLogKeepsItsCap(t *testing.T) {
 	p, _ := fixture(t)
 	e := p.execution(context.Background())

@@ -144,7 +144,16 @@ func (v *Verifier) Verify(ctx context.Context, token string) (D, error) {
 	if iss, err := claims.GetIssuer(); err != nil || !sameIssuer(iss, v.Issuer) {
 		return nil, errors.New("wrong issuer")
 	}
-	return v.OIDC.identity(D(claims))
+	who, err := v.OIDC.identity(D(claims))
+	if err != nil {
+		return nil, err
+	}
+	// exp lets a long-lived request (the event stream) end when the token
+	// does, so a member removed upstream loses access with their next token.
+	if exp, err := claims.GetExpirationTime(); err == nil && exp != nil {
+		who["exp"] = exp.Unix()
+	}
+	return who, nil
 }
 
 type OAuth struct {
