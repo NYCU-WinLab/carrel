@@ -265,6 +265,26 @@ func (s *server) send(ctx context.Context, r *run, first bool) (refused bool, er
 	if err != nil {
 		return false, fmt.Errorf("list the guest's tasks: %w", err)
 	}
+	if !first {
+		// A task that appeared since follow looked is the first request's:
+		// taking it into Before would exclude it for good and run the work twice.
+		fresh := []string{}
+		for _, upid := range before {
+			if !slices.Contains(r.Before, upid) {
+				fresh = append(fresh, upid)
+			}
+		}
+		if len(fresh) == 1 {
+			r.UPID = fresh[0]
+		}
+		r.Ambiguous = len(fresh) > 1
+		if len(fresh) > 0 {
+			if err := s.runs.save(r); err != nil {
+				return false, fmt.Errorf("save the run: %w", err)
+			}
+			return false, nil
+		}
+	}
 	r.SentAt, r.Before = now, append(r.Before, before...)
 	if err := s.runs.save(r); err != nil {
 		return false, fmt.Errorf("save the run: %w", err)
@@ -330,6 +350,9 @@ func (s *server) answer(ctx context.Context, r *run) *pluginpb.Operation {
 		s.follow(ctx, r)
 	}
 	op := &pluginpb.Operation{IdempotencyKey: r.Key, State: "running", Task: r.UPID}
+	if !r.Done && r.UPID == "" && r.Ambiguous {
+		op.Message = "more than one PVE task could be this run's; a person must look at the guest's tasks"
+	}
 	if r.Done {
 		op.State, op.Done, op.Error, op.ErrorCode, op.Result = r.State, true, r.Error, r.ErrorCode, "{}"
 	}
@@ -365,6 +388,7 @@ func (s *server) follow(ctx context.Context, r *run) {
 			// Not one task: which is the run's is unknown, so it stays
 			// running until a person looks.
 			slog.Warn("snapshot_run_ambiguous", "key", r.Key, "tasks", len(fresh))
+			r.Ambiguous = true
 			return
 		case s.now().Sub(time.Unix(r.SentAt, 0)) >= resendAfter:
 			_, _ = s.send(ctx, r, false)
