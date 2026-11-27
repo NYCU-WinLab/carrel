@@ -274,6 +274,43 @@ def jump(vmid, site):
     run("pct", "exec", str(vmid), "--", "systemctl", "try-restart", "ssh.service")
 
 
+DNS_UNIT = """[Unit]
+Description=Carrel internal resolver
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/carrel-dns.conf
+Restart=on-failure
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def dns(vmid, config):
+    """The gateway's resolver for the infra CTs and the .internal names that
+    gateway-sync.py writes to /etc/carrel-hosts. B09 had it by hand (#569)."""
+    upstream = config.get("infra_nameserver")
+    servers = [upstream] if upstream else ["1.1.1.1", "1.0.0.1"]
+    conf = "".join([
+        "port=53\n", "listen-address=10.200.0.2\n", "bind-dynamic\n", "no-resolv\n",
+        *[f"server={s}\n" for s in servers],
+        "domain-needed\n", "bogus-priv\n", "local=/internal/\n", "addn-hosts=/etc/carrel-hosts\n",
+    ])
+    with tempfile.TemporaryDirectory() as temp:
+        for name, text, target in [("dns.conf", conf, "/etc/carrel-dns.conf"),
+                                   ("dns.service", DNS_UNIT, "/etc/systemd/system/carrel-dns.service")]:
+            path = Path(temp) / name
+            path.write_text(text)
+            run("pct", "push", str(vmid), str(path), target, "--perms", "644")
+    # gateway-sync.py replaces the hosts file; never clobber one it wrote.
+    run("pct", "exec", str(vmid), "--", "sh", "-c", "test -e /etc/carrel-hosts || touch /etc/carrel-hosts")
+    run("pct", "exec", str(vmid), "--", "systemctl", "daemon-reload")
+    run("pct", "exec", str(vmid), "--", "systemctl", "enable", "carrel-dns")
+    run("pct", "exec", str(vmid), "--", "systemctl", "restart", "carrel-dns")
+
+
 def packages(vmid, role):
     run("pct", "exec", str(vmid), "--", "apt-get", "update", "-qq")
     wanted = ["ca-certificates", "curl"]
@@ -407,6 +444,7 @@ iface vmbr98 inet static
     packages(100, "control")
     packages(101, "gateway")
     caddy(101)
+    dns(101, config)
     infra = [100, 101]
     if config.get("ssh_jump"):
         write("/etc/pve/firewall/102.fw", JUMP_FIREWALL, 0o640)  # pmxcfs takes 0640 only
