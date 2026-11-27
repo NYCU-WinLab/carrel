@@ -117,9 +117,18 @@ const probePath = "/.well-known/carrel/probe"
 // askAddress is the gateway's own answer to Caddy's on-demand question.
 const askAddress = "127.0.0.1:2020"
 
-// SyncGateway sends the gateway its configuration and returns the
-// fingerprints of the pairs it now holds.
-func (e *Execution) SyncGateway(state D) map[string]any {
+// gatewaySync is everything one gateway sync sends, as plain data: it holds no
+// *Execution and no store handle, so it can be sent from another goroutine.
+type gatewaySync struct {
+	hosts string
+	caddy string
+	pairs D
+	held  map[string]any
+}
+
+// BuildGatewaySync reads the store and renders the gateway's configuration for
+// the desired state. It does not send anything.
+func (e *Execution) BuildGatewaySync(state D) gatewaySync {
 	var origin D
 	if crt, key, ok := e.originFiles(); ok {
 		origin = originPair(crt, key)
@@ -153,6 +162,18 @@ func (e *Execution) SyncGateway(state D) map[string]any {
 		pairs[name] = pair
 		held[name] = fingerprint(pair["fullchain"])
 	}
-	e.Call(D{"op": "sync", "hosts": hosts, "caddy": caddy, "certificates": pairs}, "carrel-gateway")
-	return held
+	return gatewaySync{hosts: hosts, caddy: caddy, pairs: pairs, held: held}
+}
+
+// sendGatewaySync sends a built sync to the gateway and returns the
+// fingerprints of the pairs it now holds. It does not read the store.
+func (e *Execution) sendGatewaySync(g gatewaySync) map[string]any {
+	e.Call(D{"op": "sync", "hosts": g.hosts, "caddy": g.caddy, "certificates": g.pairs}, "carrel-gateway")
+	return g.held
+}
+
+// SyncGateway sends the gateway its configuration and returns the
+// fingerprints of the pairs it now holds.
+func (e *Execution) SyncGateway(state D) map[string]any {
+	return e.sendGatewaySync(e.BuildGatewaySync(state))
 }
