@@ -151,7 +151,7 @@ func TestThePortalReadKeyDoesNotFollowARedirect(t *testing.T) {
 }
 
 func TestPortalKeysURLMustBeHTTPS(t *testing.T) {
-	base := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}, PortalKeysTokenFile: "/etc/carrel/portal-keys-token"}
+	base := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.winlab.tw", Database: "x", Nodes: []NodeConfig{{Name: "pve1", Target: "pve1"}}, PortalKeysTokenFile: "/etc/carrel/portal-keys-token"}
 	for url, ok := range map[string]bool{
 		"https://portal.test/api/ssh-keys/services/carrel":     true,
 		"http://portal.test/api/ssh-keys/services/carrel":      false,

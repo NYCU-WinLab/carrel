@@ -230,6 +230,11 @@ func (c Config) Validate() error {
 	if c.Domain != "" && !zonePattern.MatchString(c.Domain) {
 		return errors.New("domain must be a lower-case DNS name, such as winlab.tw")
 	}
+	// The gateway builds the origin site in the site's own zone, where its
+	// certificate is issued, and refuses any other host (#794).
+	if zone := or(c.Domain, defaultDomain); !under(c.OriginHost(), zone) || c.OriginHost() == zone {
+		return errors.New("origin must be a host under domain, such as carrel." + zone)
+	}
 	if c.PublicHost != "" && !zonePattern.MatchString(c.PublicHost) {
 		return errors.New("public_host must be a lower-case DNS name, such as carrel.winlab.tw")
 	}

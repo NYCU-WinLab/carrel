@@ -96,7 +96,7 @@ func TestKeycloakSubNotConfigured(t *testing.T) {
 }
 
 func TestKeycloakConfigIsAllOrNothing(t *testing.T) {
-	c := Config{Origin: "https://carrel.example", Issuer: "https://sso.example/realms/lab", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
+	c := Config{Origin: "https://carrel.winlab.tw", Issuer: "https://sso.example/realms/lab", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}

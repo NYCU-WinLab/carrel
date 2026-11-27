@@ -64,7 +64,7 @@ func TestValidateNodes(t *testing.T) {
 			t.Fatalf("accepted %s", text)
 		}
 	}
-	if c, err := LoadConfig([]byte(`{"origin": "https://c.test", "issuer": "https://sso.test/realms/x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}]}`)); err != nil || c.ZoneDir != defaultZoneDir || c.GuestReadyTimeout != defaultGuestReady {
+	if c, err := LoadConfig([]byte(`{"origin": "https://carrel.winlab.tw", "issuer": "https://sso.test/realms/x", "database": "x.db", "public_address": "140.113.60.184", "nodes": [{"name": "a", "target": "b"}]}`)); err != nil || c.ZoneDir != defaultZoneDir || c.GuestReadyTimeout != defaultGuestReady {
 		t.Fatalf("defaults: %+v %v", c, err)
 	}
 }

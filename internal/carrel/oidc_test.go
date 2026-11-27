@@ -233,7 +233,7 @@ func TestUpstreamSendsSecretAndRefusesRedirects(t *testing.T) {
 }
 
 func TestIssuerMustBeHTTPS(t *testing.T) {
-	c := Config{Origin: "https://c.test", Issuer: "http://sso.test/realms/x", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
+	c := Config{Origin: "https://carrel.winlab.tw", Issuer: "http://sso.test/realms/x", PublicAddress: "192.0.2.1", Database: "db", Nodes: []NodeConfig{{Name: "n1", Target: "n1"}}}
 	if c.Validate() == nil {
 		t.Fatal("accepted an http issuer")
 	}

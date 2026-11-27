@@ -146,7 +146,7 @@ func TestCertificateModeRefusesTheToken(t *testing.T) {
 func TestAgentCertificateConfig(t *testing.T) {
 	base := func(mut func(*Config, *NodeConfig)) error {
 		n := NodeConfig{Name: "carrel01", Target: "carrel01", Transport: "agent", AgentSource: "10.200.0.1", AgentCertificate: agentNameB09}
-		c := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.test", Database: "x",
+		c := Config{PublicAddress: "192.0.2.1", Origin: "https://carrel.winlab.tw", Database: "x",
 			AgentListen: "10.200.0.3:8443", AgentCertFile: "/c", AgentKeyFile: "/k",
 			AgentClientCAFile: agentDir + "root.crt", AgentProvisioner: agentProvisioner}
 		mut(&c, &n)

@@ -41,7 +41,7 @@ func TestIPv6MachineAddressMatchesNodeAgent(t *testing.T) {
 }
 
 func TestConfigRejectsABadIPv6Prefix(t *testing.T) {
-	c := Config{PublicAddress: "140.113.60.184", Origin: "https://carrel.example", Database: "x", Nodes: []NodeConfig{{Name: "n1"}}, IPv6Prefix: "fd00::/48"}
+	c := Config{PublicAddress: "140.113.60.184", Origin: "https://carrel.winlab.tw", Database: "x", Nodes: []NodeConfig{{Name: "n1"}}, IPv6Prefix: "fd00::/48"}
 	if err := c.Validate(); err == nil {
 		t.Fatal("private prefix accepted")
 	}

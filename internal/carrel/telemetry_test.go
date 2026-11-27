@@ -296,7 +296,7 @@ func TestTelemetryOffByDefault(t *testing.T) {
 }
 
 func TestTelemetryConfig(t *testing.T) {
-	base := Config{Origin: "https://carrel.test", Database: "x", PublicAddress: "140.113.60.184", Nodes: []NodeConfig{{Name: "carrel01", Target: "node"}}}
+	base := Config{Origin: "https://carrel.winlab.tw", Database: "x", PublicAddress: "140.113.60.184", Nodes: []NodeConfig{{Name: "carrel01", Target: "node"}}}
 	for _, c := range []struct {
 		url, file string
 		ok        bool
