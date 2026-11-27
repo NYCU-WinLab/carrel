@@ -13,7 +13,12 @@ import (
 
 func registerHostKey(t *testing.T, a *App, key hpke.PrivateKey) D {
 	t.Helper()
-	body, _ := json.Marshal(D{"kem": envSetKEM.ID(), "public": base64.StdEncoding.EncodeToString(key.PublicKey().Bytes())})
+	return registerHostKeyOpening(t, a, key, "env", "registry")
+}
+
+func registerHostKeyOpening(t *testing.T, a *App, key hpke.PrivateKey, opens ...string) D {
+	t.Helper()
+	body, _ := json.Marshal(D{"kem": envSetKEM.ID(), "public": base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), "opens": opens})
 	code, out := hostCall(t, a, "POST", "/functions/v1/agent/key", testHostToken, string(body))
 	if code != 200 {
 		t.Fatalf("register: %d %s", code, encoded(out))
@@ -218,5 +223,31 @@ func TestAHostThatRegisteredBeforeStillGetsLaterValuesMoved(t *testing.T) {
 	}
 	if !hostSealed(str(p.Store.Get("functions", functionID(1, "hook"))["registry_auth"])) {
 		t.Fatal("not moved")
+	}
+}
+
+func TestAnAgentThatOpensOnlyEnvironmentsKeepsOpenCredentials(t *testing.T) {
+	p, a := functionFixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	alice := person("alice", false)
+	call := func(tool string, args D) D { return a.Call(context.Background(), tool, args, alice) }
+	assertOK(t, call("function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1"}))
+	v1 := str(p.Store.Get("functions", functionID(1, "hook"))["pending"])
+	// An agent of #783 registers its key without naming registry.
+	key, _ := envSetKEM.GenerateKey()
+	registerHostKeyOpening(t, a, key)
+	if code, _ := putEnv(t, a, str(call("function_registry", D{"function": "hook"})["url"]), `{"username":"u","password":"p"}`); code != 200 {
+		t.Fatalf("upload: %d", code)
+	}
+	code, out := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version="+v1, testHostToken, "")
+	if code != 200 || obj(out["auth"])["password"] != "p" {
+		t.Fatalf("old agent auth: %d %s", code, encoded(out))
+	}
+	// Upgraded, it says so at its next start, and the credentials move.
+	if out := registerHostKeyOpening(t, a, key, "env", "registry"); integer(out["resealed"]) != 1 {
+		t.Fatalf("upgraded %s", encoded(out))
+	}
+	if _, out := hostCall(t, a, "GET", "/functions/v1/agent/auth?function=t1-hook&version="+v1, testHostToken, ""); out["auth_box"] == nil {
+		t.Fatalf("not moved %s", encoded(out))
 	}
 }

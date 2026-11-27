@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTheHostKeyIsMadeOnceAndKeptPrivate(t *testing.T) {
@@ -61,6 +62,9 @@ func TestAgentOpensAnEnvironmentSealedToItsKey(t *testing.T) {
 			return build(ctx, f, image, env, auth)
 		}}
 	a.registerKey(context.Background())
+	if a.keyRetryAt.Before(time.Now().Add(50 * time.Minute)) {
+		t.Fatal("the key is not sent again within the hour")
+	}
 	if !a.keyRegistered || registered["public"] != base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()) {
 		t.Fatalf("registered %v", registered)
 	}

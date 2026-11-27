@@ -90,18 +90,26 @@ func Fingerprint(public []byte) string {
 // registerKey sends the public key until the control plane answers. One
 // that predates host keys refuses it; the agent asks again later.
 func (a *Agent) registerKey(ctx context.Context) {
-	if a.EnvKey == nil || a.keyRegistered || time.Now().Before(a.keyRetryAt) {
+	// Sent again every hour, not only once: a control plane upgraded
+	// after this agent started learns what it opens, and moves values
+	// still under function_env_key to its key.
+	if a.EnvKey == nil || time.Now().Before(a.keyRetryAt) {
 		return
 	}
 	public := a.EnvKey.PublicKey().Bytes()
 	var answer struct{ State string }
-	err := a.call(ctx, http.MethodPost, "/functions/v1/agent/key", map[string]any{"kem": envKEM.ID(), "public": base64.StdEncoding.EncodeToString(public)}, &answer)
+	err := a.call(ctx, http.MethodPost, "/functions/v1/agent/key", map[string]any{"kem": envKEM.ID(), "public": base64.StdEncoding.EncodeToString(public), "opens": []string{"env", "registry"}}, &answer)
 	if err != nil {
 		slog.Warn("host key not registered", "error", err)
 		a.keyRetryAt = time.Now().Add(10 * time.Minute)
 		return
 	}
+	first := !a.keyRegistered
 	a.keyRegistered = true
+	a.keyRetryAt = time.Now().Add(time.Hour)
+	if !first {
+		return
+	}
 	if answer.State == "pending" {
 		slog.Error("the control plane holds another key for this host; an operator must run carrel -trust-function-host-key", "fingerprint", Fingerprint(public))
 		return

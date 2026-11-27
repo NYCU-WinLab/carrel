@@ -62,10 +62,21 @@ func sealBox(public string, info []byte, v any) string {
 	return hostEnvPrefix + base64.StdEncoding.EncodeToString(box)
 }
 
+// hostRegistryKey is the host's public key when its agent said it opens
+// registry credentials too; an agent of #783 registered a key for
+// environments only.
+func (p *Platform) hostRegistryKey(s *Store, host string) string {
+	rec := s.SiteGet("function_host_keys", host)
+	if !boolean(rec["registry"]) {
+		return ""
+	}
+	return str(rec["public"])
+}
+
 // sealRegistryFor seals a function's registry credentials: to its host's
-// key when the host registered one, else under function_env_key.
+// key when the host's agent opens them, else under function_env_key.
 func (p *Platform) sealRegistryFor(s *Store, f D, auth D) string {
-	if public := p.hostEnvKey(s, str(f["host"])); public != "" {
+	if public := p.hostRegistryKey(s, str(f["host"])); public != "" {
 		return sealBox(public, registryInfo(hostIDOf(f), str(auth["registry"])), auth)
 	}
 	return p.sealValue(str(f["id"])+"#registry", auth)
@@ -98,6 +109,10 @@ func (p *Platform) AgentHostKey(ctx context.Context, token, source string, body 
 	if _, err := envSetKEM.NewPublicKey(raw); err != nil {
 		fail("invalid", "The public key is not valid")
 	}
+	registry := false
+	for _, c := range arr(body["opens"]) {
+		registry = registry || c == "registry"
+	}
 	p.writer.Lock()
 	defer p.writer.Unlock()
 	rec := p.Store.SiteGet("function_host_keys", host.Name)
@@ -105,18 +120,21 @@ func (p *Platform) AgentHostKey(ctx context.Context, token, source string, body 
 	case public:
 		moved := 0
 		p.Store.Transaction(func(s *Store) {
-			if rec["pending"] != nil {
+			if rec["pending"] != nil || boolean(rec["registry"]) != registry {
 				// The host came back with its trusted key: a key it no longer
-				// uses must not be trusted later.
+				// uses must not be trusted later. What its agent opens
+				// follows the agent's release.
 				delete(rec, "pending")
+				rec["registry"] = registry
 				s.SitePut("function_host_keys", host.Name, rec)
 			}
 			// Values sealed under function_env_key since, or by a release
 			// that sealed only environments, move now.
 			moved = p.sealHostValues(s, host.Name, public)
 		})
-		if moved > 0 {
+		if moved > 0 || boolean(rec["scrub"]) {
 			scrubbed := p.scrubDatabase() == nil
+			p.noteScrub(host.Name, scrubbed)
 			p.Store.Log("host:"+host.Name, nil, "function_host_values_resealed", D{"host": host.Name, "resealed": moved, "scrubbed": scrubbed}, "ok")
 		}
 		return D{"state": "trusted", "fingerprint": keyFingerprint(public), "resealed": moved}
@@ -132,12 +150,28 @@ func (p *Platform) AgentHostKey(ctx context.Context, token, source string, body 
 	}
 	moved := 0
 	p.Store.Transaction(func(s *Store) {
-		s.SitePut("function_host_keys", host.Name, D{"name": host.Name, "public": public, "at": now()})
+		s.SitePut("function_host_keys", host.Name, D{"name": host.Name, "public": public, "at": now(), "registry": registry})
 		moved = p.sealHostValues(s, host.Name, public)
 	})
 	scrubbed := moved == 0 || p.scrubDatabase() == nil
+	p.noteScrub(host.Name, scrubbed)
 	p.Store.Log("host:"+host.Name, nil, "function_host_key_register", D{"host": host.Name, "fingerprint": keyFingerprint(public), "resealed": moved, "scrubbed": scrubbed}, "ok")
 	return D{"state": "trusted", "fingerprint": keyFingerprint(public), "resealed": moved}
+}
+
+// noteScrub records a scrub that failed, so the host's next registration
+// runs it again.
+func (p *Platform) noteScrub(host string, scrubbed bool) {
+	rec := p.Store.SiteGet("function_host_keys", host)
+	if rec == nil || boolean(rec["scrub"]) == !scrubbed {
+		return
+	}
+	if scrubbed {
+		delete(rec, "scrub")
+	} else {
+		rec["scrub"] = true
+	}
+	p.Store.SitePut("function_host_keys", host, rec)
 }
 
 // scrubDatabase removes copies of replaced rows from the database files:
@@ -180,7 +214,7 @@ func (p *Platform) sealHostValues(s *Store, host, public string) int {
 			continue
 		}
 		fid, n := str(f["id"]), integer(f["tenant_n"])
-		if sealed := str(f["registry_auth"]); sealed != "" && !hostSealed(sealed) {
+		if sealed := str(f["registry_auth"]); sealed != "" && !hostSealed(sealed) && boolean(s.SiteGet("function_host_keys", host)["registry"]) {
 			var auth D
 			if attempt(func() { p.openValue(fid+"#registry", sealed, &auth) }) == nil && str(auth["registry"]) == str(f["registry"]) {
 				f["registry_auth"] = sealBox(public, registryInfo(hostIDOf(f), str(f["registry"])), auth)
@@ -220,6 +254,7 @@ func (p *Platform) TrustFunctionHostKey(host, fingerprint string) (result D, err
 		if keyFingerprint(pending) != fingerprint {
 			fail("invalid", "The fingerprint does not match the host's new key")
 		}
+		// What the new agent opens is known at its next registration.
 		p.Store.SitePut("function_host_keys", host, D{"name": host, "public": pending, "at": now()})
 		p.Store.Log("operator", nil, "function_host_key_trust", D{"host": host, "fingerprint": fingerprint}, "ok")
 		result = D{"host": host, "fingerprint": fingerprint}
