@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/NYCU-WinLab/carrel/compare/snapshot-v0.2.0...snapshot-v0.2.1) (2026-11-27)
+
+
+### Bug fixes
+
+* **snapshot:** resend adopts a late task, ambiguous runs say so, fake UPIDs complete ([#701](https://github.com/NYCU-WinLab/carrel/issues/701)) ([46a6a5c](https://github.com/NYCU-WinLab/carrel/commit/46a6a5c9ccc78ca06413011deadb58cd28fe8e91))
+
 ## [0.2.0](https://github.com/NYCU-WinLab/carrel/compare/snapshot-v0.1.0...snapshot-v0.2.0) (2026-11-27)
 
 
