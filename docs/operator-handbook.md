@@ -504,6 +504,41 @@ row and a plugin record that differ` and change nothing. Compare the 2 rows with
 wrong one (`snapshots/<vmid>-<name>` or `plugin_objects/snapshot/snapshot/<vmid>/<name>` in
 `objects`) and run the move again. Do not touch PVE, or the tenant loses that snapshot.
 
+## Identity provider
+
+`issuer` in `config.json` names the OIDC provider members sign in with. Carrel reads its
+`/.well-known/openid-configuration` for the signing keys and the authorize, token and revoke
+endpoints. A provider without discovery, or a document whose `issuer` differs or whose endpoint
+uses another scheme, gets Keycloak's paths under the issuer.
+
+The `oidc` block names the provider's claims and groups. Every field is optional, and an empty one
+keeps WinLab's value:
+
+```json
+"oidc": {
+  "audience": "carrel-mcp",
+  "client_id": "carrel-mcp",
+  "username_claim": "preferred_username",
+  "groups_claim": "groups",
+  "admin_groups": ["winlab-admin"],
+  "member_groups": ["lab-member/112", "lab-member/master"],
+  "project_group_prefix": "winlab-projects/"
+}
+```
+
+- `audience` is the `aud` every token carries.
+- `client_id` is the client Carrel signs members in with. A token names it in `azp`, or in
+  `client_id` when it has no `azp` (RFC 9068).
+- `admin_groups` and `member_groups` are patterns over group names without the leading `/`:
+  `staff/*` matches `staff/phd` but not `staff/phd/old`. WinLab's default lists 9 member groups.
+- A group `<project_group_prefix><name>` makes the member a member of project tenant `<name>`.
+  Carrel stores the tenant as `winlab-projects/<name>` whatever the prefix, so a new prefix keeps
+  existing project tenants.
+
+A bad pattern stops the service at start. Carrel keeps its own OAuth proxy, since many providers
+have no dynamic client registration: a claude.ai team connector can instead use its own OAuth
+client with `client_id`.
+
 ## Keys from the portal
 
 With `portal_keys_url` and `portal_keys_token_file` in `config.json`, a creation that has no key

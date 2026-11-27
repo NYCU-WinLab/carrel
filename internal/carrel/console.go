@@ -148,14 +148,14 @@ func (h consoleHandler) begin(w http.ResponseWriter, r *http.Request, token stri
 	h.p.Store.OAuthPut("state", state, D{"console": rec["id"], "verifier": verifier, "cookie": digest(cookie)}, 600)
 	params := url.Values{"client_id": {h.o.ClientID}, "redirect_uri": {h.o.Origin + "/oauth/callback"}, "response_type": {"code"}, "scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}}
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/"})
-	http.Redirect(w, r, h.o.Issuer+"/protocol/openid-connect/auth?"+params.Encode(), 302)
+	http.Redirect(w, r, h.o.authorizeURL(params), 302)
 }
 
 // finish exchanges the code, checks that the member who logged in is the
 // one who asked for the link, and starts the console session.
 func (h consoleHandler) finish(w http.ResponseWriter, r *http.Request, txn D, code string) {
 	body := url.Values{"client_id": {h.o.ClientID}, "grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {str(txn["verifier"])}, "redirect_uri": {h.o.Origin + "/oauth/callback"}}
-	tokens, status, err := h.o.upstream(r.Context(), "token", body)
+	tokens, status, err := h.o.upstream(r.Context(), "token_endpoint", body)
 	access, _ := tokens["access_token"].(string)
 	if err != nil || status != 200 || access == "" {
 		consolePage(w, 503, "登入服務暫時無法使用，請稍後再試。")

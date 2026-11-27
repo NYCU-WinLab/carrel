@@ -36,13 +36,14 @@ type App struct {
 func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	origin := strings.TrimRight(p.Config.Origin, "/")
 	issuer := strings.TrimRight(p.Config.Issuer, "/")
+	ep := newEndpoints(issuer)
 	if verifier == nil {
-		verifier = NewVerifier(issuer)
+		verifier = NewVerifier(issuer, p.Config.OIDC, ep)
 	}
 	a := &App{Platform: p, verifier: verifier, forges: NewForgeVerifier(p.ciAudience(), p.Config.GitLabIssuers), schemas: map[string]*jsonschema.Schema{}}
 	a.compileSchemas()
 	mux := http.NewServeMux()
-	a.oauthRoutes(mux, origin, issuer)
+	a.oauthRoutes(mux, origin, issuer, ep)
 	a.guestRoutes(mux)
 	a.appRoutes(mux)
 	a.functionRoutes(mux)
@@ -72,9 +73,9 @@ func (a *App) compileSchemas() {
 		a.schemas[name] = schema
 	}
 }
-func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string) {
+func (a *App) oauthRoutes(mux *http.ServeMux, origin, issuer string, ep *endpoints) {
 	p := a.Platform
-	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: "carrel-mcp", Hosted: []string{}, Verifier: a.verifier, HTTP: &http.Client{Timeout: 15 * time.Second}}
+	oauth := &OAuth{Store: p.Store, Origin: origin, Issuer: issuer, ClientID: p.Config.OIDC.WithDefaults().ClientID, Hosted: []string{}, Verifier: a.verifier, endpoints: ep, HTTP: &http.Client{Timeout: 15 * time.Second}}
 	oauth.Hosted = append(oauth.Hosted, p.Config.HostedRedirects...)
 	console := consoleHandler{p: p, o: oauth}
 	oauth.Console = console.finish

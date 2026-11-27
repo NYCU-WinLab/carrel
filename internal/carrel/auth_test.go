@@ -26,7 +26,7 @@ func TestJWTSignatureIssuerAudienceAndMembership(t *testing.T) {
 		jsonResponse(w, 200, D{"keys": []D{{"kid": "test", "kty": "RSA", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB"}}})
 	}))
 	defer issuer.Close()
-	v := NewVerifier(issuer.URL)
+	v := NewVerifier(issuer.URL, OIDCConfig{}, nil)
 	base := D{"iss": issuer.URL, "aud": "carrel-mcp", "azp": "carrel-mcp", "sub": "alice", "iat": time.Now().Unix(), "exp": time.Now().Unix() + 300, "preferred_username": "alice", "groups": []any{"/lab-member/master", "/winlab-projects/shared"}}
 	sign := func(c D, k *rsa.PrivateKey) string {
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims(c))

@@ -19,10 +19,12 @@ import (
 // an integration reads on its own (netbox, vm_environment) stay maps until
 // that integration moves to its own package.
 type Config struct {
-	Origin        string `json:"origin"`
-	Issuer        string `json:"issuer"`
-	Database      string `json:"database"`
-	PublicAddress string `json:"public_address"`
+	Origin string `json:"origin"`
+	Issuer string `json:"issuer"`
+	// OIDC names the claims and groups of the provider at Issuer (#654).
+	OIDC          OIDCConfig `json:"oidc,omitempty"`
+	Database      string     `json:"database"`
+	PublicAddress string     `json:"public_address"`
 	// Site names this control plane's site in catalog_get, such as b09.
 	Site      string       `json:"site,omitempty"`
 	Nodes     []NodeConfig `json:"nodes"`
@@ -199,6 +201,7 @@ func (c Config) WithDefaults() Config {
 	if c.GitLabIssuers == nil {
 		c.GitLabIssuers = []string{gitlabCom}
 	}
+	c.OIDC = c.OIDC.WithDefaults()
 	return c
 }
 
@@ -209,6 +212,9 @@ func (c Config) Validate() error {
 	}
 	if c.OriginHost() == "" {
 		return errors.New("origin is required")
+	}
+	if err := c.OIDC.Validate(); err != nil {
+		return err
 	}
 	if c.IPv6Prefix != "" {
 		if _, err := ipv6Prefix(c.IPv6Prefix); err != nil {
