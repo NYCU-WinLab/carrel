@@ -37,8 +37,9 @@ var snapshotPluginTools = []D{
 // holds the moved snapshots as plugin objects, once, and a snapshot that
 // release takes is moved at the next start. Anything the move cannot carry
 // stops the start: an operation on snapshots still running, a snapshot that
-// is not ready, a name the plugin refuses, a row with no configuration, or
-// a record that exists already. The plugin's tool and quota rows are written
+// is not ready, a name the plugin refuses, or a row with no configuration.
+// A row under a name the ledger holds is dropped and named in the result
+// (#723). The plugin's tool and quota rows are written
 // on the first move only, so a later report's values are not undone.
 func MigrateSnapshots(s *Store) (result D, err error) {
 	defer func() {
@@ -46,7 +47,7 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 			result, err = nil, fmt.Errorf("snapshot migration: %v", r)
 		}
 	}()
-	moved := 0
+	moved, dropped := 0, []any{}
 	s.Transaction(func(tx *Store) {
 		rows := tx.Rows("SELECT id, tenant, data FROM objects WHERE kind='snapshots' ORDER BY id")
 		done := tx.SiteGet("migration", snapshotMigration)
@@ -73,7 +74,12 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 			}
 			id := pluginObjectID("snapshot", "snapshot", snap.VMID, snap.Name)
 			if tx.Get(pluginObjectRows, id) != nil {
-				panic(fmt.Sprintf("plugin object %s exists already", id))
+				// One PVE snapshot behind 2 rows: an older release took the
+				// name again over it. The record holds the configuration
+				// PVE's snapshot was taken with, so the core row goes.
+				tx.Remove("snapshots", r["id"])
+				dropped = append(dropped, r["id"])
+				continue
 			}
 			rec := pluginObject{ID: id, Plugin: "snapshot", Kind: "snapshot", Name: snap.Name, VMID: snap.VMID, State: "ready",
 				Charge: map[string]float64{"snapshots": 1, "snapshot_gb": float64(snap.DiskGB)}, Holds: []string{"freeze", "migrate", "backfill"},
@@ -97,7 +103,11 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 		}
 		tx.SitePut("migration", snapshotMigration, D{"moved": total, "at": now()})
 	})
-	return D{"moved": moved}, nil
+	out := D{"moved": moved}
+	if len(dropped) > 0 {
+		out["dropped"] = dropped
+	}
+	return out, nil
 }
 
 // MoveSnapshotsBack is the reverse move, for a binary rollback to a release
@@ -105,15 +115,17 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 // starts. That release decides a name is free from its own rows alone, so a
 // snapshot left in the plugin ledger could be taken again over the one PVE
 // keeps, under the configuration of today, and a later rollback would
-// restore older contents than it says. It refuses, changing nothing, while
-// a snapshot operation runs or a record is not ready.
+// restore older contents than it says. A core row such a release wrote under
+// a record's name is replaced by the record and named in the result. It
+// refuses, changing nothing, while a snapshot operation runs or a record is
+// not ready.
 func MoveSnapshotsBack(s *Store) (result D, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result, err = nil, fmt.Errorf("snapshot move back: %v", r)
 		}
 	}()
-	moved := 0
+	moved, replaced := 0, []any{}
 	s.Transaction(func(tx *Store) {
 		for _, op := range tx.ActiveOperations() {
 			if strings.HasPrefix(str(op["tool"]), "snapshot_") {
@@ -133,8 +145,10 @@ func MoveSnapshotsBack(s *Store) (result D, err error) {
 				panic(fmt.Sprintf("snapshot %s has no configuration", o.ID))
 			}
 			id := fmt.Sprintf("%d-%s", o.VMID, o.Name)
+			// A core row under the name is the older release's copy of
+			// this PVE snapshot: the record replaces it.
 			if tx.Get("snapshots", id) != nil {
-				panic(fmt.Sprintf("snapshot row %s exists already", id))
+				replaced = append(replaced, id)
 			}
 			gb := int(o.Charge["snapshot_gb"])
 			if gb == 0 {
@@ -155,5 +169,9 @@ func MoveSnapshotsBack(s *Store) (result D, err error) {
 		}
 		tx.SiteRemove("migration", snapshotMigration)
 	})
-	return D{"moved_back": moved}, nil
+	out := D{"moved_back": moved}
+	if len(replaced) > 0 {
+		out["replaced"] = replaced
+	}
+	return out, nil
 }

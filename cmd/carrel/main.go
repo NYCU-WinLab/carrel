@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -67,6 +68,11 @@ func main() {
 	platform := carrel.NewPlatform(store, backend, cfg)
 	platform.Telemetry = telemetry
 	if *moveBack {
+		// The running service would keep its own view of the records.
+		if exec.Command("systemctl", "is-active", "--quiet", "carrel").Run() == nil {
+			slog.Error("snapshot_move_back_refused", "reason", "carrel.service is active; stop it first")
+			fatal()
+		}
 		result, err := carrel.MoveSnapshotsBack(store)
 		if err != nil {
 			slog.Error("snapshot_move_back_failed", "error", err)
