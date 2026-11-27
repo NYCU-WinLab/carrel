@@ -376,33 +376,6 @@ func (e *Execution) Quota(t D, delta ...D) D {
 // sampled every 300 seconds and after each snapshot operation.
 const snapshotSampleMaxAge = 900
 
-// snapshotGB is what a tenant's snapshots count against snapshot_gb, and
-// whether the nodes measured it. Measured, it is the space that only the
-// snapshots hold. Without a fresh sample each snapshot counts at the size of
-// its disk, the most it can ever hold.
-func (e *Execution) snapshotGB(n int) (float64, bool) {
-	held, measured := e.heldSample(n)
-	snaps := e.snapshots(n)
-	if len(snaps) == 0 {
-		return 0, measured
-	}
-	if measured {
-		return held, true
-	}
-	declared := 0.0
-	for _, s := range snaps {
-		declared += float64(s.DiskGB)
-	}
-	return declared, false
-}
-func (e *Execution) SnapshotUsage(t D) D {
-	counts := "declared"
-	if _, measured := e.snapshotGB(integer(t["n"])); measured {
-		counts = "held"
-	}
-	return merge(e.storageView(t), D{"snapshot_gb_counts": counts})
-}
-
 // storageView is the tenant's last storage sample as a member sees it.
 func (e *Execution) storageView(t D) D {
 	if u, ok := rowOf[storageUsage](e.S, "storage_usage", str(t["n"])); ok {

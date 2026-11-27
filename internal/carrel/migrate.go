@@ -228,8 +228,6 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 	return D{"node": node.Name, "drained": true, "moves": moves, "staying": staying, "dry_run": dry}
 }
 
-func (e *Execution) snapshotRows(n int) []D { return e.S.Objects("snapshots", n) }
-
 func init() {
 	registerPhases(Phases{Perform: (*Execution).PerformMigration, Finish: func(e *Execution, t D) D { return e.FinishMigration(t) }}, "machine_migrate")
 }

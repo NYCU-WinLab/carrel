@@ -346,9 +346,7 @@ func (o *Operations) apply(id string) {
 			for _, m := range machines {
 				if contains([]string{"initializing", "provisioning", "needs_owner_fix"}, m["state"]) {
 					previous := ""
-					if op["tool"] == "snapshot_rollback" {
-						previous = str(obj(op["rollback_restore"])["boot_id"])
-					} else if op["tool"] == "machine_power" {
+					if op["tool"] == "machine_power" {
 						previous = str(obj(op["power_restore"])["boot_id"])
 					}
 					e.WaitReady(m, previous)

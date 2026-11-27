@@ -174,14 +174,14 @@ func TestStorageSampleIsDatedByTheControlPlane(t *testing.T) {
 	p.Store.Put("machines", 10100, 1, D{"vmid": 10100, "tenant_n": 1, "name": "web", "node": "carrel01", "disk_gb": 80})
 	putSnapshotRecord(p, 1, 10100, "s1", 80, "", nil)
 	e := p.execution(context.Background())
-	if _, measured := e.snapshotGB(1); measured {
+	if _, measured := e.heldSample(1); measured {
 		t.Fatal("measured without a sample")
 	}
 	e.RefreshStorage()
 	if age := now() - num(p.Store.Get("storage_usage", "1")["sampled_at"]); age < 0 || age > 5 {
 		t.Fatal("sample age", age)
 	}
-	if held, measured := e.snapshotGB(1); !measured || held != 0 {
+	if held, measured := e.heldSample(1); !measured || held != 0 {
 		t.Fatal(held, measured)
 	}
 }
