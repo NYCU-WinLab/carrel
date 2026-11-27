@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -26,12 +27,15 @@ type node struct {
 	exists bool
 	power  string
 	snaps  int
+	digest string
+	onboot int
 	// what the node does
 	dumpExit, destroyExit string // exit status of the task, "OK" unless set
 	verification          string // "ok" unless set
 	loseDumpAnswer        bool   // do the work, answer 504
 	// what happened
 	calls   []string
+	destroy url.Values // the query of the last guest removal
 	backups map[string]*backupEntry
 	tasks   []taskEntry
 }
@@ -41,10 +45,22 @@ type backupEntry struct {
 	protected int
 }
 
-type taskEntry struct{ upid, typ, exit string }
+type taskEntry struct {
+	upid, typ, exit string
+	start           int64
+}
 
 func newNode() *node {
-	return &node{exists: true, power: "stopped", backups: map[string]*backupEntry{}}
+	return &node{exists: true, power: "stopped", digest: "d0", backups: map[string]*backupEntry{}}
+}
+
+// startedBy logs a start of the machine by someone other than the plugin,
+// and its stop: the machine is stopped again, and has run.
+func (n *node) startedBy(user string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	upid := fmt.Sprintf("UPID:pve:%08X:%08X:%08X:qmstart:10100:%s:", len(n.tasks)+1, 1, time.Now().Unix(), user)
+	n.tasks = append(n.tasks, taskEntry{upid, "qmstart", "OK", time.Now().Unix() + 1})
 }
 
 func (n *node) called(prefix string) int {
@@ -64,7 +80,7 @@ func (n *node) task(typ, exit string) string {
 		exit = "OK"
 	}
 	upid := fmt.Sprintf("UPID:pve:%08X:%08X:%08X:%s:10100:root@pam!carrel-freeze:", len(n.tasks)+1, 1, time.Now().Unix(), typ)
-	n.tasks = append(n.tasks, taskEntry{upid, typ, exit})
+	n.tasks = append(n.tasks, taskEntry{upid, typ, exit, time.Now().Unix()})
 	return upid
 }
 
@@ -84,6 +100,15 @@ func (n *node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(list)
 	case r.Method == "GET" && path == "/nodes/pve/qemu/10100/status/current":
 		reply(map[string]any{"status": n.power})
+	case r.Method == "GET" && path == "/nodes/pve/qemu/10100/config":
+		reply(map[string]any{"digest": n.digest, "onboot": n.onboot})
+	case r.Method == "PUT" && path == "/nodes/pve/qemu/10100/config":
+		if r.Form.Get("onboot") != "0" {
+			http.Error(w, "bad request", 400)
+			return
+		}
+		n.onboot, n.digest = 0, n.digest+"+"
+		reply(nil)
 	case r.Method == "GET" && path == "/nodes/pve/qemu/10100/snapshot":
 		list := []map[string]any{{"name": "current"}}
 		for i := 0; i < n.snaps; i++ {
@@ -107,7 +132,7 @@ func (n *node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && path == "/nodes/pve/tasks":
 		out := []map[string]any{}
 		for _, t := range n.tasks {
-			out = append(out, map[string]any{"upid": t.upid, "type": t.typ, "id": "10100", "starttime": time.Now().Unix()})
+			out = append(out, map[string]any{"upid": t.upid, "type": t.typ, "id": "10100", "starttime": t.start})
 		}
 		reply(out)
 	case r.Method == "GET" && strings.HasSuffix(path, "/status") && strings.HasPrefix(path, "/nodes/pve/tasks/"):
@@ -146,6 +171,7 @@ func (n *node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(n.backups, id)
 		reply(nil)
 	case r.Method == "DELETE" && path == "/nodes/pve/qemu/10100":
+		n.destroy = r.URL.Query()
 		upid := n.task("qmdestroy", n.destroyExit)
 		if n.destroyExit == "" || n.destroyExit == "OK" {
 			n.exists = false
@@ -216,6 +242,74 @@ func TestFreezeBacksUpVerifiesAndRemovesTheMachine(t *testing.T) {
 	}
 	if n.exists || n.backups[volid] == nil || n.backups[volid].protected != 1 || n.backups[volid].notes != "carrel-freeze k1" {
 		t.Fatalf("node: exists=%v backups=%+v", n.exists, n.backups)
+	}
+	// Only the disks of the config, which the backup holds, are removed.
+	if n.destroy.Get("purge") != "1" || n.destroy.Has("destroy-unreferenced-disks") || len(n.destroy) != 1 {
+		t.Fatalf("destroy query %v", n.destroy)
+	}
+}
+
+func TestFreezeClearsOnbootBeforeTheBackup(t *testing.T) {
+	s, n := site(t)
+	n.onboot = 1
+	op := finish(t, s, start(t, s, freezeReq("k1")).IdempotencyKey)
+	if op.State != "succeeded" || n.onboot != 0 || n.called("PUT /nodes/pve/qemu/10100/config") != 1 {
+		t.Fatalf("op %+v onboot %d calls %v", op, n.onboot, n.calls)
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	put, dump := slices.Index(n.calls, "PUT /nodes/pve/qemu/10100/config"), slices.Index(n.calls, "POST /nodes/pve/vzdump")
+	if put < 0 || dump < put {
+		t.Fatalf("onboot was not cleared before the backup: %v", n.calls)
+	}
+}
+
+func TestAMachineStartedAndStoppedDuringTheWaitStays(t *testing.T) {
+	s, n := site(t)
+	n.verification = "none"
+	start(t, s, freezeReq("k1"))
+	// The node rebooted, or someone started it and shut it down again.
+	n.startedBy("root@pam")
+	n.mu.Lock()
+	n.verification = "ok"
+	n.mu.Unlock()
+	op := get(t, s, "k1")
+	if op.State != "failed" || !strings.Contains(op.Error, "changed") || !n.exists || len(n.backups) != 0 || n.called("DELETE /nodes/pve/qemu") != 0 {
+		t.Fatalf("op %+v node %v %+v", op, n.exists, n.backups)
+	}
+}
+
+func TestAMachineWhoseConfigChangedDuringTheWaitStays(t *testing.T) {
+	s, n := site(t)
+	n.verification = "none"
+	start(t, s, freezeReq("k1"))
+	n.mu.Lock()
+	n.verification, n.digest = "ok", "d1"
+	n.mu.Unlock()
+	op := get(t, s, "k1")
+	if op.State != "failed" || !strings.Contains(op.Error, "changed") || !n.exists || len(n.backups) != 0 || n.called("DELETE /nodes/pve/qemu") != 0 {
+		t.Fatalf("op %+v node %v %+v", op, n.exists, n.backups)
+	}
+}
+
+func TestARunWithNoProofDoesNotRemoveTheMachine(t *testing.T) {
+	s, n := site(t)
+	n.verification = "none"
+	start(t, s, freezeReq("k1"))
+	// A run stored before the proof existed.
+	r, err := s.runs.load("k1")
+	if err != nil || r == nil {
+		t.Fatalf("run %+v: %v", r, err)
+	}
+	r.Digest = ""
+	if err := s.runs.save(r); err != nil {
+		t.Fatal(err)
+	}
+	n.mu.Lock()
+	n.verification = "ok"
+	n.mu.Unlock()
+	if op := get(t, s, "k1"); op.State != "failed" || !n.exists || n.called("DELETE /nodes/pve/qemu") != 0 {
+		t.Fatalf("op %+v calls %v", op, n.calls)
 	}
 }
 

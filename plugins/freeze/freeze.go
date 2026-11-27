@@ -207,6 +207,9 @@ func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest)
 	}
 	r := &run{Key: req.IdempotencyKey, Operation: req.Operation, Kind: kind, VMID: vmid,
 		Phase: "backup", Storage: s.storage, Note: "carrel-freeze " + req.IdempotencyKey}
+	if err := s.prove(ctx, r); err != nil {
+		return nil, refuse(codes.Unavailable, "%v", err)
+	}
 	if err := s.launch(ctx, r); err != nil {
 		var api *apiError
 		if !errors.As(err, &api) {
@@ -250,6 +253,57 @@ func (s *server) launch(ctx context.Context, r *run) error {
 	}
 	return nil
 }
+
+// prove clears the machine's onboot, so a node reboot does not start it
+// during the wait, then records its config digest and its newest start
+// before the backup is sent: a start or a config change after this point
+// differs from them (the node agent's freeze stamp).
+func (s *server) prove(ctx context.Context, r *run) error {
+	_, onboot, err := s.pve.config(ctx, r.Kind, r.VMID)
+	if err != nil {
+		return fmt.Errorf("read the machine's config: %w", err)
+	}
+	if onboot {
+		if err := s.pve.noOnboot(ctx, r.Kind, r.VMID); err != nil {
+			return fmt.Errorf("clear the machine's onboot: %w", err)
+		}
+	}
+	digest, _, err := s.pve.config(ctx, r.Kind, r.VMID)
+	if err != nil {
+		return fmt.Errorf("read the machine's config: %w", err)
+	}
+	started, err := s.pve.lastStart(ctx, r.Kind, r.VMID)
+	if err != nil {
+		return fmt.Errorf("list the machine's starts: %w", err)
+	}
+	if digest == "" {
+		return errors.New("PVE gave the machine's config no digest")
+	}
+	r.Digest, r.Started = digest, started
+	return nil
+}
+
+// unchanged says whether the machine is provably as the backup holds it:
+// stopped, with the config digest and the newest start of the proof. An
+// error says nothing either way.
+func (s *server) unchanged(ctx context.Context, r *run) (bool, error) {
+	power, err := s.pve.status(ctx, r.Kind, r.VMID)
+	if err != nil {
+		return false, err
+	}
+	digest, _, err := s.pve.config(ctx, r.Kind, r.VMID)
+	if err != nil {
+		return false, err
+	}
+	started, err := s.pve.lastStart(ctx, r.Kind, r.VMID)
+	if err != nil {
+		return false, err
+	}
+	return power == "stopped" && r.Digest != "" && digest == r.Digest && started == r.Started, nil
+}
+
+// changed is the message of a run whose machine changed after the backup.
+const changed = "the machine changed while it was backed up; the backup was removed"
 
 func (s *server) fail(r *run, message string) {
 	r.Done, r.State, r.Error = true, "failed", message
@@ -383,12 +437,11 @@ func (s *server) followVerify(ctx context.Context, r *run) bool {
 		return false
 	}
 	// The wait can take minutes: the machine must be what the backup holds.
-	power, err := s.pve.status(ctx, r.Kind, r.VMID)
-	if err != nil {
+	// A start and a stop in the wait leave it stopped, so power is not enough.
+	if same, err := s.unchanged(ctx, r); err != nil {
 		return false
-	}
-	if power != "stopped" {
-		s.abort(ctx, r, "the machine changed while it was backed up; the backup was removed")
+	} else if !same {
+		s.abort(ctx, r, changed)
 		return false
 	}
 	if b.Protected == 0 {
@@ -397,6 +450,13 @@ func (s *server) followVerify(ctx context.Context, r *run) bool {
 			if overdue {
 				s.abort(ctx, r, "the backup could not be protected; it was removed and the machine is unchanged")
 			}
+			return false
+		}
+		// Protecting can wait on the server too: the same check once more.
+		if same, err := s.unchanged(ctx, r); err != nil {
+			return false
+		} else if !same {
+			s.abort(ctx, r, changed)
 			return false
 		}
 	}
@@ -419,6 +479,13 @@ func (s *server) followDestroy(ctx context.Context, r *run) bool {
 		}
 		if !exists {
 			r.Done, r.State = true, "succeeded"
+			return false
+		}
+		// Nothing is removed yet: the last chance to see a change.
+		if same, err := s.unchanged(ctx, r); err != nil {
+			return false
+		} else if !same {
+			s.abort(ctx, r, changed)
 			return false
 		}
 		var api *apiError

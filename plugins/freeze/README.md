@@ -28,8 +28,10 @@ The plugin reads its own environment, never the control plane config:
 | `CARREL_FREEZE_VERIFY_WAIT` | seconds to wait for a backup's verification, 0 to 3600, `1800` unless set |
 
 Probe says unsupported when no backup storage is set, or when the token lacks `VM.Audit`,
-`VM.Backup` and `VM.Allocate` on `/vms`, or `Datastore.Audit`, `Datastore.AllocateSpace` and
-`Datastore.Allocate` on the storage.
+`VM.Backup`, `VM.Allocate` and `VM.Config.Options` on `/vms`, `Datastore.Audit`,
+`Datastore.AllocateSpace` and `Datastore.Allocate` on the storage, or `Sys.Audit` on
+`/nodes/<node>`. `VM.Config.Options` clears the machine's `onboot` before the backup; `Sys.Audit`
+lets the plugin see starts of the machine by any user, which prove it unchanged before removal.
 
 ## Build
 

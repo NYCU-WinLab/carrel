@@ -137,13 +137,19 @@ func TestProbeWithNoBackupStorageIsUnsupported(t *testing.T) {
 }
 
 func TestProbeNeedsThePrivilegesOnTheStorage(t *testing.T) {
-	all := map[string][]string{"/vms": {"VM.Audit", "VM.Backup", "VM.Allocate"}, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}}
+	vms := []string{"VM.Audit", "VM.Backup", "VM.Allocate", "VM.Config.Options"}
+	all := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.AllocateSpace", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
 	if p := probe(t, fixture(t, "pbs", all)); !p.Supported {
 		t.Fatalf("probe: %+v", p)
 	}
-	short := map[string][]string{"/vms": {"VM.Audit", "VM.Backup", "VM.Allocate"}, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}}
+	short := map[string][]string{"/vms": vms, "/storage/pbs": {"Datastore.Audit", "Datastore.Allocate"}, "/nodes/pve": {"Sys.Audit"}}
 	p := probe(t, fixture(t, "pbs", short))
 	if p.Supported || p.Reason != "the token lacks Datastore.AllocateSpace on /storage/pbs" {
+		t.Fatalf("probe: %+v", p)
+	}
+	// Without Sys.Audit the token sees only its own tasks, not the starts of others.
+	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"]}
+	if p := probe(t, fixture(t, "pbs", noAudit)); p.Supported || p.Reason != "the token lacks Sys.Audit on /nodes/pve" {
 		t.Fatalf("probe: %+v", p)
 	}
 }
