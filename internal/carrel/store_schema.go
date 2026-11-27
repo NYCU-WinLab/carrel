@@ -87,7 +87,7 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 		return nil, err
 	}
 	if version > SchemaVersion {
-		return nil, fmt.Errorf("the database has schema version %d; this release knows up to %d: run a newer release, or restore the backup taken before the upgrade", version, SchemaVersion)
+		return nil, fmt.Errorf("the database has schema version %d; this release knows up to %d: run a newer release, or stop carrel and restore %s.schema-%d-<stamp>, the copy taken before the upgrade, which loses every write since", version, SchemaVersion, path, SchemaVersion)
 	}
 	if version == SchemaVersion {
 		return D{"version": version}, nil
