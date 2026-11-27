@@ -3,6 +3,7 @@ package carrel
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +52,9 @@ func TestEveryToolHasAnHTTPRoute(t *testing.T) {
 	}
 	if code, _ := toolCall(t, app, "machine_get", `{"nope":1}`); code != 400 {
 		t.Fatalf("schema: %d", code)
+	}
+	if code, _ := toolCall(t, app, "machine_get", `{"machine":"`+strings.Repeat("x", 300<<10)+`"}`); code != 413 {
+		t.Fatalf("too large: %d", code)
 	}
 	// The audit log has the HTTP calls, as for MCP.
 	if rows := p.Store.Rows("SELECT tool FROM audit WHERE tool='machine_create'"); len(rows) == 0 {

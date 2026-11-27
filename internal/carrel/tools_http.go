@@ -16,7 +16,7 @@ import (
 
 // toolStatus maps a tool's error code to an HTTP status.
 var toolStatus = map[string]int{"invalid": 400, "forbidden": 403, "not_found": 404, "conflict": 409, "quota_exceeded": 409, "unsupported": 409,
-	"unavailable": 503, "backend_unavailable": 503, "capacity_exhausted": 507}
+	"guest_not_ready": 409, "cancelled": 409, "plugin_failed": 502, "unavailable": 503, "backend_unavailable": 503, "capacity_exhausted": 507}
 
 // bearerMember verifies the request's OAuth token as the MCP endpoint does.
 // On failure it has written the response.
@@ -90,6 +90,11 @@ func (a *App) toolRoutes(mux *http.ServeMux, origin string) {
 		body, err := io.ReadAll(r.Body)
 		if err == nil && len(strings.TrimSpace(string(body))) > 0 {
 			err = json.Unmarshal(body, &args)
+		}
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			jsonResponse(w, 413, D{"ok": false, "error": D{"code": "invalid", "message": "The body is larger than 256 KiB"}})
+			return
 		}
 		if err != nil {
 			jsonResponse(w, 400, D{"ok": false, "error": D{"code": "invalid", "message": "The body must be a JSON object of the tool's arguments"}})
