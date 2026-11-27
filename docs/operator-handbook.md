@@ -368,8 +368,11 @@ what a disk rewind must find unchanged (#663).
 - Once the run has ended, carrel starts the guest again if it was running, and waits for a report
   from the new boot. The result says `power_state` and `power_state_restored`.
 - A run whose fate is unknown, such as a plugin that stopped answering, leaves the guest stopped:
-  the plugin may still be writing its disk. The error says `machine_left_stopped`.
-  `operation_retry` asks after the same run and restores the guest when it ends.
+  the plugin may still be writing its disk. The error says `machine_left_stopped`. The machine is
+  fenced (`plugin_fence`): every other operation on it is refused until `operation_retry` asks
+  after the same run and restores the guest when it ends.
+- Each new run reads the guest's power again, so a retry never runs on a guest the last run
+  brought back.
 - A run that succeeded is not repeated: when the guest does not come back, a retry only starts it.
 - `rewinds`: the operation may bring the disk back to an earlier state. It must also be
   `stopped`. carrel treats the guest's access files as unknown and pushes the principals again.

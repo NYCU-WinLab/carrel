@@ -536,6 +536,7 @@ func (e *Execution) dispatchPlugin(a, w D) D {
 			fail("unsupported", fmt.Sprintf("Node %s, which ran this operation, no longer reports plugin %s", plug["node"], plug["plugin"]),
 				D{"recovery": "retry_infrastructure"})
 		}
+		e.resetPower(false)
 		e.prepareRun(node, op, a)
 		return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
 	}
@@ -543,6 +544,7 @@ func (e *Execution) dispatchPlugin(a, w D) D {
 	plug["node"], plug["runs"], plug["key"], plug["read_only"], plug["ended"], plug["start_sent"] = node, runs, fmt.Sprintf("%s-%d", e.Op["id"], runs), op.ReadOnly, false, false
 	delete(plug, "refused")
 	delete(plug, "plugin_code")
+	e.resetPower(true)
 	e.prepareRun(node, op, a)
 	return D{"plugin": plug["plugin"], "operation": plug["operation"], "node": node}
 }
@@ -599,6 +601,10 @@ func (e *Execution) PerformPlugin() {
 func (e *Execution) runPlugin() {
 	defer func() {
 		if r := recover(); r != nil {
+			// A run that sent no start never began: a retry starts anew.
+			if plug := obj(e.Op["plugin"]); !boolean(plug["start_sent"]) && e.Ctx.Err() == nil {
+				plug["ended"] = true
+			}
 			e.restoreAfterFailure()
 			panic(r)
 		}

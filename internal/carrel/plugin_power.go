@@ -46,7 +46,13 @@ func (e *Execution) preparePluginStop(op PluginOperation, m D) {
 	if state != "running" && state != "stopped" {
 		fail("conflict", "The machine's power state is "+state, D{"recovery": "retry_infrastructure"})
 	}
-	plug["power"] = D{"running": state == "running", "boot_id": e.S.guestReport(m["vmid"]).BootID}
+	pw := D{"running": state == "running", "boot_id": e.S.guestReport(m["vmid"]).BootID}
+	if state == "stopped" && boolean(plug["power_owed"]) {
+		// An earlier run stopped it and could not start it again.
+		pw["running"], pw["stopping"], pw["stopped"] = true, true, true
+	}
+	delete(plug, "power_owed")
+	plug["power"] = pw
 	if op.Rewinds && m["ca_sync"] != nil {
 		// Saved before the disk goes back: if a later step fails, the
 		// older principals file it may hold is shown as pending.
@@ -54,6 +60,21 @@ func (e *Execution) preparePluginStop(op PluginOperation, m D) {
 		e.Put("machines", m["vmid"], integer(e.Op["tenant_n"]), m)
 	}
 	e.P.Operations.Save(e.Op)
+}
+
+// resetPower drops a power record the guest was brought back by, so the
+// run reads its power again; a new run drops any. A guest the last run
+// stopped and could not start again is still owed its start.
+func (e *Execution) resetPower(newRun bool) {
+	plug := obj(e.Op["plugin"])
+	prev := obj(plug["power"])
+	if plug["power"] == nil || !newRun && !boolean(prev["restored"]) {
+		return
+	}
+	delete(plug, "power")
+	if !boolean(prev["restored"]) && boolean(prev["running"]) && boolean(prev["stopping"]) {
+		plug["power_owed"] = true
+	}
 }
 
 // stopForPlugin shuts the guest down gracefully, outside the writer.
@@ -99,6 +120,10 @@ func (e *Execution) restorePluginPower() {
 	finish := func() {
 		e.P.writer.Lock()
 		pw["restored"] = true
+		if m := e.S.Get("machines", str(obj(e.Op["machine_target"])["vmid"])); m != nil && m["plugin_fence"] == e.Op["id"] {
+			delete(m, "plugin_fence")
+			e.Put("machines", m["vmid"], integer(e.Op["tenant_n"]), m)
+		}
 		e.P.Operations.Save(e.Op)
 		e.P.writer.Unlock()
 	}
@@ -146,7 +171,16 @@ func (e *Execution) restoreAfterFailure() {
 		return
 	}
 	if !boolean(plug["ended"]) && boolean(plug["start_sent"]) {
+		// The run may go on: the machine is fenced until a retry of this
+		// operation learns how it ended.
+		e.P.writer.Lock()
+		defer e.P.writer.Unlock()
 		obj(plug["power"])["left_stopped"] = true
+		if m := e.S.Get("machines", str(obj(e.Op["machine_target"])["vmid"])); m != nil {
+			m["plugin_fence"] = e.Op["id"]
+			e.Put("machines", m["vmid"], integer(e.Op["tenant_n"]), m)
+		}
+		e.P.Operations.Save(e.Op)
 		return
 	}
 	if err := attempt(e.restorePluginPower); err != nil {

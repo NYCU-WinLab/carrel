@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -17,10 +18,11 @@ func rewindPlugin() []PluginInfo {
 // guest is a node's view of one guest's power: it records every power call
 // and, after a start, reports a new boot a little later.
 type guest struct {
-	mu          sync.Mutex
-	power       string
-	calls       []string
-	refuseStart int
+	mu                          sync.Mutex
+	power                       string
+	calls                       []string
+	refuseStart, ignoreShutdown int
+	boots                       int
 }
 
 func (g *guest) seen() []string {
@@ -55,6 +57,10 @@ func withRewindPlugin(t *testing.T, power string) (*Platform, *fakePlugins, *gue
 			g.calls = append(g.calls, action)
 			switch action {
 			case "shutdown":
+				if g.ignoreShutdown > 0 {
+					g.ignoreShutdown--
+					return D{"power_state": g.power}, nil
+				}
 				g.power = "stopped"
 			case "start":
 				if g.refuseStart > 0 {
@@ -62,9 +68,11 @@ func withRewindPlugin(t *testing.T, power string) (*Platform, *fakePlugins, *gue
 					return D{"power_state": "stopped"}, nil
 				}
 				g.power = "running"
+				g.boots++
+				boot := fmt.Sprintf("boot-%d", g.boots)
 				go func() {
 					time.Sleep(200 * time.Millisecond)
-					p.Store.Put("guest_reports", 10100, 1, D{"vmid": 10100, "boot_id": "new", "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked"})
+					p.Store.Put("guest_reports", 10100, 1, D{"vmid": 10100, "boot_id": boot, "reported_at": now(), "initialization_status": "complete", "application_status": "not_checked"})
 					p.notifyReport(10100)
 				}()
 			}
@@ -150,6 +158,16 @@ func TestAStoppedGuestComesBackOnlyOnceTheRunEnded(t *testing.T) {
 	if obj(r["operation"])["state"] != "failed" || g.seen()[len(g.seen())-1] != "start" {
 		t.Fatalf("refused: %s, calls %v", encoded(r), g.seen())
 	}
+	// The retry is a new run: it stops the guest again.
+	f.mu.Lock()
+	f.fail = ""
+	f.mu.Unlock()
+	first := str(obj(r["operation"])["id"])
+	p.Operations.Retry(p.Store.TenantN(1), first, person("alice", false))
+	awaitState(t, p, first, "succeeded")
+	if want := []string{"status", "shutdown", "plugin:stopped", "start", "status", "shutdown", "plugin:stopped", "start"}; !equal(g.seen(), want) {
+		t.Fatalf("calls %v, want %v", g.seen(), want)
+	}
 
 	p2, f2, g2 := withRewindPlugin(t, "running")
 	f2.mu.Lock()
@@ -160,6 +178,10 @@ func TestAStoppedGuestComesBackOnlyOnceTheRunEnded(t *testing.T) {
 	if failure(r)["machine_left_stopped"] != true || g2.seen()[len(g2.seen())-1] == "start" {
 		t.Fatalf("unknown fate: %s, calls %v", encoded(r), g2.seen())
 	}
+	// Fenced: nothing starts the guest while the plugin may still write.
+	if r := member(p2, "machine_power", D{"machine": "web", "action": "start", "wait_seconds": 5}); failure(r)["code"] != "conflict" {
+		t.Fatalf("a start on a fenced machine: %s", encoded(r))
+	}
 	f2.mu.Lock()
 	f2.fail = ""
 	f2.mu.Unlock()
@@ -168,6 +190,9 @@ func TestAStoppedGuestComesBackOnlyOnceTheRunEnded(t *testing.T) {
 	calls := g2.seen()
 	if calls[len(calls)-1] != "start" || obj(op["plugin"])["key"] != id+"-1" {
 		t.Fatalf("retry: calls %v, op %s", calls, encoded(op["plugin"]))
+	}
+	if p2.Store.Get("machines", "10100")["plugin_fence"] != nil {
+		t.Fatal("the fence outlived the run")
 	}
 }
 
@@ -188,6 +213,29 @@ func TestARetryAfterSuccessOnlyRestoresPower(t *testing.T) {
 	calls := g.seen()
 	if pluginStarts(calls) != 1 || calls[len(calls)-1] != "start" {
 		t.Fatalf("calls %v", calls)
+	}
+}
+
+// A guest that ignored the shutdown is still running: the retry stops it
+// again before the plugin starts, and the result says what it is.
+func TestARetryAfterAnIgnoredShutdownStopsAgain(t *testing.T) {
+	p, _, g := withRewindPlugin(t, "running")
+	g.mu.Lock()
+	g.ignoreShutdown = 1
+	g.mu.Unlock()
+	r := member(p, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
+	id := str(obj(r["operation"])["id"])
+	if failure(r)["code"] != "conflict" || pluginStarts(g.seen()) != 0 {
+		t.Fatalf("ignored shutdown: %s, calls %v", encoded(r), g.seen())
+	}
+	p.Operations.Retry(p.Store.TenantN(1), id, person("alice", false))
+	op := awaitState(t, p, id, "succeeded")
+	g.mu.Lock()
+	power := g.power
+	g.mu.Unlock()
+	calls := g.seen()
+	if power != "running" || obj(op["result"])["power_state"] != "running" || calls[len(calls)-3] != "shutdown" || calls[len(calls)-2] != "plugin:stopped" {
+		t.Fatalf("power %s, calls %v, result %s", power, calls, encoded(op["result"]))
 	}
 }
 
