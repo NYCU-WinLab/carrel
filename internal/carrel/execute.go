@@ -186,6 +186,10 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		}
 		return D{"operations": out}
 	case "operation_retry":
+		// A member must not read or reset an admin's operation (#758).
+		if old := e.S.Get("operations", str(a["id"])); old != nil && adminOnly(old) && !boolean(w["admin"]) {
+			fail("not_found", "Operation not found in this tenant")
+		}
 		if dry {
 			return D{"operation": publicOperation(e.P.Operations.Find(t, str(a["id"])))}
 		}

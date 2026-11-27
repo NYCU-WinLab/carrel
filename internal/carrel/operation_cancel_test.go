@@ -181,3 +181,22 @@ func TestOperationGetHidesAdminOperationsFromMembers(t *testing.T) {
 		t.Fatalf("admin lost the operation: %s", encoded(seen))
 	}
 }
+
+// operation_retry must not let a member read or reset an admin's operation,
+// in either form; an admin in that tenant still can (#758).
+func TestOperationRetryHidesAdminOperationsFromMembers(t *testing.T) {
+	p, _ := fixture(t)
+	p.Store.Put("operations", "move", 1, D{"id": "move", "tenant_n": 1, "tool": "machine_migrate", "args": D{"machine": "dev"}, "who": person("admin", true), "state": "failed", "error": D{"code": "internal", "message": "secret detail"}, "created_at": 100.0, "updated_at": 101.0})
+	alice := person("alice", false)
+	for _, a := range []D{{"id": "move", "dry_run": true}, {"id": "move", "wait_seconds": 0}} {
+		r := p.Execute(context.Background(), "operation_retry", a, alice)
+		assertCode(t, r, "not_found")
+		if strings.Contains(string(encoded(r)), "secret detail") || strings.Contains(string(encoded(r)), "machine_migrate") {
+			t.Fatalf("member read an admin operation: %s", encoded(r))
+		}
+	}
+	if got := p.Store.Get("operations", "move"); got["state"] != "failed" || got["error"] == nil {
+		t.Fatalf("member reset an admin operation: %s", encoded(got))
+	}
+	assertOK(t, p.Execute(context.Background(), "operation_retry", D{"id": "move", "dry_run": true}, person("alice", true)))
+}
