@@ -3,6 +3,7 @@ package carrel
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -98,7 +99,9 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 			return nil, err
 		}
 		for _, old := range earlier {
-			os.Remove(old)
+			if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+				slog.Warn("schema_copy_not_removed", "path", old, "error", err.Error())
+			}
 		}
 		out["backup"] = copy
 	}
