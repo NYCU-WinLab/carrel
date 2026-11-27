@@ -474,6 +474,11 @@ func (e *Execution) Reconcile() D {
 		e.P.desired.Store(n.Name, revision)
 	}
 	result := D{"node": e.Call(request, nodes[0].Target)}
+	// The database that sent this state, so a site with no tenant can later
+	// tell its own nodes from nodes another database configured (#569).
+	if str(obj(e.S.SiteGet("reconcile", "sent"))["revision"]) != revision {
+		e.S.SitePut("reconcile", "sent", D{"revision": revision})
+	}
 	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.

@@ -312,3 +312,55 @@ func TestStoreRowsReportsReadFailureAsFailure(t *testing.T) {
 		t.Fatalf("unexpected failure: %v", f.Result)
 	}
 }
+
+// A site with no tenant reconciles only to send the gateway its origin pair,
+// and never over nodes that another database configured (#569).
+func TestASiteWithoutTenantsReconcilesOnlyForItsOrigin(t *testing.T) {
+	p, b, _ := originFixture(t)
+	e := p.execution(context.Background())
+	if !e.maintenanceReconciles() || b.count("inventory") != 0 {
+		t.Fatal("a site with tenants reconciles without asking the node")
+	}
+	p.Store.Exec("DELETE FROM objects")
+	p.Store.Exec("DELETE FROM tenants")
+	if len(p.Store.Tenants()) != 0 {
+		t.Fatal("tenants left")
+	}
+	held := any(nil)
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "inventory" {
+			return D{"desired": D{"revision": held}}, nil
+		}
+		return D{}, nil
+	}
+	// A new site: the node holds nothing yet.
+	if !e.maintenanceReconciles() {
+		t.Fatal("a new site must reconcile to send the gateway its origin pair")
+	}
+	// An empty database in front of nodes another database configured.
+	held = "f00d"
+	if e.maintenanceReconciles() {
+		t.Fatal("reconciled over nodes this database did not configure")
+	}
+	// The node holds what this database sent: safe again.
+	held = nil
+	e.Reconcile()
+	if e.maintenanceReconciles() {
+		t.Fatal("the gateway holds the pair: nothing to do")
+	}
+	held = obj(p.Store.SiteGet("reconcile", "sent"))["revision"]
+	if held == nil {
+		t.Fatal("reconcile did not record the revision it sent")
+	}
+	// A renewed pair on the same site goes out again.
+	crt, key := testPair(t)
+	e.storeCertificate(originLineage, crt, key)
+	if !e.maintenanceReconciles() {
+		t.Fatal("a renewed pair must reach the gateway")
+	}
+	// No origin host: the gateway never gets an origin site.
+	p.Config.Origin = ""
+	if e.maintenanceReconciles() {
+		t.Fatal("reconciled for an origin that is not configured")
+	}
+}

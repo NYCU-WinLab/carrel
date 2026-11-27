@@ -56,6 +56,43 @@ func (e *Execution) EnsureOriginCertificate() D {
 	return D{"state": "ready"}
 }
 
+// originAwaitsGateway reports a live origin pair the gateway does not hold
+// yet. Only a reconcile sends it, and on a site with no tenant nothing else
+// reconciles, so carrel's record would never be written (#569). Without an
+// origin host the gateway gets no origin site and never holds the pair.
+func (e *Execution) originAwaitsGateway() bool {
+	if e.P.Config.OriginHost() == "" {
+		return false
+	}
+	crt, _, ok := e.originFiles()
+	return ok && !e.gatewayHolds("_origin", crt)
+}
+
+// maintenanceReconciles reports whether the maintenance pass reconciles.
+// A site with tenants always does. A site with none does only to send the
+// gateway its origin pair, and only when the first node holds no state or
+// the state this database sent: an empty database put in front of a
+// working site must not reconcile its tenants' networks away.
+func (e *Execution) maintenanceReconciles() bool {
+	if len(e.S.Tenants()) > 0 {
+		return true
+	}
+	if !e.originAwaitsGateway() {
+		return false
+	}
+	var held any
+	if err := attempt(func() {
+		held = obj(obj(e.Call(D{"op": "inventory"}, e.P.Nodes()[0].Target))["desired"])["revision"]
+	}); err != nil {
+		return false
+	}
+	if held == nil || held == "" || str(held) == str(obj(e.S.SiteGet("reconcile", "sent"))["revision"]) {
+		return true
+	}
+	slog.Error("origin_reconcile_refused", "type", "maintenance", "reason", "the first node holds state this database did not send")
+	return false
+}
+
 // MaintainOrigin keeps the origin certificate fresh and moves carrel's record
 // to the site's address once the gateway holds a valid certificate for it.
 func (e *Execution) MaintainOrigin() {
