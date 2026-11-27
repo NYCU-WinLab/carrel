@@ -452,18 +452,65 @@ func (e *Execution) pluginHeld(n int, vmid any, action string) []D {
 	out := []D{}
 	for _, o := range e.pluginObjects(n, vmid) {
 		if slices.Contains(o.Holds, action) {
-			out = append(out, D{"plugin": o.Plugin, "kind": o.Kind, "name": o.Name, "state": o.State})
+			out = append(out, D{"plugin": o.Plugin, "kind": o.Kind, "name": o.Name, "state": o.State, "disk": o.DiskGB > 0})
 		}
 	}
 	return out
 }
 
-// refusePluginHeld fails an action a machine's plugin objects hold.
-func (e *Execution) refusePluginHeld(n int, vmid any, action, verb string) {
-	if held := e.pluginHeld(n, vmid, action); len(held) > 0 {
-		fail("conflict", fmt.Sprintf("Delete the machine's %s %s first; %s cannot keep it", held[0]["kind"], held[0]["name"], verb),
-			D{"recovery": "resolve_prerequisite", "plugin_objects": held})
+// heldWords names the first kind among held objects as carrel's own
+// snapshots were named: its plural, "disk" before a disk kind's, and how
+// many of that kind there are.
+func heldWords(held []D) (plural, noun string, disk bool, count int) {
+	kind := str(held[0]["kind"])
+	for _, h := range held {
+		if h["kind"] == kind {
+			count++
+		}
 	}
+	plural, disk = kind+"s", boolean(held[0]["disk"])
+	noun = plural
+	if disk {
+		noun = "disk " + plural
+	}
+	return plural, noun, disk, count
+}
+
+// heldReason is why a drain leaves a machine whose objects hold its move.
+func heldReason(held []D) string {
+	plural, _, _, _ := heldWords(held)
+	return "has_" + plural
+}
+
+// heldBackfill is why a backfill skips a machine whose objects hold it.
+func heldBackfill(held []D) string {
+	plural, _, disk, _ := heldWords(held)
+	if disk {
+		return "Has " + plural + ": delete them first, a rollback would undo the backfill"
+	}
+	return "Has " + plural + ": delete them first"
+}
+
+// refusePluginHeld fails an action a machine's plugin objects hold, in the
+// words carrel's own snapshots used for freeze and migrate.
+func (e *Execution) refusePluginHeld(n int, vmid any, action, verb string) {
+	held := e.pluginHeld(n, vmid, action)
+	if len(held) == 0 {
+		return
+	}
+	plural, noun, disk, count := heldWords(held)
+	details := D{"recovery": "resolve_prerequisite", "plugin_objects": held}
+	switch action {
+	case "freeze":
+		details[plural] = count
+		if disk {
+			fail("conflict", "Delete the machine's "+noun+" first; they are not part of the backup", details)
+		}
+		fail("conflict", "Delete the machine's "+noun+" first; a frozen machine cannot keep them", details)
+	case "migrate":
+		fail("conflict", "Delete the machine's "+plural+" before moving it", details)
+	}
+	fail("conflict", fmt.Sprintf("Delete the machine's %s %s first; %s cannot keep it", held[0]["kind"], held[0]["name"], verb), details)
 }
 
 // pluginUsage adds what a tenant's plugin objects charge to used.
@@ -614,4 +661,38 @@ func (e *Execution) pluginObjectsFreed(n int, m D, delta D) {
 	for d, v := range e.pluginFreed(n, e.pluginObjects(n, m["vmid"])) {
 		delta[d] = num(delta[d]) + num(v)
 	}
+}
+
+// quotaStorage adds to a quota_get answer the storage view of each object
+// kind charged to a measured dimension: the kinds a node reports now, and the
+// kinds the tenant holds records of. A key the core answers already stays.
+func (e *Execution) quotaStorage(t D, out D) D {
+	kinds := map[string][]string{}
+	now := time.Now()
+	for _, nd := range e.P.Config.Nodes {
+		for _, pl := range e.P.Hub.Plugins(nd.Name, now) {
+			if !pl.Supported {
+				continue
+			}
+			for _, k := range pl.Objects {
+				kinds[k.Name] = append(kinds[k.Name], pluginKindDims(k)...)
+			}
+		}
+	}
+	for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows, integer(t["n"])) {
+		for d := range o.Charge {
+			kinds[o.Kind] = append(kinds[o.Kind], d)
+		}
+	}
+	for kind, dims := range kinds {
+		key := kind + "_storage"
+		if _, taken := out[key]; taken {
+			continue
+		}
+		slices.Sort(dims)
+		if s := e.objectStorage(t, slices.Compact(dims)); s != nil {
+			out[key] = s
+		}
+	}
+	return out
 }

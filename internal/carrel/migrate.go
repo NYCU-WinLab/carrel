@@ -211,7 +211,7 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 		case len(filter(e.snapshotRows(integer(t["n"])), func(s D) bool { return integer(s["vmid"]) == integer(m["vmid"]) })) > 0:
 			reason = "has_snapshots"
 		case len(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate")) > 0:
-			reason = "has_plugin_objects"
+			reason = heldReason(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate"))
 		}
 		if reason != "" {
 			staying = append(staying, merge(move, D{"reason": reason}))

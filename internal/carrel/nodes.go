@@ -126,7 +126,7 @@ func (e *Execution) nodeCapacity(node nodeRef, proposed D, cached bool) D {
 
 // nodeLoad lists what admission counts against a node: its machines, with
 // proposed in place of its stored record, and the snapshots of its machines.
-func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []snapshotRecord) {
+func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []diskHold) {
 	// A record on a node missing from the config counts nowhere; requests for
 	// that machine still fail, but every other machine keeps its capacity view.
 	on := func(m D) bool { n, ok := e.P.lookupNode(m); return ok && n.Name == node.Name }
@@ -137,21 +137,21 @@ func (e *Execution) nodeLoad(node nodeRef, proposed D) ([]D, []snapshotRecord) {
 			reservations = append(reservations, proposed)
 		}
 	}
-	snapshots := []snapshotRecord{}
+	holds := []diskHold{}
 	for _, s := range e.snapshots() {
 		m := e.S.Get("machines", str(s.VMID))
 		if m == nil && node == e.P.Nodes()[0] || m != nil && on(m) {
-			snapshots = append(snapshots, s)
+			holds = append(holds, diskHold{DiskGB: s.DiskGB, State: s.State})
 		}
 	}
 	// A plugin object that holds disk space counts as a snapshot does.
 	for _, o := range rowsOf[pluginObject](e.S, pluginObjectRows) {
 		m := e.S.Get("machines", str(o.VMID))
 		if o.DiskGB > 0 && (m == nil && node == e.P.Nodes()[0] || m != nil && on(m)) {
-			snapshots = append(snapshots, snapshotRecord{ID: o.ID, VMID: o.VMID, Name: o.Name, DiskGB: o.DiskGB, State: o.State})
+			holds = append(holds, diskHold{DiskGB: o.DiskGB, State: o.State})
 		}
 	}
-	return reservations, snapshots
+	return reservations, holds
 }
 
 // nodeCapacities summarizes every node. Store reads stay on this goroutine;

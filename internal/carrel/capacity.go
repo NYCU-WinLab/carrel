@@ -31,7 +31,14 @@ func watermark(used, total float64) string {
 	return "ok"
 }
 
-func summarize(inventory D, reservations []D, snapshots []snapshotRecord, at time.Time) D {
+// diskHold is an object that may hold up to DiskGB of its node's storage: a
+// snapshot, or a plugin object of a disk kind.
+type diskHold struct {
+	DiskGB int
+	State  string
+}
+
+func summarize(inventory D, reservations []D, snapshots []diskHold, at time.Time) D {
 	status, storage := obj(inventory["status"]), obj(inventory["storage"])
 	byID := map[int]D{}
 	cpu, memory := 0.0, 0.0
