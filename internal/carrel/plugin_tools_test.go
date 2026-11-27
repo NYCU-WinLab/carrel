@@ -45,7 +45,7 @@ func (f *fakePlugins) call(r D, target string) (any, error) {
 			return clone(f.inline), nil
 		}
 		return D{"idempotency_key": key, "state": "succeeded", "done": true,
-			"result": D{"items": []any{"a", "b"}, "dry": r["dry_run"], "machine": obj(r["params"])["machine"]}}, nil
+			"result": D{"items": []any{"a", "b"}, "dry": r["dry_run"], "vmid": obj(r["params"])["machine"]}}, nil
 	}
 	switch r["call"] {
 	case "start":
@@ -236,6 +236,8 @@ func TestAPluginOperationSurvivesARestart(t *testing.T) {
 	op = p.Store.Get("operations", id)
 	op["state"], op["phase"] = "running", "waiting_for_guest"
 	op["prepared_result"] = D{"plugin": "backup"}
+	// Cut off before the run was recorded as succeeded.
+	delete(obj(op["plugin"]), "succeeded")
 	delete(op, "result")
 	p.Store.Put("operations", id, 1, op)
 	f.mu.Lock()
@@ -530,7 +532,7 @@ func TestAPluginReadAnswersAtOnce(t *testing.T) {
 	before := len(p.Store.Objects("operations", 0))
 
 	r := mcpCall(t, alice, "backup_list", D{"machine": "web"})
-	if r["ok"] != true || fmt.Sprint(r["items"]) != "[a b]" || r["machine"] != "10100" || r["operation"] != nil {
+	if r["ok"] != true || fmt.Sprint(r["items"]) != "[a b]" || r["vmid"] != "10100" || r["operation"] != nil {
 		t.Fatalf("read: %s", encoded(r))
 	}
 	if n := len(p.Store.Objects("operations", 0)); n != before {

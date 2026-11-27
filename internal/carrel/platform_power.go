@@ -330,6 +330,11 @@ func (e *Execution) PerformPlatformPower() {
 				case t == nil || t["status"] != "active":
 					record("skipped", r, D{"reason": "the tenant is suspended"})
 					continue
+				case action == "start" && m["plugin_fence"] != nil:
+					// A plugin run of unknown fate may still write its disk:
+					// it stays listed, and starts once that run has ended.
+					record("failed", r, D{"reason": "a plugin operation on it may still be running", "operation": m["plugin_fence"]})
+					continue
 				case action == "start" && !e.platformListed(r):
 					record("skipped", r, D{"reason": "its owner acted on it after the shutdown"})
 					continue

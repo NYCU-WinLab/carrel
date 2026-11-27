@@ -200,6 +200,9 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 		if e.Op != nil && e.Op["tool"] == "machine_power" {
 			current = current && reportedAt >= num(obj(e.Op["power_restore"])["reported_after"])
 		}
+		if e.Op != nil && e.Op["plugin"] != nil {
+			current = current && reportedAt >= num(obj(obj(e.Op["plugin"])["power"])["reported_after"])
+		}
 		init, app := "", ""
 		if current {
 			init, app = r.InitializationStatus, r.ApplicationStatus

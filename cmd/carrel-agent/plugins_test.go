@@ -462,8 +462,8 @@ func TestAnObjectOperationStartsOnlyOnItsReservation(t *testing.T) {
 	if r := call(t, a, bare); r["ok"] != false || p.started.Load() != 0 {
 		t.Fatalf("no reservation: %v", r)
 	}
-	spec := carrel.PluginObjectSpec(info, info.Operations[0])
-	reserved := `{"op":"plugin","plugin":"copies","call":"start","operation":"take","idempotency_key":"k2","reservation":"copies/copy/10100/a","object_spec":"` + spec + `"}`
+	spec := carrel.PluginOperationSpec(info, info.Operations[0])
+	reserved := `{"op":"plugin","plugin":"copies","call":"start","operation":"take","idempotency_key":"k2","reservation":"copies/copy/10100/a","operation_spec":"` + spec + `"}`
 	if r := call(t, a, reserved); r["ok"] != true || p.started.Load() != 1 || p.reservations[0] != "copies/copy/10100/a" {
 		t.Fatalf("reserved: %v, %v", r, p.reservations)
 	}
@@ -484,5 +484,27 @@ func TestAnObjectOperationStartsOnlyOnItsReservation(t *testing.T) {
 	b := &agent{cfg: config{PluginDir: dir2}}
 	if r := call(t, b, reserved); r["ok"] != false || plain.started.Load() != 0 {
 		t.Fatalf("a reservation reached a plugin without objects: %v", r)
+	}
+}
+
+// An operation that stops the guest starts only for a control plane that
+// stopped it by the same declaration: an older one sends no spec.
+func TestAStoppingOperationStartsOnlyOnTheSameDeclaration(t *testing.T) {
+	dir := pluginDir(t)
+	p := newFake("disks", 1)
+	p.types = []*pluginpb.OperationType{{Name: "rewind", ParamsSchema: `{"type":"object"}`, Stopped: true, Rewinds: true}}
+	serve(t, dir, p)
+	a := &agent{cfg: config{PluginDir: dir}}
+	info := describe(context.Background(), dir, "disks")
+	if !info.Operations[0].Stopped || !info.Operations[0].Rewinds {
+		t.Fatalf("report: %+v", info)
+	}
+	if r := call(t, a, `{"op":"plugin","plugin":"disks","call":"start","operation":"rewind","idempotency_key":"k1"}`); r["ok"] != false || p.started.Load() != 0 {
+		t.Fatalf("no spec: %v", r)
+	}
+	spec := carrel.PluginOperationSpec(info, info.Operations[0])
+	job := `{"op":"plugin","plugin":"disks","call":"start","operation":"rewind","idempotency_key":"k2","operation_spec":"` + spec + `","machine":{"vmid":10100,"power_state":"stopped"}}`
+	if r := call(t, a, job); r["ok"] != true || p.started.Load() != 1 {
+		t.Fatalf("same declaration: %v", r)
 	}
 }

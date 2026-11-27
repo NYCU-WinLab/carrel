@@ -57,7 +57,7 @@ type pluginObject struct {
 	// refused first start proves the object was never made.
 	Run string `json:"run,omitempty"`
 	// Spec is the declaration the record was charged and holds by
-	// (PluginObjectSpec).
+	// (PluginOperationSpec).
 	Spec string `json:"spec,omitempty"`
 	// DeletingBy is the delete operation that holds the object now, and Was
 	// the state it had before, which a refused delete gives back.
@@ -128,19 +128,43 @@ func pluginObjectProblem(pl PluginInfo, op PluginOperation) string {
 
 // pluginObjectSpec is what a tool's object declaration is on one node: two
 // nodes that declare it differently do not run the same tool.
-func pluginObjectSpec(pl PluginInfo, op PluginOperation) string { return PluginObjectSpec(pl, op) }
+func pluginObjectSpec(pl PluginInfo, op PluginOperation) string { return PluginOperationSpec(pl, op) }
 
-// PluginObjectSpec is a digest of an operation's object declaration: the
-// kind with its charges, holds and disk, the effect, the parameter and the
-// plugin's dimensions; "" for an operation on no object. The control plane
-// sends the one it charged by with the start, and the agent starts only a
-// plugin that declares the same now.
-func PluginObjectSpec(pl PluginInfo, op PluginOperation) string {
-	if op.ObjectKind == "" && op.ObjectEffect == "" && op.ObjectParam == "" {
+// PluginOperationSpec is a digest of what carrel does around an operation:
+// its object declaration (the kind with its charges, holds and disk, the
+// effect, the parameter and the plugin's dimensions) and whether it stops
+// the guest or rewinds its disk; "" for an operation with none of these.
+// The control plane sends the one it acted by with the start, and the agent
+// starts only a plugin that declares the same now.
+func PluginOperationSpec(pl PluginInfo, op PluginOperation) string {
+	if op.ObjectKind == "" && op.ObjectEffect == "" && op.ObjectParam == "" && !op.Stopped && !op.Rewinds {
 		return ""
 	}
 	k, _ := pl.kind(op.ObjectKind)
-	return digest(string(encoded(D{"op": []string{op.ObjectKind, op.ObjectEffect, op.ObjectParam}, "kind": k, "quota": pl.Quota})))
+	return digest(string(encoded(D{"op": []string{op.ObjectKind, op.ObjectEffect, op.ObjectParam}, "kind": k, "quota": pl.Quota,
+		"stopped": op.Stopped, "rewinds": op.Rewinds})))
+}
+
+// pluginPowerProblem says why an operation's power declaration cannot be a
+// tool, or "".
+func pluginPowerProblem(op PluginOperation) string {
+	if !op.Stopped && !op.Rewinds {
+		return ""
+	}
+	if op.Rewinds && !op.Stopped {
+		return "an operation that rewinds the disk must also declare stopped"
+	}
+	if op.ReadOnly {
+		return "a read_only operation cannot stop the machine"
+	}
+	var s map[string]any
+	_ = json.Unmarshal(op.Params, &s)
+	props, _ := s["properties"].(map[string]any)
+	required, _ := s["required"].([]any)
+	if _, ok := props["machine"]; !ok || !contains(required, "machine") {
+		return `an operation that stops the machine must require a top-level "machine"`
+	}
+	return ""
 }
 
 // pluginInfo is the plugin as one node reports it, supported.
@@ -210,7 +234,7 @@ func (e *Execution) planPluginObject(pl PluginInfo, op PluginOperation, a, t, m 
 			if ours(row.OperationID) {
 				// A retry runs on the record it made, so only under the
 				// declaration that record holds by.
-				if row.Spec != PluginObjectSpec(pl, op) {
+				if row.Spec != PluginOperationSpec(pl, op) {
 					fail("conflict", fmt.Sprintf("Plugin %s now declares a %s otherwise than when this operation reserved it; delete the %s, then create it again", pl.Name, op.ObjectKind, op.ObjectKind),
 						D{"recovery": "revise_request"})
 				}
@@ -246,7 +270,7 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 	plug := obj(e.Op["plugin"])
 	id, row, charge := e.planPluginObject(pl, op, a, t, m)
 	plug["object"], plug["object_effect"], plug["object_kind"], plug["object_name"] = id, op.ObjectEffect, op.ObjectKind, a[op.ObjectParam]
-	plug["object_spec"] = PluginObjectSpec(pl, op)
+	plug["operation_spec"] = PluginOperationSpec(pl, op)
 	n := integer(t["n"])
 	switch {
 	case op.ObjectEffect == "create" && row == nil:
@@ -255,7 +279,7 @@ func (e *Execution) reservePluginObject(pl PluginInfo, op PluginOperation, a, t,
 			e.S.SitePut(pluginQuotaRows, q.Name, D{"name": q.Name, "default_limit": q.DefaultLimit, "unit": q.Unit, "plugin": pl.Name})
 		}
 		rec := pluginObject{ID: id, Plugin: pl.Name, Kind: op.ObjectKind, Name: str(a[op.ObjectParam]), VMID: integer(m["vmid"]),
-			State: "creating", Holds: k.Holds, Run: str(plug["key"]), Spec: PluginObjectSpec(pl, op)}
+			State: "creating", Holds: k.Holds, Run: str(plug["key"]), Spec: PluginOperationSpec(pl, op)}
 		for d, v := range charge {
 			if rec.Charge == nil {
 				rec.Charge = map[string]float64{}
@@ -288,8 +312,9 @@ func (e *Execution) settlePluginObject(succeeded bool) {
 		return
 	}
 	self := str(e.Op["id"])
-	// refused: the first start was refused, so the run never began.
-	refused := boolean(plug["refused"])
+	// refused: the first start was refused, or none was sent, so the run
+	// never began.
+	refused := boolean(plug["refused"]) || !boolean(plug["start_sent"])
 	switch plug["object_effect"] {
 	case "create":
 		if row.OperationID != self || row.State != "creating" {

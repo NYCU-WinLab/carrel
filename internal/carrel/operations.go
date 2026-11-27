@@ -586,6 +586,15 @@ func (e *Execution) CheckBusy(t D) {
 			panic(Waiting{"waiting_for_machine_operation", now() + 1})
 		}
 	}
+	// A plugin run of unknown fate may still be writing a machine's disk:
+	// nothing else runs on it until that operation is retried to its end.
+	for vmid := range targets {
+		m := e.S.Get("machines", fmt.Sprint(vmid))
+		if fence := str(m["plugin_fence"]); m != nil && fence != "" && fence != str(e.Op["id"]) && e.Op["tool"] != "platform_power" {
+			fail("conflict", "A plugin operation on this machine may still be running; retry it with operation_retry first",
+				D{"recovery": "resolve_prerequisite", "operation": fence})
+		}
+	}
 	for _, other := range e.S.ActiveOperations() {
 		if other["id"] == e.Op["id"] || !contains([]string{"waiting_for_guest", "preparing_publication", "publishing", "moving_machine", "freezing_machine", "restoring_machine"}, other["phase"]) {
 			continue
