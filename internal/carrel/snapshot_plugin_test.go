@@ -95,3 +95,44 @@ func TestAConfirmRepeatsTheObjectName(t *testing.T) {
 		t.Fatal(problem)
 	}
 }
+
+// The plugin's tools read as the core snapshot tools do: the same
+// descriptions, machine and confirm arguments and hints. The name pattern
+// differs on purpose: PVE refuses a one-character name.
+func TestTheSnapshotPluginToolsReadAsTheCoreOnes(t *testing.T) {
+	core := map[string]D{}
+	for _, d := range dicts(Contract["tools"]) {
+		core[str(d["name"])] = d
+	}
+	for _, op := range snapshotPluginInfo().Operations {
+		c := core["snapshot_"+op.Name]
+		if c == nil {
+			t.Fatalf("%s: no core tool", op.Name)
+		}
+		// The rollback says it shuts a running guest down gracefully, and
+		// carrel adds the operation sentence to every plugin tool.
+		want := str(c["description"])
+		if op.Name == "rollback" {
+			want = "Roll back disk contents; later changes are lost. Confirm snapshot name. A running machine is shut down gracefully first. " +
+				"Restores the previous power state and checks guest readiness. Brief downtime is expected."
+		}
+		if op.Description != want {
+			t.Errorf("%s: description %q, want %q", op.Name, op.Description, want)
+		}
+		var params D
+		must(json.Unmarshal(op.Params, &params))
+		props, coreProps := obj(params["properties"]), obj(obj(c["inputSchema"])["properties"])
+		for _, key := range []string{"machine"} {
+			if !equal(props[key], coreProps[key]) {
+				t.Errorf("%s.%s: %s, core %s", op.Name, key, encoded(props[key]), encoded(coreProps[key]))
+			}
+		}
+		if !equal(params["required"], obj(c["inputSchema"])["required"]) {
+			t.Errorf("%s: required %v, core %v", op.Name, params["required"], obj(c["inputSchema"])["required"])
+		}
+		a := obj(c["annotations"])
+		if op.ReadOnly != boolean(a["readOnlyHint"]) || op.Destructive != boolean(a["destructiveHint"]) || op.Idempotent != boolean(a["idempotentHint"]) {
+			t.Errorf("%s: hints read_only %v destructive %v idempotent %v, core %s", op.Name, op.ReadOnly, op.Destructive, op.Idempotent, encoded(a))
+		}
+	}
+}

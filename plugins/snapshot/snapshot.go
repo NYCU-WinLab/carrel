@@ -61,7 +61,7 @@ type server struct {
 	now func() time.Time
 }
 
-const machineSchema = `"machine":{"type":"string"}`
+const machineSchema = `"machine":{"type":"string","minLength":1,"maxLength":32}`
 const nameSchema = `"name":{"type":"string","pattern":"^[a-z][a-z0-9-]{1,31}$"}`
 
 // Describe is what the plugin declares.
@@ -81,18 +81,20 @@ func Describe() *pluginpb.DescribeResponse {
 		Objects: []*pluginpb.ObjectKind{{Name: "snapshot", Disk: true, Holds: []string{"freeze", "migrate", "backfill"},
 			Charges: []*pluginpb.Charge{{Dimension: "snapshots", Amount: 1}, {Dimension: "snapshot_gb", Amount: 1, Per: "disk_gb"}}}},
 		Operations: []*pluginpb.OperationType{
-			object(&pluginpb.OperationType{Name: "create", DryRun: true, Idempotent: true,
-				Description:  "Take a disk snapshot of a machine. It counts against the tenant's snapshots and snapshot_gb quota.",
+			object(&pluginpb.OperationType{Name: "create", DryRun: true,
+				Description: "Create a disk snapshot. A snapshot starts near zero and grows as the disk changes; snapshot_gb counts the space the tenant's snapshots hold, not disk_gb. " +
+					"Refused while that space is over the limit. Without a recent measurement each snapshot counts at the size of its disk; snapshot_storage.snapshot_gb_counts says which applies (held or declared).",
 				ParamsSchema: `{"type":"object","properties":{` + machineSchema + `,` + nameSchema + `},"required":["machine","name"],"additionalProperties":false}`}, "create"),
 			object(&pluginpb.OperationType{Name: "delete", DryRun: true, Destructive: true, Idempotent: true,
-				Description:  "Delete a disk snapshot of a machine.",
+				Description:  "Delete a managed snapshot.",
 				ParamsSchema: `{"type":"object","properties":{` + machineSchema + `,` + nameSchema + `},"required":["machine","name"],"additionalProperties":false}`}, "delete"),
-			object(&pluginpb.OperationType{Name: "rollback", DryRun: true, Destructive: true, Stopped: true, Rewinds: true, Confirm: true,
-				Description: "Roll a machine's disk back to a snapshot. A running machine is shut down and started again; confirm repeats the snapshot name.",
+			object(&pluginpb.OperationType{Name: "rollback", DryRun: true, Destructive: true, Idempotent: true, Stopped: true, Rewinds: true, Confirm: true,
+				Description: "Roll back disk contents; later changes are lost. Confirm snapshot name. A running machine is shut down gracefully first. " +
+					"Restores the previous power state and checks guest readiness. Brief downtime is expected.",
 				ParamsSchema: `{"type":"object","properties":{` + machineSchema + `,` + nameSchema + `,"confirm":{"type":"string","pattern":"^[a-z][a-z0-9-]{1,31}$"}},` +
 					`"required":["machine","name","confirm"],"additionalProperties":false}`}, "use"),
 			object(&pluginpb.OperationType{Name: "list", ReadOnly: true,
-				Description:  "List a machine's disk snapshots.",
+				Description:  "List managed snapshots.",
 				ParamsSchema: `{"type":"object","properties":{` + machineSchema + `},"required":["machine"],"additionalProperties":false}`}, "list"),
 		}}
 }
