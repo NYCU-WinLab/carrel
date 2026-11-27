@@ -106,6 +106,9 @@ UNIT
 # A new link (a new token) starts with no built commit, so a pull-mode
 # agent builds the branch head for it even when an earlier link built it.
 rm -f "/var/lib/carrel-deployd/$app/pulled"
+# Nor any environment set an earlier link of this name was granted: the new
+# link starts with none until a member grants it (#639).
+rm -f "/var/lib/carrel-deployd/$app/env" "/etc/systemd/system/carrel-app-$app.service.d/carrel-env.conf"
 systemctl daemon-reload
 systemctl enable "carrel-app-$app.service" >/dev/null 2>&1
 systemctl enable --now "carrel-deployd@$app.service"

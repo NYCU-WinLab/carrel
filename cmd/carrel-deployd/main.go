@@ -77,6 +77,7 @@ type agent struct {
 	envKey        hpke.PrivateKey
 	envRegistered bool
 	envRetryAt    time.Time
+	envApplied    string
 	units         string
 	reload        func(ctx context.Context) error
 	restart       func(ctx context.Context) error

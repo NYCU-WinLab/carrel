@@ -157,4 +157,45 @@ func TestTheKeyIsRegisteredAndAnUpdateIsReported(t *testing.T) {
 	if report["revision"] != "r9" || report["error"] != "" {
 		t.Fatalf("report %v", report)
 	}
+	// The same revision again, as when a report was lost: reported, not restarted.
+	if err := os.MkdirAll(a.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Symlink("releases/r1", filepath.Join(a.root, "current"))
+	restarts := 0
+	a.restart = func(context.Context) error { restarts++; return nil }
+	report = nil
+	a.applyEnv(context.Background(), *env)
+	if restarts != 0 || report["revision"] != "r9" {
+		t.Fatalf("%d restarts, report %v", restarts, report)
+	}
+}
+
+func TestAFailedFirstEnvironmentIsRemoved(t *testing.T) {
+	a := envAgent(t)
+	if err := os.MkdirAll(a.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("releases/r1", filepath.Join(a.root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	restarts := 0
+	a.restart = func(context.Context) error {
+		restarts++
+		if restarts == 1 {
+			return errors.New("health check failed")
+		}
+		return nil
+	}
+	err := a.writeEnv(context.Background(), update([3]any{"base", 1, sealFor(t, a, "web", "base", 1, "A=broken")}))
+	if err == nil || restarts != 2 {
+		t.Fatalf("%v after %d restarts", err, restarts)
+	}
+	if _, err := os.Stat(a.envFile()); !os.IsNotExist(err) {
+		t.Fatal("the failed environment stayed")
+	}
+	// An empty update with nothing held changes nothing and restarts nothing.
+	if err := a.writeEnv(context.Background(), envUpdate{Revision: "none"}); err != nil || restarts != 2 {
+		t.Fatalf("%v after %d restarts", err, restarts)
+	}
 }

@@ -460,16 +460,19 @@ installed; elsewhere removing one does not rotate existing guest keys.
 Store an app's secrets once and give them to several apps, instead of copying them by hand into
 each machine's `/srv/apps/<app>/env`:
 
-1. `env_access` with `set` and `grant`: the apps that may read the set.
-2. `env_upload` with `set`: run the upload line it returns where the `.env` file is.
-3. Each granted app gets the values at its next poll and restarts with them.
+1. `env_upload` with `set`: it creates the set and returns an upload line.
+2. `env_access` with `set` and `grant`: the apps that may read the set.
+3. Run the upload line where the `.env` file is. Each granted app gets the values at its next
+   poll and restarts with them.
+
+- `PORT` and `HOME` are set by the platform and refused in a set.
 
 - The values are sealed to a key that each app's `carrel-deployd` made on its machine, so carrel
   itself cannot read them back. Tools show names and versions, never values.
 - A newly granted app gets the values at the next upload: upload the file again after granting.
 - `env_access` with `revoke` stops an app from getting later versions, and the app drops the set.
-- After a machine is rebuilt, `app_get` shows its agent's new key. Compare the fingerprint with
-  `journalctl -u carrel-deployd@<app>` on the machine, call `env_trust`, then upload again.
+- After a machine is rebuilt, `app_get` shows that its agent has a new key. Copy the fingerprint
+  from `journalctl -u carrel-deployd@<app>` on the machine into `env_trust`, then upload again.
 - Before you store a long-lived cloud key, check whether the service takes OIDC federation from
   GitHub Actions (AWS, GCP and others do). Then there is no key to store.
 

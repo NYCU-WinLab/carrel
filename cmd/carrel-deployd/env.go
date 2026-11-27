@@ -138,10 +138,13 @@ func (a *agent) registerEnvKey(ctx context.Context) {
 // applyEnv writes an environment update and tells carrel how it went.
 func (a *agent) applyEnv(ctx context.Context, u envUpdate) {
 	message := ""
-	if err := a.writeEnv(ctx, u); err != nil {
+	if u.Revision != "" && u.Revision == a.envApplied {
+		// Applied before, but carrel did not hear it: report again, no restart.
+	} else if err := a.writeEnv(ctx, u); err != nil {
 		message = err.Error()
 		slog.Warn("env_failed", "revision", u.Revision, "error", message)
 	} else {
+		a.envApplied = u.Revision
 		slog.Info("env_applied", "revision", u.Revision, "sets", len(u.Sets))
 	}
 	resp, err := a.request(ctx, "POST", "/apps/v1/agent/env", map[string]string{"revision": u.Revision, "error": message})
@@ -202,8 +205,16 @@ func (a *agent) writeEnv(ctx context.Context, u envUpdate) error {
 		return err
 	}
 	old, err := os.ReadFile(a.envFile())
+	existed := err == nil
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	if len(u.Sets) == 0 && !existed {
+		// Nothing held before and nothing now.
+		return nil
+	}
+	if existed && bytes.Equal(old, content) {
+		return a.ensureDropIn(ctx)
 	}
 	if err := writePrivate(a.envFile(), content); err != nil {
 		return err
@@ -218,11 +229,19 @@ func (a *agent) writeEnv(ctx context.Context, u envUpdate) error {
 	a.inv.deploying.Lock()
 	defer a.inv.deploying.Unlock()
 	if err := a.restart(ctx); err != nil {
-		if old != nil && writePrivate(a.envFile(), old) == nil {
-			_ = a.restart(ctx)
+		var back error
+		if existed {
+			back = writePrivate(a.envFile(), old)
+		} else {
+			back = os.Remove(a.envFile())
+		}
+		if back == nil {
+			if again := a.restart(ctx); again != nil {
+				return fmt.Errorf("the app failed with the new environment (%v), and again with the previous one (%v)", err, again)
+			}
 			return fmt.Errorf("the app failed with the new environment (%v); the previous environment is back", err)
 		}
-		return fmt.Errorf("the app failed with the new environment: %v", err)
+		return fmt.Errorf("the app failed with the new environment (%v), and the previous one could not be put back (%v)", err, back)
 	}
 	return nil
 }

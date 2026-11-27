@@ -138,10 +138,14 @@ func TestEnvironmentSetsAreSealedToEachAppAndOnlyThere(t *testing.T) {
 		t.Fatalf("env_list: %s", listed)
 	}
 
-	// Revoking the api: it gets no later version and drops the set.
+	// Revoking the api after it applied the set: it is told to drop it.
+	apiEnv := obj(next["env"])
+	if code, _ := do(t, a, "POST", "/apps/v1/agent/env", api, strings.NewReader(`{"revision":"`+str(apiEnv["revision"])+`"}`)); code != 200 {
+		t.Fatalf("api report: %d", code)
+	}
 	assertOK(t, call("env_access", D{"set": "shared", "revoke": []any{"api"}}))
 	_, next = do(t, a, "POST", "/apps/v1/agent/next", api, nil)
-	if env := obj(next["env"]); len(arr(env["sets"])) != 0 {
+	if env := obj(next["env"]); env["revision"] != "none" || len(arr(env["sets"])) != 0 {
 		t.Fatalf("revoked app still gets %s", encoded(next))
 	}
 	r = call("env_upload", D{"set": "shared"})

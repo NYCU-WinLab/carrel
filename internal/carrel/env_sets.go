@@ -189,8 +189,8 @@ func (e *Execution) EnvTool(tool string, a, w, t D) D {
 		if pending == "" {
 			fail("conflict", "This app's agent has registered no new key")
 		}
-		if want := keyFingerprint(pending); str(a["fingerprint"]) != want {
-			fail("invalid", "The fingerprint does not match the new key; compare it with the one carrel-deployd logged on the machine", D{"fingerprint": want})
+		if str(a["fingerprint"]) != keyFingerprint(pending) {
+			fail("invalid", "The fingerprint does not match the new key; copy it from carrel-deployd's log on the machine")
 		}
 		if dry {
 			return D{"dry_run": true, "app": app["name"], "fingerprint": keyFingerprint(pending)}
@@ -332,7 +332,8 @@ func (p *Platform) envFor(app D) (string, []D) {
 		names = append(names, fmt.Sprintf("%s:%d", s["name"], integer(held["version"])))
 	}
 	if len(names) == 0 {
-		return "", out
+		// Not "": an agent that held sets must hear that it holds none now.
+		return "none", out
 	}
 	return digest(strings.Join(names, "\n"))[:16], out
 }
