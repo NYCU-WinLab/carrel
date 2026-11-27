@@ -1460,6 +1460,33 @@
           }
         }
       }
+    },
+    "/functions/v1/deploy/{tenant}/{function}/preview": {
+      "delete": {
+        "x-carrel-audience": "ci",
+        "security": [
+          {
+            "ciOidc": []
+          }
+        ],
+        "summary": "Remove the preview of the closed pull request the pull_request token names (#645): by its number, or by its head branch when a merged close names only the base branch",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/tenant"
+          },
+          {
+            "$ref": "#/components/parameters/function"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Ok"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   }
 }

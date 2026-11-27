@@ -31,7 +31,9 @@ func (e *Execution) functionLink(a, t D) D {
 			delete(f, "repo")
 			delete(f, "branch")
 			delete(f, "repo_id")
+			delete(f, "previews")
 			e.Put("functions", f["id"], n, f)
+			e.removePreviews(e.previewsOf(f))
 		}
 		return D{"dry_run": dry, "function": f["name"], "unlinked": was}
 	}
@@ -39,22 +41,40 @@ func (e *Execution) functionLink(a, t D) D {
 	if repo == "" {
 		fail("invalid", "Give repo, the GitHub owner/name, or clear")
 	}
+	if f["preview_of"] != nil {
+		fail("invalid", "A preview is not linked; link the function it previews")
+	}
+	previews := boolean(a["previews"])
 	if !dry {
 		// Another repository starts unpinned; the same one keeps its id.
-		if f["repo"] != repo {
+		moved := f["repo"] != repo
+		if moved {
 			delete(f, "repo_id")
 		}
 		f["repo"], f["branch"] = repo, branch
+		if previews {
+			f["previews"] = true
+		} else {
+			delete(f, "previews")
+		}
 		e.Put("functions", f["id"], n, f)
+		// Previews of another repository's pull requests, or of a link
+		// without previews, go.
+		if !previews || moved {
+			e.removePreviews(e.previewsOf(f))
+		}
 	}
 	return D{
-		"dry_run": dry, "function": f["name"], "repo": repo, "branch": branch,
-		"workflow":    e.functionWorkflow(t, f, repo, branch),
+		"dry_run": dry, "function": f["name"], "repo": repo, "branch": branch, "previews": previews,
+		"workflow":    e.functionWorkflow(t, f, repo, branch, previews),
 		"next_action": "Commit workflow to .github/workflows/carrel.yml on " + branch + ". Each push builds the image, pushes it to ghcr.io and deploys it as a new version with this function's settings. A ghcr.io package is private by default: make it public in its package settings, or give the function credentials with function_registry (registry ghcr.io) before the first push.",
 	}
 }
 
-func (e *Execution) functionWorkflow(t, f D, repo, branch string) string {
+func (e *Execution) functionWorkflow(t, f D, repo, branch string, previews bool) string {
+	if previews {
+		return e.previewWorkflow(t, f, repo, branch)
+	}
 	return fmt.Sprintf(`name: carrel
 on:
   push:
@@ -124,6 +144,9 @@ func (p *Platform) ReceiveFunctionImage(ctx context.Context, slug, name string, 
 	p.writer.Lock()
 	defer p.writer.Unlock()
 	t, f := e.functionBySlug(slug, name)
+	if isPreviewToken(c) {
+		return e.receivePreview(t, f, c, in.Image)
+	}
 	// Same checks as an app release: repository, its pinned id, branch, event.
 	e.authorizeRelease(f, c)
 	if str(f["pending"]) != "" {
@@ -175,7 +198,10 @@ func functionRelease(f, v D, version string) D {
 // FunctionImageStatus answers the deploy action's poll for one version.
 func (p *Platform) FunctionImageStatus(ctx context.Context, slug, name, version string, c CIClaims) D {
 	e := p.execution(ctx)
-	_, f := e.functionBySlug(slug, name)
+	t, f := e.functionBySlug(slug, name)
+	if isPreviewToken(c) {
+		return e.previewStatus(t, f, c, version)
+	}
 	// The same checks as the deploy: another branch or event of the linked
 	// repository reads nothing.
 	e.authorizeRelease(f, c)

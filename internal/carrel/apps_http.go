@@ -162,6 +162,11 @@ func (a *App) functionRoutes(mux *http.ServeMux) {
 		c := a.ciClaims(r)
 		return p.ReceiveFunctionImage(r.Context(), r.PathValue("tenant"), r.PathValue("function"), c, r.Body)
 	}))
+	// A closed pull request's job removes its preview (#645).
+	mux.Handle("DELETE /functions/v1/deploy/{tenant}/{function}/preview", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		c := a.ciClaims(r)
+		return p.ClosePreview(r.Context(), r.PathValue("tenant"), r.PathValue("function"), c, r.Body)
+	}))
 	mux.Handle("GET /functions/v1/deploy/{tenant}/{function}/{version}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.ciClaims(r)
 		return D{"version": p.FunctionImageStatus(r.Context(), r.PathValue("tenant"), r.PathValue("function"), r.PathValue("version"), c)}
