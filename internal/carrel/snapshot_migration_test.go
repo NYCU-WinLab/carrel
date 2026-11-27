@@ -191,38 +191,37 @@ func TestSnapshotsMoveDeletesByRowKey(t *testing.T) {
 	}
 }
 
-// A name collision is one PVE snapshot behind 2 rows: an older release took
-// the name again over it. Both moves keep the plugin record, whose
-// configuration matches PVE, and name the core row they replaced (#723).
-func TestSnapshotCollisionKeepsTheRecord(t *testing.T) {
-	kept := D{"cpu": 1, "disk_gb": 20, "memory_mb": 1024, "nics": []any{}}
+// A name collision merges only when both rows agree on configuration and
+// size; otherwise it stops the move and changes nothing (#723).
+func TestSnapshotCollision(t *testing.T) {
+	cfg := D{"cpu": 1, "disk_gb": 20, "memory_mb": 1024, "nics": []any{}}
 	for name, c := range map[string]struct {
 		move func(*Store) (D, error)
 		key  string
 	}{"back": {MoveSnapshotsBack, "replaced"}, "forward": {MigrateSnapshots, "dropped"}} {
-		t.Run(name, func(t *testing.T) {
-			p, _ := fixture(t)
-			putSnapshotRecord(p, 1, 10100, "s1", 20, "", kept)
-			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", D{"configuration": D{"cpu": 4, "disk_gb": 20, "memory_mb": 8192, "nics": []any{}}}))
-			r, err := c.move(p.Store)
-			if err != nil || !equal(r[c.key], []any{"10100-s1"}) {
-				t.Fatal(r, err)
-			}
-			var got D
-			if name == "back" {
-				got = p.Store.Get("snapshots", "10100-s1")
-				if len(p.Store.Objects(pluginObjectRows)) != 0 {
-					t.Fatal("the record stayed in the ledger")
+		for _, differ := range []D{nil, {"configuration": merge(cfg, D{"memory_mb": 8192})}, {"disk_gb": 40}} {
+			t.Run(fmt.Sprintf("%s/%v", name, differ), func(t *testing.T) {
+				p, _ := fixture(t)
+				putSnapshotRecord(p, 1, 10100, "s1", 20, "", cfg)
+				p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", merge(D{"configuration": cfg}, differ)))
+				ledger, core := len(p.Store.Objects(pluginObjectRows)), len(p.Store.Objects("snapshots"))
+				r, err := c.move(p.Store)
+				if differ != nil {
+					if err == nil || !strings.Contains(err.Error(), "differ") || len(p.Store.Objects(pluginObjectRows)) != ledger || len(p.Store.Objects("snapshots")) != core {
+						t.Fatal("a differing collision merged", r, err)
+					}
+					return
 				}
-			} else {
-				got = p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s1"))
-				if len(p.Store.Objects("snapshots")) != 0 {
-					t.Fatal("the core row stayed")
+				if err != nil || !equal(r[c.key], []any{"10100-s1"}) {
+					t.Fatal(r, err)
 				}
-			}
-			if got == nil || num(obj(got["configuration"])["cpu"]) != 1 {
-				t.Fatal("the kept record lost the PVE configuration", string(encoded(got)))
-			}
-		})
+				if name == "back" && (len(p.Store.Objects(pluginObjectRows)) != 0 || p.Store.Get("snapshots", "10100-s1") == nil) {
+					t.Fatal("move back left the ledger")
+				}
+				if name == "forward" && (len(p.Store.Objects("snapshots")) != 0 || p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s1")) == nil) {
+					t.Fatal("move forward left a core row")
+				}
+			})
+		}
 	}
 }

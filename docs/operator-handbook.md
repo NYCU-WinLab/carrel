@@ -464,8 +464,9 @@ A snapshot name has at least 2 characters: PVE refuses a one-character name.
 
 #### Rolling back to a release before the snapshot plugin
 
-1. Stop carrel first (`systemctl stop carrel`). `carrel -move-snapshots-back` refuses while
-   `carrel.service` is active.
+1. Stop carrel first (`systemctl stop carrel`). `carrel -move-snapshots-back` refuses unless
+   `carrel.service` is inactive or failed, and while another carrel process holds the store's
+   lock file (`<database>.lock`).
 2. Run `carrel -move-snapshots-back` with the newer binary. It moves the plugin's snapshot records
    back to core rows, so the older release charges each snapshot once. It also removes the
    plugin's tool and quota site rows, so the older release does not treat `snapshots` and
@@ -478,12 +479,18 @@ health check, but it does not run the move back. A failed deploy after the forwa
 the older release with the records still in the plugin ledger, which is how a collision below
 happens. After such a rollback, stop carrel and run the move back with the newer binary as above.
 
-If the older release took a snapshot under a name the plugin ledger already holds, both rows stand
-for one PVE snapshot: PVE keeps one snapshot per VM and name, and the older release recorded the
-existing one as `ready` with the configuration of the day it ran, without taking a new one. Both
-moves keep the plugin ledger record, whose configuration matches what PVE holds, and name the core
-row they gave up: the move back under `replaced`, the forward move under `dropped` in the
-`snapshot_migration` log. Do not touch PVE, or the tenant loses that snapshot.
+If the older release took a snapshot under a name the plugin ledger already holds, it recorded
+the existing PVE snapshot as `ready` again, without taking a new one: PVE keeps one snapshot per VM
+and name. When the core row and the record agree on configuration and size, both moves merge them
+and name the core row they gave up: the move back under `replaced`, the forward move under
+`dropped` in the `snapshot_migration` log.
+
+When they differ, a member deleted that snapshot on the older release and took a new one under
+other resources, and only PVE can tell which row is right. Both moves then stop with `has a core
+row and a plugin record that differ` and change nothing. Compare the 2 rows with
+`qm config <vmid> --snapshot <name>`, then, with carrel stopped and the store backed up, delete the
+wrong one (`snapshots/<vmid>-<name>` or `plugin_objects/snapshot/snapshot/<vmid>/<name>` in
+`objects`) and run the move again. Do not touch PVE, or the tenant loses that snapshot.
 
 ## Keys from the portal
 
