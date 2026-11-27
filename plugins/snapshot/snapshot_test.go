@@ -420,3 +420,16 @@ func TestAKnownKeyIsAnsweredBeforeAnyCheck(t *testing.T) {
 		t.Fatalf("another operation: %v", err)
 	}
 }
+
+// A plugin with no state directory cannot tell a key it knows, so it never
+// answers as if it had none.
+func TestAPluginWithoutItsStateSaysNothing(t *testing.T) {
+	t.Setenv("STATE_DIRECTORY", "")
+	s := newServer()
+	if _, err := start(s, "k", "create", take, "running"); status.Code(err) != codes.Unavailable {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := s.GetOperation(context.Background(), &pluginpb.GetRequest{IdempotencyKey: "k"}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("get: %v", err)
+	}
+}

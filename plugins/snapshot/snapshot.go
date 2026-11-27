@@ -172,6 +172,10 @@ func done(key, state string) *pluginpb.Operation {
 func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest) (*pluginpb.Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.runs.dir == "" {
+		// With no state it cannot tell a key it knows: it says nothing.
+		return nil, refuse(codes.Unavailable, "%s", s.problem)
+	}
 	// A key it knows is answered before any check: carrel takes a refusal
 	// of a key it sent before as proof that no run of it goes on.
 	if !req.DryRun && req.IdempotencyKey != "" && req.Operation != "list" {
@@ -372,6 +376,9 @@ func (s *server) follow(ctx context.Context, r *run) {
 func (s *server) GetOperation(ctx context.Context, req *pluginpb.GetRequest) (*pluginpb.Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.runs.dir == "" {
+		return nil, refuse(codes.Unavailable, "%s", s.problem)
+	}
 	r, err := s.runs.load(req.IdempotencyKey)
 	if err != nil {
 		return nil, refuse(codes.Unavailable, "read the run: %v", err)
