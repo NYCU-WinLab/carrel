@@ -63,7 +63,7 @@ func (e *Execution) PlanAccess(t, a D, machines map[string]D) ([]D, []D, D) {
 			if str(r["sub"]) == "" {
 				fail("invalid", "HTTPS publication requires sub")
 			}
-			name := str(r["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
+			name := str(r["sub"]) + "." + str(t["slug"]) + "." + specialZone
 			key = "https:" + name
 			old, found := domainNamed(e.domains(integer(t["n"])), name)
 			if found && (!at(m, vip, old.VMID, old.VIP) || old.TargetPort != port || old.State != "ready") {
@@ -253,7 +253,7 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			var reference []any
 			if kind == "domains" {
 				for _, g := range e.domains(n) {
-					if at(m, vip, g.VMID, g.VIP) && g.Name == str(p["sub"])+"."+str(t["slug"])+".winlab.tw" {
+					if at(m, vip, g.VMID, g.VIP) && g.Name == str(p["sub"])+"."+str(t["slug"])+"."+specialZone {
 						reference = []any{kind, g.ID, orNil(g.OperationID)}
 						break
 					}
@@ -278,7 +278,7 @@ func (e *Execution) ReserveAccess(t, plan D) (D, D, []any) {
 			vmid, ip, target = 0, vip.Address, D{"vip": vip.ID}
 		}
 		if kind == "domains" {
-			add(kind, merge(D{"id": randomID()[:16], "tenant_n": n, "vmid": vmid, "slug": t["slug"], "sub": p["sub"], "name": str(p["sub"]) + "." + str(t["slug"]) + ".winlab.tw", "target_port": p["port"], "state": "queued", "ready_at": time.Now().Unix()}, target))
+			add(kind, merge(D{"id": randomID()[:16], "tenant_n": n, "vmid": vmid, "slug": t["slug"], "sub": p["sub"], "name": str(p["sub"]) + "." + str(t["slug"]) + "." + specialZone, "target_port": p["port"], "state": "queued", "ready_at": time.Now().Unix()}, target))
 		} else {
 			port := e.AllocatePort(t)
 			add(kind, merge(D{"id": fmt.Sprintf("%d-%d-%s", n, port, str(p["protocol"])), "tenant_n": n, "vmid": vmid, "ip": ip, "public_port": port, "port": p["port"], "proto": p["protocol"]}, target))
@@ -424,7 +424,7 @@ func (e *Execution) AccessResult(t, a D) D {
 			who["machine"] = m["name"]
 		}
 		if p["protocol"] == "https" {
-			name := str(p["sub"]) + "." + str(t["slug"]) + ".winlab.tw"
+			name := str(p["sub"]) + "." + str(t["slug"]) + "." + specialZone
 			var state any
 			if d, ok := domainNamed(e.domains(integer(t["n"])), name); ok {
 				state = d.State
@@ -438,7 +438,7 @@ func (e *Execution) AccessResult(t, a D) D {
 					break
 				}
 			}
-			endpoints = append(endpoints, merge(who, D{"host": "carrel.winlab.tw", "port": public, "protocol": protocol, "verification": "routing_configured"}))
+			endpoints = append(endpoints, merge(who, D{"host": publicHost, "port": public, "protocol": protocol, "verification": "routing_configured"}))
 		}
 	}
 	return D{"connections": arr(a["connections"]), "endpoints": endpoints}

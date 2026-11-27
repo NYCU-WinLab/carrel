@@ -60,7 +60,7 @@ func grantIndex(state D, slugs map[int]string, origin string) (map[string]domain
 		}
 		// A tenant's subtree is its own site block; no grant may reach into it.
 		for n, slug := range slugs {
-			if owner := slug + ".winlab.tw"; under(g.Name, owner) && (g.Name != owner || n != g.TenantN) {
+			if owner := slug + "." + specialZone; under(g.Name, owner) && (g.Name != owner || n != g.TenantN) {
 				fail("conflict", "Invalid special domain grant")
 			}
 		}
@@ -195,7 +195,7 @@ func machineTarget(d D, machines map[int]D, vips map[string]D, frozen map[int]in
 // checkTenantName fails unless the domain is a name under its tenant's slug.
 func checkTenantName(d D, slug string) {
 	sub := str(d["sub"])
-	if (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+".winlab.tw" {
+	if (sub != "*" && !labelPattern.MatchString(sub)) || str(d["name"]) != sub+"."+slug+"."+specialZone {
 		fail("conflict", "Invalid tenant domain")
 	}
 }
@@ -273,8 +273,8 @@ func appendTenantSites(lines []string, certificates map[string]D, routes map[str
 		if bundle == nil {
 			fail("conflict", "Missing domain certificate", D{"tenant": slug})
 		}
-		certificates[slug] = checkedPair(bundle, "probe."+slug+".winlab.tw")
-		lines = append(lines, "https://*."+slug+".winlab.tw {", " tls "+gatewayCerts+"/"+slug+"/fullchain.pem "+gatewayCerts+"/"+slug+"/privkey.pem")
+		certificates[slug] = checkedPair(bundle, "probe."+slug+"."+specialZone)
+		lines = append(lines, "https://*."+slug+"."+specialZone+" {", " tls "+gatewayCerts+"/"+slug+"/fullchain.pem "+gatewayCerts+"/"+slug+"/privkey.pem")
 		// Caddy runs a handle without a matcher after every named one, so a
 		// domain of its own always wins over the catch-all.
 		var fallback string

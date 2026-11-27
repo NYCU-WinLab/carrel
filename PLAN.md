@@ -2029,7 +2029,7 @@ through Release Please. Container images, if any, are tagged by git SHA.
 
 Planned: a nested Proxmox VE inside a VM on a site node. CI installs carrel into it from scratch on
 every release candidate and runs the acceptance sentences of section 11.3 against it, with two
-differences from production: staging has its own DNS zone (open decision 13.11) and uses the
+differences from production: staging has its own DNS zone (`domain`, decision 13.11) and uses the
 Let's Encrypt staging CA, so a run never issues real certificates or touches `winlab.tw` records.
 M9 (import) is production only and is checked once, by hand, against its sentence.
 
@@ -2173,8 +2173,8 @@ old host.
    separate from member-facing ingress (13.13).
 9. Resolved 2026-09-27: the old host stays outside carrel and does not join the site.
 10. Which of the old host's guests move, and their owners (section 10.7). Decided guest by guest.
-11. Which DNS zone staging uses (section 10.5). It must not be `winlab.tw`, and its token must not
-    reach any production zone.
+11. Resolved 2026-11-27: staging uses a subdomain of `zyx.tw`, set as `domain` in its
+    `config.json`, with a token scoped to that zone only; it never touches `winlab.tw` (#569).
 12. The old gateway (CT 200 on the old host) still holds a Cloudflare token for the whole
     `winlab.tw` zone, the exposure section 6.4 keeps off carrel's gateway, and it stays while both
     gateways run. Keep it, scope it down, or move DNS changes for the old host's names into carrel's
