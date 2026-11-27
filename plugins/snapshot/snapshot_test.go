@@ -400,3 +400,23 @@ func TestAProxyTimeoutIsNotARefusal(t *testing.T) {
 		t.Fatalf("found: %v, sent %d", op, f.sent)
 	}
 }
+
+// A key the plugin knows is answered before any check, so a start sent again
+// is never refused while its run goes on: carrel would take the refusal as
+// proof that none does (#682).
+func TestAKnownKeyIsAnsweredBeforeAnyCheck(t *testing.T) {
+	s, f := fixture(t)
+	f.snaps[10100]["s1"], f.hold = true, true
+	rollback := `{"machine":"10100","name":"s1","confirm":"s1"}`
+	if _, err := start(s, "k1", "rollback", rollback, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	// The facts carrel sends changed: a fresh start would be refused.
+	op, err := start(s, "k1", "rollback", rollback, "running")
+	if err != nil || op.State != "running" || f.sent != 1 {
+		t.Fatalf("sent again: %v %v, sent %d", op, err, f.sent)
+	}
+	if _, err := start(s, "k1", "delete", take, "stopped"); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("another operation: %v", err)
+	}
+}
