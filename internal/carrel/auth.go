@@ -52,40 +52,17 @@ type Verifier struct {
 	Issuer, Audience string
 	JWKS             string
 	HTTP             *http.Client
-	mu               sync.Mutex
-	keys             map[string]*rsa.PublicKey
-	loaded           time.Time
+	// OIDC and endpoints are set for member tokens (NewVerifier) only.
+	OIDC      OIDCConfig
+	endpoints *endpoints
+	mu        sync.Mutex
+	keys      map[string]*rsa.PublicKey
+	loaded    time.Time
 }
 
-func NewVerifier(issuer string) *Verifier {
-	return &Verifier{Issuer: issuer, Audience: "carrel-mcp", HTTP: &http.Client{Timeout: 8 * time.Second}}
-}
-func identity(c D) (D, error) {
-	groups, ok := c["groups"].([]any)
-	if !ok {
-		return nil, errors.New("missing groups claim")
-	}
-	admin, active := false, false
-	projects := []string{}
-	for _, v := range groups {
-		g, ok := v.(string)
-		if !ok {
-			return nil, errors.New("invalid groups claim")
-		}
-		g = strings.TrimPrefix(g, "/")
-		admin = admin || g == "winlab-admin"
-		for _, name := range []string{"112", "113", "114", "115", "master", "doctoral", "undergrad", "assistant", "teacher"} {
-			active = active || g == "lab-member/"+name
-		}
-		if matches(`^winlab-projects/[^/]+$`, g) {
-			projects = append(projects, g)
-		}
-	}
-	username, ok := c["preferred_username"].(string)
-	if !ok || str(c["sub"]) == "" || (!admin && !active) {
-		return nil, errors.New("current lab membership required")
-	}
-	return D{"sub": c["sub"], "username": username, "admin": admin, "projects": projects}, nil
+func NewVerifier(issuer string, oidc OIDCConfig, ep *endpoints) *Verifier {
+	oidc = oidc.WithDefaults()
+	return &Verifier{Issuer: issuer, Audience: oidc.Audience, OIDC: oidc, endpoints: ep, HTTP: &http.Client{Timeout: 8 * time.Second}}
 }
 func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	v.mu.Lock()
@@ -98,7 +75,7 @@ func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 	}
 	jwksURL := v.JWKS
 	if jwksURL == "" {
-		jwksURL = v.Issuer + "/protocol/openid-connect/certs"
+		jwksURL = v.endpoints.url(v.Issuer, "jwks_uri")
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
 	if err != nil {
@@ -154,10 +131,16 @@ func (v *Verifier) Verify(ctx context.Context, token string) (D, error) {
 	if err != nil {
 		return nil, err
 	}
-	if claims["iat"] == nil || claims["sub"] == nil || claims["azp"] != v.Audience {
+	// azp names the client; a provider that follows RFC 9068 without azp
+	// names it in client_id instead.
+	client, ok := claims["azp"]
+	if !ok {
+		client = claims["client_id"]
+	}
+	if claims["iat"] == nil || claims["sub"] == nil || client != v.OIDC.ClientID {
 		return nil, errors.New("missing identity or wrong authorized party")
 	}
-	return identity(D(claims))
+	return v.OIDC.identity(D(claims))
 }
 
 type OAuth struct {
@@ -165,6 +148,9 @@ type OAuth struct {
 	Origin, Issuer, ClientID string
 	Hosted                   []string
 	Verifier                 IdentityVerifier
+	// endpoints finds the provider's authorize, token and revoke URLs;
+	// nil uses Keycloak's paths under Issuer.
+	endpoints *endpoints
 	// Console finishes browser console logins (console.go).
 	Console  func(http.ResponseWriter, *http.Request, D, string)
 	HTTP     *http.Client
@@ -229,8 +215,8 @@ func oauthError(w http.ResponseWriter, code string, status int) {
 	jsonResponse(w, status, D{"error": code})
 }
 func secureEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
-func (o *OAuth) upstream(ctx context.Context, path string, values url.Values) (D, int, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", o.Issuer+"/protocol/openid-connect/"+path, strings.NewReader(values.Encode()))
+func (o *OAuth) upstream(ctx context.Context, endpoint string, values url.Values) (D, int, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", o.endpoints.url(o.Issuer, endpoint), strings.NewReader(values.Encode()))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -350,7 +336,17 @@ func (o *OAuth) authorize(w http.ResponseWriter, r *http.Request) {
 	o.Store.OAuthPut("state", state, txn, 600)
 	params := url.Values{"client_id": {o.ClientID}, "redirect_uri": {callback}, "response_type": {"code"}, "scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge": {str(txn["challenge"])}, "code_challenge_method": {"S256"}}
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: cookie, MaxAge: 600, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Path: "/"})
-	http.Redirect(w, r, o.Issuer+"/protocol/openid-connect/auth?"+params.Encode(), 302)
+	http.Redirect(w, r, o.authorizeURL(params), 302)
+}
+
+// authorizeURL is the provider's authorization endpoint with params, kept
+// apart from any query the endpoint already has.
+func (o *OAuth) authorizeURL(params url.Values) string {
+	u := o.endpoints.url(o.Issuer, "authorization_endpoint")
+	if strings.Contains(u, "?") {
+		return u + "&" + params.Encode()
+	}
+	return u + "?" + params.Encode()
 }
 func (o *OAuth) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -427,7 +423,7 @@ func (o *OAuth) revoke(w http.ResponseWriter, r *http.Request, client D) {
 	token := q.Get("token")
 	txn := o.Store.OAuthGet("refresh", digest(token))
 	if txn != nil && txn["client"] == cid {
-		_, status, err := o.upstream(r.Context(), "revoke", url.Values{"client_id": {o.ClientID}, "token": {token}, "token_type_hint": {"refresh_token"}})
+		_, status, err := o.upstream(r.Context(), "revocation_endpoint", url.Values{"client_id": {o.ClientID}, "token": {token}, "token_type_hint": {"refresh_token"}})
 		if err != nil || status != 200 {
 			oauthError(w, "temporarily_unavailable", 503)
 			return
@@ -481,7 +477,7 @@ func (o *OAuth) exchange(w http.ResponseWriter, r *http.Request, client D, resou
 		oauthError(w, "unsupported_grant_type", 400)
 		return
 	}
-	tokens, status, err := o.upstream(r.Context(), "token", body)
+	tokens, status, err := o.upstream(r.Context(), "token_endpoint", body)
 	if err == nil && status == 400 && tokens["error"] == "invalid_grant" {
 		o.Store.OAuthPop(kind, key)
 		oauthError(w, "invalid_grant", 400)

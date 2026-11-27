@@ -205,7 +205,7 @@ func subjects(w D) [][2]string {
 	out := [][2]string{{"user:" + str(w["sub"]), str(w["username"])}}
 	for _, v := range arr(w["projects"]) {
 		s := str(v)
-		out = append(out, [2]string{s, strings.TrimPrefix(s, "winlab-projects/")})
+		out = append(out, [2]string{s, strings.TrimPrefix(s, projectSubject)})
 	}
 	return out
 }
