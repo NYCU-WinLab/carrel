@@ -318,3 +318,20 @@ func TestPlatformRestoreListExpires(t *testing.T) {
 		t.Fatalf("record after start: %s", encoded(s))
 	}
 }
+
+// A machine a plugin run of unknown fate fenced is not started: the plugin
+// may still write its disk. It stays on the list.
+func TestPlatformStartLeavesAFencedMachineStopped(t *testing.T) {
+	p, power, mu := powerFixture(t, 10100)
+	admin := person("alice", true)
+	platformRun(t, p, "shutdown", admin)
+	m := p.Store.Get("machines", "10100")
+	m["plugin_fence"] = "op-1"
+	p.Store.Put("machines", 10100, 1, m)
+	r := platformRun(t, p, "start", admin)
+	mu.Lock()
+	defer mu.Unlock()
+	if power[10100] != "stopped" || len(dicts(r["failed"])) != 1 || fmt.Sprint(restoreList(p)) != "[10100]" {
+		t.Fatalf("power %s, result %s, list %v", power[10100], encoded(r), restoreList(p))
+	}
+}
