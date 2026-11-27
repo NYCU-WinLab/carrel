@@ -121,3 +121,7 @@ jobs:
           tar -czf snapshot.tar.gz -C artifact plugin
           sha256sum snapshot.tar.gz > SHA256SUMS
           gh release upload "$TAG" snapshot.tar.gz SHA256SUMS --clobber
+          # A plugin release is never the latest: the newest carrel release is.
+          latest=$(gh release list --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$"))] | first')
+          test -n "$latest"
+          gh release edit "$latest" --latest
