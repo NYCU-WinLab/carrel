@@ -462,6 +462,15 @@ UPID once PVE answers. A plugin that restarts follows the same task; one whose a
 finds the task by its type and start time, and sends the request again only when PVE has none.
 A snapshot name has at least 2 characters: PVE refuses a one-character name.
 
+#### Database schema
+
+The database keeps its schema version in `PRAGMA user_version` (#565). At start carrel refuses a
+version newer than it knows, and applies each missing migration in its own transaction. Before the
+first one it copies the whole database to `<database>.schema-<from>-<stamp>` (mode 0600) and logs
+`schema_migrated` with the copy's path. To roll back across a migration, stop carrel and restore
+that copy, or the store backup, before starting the older release: an older release that knows the
+version check refuses the newer database.
+
 #### Rolling back to a release before the snapshot plugin
 
 1. Stop carrel first (`systemctl stop carrel`). `carrel -move-snapshots-back` refuses unless
