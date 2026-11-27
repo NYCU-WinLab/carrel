@@ -5,6 +5,7 @@ A nested Proxmox VE node for installing carrel from scratch (#569, PLAN 10.5).
 - Host: VM 1110 `carrel-stg01` on anvil, 10.10.11.110, 8 vCPU, 16 GiB, CPU type `host`.
 - Guest storage: ZFS pool `tank` on a second 120 GB disk.
 - Public network: there is no real prefix. `edge.sh` (installed as `/usr/local/sbin/stg-edge`, run by `stg-edge.service`) makes a network namespace that holds the gateway `198.18.61.1` on VLAN 61 of `vmbr0` and NATs both ways. `198.18.0.0/15` is a benchmark range, so the installer's ingress filter does not drop it as private.
+- Tailnet access: anvil joins VLAN 61 as `198.18.61.2` (`carrel-stg-route.service` on anvil) and advertises `198.18.61.0/24` to the tailnet (zyx-tw/network#9). It SNATs tailnet clients to `198.18.61.2`, so they reach `198.18.61.10` through the public interface, the way the internet does. A route to the node's `vmbr0` address does not work for tenant ports: the return path leaves through the edge gateway.
 - DNS: the zone `zhanyongxiang.com`, set as `domain` in CT 100's `config.json` (decision 13.11). Sign-in uses the winlab Keycloak client `carrel-stg`, whose only redirect is `https://carrel.zhanyongxiang.com/oauth/callback`.
 - Root SSH: cloud-init's `disable_root` is turned off (`/etc/cloud/cloud.cfg.d/99-carrel-root.cfg`), because `deploy-go.py` connects as root.
 
