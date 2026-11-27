@@ -353,9 +353,20 @@ func TestASiteWithoutTenantsReconcilesOnlyForItsOrigin(t *testing.T) {
 		t.Fatal("tenants left")
 	}
 	held := any(nil)
+	// What the fake gateway serves: the fingerprints of the last pairs it took.
+	served := D{}
 	b.call = func(r D, target string) (any, error) {
 		if r["op"] == "inventory" {
 			return D{"desired": D{"revision": held}}, nil
+		}
+		if r["op"] == "sync" && target == "carrel-gateway" {
+			served = D{}
+			for name, pair := range obj(r["certificates"]) {
+				served[name] = fingerprint(obj(pair)["fullchain"])
+			}
+		}
+		if r["op"] == "status" && target == "carrel-gateway" {
+			return D{"certificates": served}, nil
 		}
 		return D{}, nil
 	}
