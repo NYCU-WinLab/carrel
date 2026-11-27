@@ -214,7 +214,8 @@ func appendOriginSite(lines []string, certificates map[string]D, origin string, 
 	if origin == "" || originBundle == nil {
 		return lines
 	}
-	if !originPattern.MatchString(origin) {
+	// The origin lives in the site's own zone, where its certificate is issued.
+	if !originPattern.MatchString(origin) || origin == specialZone || !under(origin, specialZone) {
 		fail("conflict", "Invalid origin host")
 	}
 	// "_origin" is no tenant label, so no slug can take its directory.

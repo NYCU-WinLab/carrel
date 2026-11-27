@@ -691,7 +691,7 @@ func (e *Execution) srvRecord(g domainGrant, remove bool) {
 		e.cfIn(z, "DELETE", "/"+str(r["id"]), nil)
 		slog.Info("grant_record_adopted", "grant", g.ID, "name", g.Name, "previous", r["content"], "type", "SRV")
 	}
-	data := D{"priority": 0, "weight": 0, "port": port, "target": e.P.Config.OriginHost()}
+	data := D{"priority": 0, "weight": 0, "port": port, "target": publicHost}
 	for i, r := range ours {
 		if i == 0 {
 			if current := obj(r["data"]); integer(current["port"]) != port || current["target"] != data["target"] {
