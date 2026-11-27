@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,6 +57,47 @@ func TestCancelRefusedByThePluginLeavesItRunning(t *testing.T) {
 	f.mu.Lock()
 	f.hold, f.refuseCancel = false, false
 	f.mu.Unlock()
+	awaitState(t, p, id, "succeeded")
+}
+
+// A plugin that answers cancel with a run still going, as the snapshot
+// plugin does, did not cancel it: the call is a conflict naming the state,
+// and the operation runs on to its own end.
+func TestCancelAnsweredRunningIsAConflict(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	f.hold, f.cancelAnswer = true, "running"
+	runQueue(p)
+	seedMachine(p, "web", 10100)
+	id := str(obj(member(p, "backup_take", D{"machine": "web", "wait_seconds": 0})["operation"])["id"])
+	awaitStarted(t, f)
+	e := failure(member(p, "operation_cancel", D{"id": id}))
+	if e["code"] != "conflict" || !strings.Contains(str(e["message"]), "did not cancel the operation; it is running") {
+		t.Fatal(encoded(e))
+	}
+	if st := p.Store.Get("operations", id)["state"]; st != "running" {
+		t.Fatalf("state %v", st)
+	}
+	f.mu.Lock()
+	f.hold = false
+	f.mu.Unlock()
+	awaitState(t, p, id, "succeeded")
+}
+
+// A run that ended before the cancel reached it is returned as it is: the
+// call is a conflict, and the operation ends as the run did.
+func TestCancelOfARunThatAlreadySucceededIsAConflict(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	f.hold, f.cancelAnswer = true, "succeeded"
+	runQueue(p)
+	seedMachine(p, "web", 10100)
+	id := str(obj(member(p, "backup_take", D{"machine": "web", "wait_seconds": 0})["operation"])["id"])
+	awaitStarted(t, f)
+	e := failure(member(p, "operation_cancel", D{"id": id}))
+	if e["code"] != "conflict" || !strings.Contains(str(e["message"]), "it is succeeded") {
+		t.Fatal(encoded(e))
+	}
 	awaitState(t, p, id, "succeeded")
 }
 

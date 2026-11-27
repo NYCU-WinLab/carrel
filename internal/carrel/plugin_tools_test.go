@@ -32,7 +32,11 @@ type fakePlugins struct {
 	// hold keeps a started run running until it is cancelled; refuseCancel
 	// makes the plugin answer conflict to cancel.
 	hold, refuseCancel bool
-	cancels            []D
+	// cancelAnswer, when set, is the state cancel answers instead of
+	// cancelling: running for a plugin that cannot stop a run, succeeded
+	// for a run that ended first.
+	cancelAnswer string
+	cancels      []D
 }
 
 func (f *fakePlugins) call(r D, target string) (any, error) {
@@ -67,6 +71,13 @@ func (f *fakePlugins) call(r D, target string) (any, error) {
 		f.cancels = append(f.cancels, clone(r))
 		if f.refuseCancel {
 			return nil, Failure{D{"ok": false, "error": D{"code": "conflict", "backend_code": "conflict"}}}
+		}
+		if f.cancelAnswer != "" {
+			// A plugin that cannot stop the run answers how it stands.
+			if f.cancelAnswer != "running" {
+				f.ops[key] = merge(f.ops[key], D{"state": f.cancelAnswer, "done": true, "progress": 100, "result": D{"snapshot": "s-" + key}})
+			}
+			break
 		}
 		f.ops[key] = merge(f.ops[key], D{"state": "cancelled", "done": true})
 	case "get":

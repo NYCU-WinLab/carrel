@@ -220,8 +220,8 @@ func (o *Operations) Cancel(t D, id string, w D, dry bool) D {
 	waiting := op["state"] == "waiting" && contains(cancelPhases, op["phase"]) && op["dispatched"] == false && op["resource_changes"] == false && op["prepared_result"] == nil && !reserved
 	if !fresh && !waiting && o.runningPlugin(op) {
 		// The plugin run has started: ask the plugin to stop. The poll loop
-		// then sees cancelled and ends the operation. A refusal is the
-		// plugin's conflict, and the operation keeps running.
+		// then sees cancelled and ends the operation. A refusal, or an
+		// answer other than cancelled, is a conflict, and the run goes on.
 		if !dry {
 			o.cancelPlugin(op)
 		}
@@ -249,16 +249,25 @@ func (o *Operations) runningPlugin(op D) bool {
 	return op["state"] == "running" && plug != nil && boolean(plug["start_sent"]) && !boolean(plug["ended"]) && !boolean(plug["succeeded"])
 }
 
-// cancelPlugin sends cancel with the operation's key to its node.
+// cancelPlugin sends cancel with the operation's key to its node. Only an
+// answer of cancelled counts: a plugin that cannot stop the run, or a run
+// that ended first, is returned as it stands, and the call is a conflict.
 func (o *Operations) cancelPlugin(op D) {
 	plug := obj(op["plugin"])
 	name := str(plug["plugin"])
 	target := o.p.nodeTarget(str(plug["node"]))
 	ctx, stop := context.WithTimeout(o.p.ctx, 30*time.Second)
 	defer stop()
-	_, err := o.p.Backend.Call(ctx, D{"op": "plugin", "plugin": plug["plugin"], "operation": plug["operation"], "idempotency_key": plug["key"], "call": "cancel"}, target)
+	v, err := o.p.Backend.Call(ctx, D{"op": "plugin", "plugin": plug["plugin"], "operation": plug["operation"], "idempotency_key": plug["key"], "call": "cancel"}, target)
 	if err == nil {
-		return
+		state := str(obj(v)["state"])
+		if state == "cancelled" {
+			return
+		}
+		if state == "" {
+			state = "unknown"
+		}
+		fail("conflict", fmt.Sprintf("Plugin %s did not cancel the operation; it is %s", name, state), D{"plugin_state": state, "recovery": "revise_request"})
 	}
 	code := str(obj(failureResult(err)["error"])["backend_code"])
 	pluginRefusal(code, name, str(plug["node"]))
