@@ -488,7 +488,7 @@ The events are:
 
 To get them as HTTP POSTs, add a webhook:
 
-1. Run `webhook_add` with an https URL, and `types` to pick events (empty sends all).
+1. Run `webhook_add` with an https URL (no query string: check the signature, do not put a token in the URL), and `types` to pick events (empty sends all).
 2. Save the `secret` it returns: it is shown once.
 3. Run `webhook_test` to send one `webhook.test` event.
 

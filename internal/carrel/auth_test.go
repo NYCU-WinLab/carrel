@@ -37,7 +37,7 @@ func TestJWTSignatureIssuerAudienceAndMembership(t *testing.T) {
 		}
 		return s
 	}
-	if who, err := v.Verify(context.Background(), sign(base, key)); err != nil || who["sub"] != "alice" {
+	if who, err := v.Verify(context.Background(), sign(base, key)); err != nil || who["sub"] != "alice" || who["exp"] != base["exp"] {
 		t.Fatalf("%v %v", who, err)
 	}
 	for _, change := range []D{{"aud": "wrong"}, {"azp": "wrong"}, {"iss": "https://evil.test"}, {"exp": 1}, {"iat": nil}, {"groups": []any{"/winlab-admin/child"}}, {"groups": []any{"/lab-member/alumni"}}, {"groups": "winlab-admin"}} {
