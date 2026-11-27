@@ -2,7 +2,9 @@ package carrel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"time"
@@ -170,18 +172,30 @@ func (e *Execution) removePreviews(previews []D) {
 	e.P.kickMaintenance()
 }
 
-// ClosePreview removes the preview of the pull request a closing job's
-// token names. A merged pull request's token names only its head branch, so
-// the preview deployed from that branch goes.
-func (p *Platform) ClosePreview(ctx context.Context, slug, name string, c CIClaims) D {
+// ClosePreview removes the preview of the pull request a closing job names.
+// The job sends the number it closes (the action's github.event.pull_request
+// .number). An unmerged close's token names the same number; a merged one's
+// names only the base branch, so the preview must also have been deployed
+// from the token's head branch. A late close of an older pull request on a
+// reused branch name names its own number, and so never removes a newer
+// pull request's preview.
+func (p *Platform) ClosePreview(ctx context.Context, slug, name string, c CIClaims, body io.Reader) D {
+	var in struct {
+		PR int `json:"pr"`
+	}
+	if json.NewDecoder(io.LimitReader(body, 1<<10)).Decode(&in) != nil || in.PR <= 0 {
+		fail("invalid", "The body must be JSON with pr, the closed pull request's number")
+	}
 	e := p.execution(ctx)
 	p.writer.Lock()
 	defer p.writer.Unlock()
 	t, f := e.functionBySlug(slug, name)
 	e.authorizePreview(f, c)
-	pr := pullNumber(c)
+	if pr := pullNumber(c); pr != 0 && pr != in.PR {
+		fail("forbidden", "The token names another pull request")
+	}
 	gone := filter(e.previewsOf(f), func(pf D) bool {
-		return (pr != 0 && integer(pf["pr"]) == pr) || (pr == 0 && c.HeadRef != "" && pf["head_ref"] == c.HeadRef)
+		return integer(pf["pr"]) == in.PR && (pullNumber(c) != 0 || (c.HeadRef != "" && pf["head_ref"] == c.HeadRef))
 	})
 	e.removePreviews(gone)
 	removed := []any{}

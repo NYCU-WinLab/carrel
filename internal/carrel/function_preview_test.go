@@ -104,7 +104,20 @@ func TestPullRequestPreviews(t *testing.T) {
 	}
 
 	// A merged close names only the head branch: that preview goes, with its domain.
-	if code, out := do(t, a, "DELETE", "/functions/v1/deploy/alice/hook/preview", "merged7", nil); code != 200 || len(arr(out["removed"])) != 1 {
+	closePR := func(token string, pr int) (int, D) {
+		return do(t, a, "DELETE", "/functions/v1/deploy/alice/hook/preview", token, strings.NewReader(`{"pr":`+itoa(int64(pr))+`}`))
+	}
+	// A late close of an older pull request from a branch named like pr-8's
+	// names its own number: pr-8's preview stays.
+	a.forges.(fakeForge)["late"] = pullToken("alice/hook", "42", 0, "other")
+	if code, out := closePR("late", 3); code != 200 || len(arr(out["removed"])) != 0 {
+		t.Fatalf("late close: %d %s", code, encoded(out))
+	}
+	// The token's number must match the body's.
+	if code, _ := closePR("pr8", 7); code != 403 {
+		t.Fatalf("mismatched close: %d", code)
+	}
+	if code, out := closePR("merged7", 7); code != 200 || len(arr(out["removed"])) != 1 {
 		t.Fatalf("close: %d %s", code, encoded(out))
 	}
 	if p.Store.Get("functions", functionID(1, "pr-7-hook")) != nil {
@@ -114,7 +127,7 @@ func TestPullRequestPreviews(t *testing.T) {
 		t.Fatal("preview domain kept")
 	}
 	// Another repository's token removes nothing.
-	if code, _ := do(t, a, "DELETE", "/functions/v1/deploy/alice/hook/preview", "mallory7", nil); code != 403 && code != 404 {
+	if code, _ := closePR("mallory7", 8); code != 403 && code != 404 {
 		t.Fatalf("foreign close: %d", code)
 	}
 	// Removing the parent removes its previews.
