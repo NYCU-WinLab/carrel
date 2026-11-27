@@ -23,8 +23,6 @@ type guest struct {
 	calls                       []string
 	refuseStart, ignoreShutdown int
 	boots                       int
-	// lock is the PVE lock the status shows.
-	lock string
 }
 
 func (g *guest) seen() []string {
@@ -50,9 +48,6 @@ func withRewindPlugin(t *testing.T, power string) (*Platform, *fakePlugins, *gue
 			g.calls = append(g.calls, "status")
 			if g.power == "paused" {
 				return D{"status": "running", "qmpstatus": "paused"}, nil
-			}
-			if g.lock != "" {
-				return D{"status": g.power, "lock": g.lock}, nil
 			}
 			return D{"status": g.power}, nil
 		case "action":
@@ -201,65 +196,50 @@ func TestAStoppedGuestComesBackOnlyOnceTheRunEnded(t *testing.T) {
 	}
 }
 
-// A fence ends when the plugin shows no run of the key, a retry's start
-// refused or a get answered not_found, and the node shows the guest stopped
-// and unlocked. A lock means a task may still write: the fence stays, and a
-// retry once the lock is gone ends it (#682).
-func TestAFenceEndsOnlyWhenTheNodeShowsTheGuestFree(t *testing.T) {
+// A plugin that shows no run of the key proves nothing: its worker may
+// still wait for its lock. The fence stays, and the operation can be
+// retried (#682).
+func TestANoRecordAnswerKeepsTheFence(t *testing.T) {
 	p, f, g := withRewindPlugin(t, "running")
 	f.mu.Lock()
 	f.fail = "plugin_unavailable"
 	f.mu.Unlock()
 	r := member(p, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
 	id := str(obj(r["operation"])["id"])
-	if p.Store.Get("machines", "10100")["plugin_fence"] != id {
-		t.Fatalf("not fenced: %s", encoded(r))
-	}
-	// The plugin lost the run while its task holds the guest.
 	f.mu.Lock()
 	f.fail = "conflict"
 	f.mu.Unlock()
-	g.mu.Lock()
-	g.lock = "rollback"
-	g.mu.Unlock()
 	p.Operations.Retry(p.Store.TenantN(1), id, person("alice", false))
 	op := awaitState(t, p, id, "failed")
 	if e := obj(op["error"]); e["recovery"] != "retry" || e["machine_left_stopped"] != true || p.Store.Get("machines", "10100")["plugin_fence"] != id {
-		t.Fatalf("a locked guest: %s", encoded(op["error"]))
+		t.Fatalf("a refused retry: %s", encoded(op["error"]))
 	}
 	if calls := g.seen(); calls[len(calls)-1] == "start" {
-		t.Fatalf("a locked guest was started: %v", calls)
+		t.Fatalf("the guest was started: %v", calls)
 	}
-	// The task ended: a retry lifts the fence and starts the guest.
-	g.mu.Lock()
-	g.lock = ""
-	g.mu.Unlock()
-	p.Operations.Retry(p.Store.TenantN(1), id, person("alice", false))
-	awaitState(t, p, id, "failed")
-	if calls := g.seen(); calls[len(calls)-1] != "start" || p.Store.Get("machines", "10100")["plugin_fence"] != nil {
-		t.Fatalf("a free guest: calls %v", calls)
+	// Retryable: once the plugin answers, the run ends and the fence goes.
+	f.mu.Lock()
+	f.fail = ""
+	f.mu.Unlock()
+	if r := p.Operations.Retry(p.Store.TenantN(1), id, person("alice", false)); r["operation"] == nil {
+		t.Fatalf("not retryable: %v", r)
+	}
+	awaitState(t, p, id, "succeeded")
+	if p.Store.Get("machines", "10100")["plugin_fence"] != nil {
+		t.Fatal("the fence outlived the run")
 	}
 
-	// A get answered not_found: the same.
 	p2, f2, g2 := withRewindPlugin(t, "running")
 	f2.mu.Lock()
 	f2.forget = true
 	f2.mu.Unlock()
-	g2.mu.Lock()
-	g2.lock = "rollback"
-	g2.mu.Unlock()
 	r = member(p2, "disks_rewind", D{"machine": "web", "wait_seconds": 10})
 	id = str(obj(r["operation"])["id"])
-	if f := failure(r); f["code"] != "plugin_failed" || f["machine_left_stopped"] != true || p2.Store.Get("machines", "10100")["plugin_fence"] != id {
-		t.Fatalf("a lost run on a locked guest: %s", encoded(r))
+	if f := failure(r); f["code"] != "plugin_failed" || f["recovery"] != "retry" || p2.Store.Get("machines", "10100")["plugin_fence"] != id {
+		t.Fatalf("a lost run: %s", encoded(r))
 	}
-	g2.mu.Lock()
-	g2.lock = ""
-	g2.mu.Unlock()
-	p2.Operations.Retry(p2.Store.TenantN(1), id, person("alice", false))
-	op = awaitState(t, p2, id, "failed")
-	if calls := g2.seen(); calls[len(calls)-1] != "start" || p2.Store.Get("machines", "10100")["plugin_fence"] != nil || obj(op["error"])["recovery"] != "retry" {
-		t.Fatalf("a lost run on a free guest: calls %v, %s", calls, encoded(op["error"]))
+	if calls := g2.seen(); calls[len(calls)-1] == "start" {
+		t.Fatalf("a lost run started the guest: %v", calls)
 	}
 }
 

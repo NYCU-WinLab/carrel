@@ -714,21 +714,15 @@ func (e *Execution) runPlugin() {
 				plug["ended"], plug["refused"] = true, true
 			case call == "start" && (code == "invalid" || code == "conflict"), call == "get" && code == "not_found":
 				// The plugin shows no run of the key (#682). A plugin that
-				// lost its state shows the same while its task still runs,
-				// so the run ends only when the node shows nothing holds
-				// the guest. The first start may have done its work: this
-				// is no refusal of the run that made a record.
-				if !e.guestQuiet() {
-					details := D{"recovery": "retry"}
-					if plug["power"] != nil {
-						details["machine_left_stopped"] = true
-					}
-					fail("plugin_failed", fmt.Sprintf("Plugin %s has no record of the operation, and the node shows the machine busy", name), details)
+				// lost its state shows the same while its PVE worker may
+				// still wait for its lock, so nothing proves the run ended:
+				// the machine stays fenced, and the operation can be
+				// retried. An admin who checked the node clears the fence.
+				details := D{"recovery": "retry"}
+				if plug["power"] != nil {
+					details["machine_left_stopped"] = true
 				}
-				plug["ended"] = true
-				if call == "get" {
-					fail("plugin_failed", fmt.Sprintf("Plugin %s has no record of the operation", name), D{"recovery": "retry"})
-				}
+				fail("plugin_failed", fmt.Sprintf("Plugin %s has no record of the operation", name), details)
 			}
 			first = false
 			pluginRefusal(code, name, str(plug["node"]))
@@ -783,29 +777,6 @@ func (e *Execution) runPlugin() {
 		plug["plugin_code"] = r["error_code"]
 		pluginFailure(name, r)
 	}
-}
-
-// guestQuiet says whether the node shows that nothing holds the guest: no
-// PVE lock, which every snapshot, rollback and backup task holds while it
-// runs, and the guest stopped when the operation stopped it. Any doubt is
-// no.
-func (e *Execution) guestQuiet() bool {
-	id := obj(e.Op["machine_target"])["vmid"]
-	if id == nil {
-		return false
-	}
-	m := e.S.Get("machines", str(id))
-	if m == nil {
-		return false
-	}
-	var status D
-	if attempt(func() { status = obj(e.Call(D{"op": "status", "machine": m})) }) != nil {
-		return false
-	}
-	if lock, ok := status["lock"]; ok && lock != nil && str(lock) != "" {
-		return false
-	}
-	return obj(e.Op["plugin"])["power"] == nil || powerState(status) == "stopped"
 }
 
 // FinishPlugin reports the plugin operation's result.

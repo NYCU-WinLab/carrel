@@ -46,11 +46,10 @@ type PluginClient interface {
 	Probe(ctx context.Context, in *ProbeRequest, opts ...grpc.CallOption) (*ProbeResponse, error)
 	// StartOperation starts an operation once per idempotency key; the same
 	// key again returns the same operation, before any check of the request.
-	// A plugin keeps every operation it started across restarts. When a start
-	// of a key carrel sent before is refused (INVALID_ARGUMENT or
-	// FAILED_PRECONDITION), carrel ends that key's run only if the node shows
-	// the guest unlocked, and stopped when the operation stopped it: a task
-	// that writes a guest's disk must hold the guest's PVE lock.
+	// A plugin keeps every operation it started across restarts. A start of
+	// a key carrel sent before that is refused (INVALID_ARGUMENT or
+	// FAILED_PRECONDITION) proves nothing of that key's run: a machine the
+	// run stopped stays fenced.
 	StartOperation(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (*Operation, error)
 	// GetOperation reads an operation by its key. Ask again until done.
 	// NOT_FOUND: the plugin has no operation of the key, which carrel takes
@@ -130,11 +129,10 @@ type PluginServer interface {
 	Probe(context.Context, *ProbeRequest) (*ProbeResponse, error)
 	// StartOperation starts an operation once per idempotency key; the same
 	// key again returns the same operation, before any check of the request.
-	// A plugin keeps every operation it started across restarts. When a start
-	// of a key carrel sent before is refused (INVALID_ARGUMENT or
-	// FAILED_PRECONDITION), carrel ends that key's run only if the node shows
-	// the guest unlocked, and stopped when the operation stopped it: a task
-	// that writes a guest's disk must hold the guest's PVE lock.
+	// A plugin keeps every operation it started across restarts. A start of
+	// a key carrel sent before that is refused (INVALID_ARGUMENT or
+	// FAILED_PRECONDITION) proves nothing of that key's run: a machine the
+	// run stopped stays fenced.
 	StartOperation(context.Context, *StartRequest) (*Operation, error)
 	// GetOperation reads an operation by its key. Ask again until done.
 	// NOT_FOUND: the plugin has no operation of the key, which carrel takes
