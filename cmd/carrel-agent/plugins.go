@@ -157,7 +157,7 @@ func describeRaw(ctx context.Context, dir, name string) carrel.PluginInfo {
 			Params: json.RawMessage(op.ParamsSchema), Member: op.Member, ReadOnly: op.ReadOnly,
 			Destructive: op.Destructive, Idempotent: op.Idempotent, Toolset: clip(op.Toolset), DryRun: op.DryRun,
 			ObjectKind: clip(op.ObjectKind), ObjectEffect: clip(op.ObjectEffect), ObjectParam: clip(op.ObjectParam),
-			Stopped: op.Stopped, Rewinds: op.Rewinds})
+			Stopped: op.Stopped, Rewinds: op.Rewinds, Confirm: op.Confirm})
 	}
 	for _, q := range d.Quota {
 		info.Quota = append(info.Quota, carrel.PluginQuota{Name: clip(q.Name), DefaultLimit: q.DefaultLimit, Unit: clip(q.Unit), Measured: q.Measured})

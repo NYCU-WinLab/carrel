@@ -20,9 +20,15 @@
   ],
   "packages": {
     ".": {
+      "exclude-paths": ["plugins/snapshot"],
       "extra-files": [
         { "type": "generic", "path": "internal/carrel/value.go" }
       ]
+    },
+    "plugins/snapshot": {
+      "component": "snapshot",
+      "include-component-in-tag": true,
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

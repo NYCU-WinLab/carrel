@@ -14,7 +14,7 @@ it is designed lives in `PLAN.md`; how to use and run it lives in `README.md`.
 CI (`.github/workflows/check.yml`) runs these on every pull request. Run them before you push:
 
 ```sh
-test -z "$(gofmt -l cmd internal)"
+test -z "$(gofmt -l cmd internal plugins)"
 go vet ./...
 go test ./... -count=1
 go test -race -count=1 ./cmd/carrel-deployd/

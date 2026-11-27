@@ -75,6 +75,10 @@ message OperationType {
   // state, as a snapshot rollback does. carrel then treats the guest's
   // access files as unknown and waits for a report from a new boot.
   bool rewinds = 14;
+  // confirm: an operation on an object takes a required string parameter
+  // "confirm" that must repeat the object's name. carrel checks it before
+  // anything changes, as a core rollback does.
+  bool confirm = 15;
 }
 
 // A quota dimension the plugin's objects are charged to. Tenants' quota
