@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -22,14 +23,17 @@ func TestExistingPolicyPreviewApplyAndRollback(t *testing.T) {
 			}
 			dicts(args["access"])[0]["confirm"] = "db"
 			if rollback {
-				calls := 0
+				// The gateway sender calls the fake from its own goroutine (#804).
+				settleGateway(t, p)
+				var calls atomic.Int32
+				b.mu.Lock()
 				b.call = func(D, string) (any, error) {
-					calls++
-					if calls == 1 {
+					if calls.Add(1) == 1 {
 						return nil, errors.New("reconcile failed")
 					}
 					return D{}, nil
 				}
+				b.mu.Unlock()
 			}
 			runQueue(p)
 			result := app.Call(ctx, "deployment_apply", obj(copyValue(args)), who)

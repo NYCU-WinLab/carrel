@@ -494,11 +494,17 @@ func (e *Execution) Reconcile() D {
 	e.recordIPv6(result["node"])
 	// The gateway goes after the first node, whose guest firewalls admit it,
 	// and together with the other nodes.
-	// The build reads the store, so it stays under the writer and a failure
-	// panics here as before. The send runs off the lock (#800): Reconcile does
-	// not report delivery failures; the maintenance pass retries them.
+	// The build reads the store, so it stays under the writer. A build failure
+	// (an expired or missing pair) panics only after the other nodes and the
+	// jump host have their state, as before. The send runs off the lock
+	// (#800): Reconcile does not report delivery failures; the maintenance
+	// pass retries them.
 	var gatewayDone sync.WaitGroup
-	e.P.gateway.Submit(e.BuildGatewaySync(state))
+	var g gatewaySync
+	buildFailure := attempt(func() { g = e.BuildGatewaySync(state) })
+	if buildFailure == nil {
+		e.P.gateway.Submit(g)
+	}
 	var jump any
 	if e.jumpEnabled() && !e.deferJump {
 		// Store reads stay on this goroutine; only the request runs beside.
@@ -543,6 +549,9 @@ func (e *Execution) Reconcile() D {
 		}
 	}
 	gatewayDone.Wait()
+	if buildFailure != nil {
+		panic(buildFailure)
+	}
 	if jump != nil {
 		result["jump"] = jump
 	}
