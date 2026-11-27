@@ -705,3 +705,44 @@ func TestAPluginToolNamesItsToolsetAndHints(t *testing.T) {
 		t.Fatalf("left out: %s", left)
 	}
 }
+
+// An admin-only plugin operation takes tenant like a core admin tool and the
+// plugin sees that tenant's machine; a member operation stays in the
+// caller's own tenants (#711).
+func TestAnAdminPluginOperationActsInAnyTenant(t *testing.T) {
+	p, b := fixture(t)
+	f := withPlugin(t, p, b)
+	runQueue(p)
+	reportPlugins(p, []PluginInfo{{Name: "backup", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "take", Member: true, Params: json.RawMessage(`{"type":"object","properties":{"machine":{"type":"string"}},"required":["machine"]}`)},
+		{Name: "audit", Params: json.RawMessage(`{"type":"object","properties":{"machine":{"type":"string"}},"required":["machine"]}`)}}}})
+	seedMachine(p, "web", 10100)
+	theirs := seedMachine(p, "theirs", 10200)
+	p.Store.Remove("machines", 10200)
+	theirs["tenant_n"] = 2
+	p.Store.Put("machines", 10200, 2, theirs)
+	ctx := context.Background()
+	root, alice := person("root", true), person("alice", false)
+
+	r := p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob", "wait_seconds": 5}, root)
+	if obj(r["operation"])["state"] != "succeeded" || len(f.starts) != 1 || obj(f.starts[0]["params"])["machine"] != "10200" {
+		t.Fatalf("admin in bob: %s %v", encoded(r), f.starts)
+	}
+	if n := integer(p.Store.Get("operations", str(obj(r["operation"])["id"]))["tenant_n"]); n != 2 {
+		t.Fatalf("operation bound to tenant %d", n)
+	}
+	// The named tenant decides the machine: bob's machine is not in the admin's own tenant.
+	if code := str(failure(p.Execute(ctx, "backup_audit", D{"machine": "theirs"}, root))["code"]); code == "" {
+		t.Fatal("the admin's own tenant resolved bob's machine")
+	}
+	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "web", "tenant": "nobody"}, root), "not_found")
+	// A member naming another tenant is refused, on either kind of operation.
+	assertCode(t, p.Execute(ctx, "backup_take", D{"machine": "theirs", "tenant": "bob"}, alice), "forbidden")
+	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob"}, alice), "forbidden")
+	// A suspended tenant is still refused.
+	p.Store.Exec("UPDATE tenants SET status='suspended' WHERE n=2")
+	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob"}, root), "forbidden")
+	if len(f.starts) != 1 {
+		t.Fatalf("a refused call reached the node: %v", f.starts)
+	}
+}

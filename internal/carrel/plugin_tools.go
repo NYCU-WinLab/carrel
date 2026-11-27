@@ -275,10 +275,20 @@ func (e *Execution) submitPlugin(pt *pluginTool, a, w D) D {
 	if pt.Member && str(a["machine"]) == "" {
 		fail("invalid", "machine must name one of your machines")
 	}
-	if !sel.readOnly {
-		e.Register(w, str(a["tenant"]), false)
+	// An admin-only operation acts in the named tenant, like a core admin
+	// tool; a member operation stays in a tenant the caller belongs to.
+	var t D
+	if !pt.Member && str(a["tenant"]) != "" {
+		t = find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
+		if t == nil {
+			fail("not_found", "Tenant not found")
+		}
+	} else {
+		if !sel.readOnly {
+			e.Register(w, str(a["tenant"]), false)
+		}
+		t = e.Tenant(w, str(a["tenant"]))
 	}
-	t := e.Tenant(w, str(a["tenant"]))
 	if t["status"] != "active" {
 		fail("forbidden", "Tenant is suspended")
 	}
