@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -377,5 +378,41 @@ func TestWebhookURLRefusesQueryAndBlockedRanges(t *testing.T) {
 	webhookBlocked = []netip.Prefix{netip.MustParsePrefix("8.8.8.0/24")}
 	if publicAddr(netip.MustParseAddr("8.8.8.8")) || !publicAddr(netip.MustParseAddr("1.1.1.1")) {
 		t.Error("configured range not blocked, or too much blocked")
+	}
+}
+
+func TestMachineOperationAndQuotaEvents(t *testing.T) {
+	p, b := fixture(t)
+	seedMachine(p, "dev", 10100)
+	b.call = func(D, string) (any, error) { return D{"power_state": "stopped", "changed": true}, nil }
+	runQueue(p)
+	ctx, alice, root := context.Background(), person("alice", false), person("root", true)
+	// The machine's memory is all of the limit: the next operation warns once.
+	if r := p.Execute(ctx, "quota_set", D{"tenant": "alice", "dimension": "memory_mb", "amount": 2048}, root); !boolean(r["ok"]) {
+		t.Fatalf("quota_set: %s", encoded(r))
+	}
+	events := func() []D {
+		out := []D{}
+		for _, row := range p.Store.Rows("SELECT tenant,type,data FROM events ORDER BY id") {
+			var data D
+			_ = json.Unmarshal([]byte(str(row["data"])), &data)
+			out = append(out, D{"tenant": row["tenant"], "type": row["type"], "data": data})
+		}
+		return out
+	}
+	assertOK(t, NewApp(p, nil).Call(ctx, "machine_power", D{"machine": "dev", "action": "shutdown"}, alice))
+	got := events()
+	if len(got) != 2 || got[0]["type"] != "machine.operation.succeeded" || obj(got[0]["data"])["machine"] != "dev" || obj(got[0]["data"])["tool"] != "machine_power" || integer(got[0]["tenant"]) != 1 {
+		t.Fatalf("events: %s", encoded(got))
+	}
+	if got[1]["type"] != "quota.warning" || obj(got[1]["data"])["dimension"] != "memory_mb" {
+		t.Fatalf("quota event: %s", encoded(got[1]))
+	}
+	// A second operation at the same usage does not warn again.
+	b.call = func(D, string) (any, error) { return nil, errors.New("node unreachable") }
+	assertOK(t, NewApp(p, nil).Call(ctx, "machine_power", D{"machine": "dev", "action": "shutdown"}, alice))
+	got = events()
+	if len(got) != 3 || got[2]["type"] != "machine.operation.failed" || obj(obj(got[2]["data"])["error"])["code"] == nil {
+		t.Fatalf("after failure: %s", encoded(got))
 	}
 }
