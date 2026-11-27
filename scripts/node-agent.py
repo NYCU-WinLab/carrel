@@ -3576,6 +3576,10 @@ def main():
             owned(m)
             kind = "qemu" if m["kind"] == "vm" else "lxc"
             out = pve_get(f"/nodes/{NODE}/{kind}/{m['vmid']}/status/current")
+        elif op == "guest_tasks":
+            m = req["machine"]
+            owned(m)
+            out = pve_get(f"/nodes/{NODE}/tasks", vmid=m["vmid"], source="active")
         elif op == "migrate_prepare":
             out = migrate_prepare(req)
         elif op == "migrate":

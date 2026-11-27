@@ -235,6 +235,8 @@ migrate mcp {"ok":true,"operation":{"attempts":1,"created_at":"<time:float>","do
 migrate mcp {"error":{"code":"forbidden","message":"winlab-admin membership required"},"ok":false}
 backfill mcp {"error":{"code":"invalid","message":"No SSH user CA is configured","recovery":"resolve_prerequisite"},"ok":false}
 backfill mcp {"error":{"code":"forbidden","message":"winlab-admin membership required"},"ok":false}
+unfence mcp {"error":{"code":"conflict","message":"The machine is not fenced","recovery":"revise_request"},"ok":false}
+unfence mcp {"error":{"code":"forbidden","message":"winlab-admin membership required"},"ok":false}
 drain mcp {"error":{"code":"unsupported","feature":"machine_migrate","message":"This site does not support machine_migrate: The site has one node, so there is nowhere to move a machine","recovery":"revise_request","site":"default","sites_with_feature":[]},"ok":false}
 drain mcp {"drained":false,"dry_run":false,"node":"carrel01","ok":true}
 drain mcp {"error":{"code":"forbidden","message":"winlab-admin membership required"},"ok":false}
@@ -559,6 +561,8 @@ db audit id=<id> at=<at> actor=root tenant=1 tool=operation_finished args={"oper
 db audit id=<id> at=<at> actor=alice tenant=null tool=machine_migrate args={"machine":"api","node":"carrel01","tenant":"alice"} outcome=forbidden
 db audit id=<id> at=<at> actor=root tenant=null tool=machine_ca_backfill args={"dry_run":true,"tenant":"alice"} outcome=invalid
 db audit id=<id> at=<at> actor=alice tenant=null tool=machine_ca_backfill args={"dry_run":true,"tenant":"alice"} outcome=forbidden
+db audit id=<id> at=<at> actor=root tenant=null tool=machine_unfence args={"confirm":"api","machine":"api","tenant":"alice"} outcome=conflict
+db audit id=<id> at=<at> actor=alice tenant=null tool=machine_unfence args={"confirm":"api","machine":"api","tenant":"alice"} outcome=forbidden
 db audit id=<id> at=<at> actor=root tenant=null tool=node_drain args={"node":"carrel01"} outcome=unsupported
 db audit id=<id> at=<at> actor=root tenant=null tool=node_undrain args={"node":"carrel01"} outcome=ok
 db audit id=<id> at=<at> actor=alice tenant=null tool=node_drain args={"node":"carrel01"} outcome=forbidden

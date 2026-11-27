@@ -554,6 +554,9 @@ func goldenScenario(g *goldenRun) {
 	call("backfill", "machine_ca_backfill", D{"tenant": "alice", "dry_run": true}, admin)
 	call("backfill", "machine_ca_backfill", D{"tenant": "alice", "dry_run": true}, alice)
 
+	call("unfence", "machine_unfence", D{"tenant": "alice", "machine": "api", "confirm": "api"}, admin)
+	call("unfence", "machine_unfence", D{"tenant": "alice", "machine": "api", "confirm": "api"}, alice)
+
 	call("drain", "node_drain", D{"node": "carrel01"}, admin)
 	call("drain", "node_undrain", D{"node": "carrel01"}, admin)
 	call("drain", "node_drain", D{"node": "carrel01"}, alice)

@@ -3096,6 +3096,51 @@
       }
     },
     {
+      "name": "machine_unfence",
+      "description": "Admin: clear a machine's plugin fence. A plugin operation whose run may still be writing the guest's disk leaves the machine fenced: nothing else runs on it, and a retry of that operation is the usual way out. Use this when the retry cannot settle the run. carrel reads the node first and refuses while the guest holds a Proxmox lock or has an active task; a lock with no task is named with the unlock command to run after checking the guest. The fenced operation ends: operation_retry refuses it, and the action must be submitted again. confirm must equal the machine name. dry_run shows the node's answer without clearing the fence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "machine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "confirm": {
+            "type": "string",
+            "description": "The machine name again."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "description": "Reuse to retry a lost submission with identical arguments."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: reads the node and clears nothing."
+          }
+        },
+        "required": [
+          "tenant",
+          "machine",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "node_drain",
       "description": "Admin: stop placing new machines on a node and queue a machine_migrate for each machine on it; the moves run one at a time, each visible with operation_get by its ID. Machines that cannot move (snapshots, suspended tenant, transient state) are listed under staying. Running it again only queues machines without a move in progress. node_undrain reopens the node.",
       "inputSchema": {
@@ -5276,6 +5321,7 @@
     "domain_proxy",
     "domain_transfer",
     "machine_ca_backfill",
+    "machine_unfence",
     "machine_migrate",
     "node_drain",
     "node_list",
@@ -5315,6 +5361,7 @@
     "machine_media",
     "machine_migrate",
     "machine_ca_backfill",
+    "machine_unfence",
     "machine_nic_attach",
     "machine_nic_detach",
     "machine_power",
@@ -5595,6 +5642,7 @@
       "domain_proxy",
       "domain_transfer",
       "machine_ca_backfill",
+      "machine_unfence",
       "machine_migrate",
       "node_drain",
       "node_list",
