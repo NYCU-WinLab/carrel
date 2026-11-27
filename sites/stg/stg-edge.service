@@ -1,0 +1,10 @@
+[Unit]
+Description=Staging public network stand-in (#569)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/stg-edge
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run stg-edge-heal every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+Unit=stg-edge-heal.service
+
+[Install]
+WantedBy=timers.target
