@@ -28,13 +28,15 @@ import (
 // or from the SSE stream GET /v1/events, without polling app_get.
 
 const (
-	eventsKept      = 1000
-	eventsMaxAge    = 7 * 24 * time.Hour
-	maxWebhooks     = 10
-	webhookTimeout  = 10 * time.Second
-	webhookBatch    = 20
-	webhookOverlap  = 24 * time.Hour
-	eventStreamLife = 30 * time.Minute
+	eventsKept     = 1000
+	eventsMaxAge   = 7 * 24 * time.Hour
+	maxWebhooks    = 10
+	webhookTimeout = 10 * time.Second
+	webhookBatch   = 20
+	webhookOverlap = 24 * time.Hour
+	// webhookPassBudget bounds one endpoint's share of a delivery pass.
+	webhookPassBudget = 20 * time.Second
+	eventStreamLife   = 30 * time.Minute
 )
 
 // webhookBackoff is the wait before each attempt at one event; after the
@@ -137,7 +139,7 @@ func publicAddr(ip netip.Addr) bool {
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 		return false
 	}
-	for _, p := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "64:ff9b::/96", "2001:db8::/32"} {
+	for _, p := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2002::/16", "2001:db8::/32", "fec0::/10", "::/96"} {
 		if netip.MustParsePrefix(p).Contains(ip) {
 			return false
 		}
@@ -328,57 +330,74 @@ func (p *Platform) deliverWebhooks(ctx context.Context) {
 func (p *Platform) deliverPass(ctx context.Context) {
 	slugs := map[int]string{}
 	for _, t := range p.Store.Tenants() {
-		slugs[integer(t["n"])] = str(t["slug"])
+		if t["status"] == "active" {
+			slugs[integer(t["n"])] = str(t["slug"])
+		}
 	}
 	for _, h := range p.Store.Objects("webhooks") {
 		if ctx.Err() != nil {
 			return
 		}
-		if num(h["next_attempt_at"]) > now() {
+		// A suspended tenant sends nothing; its events wait.
+		if num(h["next_attempt_at"]) > now() || slugs[integer(h["tenant_n"])] == "" {
 			continue
 		}
-		n, id := integer(h["tenant_n"]), str(h["id"])
-		cursor := int64(integer(h["cursor"]))
-		for range webhookBatch {
-			// Read the record again before each send: a removal stops the
-			// next delivery, and a rotation signs it with the new secret.
-			if h = p.Store.Get("webhooks", id); h == nil {
-				break
-			}
-			cursor = int64(integer(h["cursor"]))
-			rows := p.Store.eventsAfter(n, cursor, 1)
-			if len(rows) == 0 {
-				break
-			}
-			row := rows[0]
-			eid := int64(integer(row["id"]))
-			if types := arr(h["types"]); len(types) > 0 && !contains(types, row["type"]) {
-				cursor = eid
-				p.saveDelivery(h, D{"cursor": eid})
-				continue
-			}
-			event := publicEvent(row, slugs[n])
-			status, err := p.send(ctx, h, event)
-			delivery := D{"event": event["id"], "status": status, "at": now()}
-			if err == nil && status >= 200 && status < 300 {
-				cursor = eid
-				p.saveDelivery(h, D{"cursor": eid, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
-				continue
-			}
-			if err != nil {
-				delivery["error"] = webhookError(err)
-			}
-			attempts := integer(h["attempts"]) + 1
-			if attempts >= len(webhookBackoff) {
-				delivery["given_up"] = true
-				p.saveDelivery(h, D{"cursor": eid, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
-				slog.Warn("webhook_gave_up", "webhook", h["id"], "event", event["id"])
-				cursor = eid
-				continue
-			}
-			p.saveDelivery(h, D{"attempts": attempts, "next_attempt_at": now() + webhookBackoff[attempts].Seconds(), "last_delivery": delivery})
+		// One endpoint that cannot be served, such as a secret no key
+		// opens, must not stop the others.
+		if err := attempt(func() { p.deliverTo(ctx, h, slugs) }); err != nil {
+			slog.Warn("webhook_delivery_failed", "webhook", h["id"], "error", describe(err))
+		}
+	}
+}
+
+// deliverTo sends one endpoint its waiting events, for at most
+// webhookPassBudget, so a slow endpoint delays the others by little.
+func (p *Platform) deliverTo(ctx context.Context, h D, slugs map[int]string) {
+	started := time.Now()
+	n, id := integer(h["tenant_n"]), str(h["id"])
+	cursor := int64(integer(h["cursor"]))
+	for range webhookBatch {
+		if time.Since(started) > webhookPassBudget {
 			break
 		}
+		// Read the record again before each send: a removal stops the
+		// next delivery, and a rotation signs it with the new secret.
+		if h = p.Store.Get("webhooks", id); h == nil {
+			break
+		}
+		cursor = int64(integer(h["cursor"]))
+		rows := p.Store.eventsAfter(n, cursor, 1)
+		if len(rows) == 0 {
+			break
+		}
+		row := rows[0]
+		eid := int64(integer(row["id"]))
+		if types := arr(h["types"]); len(types) > 0 && !contains(types, row["type"]) {
+			cursor = eid
+			p.saveDelivery(h, D{"cursor": eid})
+			continue
+		}
+		event := publicEvent(row, slugs[n])
+		status, err := p.send(ctx, h, event)
+		delivery := D{"event": event["id"], "status": status, "at": now()}
+		if err == nil && status >= 200 && status < 300 {
+			cursor = eid
+			p.saveDelivery(h, D{"cursor": eid, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
+			continue
+		}
+		if err != nil {
+			delivery["error"] = webhookError(err)
+		}
+		attempts := integer(h["attempts"]) + 1
+		if attempts >= len(webhookBackoff) {
+			delivery["given_up"] = true
+			p.saveDelivery(h, D{"cursor": eid, "attempts": 0, "next_attempt_at": 0, "last_delivery": delivery})
+			slog.Warn("webhook_gave_up", "webhook", h["id"], "event", event["id"])
+			cursor = eid
+			continue
+		}
+		p.saveDelivery(h, D{"attempts": attempts, "next_attempt_at": now() + webhookBackoff[attempts].Seconds(), "last_delivery": delivery})
+		break
 	}
 }
 

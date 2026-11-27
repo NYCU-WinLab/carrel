@@ -302,4 +302,33 @@ func TestWebhookRemovalStopsDeliveryAndTestTakesNoLock(t *testing.T) {
 	}
 }
 
+// A webhook whose secret no key opens does not stop the others.
+func TestBrokenWebhookDoesNotStopTheOthers(t *testing.T) {
+	p, _ := fixture(t)
+	p.Config.FunctionEnvKey = testEnvKey
+	a, ctx := NewApp(p, nil), context.Background()
+	rcv := &receiver{status: 204}
+	srv := httptest.NewTLSServer(rcv)
+	defer srv.Close()
+	allowLoopback(t, srv)
+	e := p.execution(ctx)
+	ns := []int{}
+	for _, who := range []string{"alice", "bob"} {
+		assertOK(t, a.Call(ctx, "webhook_add", D{"url": srv.URL}, person(who, false)))
+		n := integer(e.Tenant(person(who, false), "")["n"])
+		ns = append(ns, n)
+	}
+	hooks := p.Store.Objects("webhooks")
+	broken := hooks[0]
+	broken["secret"] = "AAAA" + str(broken["secret"])[4:]
+	p.Store.Put("webhooks", broken["id"], integer(broken["tenant_n"]), broken)
+	for _, n := range ns {
+		e.emit(n, "app.release.live", D{"app": "site"})
+	}
+	p.deliverPass(ctx)
+	if rcv.count() != 1 {
+		t.Fatalf("deliveries: %d, want the healthy webhook's 1", rcv.count())
+	}
+}
+
 func itoa(v int64) string { return string(encoded(v)) }
