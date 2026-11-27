@@ -117,6 +117,13 @@ func (a *App) appRoutes(mux *http.ServeMux) {
 		}
 		return p.AgentReport(r.Context(), bearer(r), body)
 	}))
+	mux.Handle("POST /apps/v1/agent/logs", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+		var body D
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			fail("invalid", "Invalid JSON body")
+		}
+		return p.AppLogAnswer(bearer(r), body)
+	}))
 }
 
 // remoteIP is the connection's address, never a header: the agent paths are

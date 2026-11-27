@@ -260,3 +260,27 @@ func TestMigrateReportsBothCopies(t *testing.T) {
 		t.Fatal("schema", s.Schema)
 	}
 }
+
+func TestSchemaLockWaitIsBounded(t *testing.T) {
+	old := schemaLockWait
+	schemaLockWait = 200 * time.Millisecond
+	defer func() { schemaLockWait = old }()
+	path := filepath.Join(t.TempDir(), "carrel.db")
+	held, err := os.OpenFile(path+"-schema.lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := lockSchema(held, path+"-schema.lock"); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = migrateSchema(db, path)
+	if err == nil || !strings.Contains(err.Error(), "carrel.db-schema.lock") {
+		t.Fatalf("want a timeout naming the lock file, got %v", err)
+	}
+}

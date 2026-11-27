@@ -511,7 +511,10 @@ wrong one (`snapshots/<vmid>-<name>` or `plugin_objects/snapshot/snapshot/<vmid>
 `issuer` in `config.json` names the OIDC provider members sign in with. Carrel reads its
 `/.well-known/openid-configuration` for the signing keys and the authorize, token and revoke
 endpoints. A provider without discovery, or a document whose `issuer` differs or whose endpoint
-uses another scheme, gets Keycloak's paths under the issuer.
+uses another scheme, gets Keycloak's paths under the issuer. `issuer` must be an https URL, and a
+trailing `/` is ignored. The sign-in callback requires `iss` (RFC 9207) only when discovery says
+`authorization_response_iss_parameter_supported` is true. A provider whose discovery lists no
+`revocation_endpoint` is not asked to revoke. Carrel refuses redirects from the provider.
 
 The `oidc` block names the provider's claims and groups. Every field is optional, and an empty one
 keeps WinLab's value:
@@ -520,6 +523,7 @@ keeps WinLab's value:
 "oidc": {
   "audience": "carrel-mcp",
   "client_id": "carrel-mcp",
+  "client_secret_file": "/etc/carrel/oidc-secret",
   "username_claim": "preferred_username",
   "groups_claim": "groups",
   "admin_groups": ["winlab-admin"],
@@ -531,6 +535,8 @@ keeps WinLab's value:
 - `audience` is the `aud` every token carries.
 - `client_id` is the client Carrel signs members in with. A token names it in `azp`, or in
   `client_id` when it has no `azp` (RFC 9068).
+- `client_secret_file` is a file holding the secret of a confidential client. Carrel sends it with
+  every token and revocation request. Empty: a public client.
 - `admin_groups` and `member_groups` are patterns over group names without the leading `/`:
   `staff/*` matches `staff/phd` but not `staff/phd/old`. WinLab's default lists 9 member groups.
 - A group `<project_group_prefix><name>` makes the member a member of project tenant `<name>`.

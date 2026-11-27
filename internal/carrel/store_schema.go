@@ -3,6 +3,7 @@ package carrel
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,14 +35,36 @@ CREATE TABLE IF NOT EXISTS site(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NO
 // SchemaVersion is the version this release writes and reads.
 var SchemaVersion = len(schemaMigrations)
 
+// schemaLockWait bounds how long an opener waits for the schema lock.
+var schemaLockWait = 60 * time.Second
+
+// lockSchema takes the exclusive lock without blocking forever: it retries
+// LOCK_NB until schemaLockWait passes, then fails naming the lock file.
+func lockSchema(lock *os.File, name string) error {
+	deadline := time.Now().Add(schemaLockWait)
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EINTR {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("timed out after %s waiting for the schema lock %s: another process is migrating or hung; stop it, then retry", schemaLockWait, name)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // migrateSchema refuses a database newer than this release, then applies
 // each missing migration in its own transaction, which also records the new
 // version. A database that holds tables already is copied first, whole and
 // consistent, to <path>.schema-<from>-<stamp>; of the earlier copies from the
 // same version only the oldest stays, so a migration that keeps failing keeps
-// at most 2 copies. Every
-// opener holds <path>-schema.lock meanwhile and reads the version under it,
-// so the service, -backup and -reseal never apply a migration twice.
+// at most 2 copies. Every opener holds <path>-schema.lock meanwhile and reads
+// the version under it, so the service, -backup and -reseal never apply a
+// migration twice.
 func migrateSchema(db *sql.DB, path string) (D, error) {
 	if path != ":memory:" {
 		lock, err := os.OpenFile(path+"-schema.lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -49,7 +72,7 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 			return nil, err
 		}
 		defer lock.Close()
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		if err := lockSchema(lock, path+"-schema.lock"); err != nil {
 			return nil, err
 		}
 	}
@@ -85,7 +108,9 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 		if len(earlier) > 0 {
 			out["first_backup"] = earlier[0]
 			for _, old := range earlier[1:] {
-				os.Remove(old)
+				if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+					slog.Warn("schema_copy_not_removed", "path", old, "error", err.Error())
+				}
 			}
 		}
 	}

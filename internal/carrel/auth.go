@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -62,7 +63,7 @@ type Verifier struct {
 
 func NewVerifier(issuer string, oidc OIDCConfig, ep *endpoints) *Verifier {
 	oidc = oidc.WithDefaults()
-	return &Verifier{Issuer: issuer, Audience: oidc.Audience, OIDC: oidc, endpoints: ep, HTTP: &http.Client{Timeout: 8 * time.Second}}
+	return &Verifier{Issuer: issuer, Audience: oidc.Audience, OIDC: oidc, endpoints: ep, HTTP: &http.Client{Timeout: 8 * time.Second, CheckRedirect: noRedirect}}
 }
 func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	v.mu.Lock()
@@ -127,7 +128,7 @@ func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) 
 // /mcp/read-only is a tool filter, not a credential boundary.
 func (v *Verifier) Verify(ctx context.Context, token string) (D, error) {
 	claims := jwt.MapClaims{}
-	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) { return v.key(ctx, str(t.Header["kid"])) }, jwt.WithValidMethods([]string{"RS256"}), jwt.WithAudience(v.Audience), jwt.WithIssuer(v.Issuer), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithLeeway(10*time.Second))
+	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) { return v.key(ctx, str(t.Header["kid"])) }, jwt.WithValidMethods([]string{"RS256"}), jwt.WithAudience(v.Audience), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithLeeway(10*time.Second))
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +140,9 @@ func (v *Verifier) Verify(ctx context.Context, token string) (D, error) {
 	}
 	if claims["iat"] == nil || claims["sub"] == nil || client != v.OIDC.ClientID {
 		return nil, errors.New("missing identity or wrong authorized party")
+	}
+	if iss, err := claims.GetIssuer(); err != nil || !sameIssuer(iss, v.Issuer) {
+		return nil, errors.New("wrong issuer")
 	}
 	return v.OIDC.identity(D(claims))
 }
@@ -152,11 +156,14 @@ type OAuth struct {
 	// nil uses Keycloak's paths under Issuer.
 	endpoints *endpoints
 	// Console finishes browser console logins (console.go).
-	Console  func(http.ResponseWriter, *http.Request, D, string)
-	HTTP     *http.Client
-	locks    [64]sync.Mutex
-	replayMu sync.Mutex
-	replay   map[string]rotated
+	Console func(http.ResponseWriter, *http.Request, D, string)
+	HTTP    *http.Client
+	// ClientSecretFile, when set, makes Carrel a confidential client: the
+	// secret is sent with every token and revocation request.
+	ClientSecretFile string
+	locks            [64]sync.Mutex
+	replayMu         sync.Mutex
+	replay           map[string]rotated
 }
 
 // replayed returns the response already issued for a refresh token rotated
@@ -216,7 +223,15 @@ func oauthError(w http.ResponseWriter, code string, status int) {
 }
 func secureEqual(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 func (o *OAuth) upstream(ctx context.Context, endpoint string, values url.Values) (D, int, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", o.endpoints.url(o.Issuer, endpoint), strings.NewReader(values.Encode()))
+	target, _ := o.endpoints.lookup(o.Issuer, endpoint)
+	if o.ClientSecretFile != "" {
+		secret, err := os.ReadFile(o.ClientSecretFile)
+		if err != nil || strings.TrimSpace(string(secret)) == "" {
+			return nil, 0, errors.New("oidc client secret unreadable")
+		}
+		values.Set("client_secret", strings.TrimSpace(string(secret)))
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", target, strings.NewReader(values.Encode()))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -348,6 +363,16 @@ func (o *OAuth) authorizeURL(params url.Values) string {
 	}
 	return u + "?" + params.Encode()
 }
+
+// badIss refuses an authorization response whose iss is not the issuer
+// (RFC 9207). A response without iss passes unless the provider's discovery
+// says it sends one.
+func (o *OAuth) badIss(q url.Values) bool {
+	if !q.Has("iss") {
+		return o.endpoints.issParamRequired()
+	}
+	return !sameIssuer(q.Get("iss"), o.Issuer)
+}
 func (o *OAuth) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	txn := o.Store.OAuthPop("state", q.Get("state"))
@@ -356,7 +381,7 @@ func (o *OAuth) callback(w http.ResponseWriter, r *http.Request) {
 	if cookie != nil {
 		value = cookie.Value
 	}
-	if txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) || q.Get("iss") != o.Issuer || q.Get("code") == "" || q.Get("error") != "" {
+	if txn == nil || !secureEqual(str(txn["cookie"]), digest(value)) || o.badIss(q) || q.Get("code") == "" || q.Get("error") != "" {
 		oauthError(w, "access_denied", 400)
 		return
 	}
@@ -423,6 +448,14 @@ func (o *OAuth) revoke(w http.ResponseWriter, r *http.Request, client D) {
 	token := q.Get("token")
 	txn := o.Store.OAuthGet("refresh", digest(token))
 	if txn != nil && txn["client"] == cid {
+		// A provider that publishes no revocation endpoint has nothing to
+		// revoke upstream; the local record still goes.
+		if _, ok := o.endpoints.lookup(o.Issuer, "revocation_endpoint"); !ok {
+			o.Store.OAuthPop("refresh", digest(token))
+			o.forget(token)
+			jsonResponse(w, 200, D{})
+			return
+		}
 		_, status, err := o.upstream(r.Context(), "revocation_endpoint", url.Values{"client_id": {o.ClientID}, "token": {token}, "token_type_hint": {"refresh_token"}})
 		if err != nil || status != 200 {
 			oauthError(w, "temporarily_unavailable", 503)
