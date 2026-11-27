@@ -191,6 +191,11 @@ func (a *agent) openEnv(u envUpdate) ([]byte, error) {
 	quote := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
 	var b bytes.Buffer
 	b.WriteString("# Written by carrel-deployd from environment sets. Edit /srv/apps/" + a.cfg.App + "/env instead.\n")
+	names := []string{}
+	for _, s := range u.Sets {
+		names = append(names, s.Set)
+	}
+	b.WriteString("# sets: " + strings.Join(names, " ") + "\n")
 	for _, key := range order {
 		fmt.Fprintf(&b, "%s=\"%s\"\n", key, quote.Replace(values[key]))
 	}
@@ -229,6 +234,10 @@ func (a *agent) writeEnv(ctx context.Context, u envUpdate) error {
 	a.inv.deploying.Lock()
 	defer a.inv.deploying.Unlock()
 	if err := a.restart(ctx); err != nil {
+		if dropped := droppedSets(old, u); len(dropped) > 0 {
+			// A set this app may no longer read never comes back.
+			return fmt.Errorf("the app failed without the sets it may no longer read (%s): %v; their values stay removed", strings.Join(dropped, ", "), err)
+		}
 		var back error
 		if existed {
 			back = writePrivate(a.envFile(), old)
@@ -267,4 +276,23 @@ func systemdReload(ctx context.Context) error {
 		return fmt.Errorf("daemon-reload: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// droppedSets are the sets the old file held that the update does not.
+func droppedSets(old []byte, u envUpdate) []string {
+	keep := map[string]bool{}
+	for _, s := range u.Sets {
+		keep[s.Set] = true
+	}
+	dropped := []string{}
+	for _, line := range strings.Split(string(old), "\n") {
+		if names, ok := strings.CutPrefix(line, "# sets: "); ok {
+			for _, name := range strings.Fields(names) {
+				if !keep[name] {
+					dropped = append(dropped, name)
+				}
+			}
+		}
+	}
+	return dropped
 }

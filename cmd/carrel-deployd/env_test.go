@@ -199,3 +199,24 @@ func TestAFailedFirstEnvironmentIsRemoved(t *testing.T) {
 		t.Fatalf("%v after %d restarts", err, restarts)
 	}
 }
+
+func TestARevokedSetNeverComesBack(t *testing.T) {
+	a := envAgent(t)
+	if err := os.MkdirAll(a.root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeEnv(context.Background(), update([3]any{"base", 1, sealFor(t, a, "web", "base", 1, "SECRET=1")})); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("releases/r1", filepath.Join(a.root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	a.restart = func(context.Context) error { return errors.New("health check failed") }
+	err := a.writeEnv(context.Background(), envUpdate{Revision: "none"})
+	if err == nil || !strings.Contains(err.Error(), "stay removed") {
+		t.Fatalf("%v", err)
+	}
+	if b, _ := os.ReadFile(a.envFile()); strings.Contains(string(b), "SECRET") {
+		t.Fatalf("revoked value back:\n%s", b)
+	}
+}
