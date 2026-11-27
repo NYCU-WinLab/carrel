@@ -552,3 +552,32 @@ func TestCheckPluginAnswersOnlyForTheExpectedPlugin(t *testing.T) {
 		t.Fatal("a missing socket passed")
 	}
 }
+
+// A writable or symlinked parent lets someone replace plugin_dir (#666).
+func TestCheckPluginDirParents(t *testing.T) {
+	root := pluginDir(t)
+	inner := filepath.Join(root, "a", "plugins")
+	if err := os.MkdirAll(inner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPluginDir(inner); err != nil {
+		t.Fatalf("closed parents: %v", err)
+	}
+	parent := filepath.Join(root, "a")
+	if err := os.Chmod(parent, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPluginDir(inner); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("group writable parent: %v", err)
+	}
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(parent, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkPluginDir(filepath.Join(link, "plugins")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked parent: %v", err)
+	}
+}

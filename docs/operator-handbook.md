@@ -280,6 +280,10 @@ A plugin is a service on a unix socket, `<name>.sock`, in the agent's `plugin_di
 
 - The agent trusts the directory only when its own user owns it and nobody else can write to it.
   Otherwise it reports one entry named `plugin-dir` with the reason, and runs no plugin.
+- The same holds for every parent of `plugin_dir` up to `/` (#666): none may be a symlink, be owned
+  by anyone but root or the agent's user, or be writable by group or others (a sticky directory
+  such as `/tmp` is accepted). A plugin unit must never own `/run/carrel`, for example through
+  systemd `RuntimeDirectory=` with `User=`: it could replace `plugins`.
 - Every claim carries a report of each socket: name, version, contract, operations, and whether
   the node can run it. The report is at most 30 s old. `node_list` shows it per node.
 - The agent serves the contract revisions in `PluginContracts`, the current and the previous one.
@@ -427,6 +431,9 @@ removes every plugin the list no longer names:
   `env_file: true` reads `/etc/carrel/plugins/<name>.env`, which the operator writes, for
   credentials such as an API token. Make it root's, mode 0600: other plugins can read
   `/etc/carrel`.
+- Every plugin service is capped at `TasksMax=256`, `MemoryMax=512M` and `CPUQuota=100%`, so a
+  leaking or forking plugin cannot starve the node. Raise one per plugin with `tasks_max`,
+  `memory_max` (such as `2G`) or `cpu_quota` (such as `200%`) in its site file entry.
 - A plugin removed from the list loses its units and program. Its state directory stays, so a
   plugin listed again keeps its operations.
 
