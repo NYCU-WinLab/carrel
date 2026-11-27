@@ -6,7 +6,7 @@ import (
 	"regexp"
 )
 
-// snapshotMigration is the site row that marks the copy of the core
+// snapshotMigration is the site row that marks the move of the core
 // snapshot rows into the plugin ledger as done (#663).
 const snapshotMigration = "snapshot_plugin_objects"
 
@@ -30,31 +30,35 @@ var snapshotPluginTools = []D{
 	{"name": "snapshot_rollback", "plugin": "snapshot", "member": true, "read_only": false, "kind": "snapshot", "dims": []any{"snapshots", "snapshot_gb"}},
 }
 
-// MigrateSnapshots copies every core snapshot row into the plugin ledger,
-// once, in one transaction, before any operation is recovered. The old rows
-// stay as they are, so the release before can still run on them; snapshot
-// changes made after the copy do not go back to them. Anything the copy
-// cannot carry stops the start: an operation on snapshots still running, a
-// snapshot that is not ready, a name the plugin refuses, or a record that
-// exists already.
+// MigrateSnapshots moves every core snapshot row into the plugin ledger, in
+// one transaction, at each start before any operation is recovered. A move,
+// not a copy: a binary rollback to a release before #663 still counts and
+// holds the moved snapshots as plugin objects, once, and a snapshot that
+// release takes is moved at the next start. Anything the move cannot carry
+// stops the start: an operation on snapshots still running, a snapshot that
+// is not ready, a name the plugin refuses, a row with no configuration, or
+// a record that exists already. The plugin's tool and quota rows are written
+// on the first move only, so a later report's values are not undone.
 func MigrateSnapshots(s *Store) (result D, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			result, err = nil, fmt.Errorf("snapshot migration: %v", r)
 		}
 	}()
-	if done := s.SiteGet("migration", snapshotMigration); done != nil {
-		return D{"skipped": true, "copied": done["copied"]}, nil
-	}
-	copied := 0
+	moved := 0
 	s.Transaction(func(tx *Store) {
+		rows := tx.Rows("SELECT tenant, data FROM objects WHERE kind='snapshots' ORDER BY id")
+		done := tx.SiteGet("migration", snapshotMigration)
+		if done != nil && len(rows) == 0 {
+			return
+		}
 		for _, op := range tx.ActiveOperations() {
 			switch op["tool"] {
 			case "snapshot_create", "snapshot_delete", "snapshot_rollback":
 				panic(fmt.Sprintf("operation %s (%s) is still %s: let it end first", op["id"], op["tool"], op["state"]))
 			}
 		}
-		for _, r := range tx.Rows("SELECT tenant, data FROM objects WHERE kind='snapshots' ORDER BY id") {
+		for _, r := range rows {
 			var snap snapshotRecord
 			must(json.Unmarshal([]byte(str(r["data"])), &snap))
 			n := integer(r["tenant"])
@@ -74,15 +78,21 @@ func MigrateSnapshots(s *Store) (result D, err error) {
 				Charge: map[string]float64{"snapshots": 1, "snapshot_gb": float64(snap.DiskGB)}, Holds: []string{"freeze", "migrate", "backfill"},
 				DiskGB: snap.DiskGB, OperationID: snap.OperationID, Configuration: snap.Configuration}
 			tx.Put(pluginObjectRows, id, n, decode(string(encoded(rec))))
-			copied++
+			tx.Remove("snapshots", snap.ID)
+			moved++
 		}
-		for _, q := range snapshotPluginQuota {
-			tx.SitePut(pluginQuotaRows, str(q["name"]), q)
+		total := moved
+		if done == nil {
+			for _, q := range snapshotPluginQuota {
+				tx.SitePut(pluginQuotaRows, str(q["name"]), q)
+			}
+			for _, t := range snapshotPluginTools {
+				tx.SitePut(pluginToolRows, str(t["name"]), t)
+			}
+		} else {
+			total += integer(done["moved"])
 		}
-		for _, t := range snapshotPluginTools {
-			tx.SitePut(pluginToolRows, str(t["name"]), t)
-		}
-		tx.SitePut("migration", snapshotMigration, D{"copied": copied, "at": now()})
+		tx.SitePut("migration", snapshotMigration, D{"moved": total, "at": now()})
 	})
-	return D{"skipped": false, "copied": copied}, nil
+	return D{"moved": moved}, nil
 }

@@ -188,9 +188,9 @@ func snapshotScenario(g *goldenRun, fb *flakyBackend, b *fakeBackend) {
 	put(fmt.Sprintf("%d-emptynics", dbID), 1, D{"id": fmt.Sprintf("%d-emptynics", dbID), "vmid": dbID, "name": "emptynics", "disk_gb": 20, "configuration": merge(pick(db, "cpu", "memory_mb", "disk_gb"), D{"nics": []any{}}), "state": "ready"})
 	put(fmt.Sprintf("%d-plain", dbID), 1, D{"id": fmt.Sprintf("%d-plain", dbID), "vmid": dbID, "name": "plain", "disk_gb": 20, "configuration": pick(db, "cpu", "memory_mb", "disk_gb", "nics"), "state": "ready"})
 	put("10999-orphan", 1, D{"id": "10999-orphan", "vmid": 10999, "name": "orphan", "disk_gb": 15, "state": "ready", "operation_id": "dead"})
-	// The switch copies such rows into the plugin ledger (#663). A row
-	// without its configuration stops the copy, and carrel does not start;
-	// without those rows the copy goes through.
+	// The switch moves such rows into the plugin ledger (#663). A row
+	// without its configuration stops the move, and carrel does not start;
+	// without those rows the move goes through.
 	migrate := func(step string) {
 		g.p.Store.SiteRemove("migration", snapshotMigration)
 		result, err := MigrateSnapshots(g.p.Store)

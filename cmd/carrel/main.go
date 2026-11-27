@@ -101,7 +101,7 @@ func main() {
 	if migrated, err := carrel.MigrateSnapshots(store); err != nil {
 		slog.Error("snapshot_migration_failed", "error", err)
 		fatal()
-	} else if migrated["skipped"] != true {
+	} else if migrated["moved"] != 0 {
 		slog.Info("snapshot_migration", "result", migrated)
 	}
 	platform.UseAgents()

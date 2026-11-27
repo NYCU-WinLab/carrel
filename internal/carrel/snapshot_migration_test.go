@@ -13,7 +13,7 @@ func legacySnapshot(vmid int, name string, change D) D {
 		"operation_id": "op-" + name, "configuration": D{"cpu": 1, "disk_gb": 20, "memory_mb": 1024, "nics": []any{}}}, change)
 }
 
-// unmigrated is a site whose start has not copied the snapshots yet.
+// unmigrated is a site whose start has not moved the snapshots yet.
 func unmigrated(t *testing.T) *Platform {
 	t.Helper()
 	p, _ := fixture(t)
@@ -21,14 +21,15 @@ func unmigrated(t *testing.T) *Platform {
 	return p
 }
 
-// The copy carries each ready row into the plugin ledger, once, and keeps
-// the old row for the release before.
-func TestSnapshotMigrationCopiesReadyRowsOnce(t *testing.T) {
+// The move carries each ready row into the plugin ledger and drops it from
+// the core table, so a release before #663 counts it once. A row that
+// release writes later is moved at the next start.
+func TestSnapshotMigrationMovesReadyRows(t *testing.T) {
 	p := unmigrated(t)
 	old := legacySnapshot(10100, "before", nil)
 	p.Store.Put("snapshots", old["id"], 1, old)
 	r, err := MigrateSnapshots(p.Store)
-	if err != nil || r["copied"] != 1 {
+	if err != nil || r["moved"] != 1 {
 		t.Fatal(r, err)
 	}
 	rec := p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "before"))
@@ -36,15 +37,24 @@ func TestSnapshotMigrationCopiesReadyRowsOnce(t *testing.T) {
 		len(arr(rec["holds"])) != 3 || rec["operation_id"] != "op-before" || obj(rec["configuration"])["cpu"] == nil {
 		t.Fatal(string(encoded(rec)))
 	}
-	if p.Store.Get("snapshots", str(old["id"])) == nil {
-		t.Fatal("the old row is gone")
+	if p.Store.Get("snapshots", str(old["id"])) != nil {
+		t.Fatal("the old row is still counted by the release before")
 	}
-	if r, err := MigrateSnapshots(p.Store); err != nil || r["skipped"] != true {
+	if r, err := MigrateSnapshots(p.Store); err != nil || r["moved"] != 0 {
 		t.Fatal("second run", r, err)
+	}
+	// A rollback to the release before took a snapshot; the next start moves it.
+	later := legacySnapshot(10100, "later", nil)
+	p.Store.Put("snapshots", later["id"], 1, later)
+	if r, err := MigrateSnapshots(p.Store); err != nil || r["moved"] != 1 || p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "later")) == nil {
+		t.Fatal("after a rollback", r, err)
+	}
+	if m := p.Store.SiteGet("migration", snapshotMigration); num(m["moved"]) != 2 {
+		t.Fatal(m)
 	}
 }
 
-// Anything the copy cannot carry stops it, and nothing is written.
+// Anything the move cannot carry stops it, and nothing is written.
 func TestSnapshotMigrationRefusesWhatItCannotCarry(t *testing.T) {
 	for name, c := range map[string]struct {
 		setup func(p *Platform)
@@ -69,19 +79,19 @@ func TestSnapshotMigrationRefusesWhatItCannotCarry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := unmigrated(t)
 			c.setup(p)
-			before := len(p.Store.Objects(pluginObjectRows))
+			before, core := len(p.Store.Objects(pluginObjectRows)), len(p.Store.Objects("snapshots"))
 			r, err := MigrateSnapshots(p.Store)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatal(r, err)
 			}
-			if len(p.Store.Objects(pluginObjectRows)) != before || p.Store.SiteGet("migration", snapshotMigration) != nil {
-				t.Fatal("a refused copy wrote rows")
+			if len(p.Store.Objects(pluginObjectRows)) != before || len(p.Store.Objects("snapshots")) != core || p.Store.SiteGet("migration", snapshotMigration) != nil {
+				t.Fatal("a refused move changed rows")
 			}
 		})
 	}
 }
 
-// The tool and quota rows the copy writes are the ones the plugin's report
+// The tool and quota rows the move writes are the ones the plugin's report
 // writes, so the first report changes nothing.
 func TestSnapshotMigrationWritesWhatThePluginReports(t *testing.T) {
 	p, b := fixture(t)
