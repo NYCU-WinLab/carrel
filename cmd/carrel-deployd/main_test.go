@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -199,4 +200,39 @@ func extract(r io.Reader, dir string, uid, gid int) error {
 	}
 	defer parent.Close()
 	return extractAt(r, parent, filepath.Base(dir), uid, gid)
+}
+
+func TestParseJournalNamesTheRelease(t *testing.T) {
+	out := `{"__REALTIME_TIMESTAMP":"1795000000000000","MESSAGE":"listening","_SYSTEMD_INVOCATION_ID":"inv2"}
+{"__REALTIME_TIMESTAMP":"1795000001000000","MESSAGE":[104,105,255],"_SYSTEMD_INVOCATION_ID":"inv9"}
+not json
+{"__REALTIME_TIMESTAMP":"1795000002000000","MESSAGE":"` + strings.Repeat("x", logMaxLineText+10) + `","_SYSTEMD_INVOCATION_ID":"inv1"}
+`
+	lines, truncated := parseJournal(strings.NewReader(out), []invocation{{"inv1", "r1"}, {"inv2", "r2"}})
+	if len(lines) != 3 || !truncated {
+		t.Fatalf("%d lines, truncated %v", len(lines), truncated)
+	}
+	if lines[0].Release != "r2" || lines[0].Text != "listening" || lines[0].Time != "2026-11-18T11:06:40Z" {
+		t.Fatalf("first: %+v", lines[0])
+	}
+	// Bytes that are not UTF-8 come out valid; an unknown invocation has no release.
+	if lines[1].Release != "" || lines[1].Text != "hi�" {
+		t.Fatalf("second: %+v", lines[1])
+	}
+	if lines[2].Release != "r1" || len(lines[2].Text) != logMaxLineText {
+		t.Fatalf("third: %d bytes", len(lines[2].Text))
+	}
+}
+
+func TestALogRequestAloneIsAValidPoll(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"logs":[{"id":"q1","lines":20,"since":5}]}`))
+	}))
+	defer srv.Close()
+	a := &agent{cfg: config{Origin: srv.URL, Token: "t"}, http: srv.Client()}
+	r, pull, logs, status, err := a.next(context.Background())
+	if err != nil || status != 200 || r != nil || pull || len(logs) != 1 || logs[0] != (logRequest{ID: "q1", Lines: 20, Since: 5}) {
+		t.Fatalf("%v %v %v %d %v", r, pull, logs, status, err)
+	}
 }

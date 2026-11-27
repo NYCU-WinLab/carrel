@@ -68,6 +68,10 @@ type agent struct {
 	backoff time.Duration
 	// command runs a script as the app user; tests run it as themselves.
 	command func(ctx context.Context, script string) *exec.Cmd
+	// inv maps the unit's invocations to releases for app_logs (logs.go).
+	inv invocations
+	// reading bounds how many log requests run at once.
+	reading chan struct{}
 }
 
 const (
@@ -96,7 +100,7 @@ func main() {
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second, steadyFor: 3 * time.Second, every: time.Minute, wake: make(chan bool, 1)}
+	a := &agent{cfg: cfg, root: filepath.Join("/srv/apps", cfg.App), state: filepath.Join("/var/lib/carrel-deployd", cfg.App), http: &http.Client{Timeout: 10 * time.Minute}, uid: uid, gid: gid, health: 60 * time.Second, steadyFor: 3 * time.Second, every: time.Minute, wake: make(chan bool, 1), reading: make(chan struct{}, 2)}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("carrel_deployd_started", "app", cfg.App)
@@ -111,7 +115,10 @@ func (a *agent) loop(ctx context.Context) {
 	go func() { a.builder(ctx); close(built) }()
 	defer func() { <-built }()
 	for ctx.Err() == nil {
-		r, pull, status, err := a.next(ctx)
+		r, pull, logs, status, err := a.next(ctx)
+		for _, req := range logs {
+			a.startLogs(ctx, req)
+		}
 		if pull {
 			// The webhook was called: check now, or after the build that runs.
 			select {
@@ -130,6 +137,22 @@ func (a *agent) loop(ctx context.Context) {
 			a.deploy(ctx, *r)
 		}
 	}
+}
+
+// startLogs answers a log request beside the loop, so reading the journal
+// never holds up a deploy. Past 2 at once, a request is dropped and
+// carrel's call times out.
+func (a *agent) startLogs(ctx context.Context, req logRequest) {
+	select {
+	case a.reading <- struct{}{}:
+	default:
+		slog.Warn("log_request_dropped", "id", req.ID)
+		return
+	}
+	go func() {
+		defer func() { <-a.reading }()
+		a.serveLogs(ctx, req)
+	}()
 }
 
 func pause(ctx context.Context, d time.Duration) {
@@ -156,30 +179,31 @@ func (a *agent) request(ctx context.Context, method, path string, body any) (*ht
 	return a.http.Do(req)
 }
 
-// next long-polls carrel for a release to deploy, or for a webhook call
-// that asks a pull-mode agent to check its branch now.
-func (a *agent) next(ctx context.Context) (*release, bool, int, error) {
+// next long-polls carrel for a release to deploy, for a webhook call
+// that asks a pull-mode agent to check its branch now, or for log requests.
+func (a *agent) next(ctx context.Context) (*release, bool, []logRequest, int, error) {
 	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	resp, err := a.request(poll, "POST", "/apps/v1/agent/next", nil)
 	if err != nil {
-		return nil, false, 0, err
+		return nil, false, nil, 0, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case 204:
-		return nil, false, 204, nil
+		return nil, false, nil, 204, nil
 	case 200:
 		var out struct {
 			Release *release
 			Pull    bool
+			Logs    []logRequest
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || (out.Release == nil && !out.Pull) {
-			return nil, false, 200, errors.New("invalid release response")
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || (out.Release == nil && !out.Pull && len(out.Logs) == 0) {
+			return nil, false, nil, 200, errors.New("invalid release response")
 		}
-		return out.Release, out.Pull, 200, nil
+		return out.Release, out.Pull, out.Logs, 200, nil
 	}
-	return nil, false, resp.StatusCode, nil
+	return nil, false, nil, resp.StatusCode, nil
 }
 
 func (a *agent) report(ctx context.Context, id, state, message, log string) {
@@ -201,6 +225,11 @@ func (a *agent) deploy(ctx context.Context, r release) {
 	}
 	current := filepath.Join(a.root, "current")
 	previous, _ := os.Readlink(current)
+	// From the switch until the unit runs the new release, current and the
+	// running process disagree: app_logs records no invocation then.
+	a.inv.deploying.Lock()
+	defer a.inv.deploying.Unlock()
+	a.remember(ctx)
 	if err := swap(current, dir); err != nil {
 		a.report(ctx, r.ID, "failed", "switch release: "+err.Error(), "")
 		return
@@ -210,6 +239,7 @@ func (a *agent) deploy(ctx context.Context, r release) {
 		message := err.Error()
 		if previous != "" && swap(current, previous) == nil {
 			if a.restartAndCheck(ctx) == nil {
+				a.remember(ctx)
 				message += "; previous release restored"
 			} else {
 				message += "; previous release did not recover"
@@ -219,6 +249,7 @@ func (a *agent) deploy(ctx context.Context, r release) {
 		slog.Warn("deploy_failed", "release", r.ID, "error", message)
 		return
 	}
+	a.remember(ctx)
 	a.report(ctx, r.ID, "live", "", "")
 	a.prune(dir, previous)
 	slog.Info("deploy_live", "release", r.ID)

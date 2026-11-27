@@ -257,6 +257,8 @@ func limitBody(next http.Handler) http.Handler {
 			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionReport)
 		case r.URL.Path == "/functions/v1/agent/logs":
 			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionLogReply)
+		case r.URL.Path == "/apps/v1/agent/logs":
+			r.Body = http.MaxBytesReader(w, r.Body, maxAppLogReply)
 		default:
 			r.Body = http.MaxBytesReader(w, r.Body, 262144)
 		}

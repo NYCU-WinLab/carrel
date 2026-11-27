@@ -235,6 +235,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `public_ip_bind`, `public_ip_release`, `public_ip_list` | `machine`, `address`, `ports: ["all"] \| ["tcp/N", "udp/N"]`; 1:1 NAT |
 | Apps | `app_link` | `machine`, `name`, `repo` (GitHub owner/name or a GitHub or GitLab URL), `branch`, `start`, `port`; returns the install line and the workflow snippet (section 7.9) |
 | | `app_get`, `app_list` | linked repository, agent state, current and previous release, last result |
+| | `app_logs` | `app`, `since_seconds`, `lines`; the end of the app unit's journal, each line with its time and release, read from the agent on request |
 | | `app_deploy` | `app`, `release`; deploys a stored release again |
 | | `app_rollback` | `app`; switches back to the previous release |
 | | `app_unlink` | `confirm: <name>`; deletes stored releases and revokes the agent token, leaves the machine as it is |
@@ -1491,8 +1492,8 @@ answers 409, and the host fails that version instead of asking again.
 - Each wake is a span in sensorium with function, version, mode, restore time and whether the
   snapshot came from the page cache.
 - The platform captures standard output and standard error, keeps the last 10 MB per function
-  and returns it through `function_logs`. Apps keep their logs inside the machine; functions have
-  no machine to keep them in.
+  and returns it through `function_logs`. Apps keep their logs in the machine's journal, and
+  `app_logs` asks the app's agent for them; functions have no machine to keep them in.
 - `function_get` reports state, the URL, versions and the p50 and p95 wake time of the last
   24 hours.
 
