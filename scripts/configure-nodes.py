@@ -500,7 +500,7 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
     state directory stays, so a plugin listed again keeps its operations.
     Every value is checked in plugin_list, so quoting is enough."""
     q = shlex.quote
-    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}"]
+    lines = ["set -eu", "umask 022", f"U={q(units)} L={q(lib)} A={q(artifacts)} S={q(systemctl)}", "failed=0"]
     for p in plugins:
         lines.append(f'echo {q(p["sha256"] + "  " + artifacts + "/" + plugin_artifact(p))} | sha256sum -c --quiet - '
                      f'|| {{ echo "plugin {p["name"]}: the artifact does not match its sha256" >&2; exit 1; }}')
@@ -516,9 +516,9 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
             f'  tar -xzf "$A/{plugin_artifact(p)}" -C "$d.next" --no-same-owner --no-same-permissions',
             # A link could point root's chmod below, or the plugin, outside its directory.
             '  if [ -n "$(find "$d.next" ! -type f ! -type d | head -n 1)" ]; then',
-            f'    echo "plugin {name}: the artifact may hold only files and directories" >&2; exit 1',
+            f'    rm -rf "$d.next"; echo "plugin {name}: the artifact may hold only files and directories" >&2; exit 1',
             "  fi",
-            f'  test -f "$d.next/plugin" || {{ echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
+            f'  test -f "$d.next/plugin" || {{ rm -rf "$d.next"; echo "plugin {name}: the artifact has no plugin program at its top" >&2; exit 1; }}',
             '  chmod -R go-w "$d.next" && chmod 755 "$d.next/plugin"',
             f'  echo {sha} > "$d.next/.sha256"',
             f'  rm -rf "$d" && mv "$d.next" "$d" && touch $L/{name}/.restart',
@@ -559,10 +559,16 @@ def plugin_apply(plugins, units=PLUGIN_UNITS, lib=PLUGIN_LIB, artifacts=PLUGIN_A
         name = p["name"]
         lines += [
             f"$S enable --now carrel-plugin-{name}.socket",
-            f"if [ -e $L/{name}/.restart ]; then $S try-restart carrel-plugin-{name}.service && rm -f $L/{name}/.restart; fi",
+            # A failed restart keeps the mark, says so, and fails the run after the other plugins.
+            (
+                f"if [ -e $L/{name}/.restart ]; then if $S try-restart carrel-plugin-{name}.service; "
+                f"then rm -f $L/{name}/.restart; "
+                f'else echo "plugin {name}: the restart failed; the next deploy retries it" >&2; failed=1; fi; fi'
+            ),
             # Older versions go once the new one is in place.
             f'for v in $L/{name}/*; do case "${{v##*/}}" in current|{p["version"]}) ;; *) rm -rf "$v";; esac; done',
         ]
+    lines.append('[ "$failed" = 0 ]')
     return "\n".join(lines) + "\n"
 
 
@@ -984,7 +990,7 @@ if __name__ == "__main__":
         # is reported beside them, and install-control.py still checks them.
         try:
             report["plugins"] = plugins_on_nodes()
-        except SystemExit as e:
+        except (SystemExit, OSError) as e:
             report["plugins_error"] = str(e)
         print(json.dumps(report))
         sys.exit(1 if "plugins_error" in report else 0)
