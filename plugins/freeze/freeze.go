@@ -1,7 +1,8 @@
 // Package freeze is the freeze plugin: it parks a stopped carrel machine as a
 // backup on the site's backup storage and brings it back (#664). The
 // plugin declares the operations and the object kind, probes the site and
-// runs machine_freeze (#717); machine_thaw does not run yet.
+// runs machine_freeze (#717), machine_thaw, the delete of a frozen
+// machine's backup and the backup sweep (#718).
 //
 // It serves the plugin contract on the socket systemd passes as fd 3, and
 // keeps its runs in $STATE_DIRECTORY. The environment names the API, the
@@ -60,7 +61,7 @@ const machineSchema = `"machine":{"type":"string","minLength":1,"maxLength":32}`
 // Describe is what the plugin declares. The descriptions and schemas are
 // those of machine_freeze and machine_thaw in internal/carrel/contract.json.
 func Describe() *pluginpb.DescribeResponse {
-	return &pluginpb.DescribeResponse{Name: "freeze", Version: Version, Contract: 1,
+	d := &pluginpb.DescribeResponse{Name: "freeze", Version: Version, Contract: 1,
 		Quota: []*pluginpb.QuotaDimension{{Name: "frozen_gb", DefaultLimit: 200, Unit: "GiB"}},
 		Objects: []*pluginpb.ObjectKind{{Name: "frozen", Gone: true,
 			Charges: []*pluginpb.Charge{{Dimension: "frozen_gb", Amount: 1, Per: "disk_gb"}}}},
@@ -81,6 +82,8 @@ func Describe() *pluginpb.DescribeResponse {
 					"Its backup is deleted and its frozen_gb released.",
 				ParamsSchema: `{"type":"object","properties":{` + machineSchema + `},"required":["machine"],"additionalProperties":false}`},
 		}}
+	d.Operations = append(d.Operations, adminOperations()...)
+	return d
 }
 
 func (s *server) Describe(context.Context, *pluginpb.DescribeRequest) (*pluginpb.DescribeResponse, error) {
@@ -182,6 +185,12 @@ func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest)
 	}
 	if s.problem != "" {
 		return nil, refuse(codes.FailedPrecondition, "%s", s.problem)
+	}
+	switch req.Operation {
+	case "machine_thaw", "frozen_delete":
+		return s.startThaw(ctx, req)
+	case "backup_sweep":
+		return s.sweep(ctx, req)
 	}
 	vmid, kind, err := parse(req)
 	if err != nil {
@@ -320,7 +329,9 @@ func (s *server) answer(ctx context.Context, r *run) *pluginpb.Operation {
 	}
 	if r.Done {
 		op.State, op.Done, op.Error, op.ErrorCode, op.Message, op.Result = r.State, true, r.Error, r.ErrorCode, "", "{}"
-		if r.State == "succeeded" {
+		if r.Result != "" {
+			op.Result = r.Result
+		} else if r.State == "succeeded" {
 			// The machine is gone from the cluster; the backup is its only copy.
 			res, _ := json.Marshal(map[string]any{"gone": true, "backup": map[string]any{"volid": r.Volid, "size": r.Size, "note": r.Note, "verification": "ok"}})
 			op.Result = string(res)
@@ -341,6 +352,12 @@ func (s *server) follow(ctx context.Context, r *run) {
 	}()
 	for !r.Done {
 		var again bool
+		if r.Operation != "machine_freeze" {
+			if again = s.followThaw(ctx, r); !again {
+				return
+			}
+			continue
+		}
 		switch r.Phase {
 		case "backup":
 			again = s.followBackup(ctx, r)
@@ -562,7 +579,22 @@ func (s *server) Cancel(ctx context.Context, req *pluginpb.CancelRequest) (*plug
 	if s.problem != "" {
 		return &pluginpb.Operation{IdempotencyKey: r.Key, State: "running", Task: r.UPID, Message: s.problem}, nil
 	}
-	if !r.Done && r.Phase != "destroy" {
+	if !r.Done && r.Operation != "machine_freeze" {
+		// A restore can be stopped; a half it leaves is removed by the next look.
+		if r.Operation == "machine_thaw" && r.Phase == "restore" && !r.Cancelled {
+			if r.UPID != "" {
+				if ended, _, err := s.pve.taskStatus(ctx, r.UPID); err == nil && !ended {
+					if err := s.pve.stopTask(ctx, r.UPID); err != nil {
+						return nil, refuse(codes.Unavailable, "stop the restore task: %v", err)
+					}
+				}
+			}
+			r.Cancelled = true
+			if err := s.runs.save(r); err != nil {
+				return nil, refuse(codes.Unavailable, "save the run: %v", err)
+			}
+		}
+	} else if !r.Done && r.Phase != "destroy" {
 		if r.UPID != "" {
 			if ended, _, err := s.pve.taskStatus(ctx, r.UPID); err == nil && !ended {
 				if err := s.pve.stopTask(ctx, r.UPID); err != nil {

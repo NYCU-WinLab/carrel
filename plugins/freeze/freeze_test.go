@@ -77,7 +77,7 @@ func probe(t *testing.T, s *server) *pluginpb.ProbeResponse {
 	return p
 }
 
-func TestDescribeListsBothOperations(t *testing.T) {
+func TestDescribeListsTheOperations(t *testing.T) {
 	d := Describe()
 	if d.Name != "freeze" {
 		t.Fatalf("name %q", d.Name)
@@ -85,7 +85,12 @@ func TestDescribeListsBothOperations(t *testing.T) {
 	got := map[string]*pluginpb.OperationType{}
 	for _, op := range d.Operations {
 		got[op.Name] = op
-		if !op.Member || op.Toolset != "machines" || op.ObjectKind != "frozen" {
+		if !op.Member {
+			// The admin operations have no machine and no object.
+			if op.ObjectKind != "" || op.Toolset != "" {
+				t.Errorf("admin operation %s: %+v", op.Name, op)
+			}
+		} else if !op.Member || op.Toolset != "machines" || op.ObjectKind != "frozen" {
 			t.Errorf("operation %s: %+v", op.Name, op)
 		}
 		var schema map[string]any
@@ -93,7 +98,7 @@ func TestDescribeListsBothOperations(t *testing.T) {
 			t.Errorf("operation %s: schema is not JSON", op.Name)
 		}
 	}
-	if len(got) != 2 || got["machine_freeze"] == nil || got["machine_thaw"] == nil {
+	if len(got) != 4 || got["machine_freeze"] == nil || got["machine_thaw"] == nil || got["frozen_delete"] == nil || got["backup_sweep"] == nil {
 		t.Fatalf("operations: %v", got)
 	}
 	if len(d.Objects) != 1 || !d.Objects[0].Gone || d.Objects[0].Name != "frozen" {
@@ -117,6 +122,9 @@ func TestDescribeMatchesTheContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, op := range Describe().Operations {
+		if !op.Member {
+			continue
+		}
 		i := slices.IndexFunc(c.Tools, func(x struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
@@ -151,12 +159,5 @@ func TestProbeNeedsThePrivilegesOnTheStorage(t *testing.T) {
 	noAudit := map[string][]string{"/vms": vms, "/storage/pbs": all["/storage/pbs"]}
 	if p := probe(t, fixture(t, "pbs", noAudit)); p.Supported || p.Reason != "the token lacks Sys.Audit on /nodes/pve" {
 		t.Fatalf("probe: %+v", p)
-	}
-}
-
-func TestThawDoesNotRunYet(t *testing.T) {
-	s := fixture(t, "pbs", nil)
-	if _, err := s.StartOperation(context.Background(), &pluginpb.StartRequest{Operation: "machine_thaw"}); err == nil {
-		t.Fatal("started")
 	}
 }

@@ -11,8 +11,22 @@ removal itself fails the backup is kept, since a half removed machine leaves it 
 The PVE task's UPID is stored under the idempotency key in `$STATE_DIRECTORY`, so a restarted plugin
 finds the task again. The core checks the site's release list (public IPs, special ports and
 domains) before it calls the plugin; the plugin refuses a running machine and one with snapshots.
-`machine_thaw` does not run yet. carrel does not route to the plugin until the last sub-issue of
-#664.
+carrel does not route to the plugin until the last sub-issue of #664.
+
+`machine_thaw` restores the backup under the old VMID (`qmrestore` or `vzrestore`, each disk to the
+storage its config names), checks that the guest is there, unlocked and named as the frozen record
+says, and only then removes the backup. carrel sends the frozen record's facts as the machine:
+`vmid`, `kind`, `name`, `backup_volid`, `backup_storage` and `backup_note`. A restore that fails
+keeps the backup, and a half it left locked is removed. A backup that cannot be removed after the
+restore does not fail the thaw: the result carries `thaw_backup` (`volid`, `note`) so `machine_delete`
+can remove it later with `frozen_delete`. A thaw asked again after it finished changes nothing.
+
+Two operations are for admins only. `frozen_delete` removes a frozen machine's backup (`volid`, and
+`note` to match the record), and with `vmid`, `kind` and `name` first removes a cut-off restore of
+that machine. `backup_sweep` lists the freeze backups no record names (`keep` notes, `keep_volids`)
+and, only when `older_than` is given, removes the listed ones older than that many seconds. Both
+touch only backups whose notes start with `carrel-freeze`, on the site's backup storage. Freeze notes
+do not name the site, so two sites on one datastore must not both sweep with `older_than`.
 
 ## Settings
 

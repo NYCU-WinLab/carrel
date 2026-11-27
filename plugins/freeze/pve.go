@@ -280,8 +280,19 @@ func (p *pve) start(ctx context.Context, r *run) (string, error) {
 	case "backup":
 		data, err = p.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/vzdump", url.PathEscape(p.node)), url.Values{
 			"vmid": {fmt.Sprint(r.VMID)}, "storage": {r.Storage}, "mode": {"stop"}, "notes-template": {r.Note}})
-	case "destroy":
+	case "destroy", "discard":
 		data, err = p.do(ctx, http.MethodDelete, p.guest(r.Kind, r.VMID)+"?"+url.Values{"purge": {"1"}}.Encode(), nil)
+	case "restore":
+		// No target storage is named: PVE restores each disk to the storage
+		// its config names, as the backup holds it.
+		form := url.Values{"vmid": {fmt.Sprint(r.VMID)}}
+		if r.Kind == "ct" {
+			form.Set("ostemplate", r.Volid)
+			form.Set("restore", "1")
+		} else {
+			form.Set("archive", r.Volid)
+		}
+		data, err = p.do(ctx, http.MethodPost, fmt.Sprintf("/nodes/%s/%s", url.PathEscape(p.node), kinds[r.Kind]), form)
 	default:
 		return "", fmt.Errorf("no task for phase %q", r.Phase)
 	}
@@ -293,8 +304,11 @@ func (p *pve) start(ctx context.Context, r *run) (string, error) {
 
 // taskType is the PVE type of the task of the run's phase.
 func taskType(r *run) string {
-	if r.Phase == "destroy" {
+	switch r.Phase {
+	case "destroy", "discard":
 		return map[string]string{"vm": "qmdestroy", "ct": "vzdestroy"}[r.Kind]
+	case "restore":
+		return map[string]string{"vm": "qmrestore", "ct": "vzrestore"}[r.Kind]
 	}
 	return "vzdump"
 }
@@ -365,6 +379,7 @@ type backup struct {
 	Volid        string `json:"volid"`
 	Notes        string `json:"notes"`
 	Size         int64  `json:"size"`
+	CTime        int64  `json:"ctime"`
 	Protected    int    `json:"protected"`
 	Verification struct {
 		State string `json:"state"`
@@ -414,4 +429,54 @@ func (p *pve) removeBackup(ctx context.Context, storage string, b *backup) error
 	}
 	_, err := p.do(ctx, http.MethodDelete, fmt.Sprintf("/nodes/%s/storage/%s/content/%s", url.PathEscape(p.node), url.PathEscape(storage), url.PathEscape(b.Volid)), nil)
 	return err
+}
+
+// guestConfig reads the lock and the name of a guest: a VM's name, a
+// container's hostname. A restore PVE cut off leaves its half locked "create".
+func (p *pve) guestConfig(ctx context.Context, kind string, vmid int) (lock, name string, err error) {
+	data, err := p.do(ctx, http.MethodGet, p.guest(kind, vmid)+"/config", nil)
+	if err != nil {
+		return "", "", err
+	}
+	var c struct {
+		Lock     string `json:"lock"`
+		Name     string `json:"name"`
+		Hostname string `json:"hostname"`
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return "", "", err
+	}
+	name = c.Name
+	if kind == "ct" {
+		name = c.Hostname
+	}
+	return c.Lock, name, nil
+}
+
+// backupVolid is the backup on the storage with this volume id, or nil.
+func (p *pve) backupVolid(ctx context.Context, storage string, vmid int, volid string) (*backup, error) {
+	q := url.Values{"content": {"backup"}, "vmid": {fmt.Sprint(vmid)}}
+	list, err := p.backupList(ctx, storage, q)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list {
+		if list[i].Volid == volid {
+			return &list[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// backupList lists the backups of the storage that match the query.
+func (p *pve) backupList(ctx context.Context, storage string, q url.Values) ([]backup, error) {
+	data, err := p.do(ctx, http.MethodGet, fmt.Sprintf("/nodes/%s/storage/%s/content?%s", url.PathEscape(p.node), url.PathEscape(storage), q.Encode()), nil)
+	if err != nil {
+		return nil, err
+	}
+	var list []backup
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
 }
