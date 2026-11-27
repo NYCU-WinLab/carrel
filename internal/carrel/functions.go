@@ -86,7 +86,7 @@ func (e *Execution) functionHostState(name string) string {
 }
 
 func (e *Execution) PublicFunction(f D) D {
-	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry", "repo", "branch")
+	out := pick(f, "name", "current", "previous", "pending", "created_at", "deployed_at", "registry", "repo", "branch", "schedules")
 	versions := e.FunctionVersions(f)
 	public := []D{}
 	for _, v := range versions {
@@ -274,6 +274,8 @@ func (e *Execution) FunctionTool(tool string, a, t D) D {
 			})
 		}
 		return D{"dry_run": dry, "function": e.PublicFunction(f)}
+	case "function_schedule":
+		return e.functionSchedule(e.Function(t, a["function"]), a, dry)
 	case "function_remove":
 		f := e.Function(t, a["function"])
 		if a["confirm"] != f["name"] {
@@ -471,6 +473,9 @@ func (p *Platform) desiredFunctions(host FunctionHostConfig) D {
 			})
 		}
 		entry := D{"id": functionHostID(integer(f["tenant_n"]), str(f["name"])), "versions": versions}
+		if s := arr(f["schedules"]); len(s) > 0 {
+			entry["schedules"] = s
+		}
 		if c := str(f["current"]); c != "" {
 			entry["current"] = c
 		}

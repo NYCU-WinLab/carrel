@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+
+	"github.com/NYCU-WinLab/carrel/internal/schedule"
 )
 
 // The host agent keeps a function host at the control plane's desired state
@@ -59,6 +61,8 @@ type DesiredFunction struct {
 	ID       string           `json:"id"`
 	Current  string           `json:"current,omitempty"`
 	Versions []DesiredVersion `json:"versions"`
+	// Schedules fire requests to the function on this host (#643).
+	Schedules []schedule.Schedule `json:"schedules,omitempty"`
 }
 
 // Desired is the whole state of one host.
@@ -105,6 +109,8 @@ type Agent struct {
 	Lock func(name string) (unlock func(), err error)
 	// Forget tells the router a function changed or went away.
 	Forget func(name string)
+	// Scheduler fires the functions' schedules; nil fires none.
+	Scheduler *Scheduler
 	// failed holds the error of a version that did not build, so the agent
 	// does not build it again while the control plane still names it.
 	failed map[string]string
@@ -371,6 +377,9 @@ func (a *Agent) apply(ctx context.Context, desired Desired) {
 			}
 		}
 		wanted[f.ID] = keep
+		if a.Scheduler != nil {
+			a.Scheduler.Set(f.ID, f.Schedules)
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -400,6 +409,13 @@ func (a *Agent) apply(ctx context.Context, desired Desired) {
 	}
 	if ctx.Err() == nil {
 		a.remove(wanted)
+		if a.Scheduler != nil {
+			ids := map[string]bool{}
+			for id := range wanted {
+				ids[id] = true
+			}
+			a.Scheduler.Keep(ids)
+		}
 	}
 }
 

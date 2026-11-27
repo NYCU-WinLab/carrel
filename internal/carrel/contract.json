@@ -4197,6 +4197,70 @@
       }
     },
     {
+      "name": "function_schedule",
+      "description": "Add, replace or remove one cron schedule of a function. At each minute the expression matches in time_zone, the function's host sends GET path (POST with body as application/json when body is set) to the function with the header X-Carrel-Schedule: <name>, which outside requests can never carry. A run still going when its schedule comes round is skipped; minutes missed during an outage are not replayed. Each run's status goes to function_logs. function_get lists the schedules. At most 10 per function.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "function": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "The schedule's name, unique within the function."
+          },
+          "cron": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "5 fields: minute hour day-of-month month day-of-week, with *, numbers, a-b ranges, lists and /steps, such as */5 * * * * or 0 9 * * 1-5."
+          },
+          "time_zone": {
+            "type": "string",
+            "maxLength": 64,
+            "default": "UTC",
+            "description": "IANA zone such as UTC or Asia/Taipei."
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "default": "/",
+            "description": "Path and query to request."
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "Sent with POST; without it the request is a GET."
+          },
+          "remove": {
+            "type": "boolean",
+            "default": false,
+            "description": "Remove the named schedule."
+          },
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "function",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "function_remove",
       "description": "Remove a function, its versions and snapshots.",
       "inputSchema": {
@@ -5224,6 +5288,7 @@
     "function_registry",
     "function_link",
     "function_rollback",
+    "function_schedule",
     "function_remove",
     "runner_add",
     "runner_remove",
@@ -5449,6 +5514,7 @@
       "function_link",
       "function_list",
       "function_rollback",
+      "function_schedule",
       "function_remove"
     ],
     "admin": [

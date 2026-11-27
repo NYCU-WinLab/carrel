@@ -249,6 +249,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
 | | `function_logs` | `function`, `since`; the output the platform captured |
 | | `function_rollback` | `function`; switches back to the previous version |
+| | `function_schedule` | `function`, `name`, `cron`, `time_zone`, `path`, `body`, `remove`; a cron schedule the function's host fires with `X-Carrel-Schedule` |
 | | `function_remove` | `confirm: <name>`; deletes every version and snapshot |
 | Peering | `peer_allow`, `peer_revoke`, `peer_list` | `machine`, `port`, `from_tenant` or `from_machine` |
 | Virtual addresses | `vip_add`, `vip_list`, `vip_remove` | `name`, `machines` (section 6.3) |
