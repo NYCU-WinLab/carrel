@@ -3,6 +3,7 @@ package carrel
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -194,5 +195,48 @@ func TestSnapshotsMoveDeletesByRowKey(t *testing.T) {
 	}
 	if r, err := MigrateSnapshots(p.Store); err != nil || r["moved"] != 0 {
 		t.Fatal(r, err)
+	}
+}
+
+// collisionSQL is the delete the handbook gives for a name collision during
+// a rollback: it removes the core row and leaves the plugin ledger and PVE.
+const collisionSQL = `DELETE FROM objects WHERE kind=? AND id=?", ("snapshots", sys.argv[2])`
+
+// A name collision is one PVE snapshot behind two rows. The handbook keeps
+// the plugin record, whose configuration matches PVE, and removes only the
+// core row; both moves then run.
+func TestSnapshotCollisionRunbook(t *testing.T) {
+	handbook, err := os.ReadFile("../../docs/operator-handbook.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := string(handbook)[strings.Index(string(handbook), "#### Rolling back to a release before the snapshot plugin"):]
+	section = section[:strings.Index(section, "\n## ")]
+	if !strings.Contains(section, collisionSQL) || strings.Contains(section, "qm delsnapshot") {
+		t.Fatal("the handbook's collision steps changed")
+	}
+	kept := D{"cpu": 1, "disk_gb": 20, "memory_mb": 1024, "nics": []any{}}
+	for name, move := range map[string]func(*Store) (D, error){"back": MoveSnapshotsBack, "forward": MigrateSnapshots} {
+		t.Run(name, func(t *testing.T) {
+			p, _ := fixture(t)
+			putSnapshotRecord(p, 1, 10100, "s1", 20, "", kept)
+			p.Store.Put("snapshots", "10100-s1", 1, legacySnapshot(10100, "s1", D{"configuration": D{"cpu": 4, "disk_gb": 20, "memory_mb": 8192, "nics": []any{}}}))
+			if _, err := move(p.Store); err == nil || !strings.Contains(err.Error(), "exists already") {
+				t.Fatal("collision not refused", err)
+			}
+			p.Store.Exec("DELETE FROM objects WHERE kind=? AND id=?", "snapshots", "10100-s1")
+			if _, err := move(p.Store); err != nil {
+				t.Fatal(err)
+			}
+			var got D
+			if name == "back" {
+				got = p.Store.Get("snapshots", "10100-s1")
+			} else {
+				got = p.Store.Get(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10100, "s1"))
+			}
+			if got == nil || num(obj(got["configuration"])["cpu"]) != 1 {
+				t.Fatal("the kept record lost the PVE configuration", string(encoded(got)))
+			}
+		})
 	}
 }

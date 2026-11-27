@@ -467,15 +467,31 @@ A snapshot name has at least 2 characters: PVE refuses a one-character name.
 1. Stop carrel first (`systemctl stop carrel`). `carrel -move-snapshots-back` does not check for a
    running service: run while it is up, the running binary loses the records until its next start.
 2. Run `carrel -move-snapshots-back` with the newer binary. It moves the plugin's snapshot records
-   back to core rows and removes the plugin's tool and quota site rows, so the older release does
-   not count them twice. It refuses, changing nothing, while a snapshot operation runs or a record
-   is not ready.
+   back to core rows, so the older release charges each snapshot once. It also removes the
+   plugin's tool and quota site rows, so the older release does not treat `snapshots` and
+   `snapshot_gb` as plugin dimensions or route snapshot calls to plugin tools. It refuses, changing
+   nothing, while a snapshot operation runs or a record is not ready.
 3. Start the older release.
+
+A deploy (`scripts/deploy-go.py`) restores the previous binaries when the new version fails its
+health check, but it does not run the move back. A failed deploy after the forward move committed starts
+the older release with the records still in the plugin ledger, which is how a collision below
+happens. After such a rollback, stop carrel and run the move back with the newer binary as above.
 
 If the older release took a snapshot under a name the plugin ledger already holds, the move back
 stops with `snapshot row <vmid>-<name> exists already` and nothing changes. The same stop happens at
-the next forward start as `plugin object ... exists already`. Pick which snapshot to keep, delete
-the other in PVE (`qm delsnapshot <vmid> <name>`) and its row, then run the move again.
+the next forward start as `plugin object ... exists already`. Both rows stand for one PVE
+snapshot: PVE keeps one snapshot per VM and name, and the older release recorded the existing one
+as `ready` with the configuration of the day it ran, without taking a new one. Do not touch PVE,
+or the tenant loses that snapshot. Keep the plugin ledger record, whose configuration matches what
+PVE holds, and remove only the core row the older release wrote. With carrel stopped, on the
+database named by `database` in `config.json` (as the `carrel` user):
+
+```sh
+python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); print(c.execute("DELETE FROM objects WHERE kind=? AND id=?", ("snapshots", sys.argv[2])).rowcount); c.commit()' /var/lib/carrel/carrel.db <vmid>-<name>
+```
+
+It prints `1`. Then run the move again (`carrel -move-snapshots-back`, or start the newer release).
 
 ## Keys from the portal
 
