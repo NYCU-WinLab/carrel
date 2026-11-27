@@ -60,7 +60,9 @@ func TestFunctionEnvironmentsAreSealedToTheHost(t *testing.T) {
 		t.Fatalf("open env %s", encoded(got))
 	}
 
-	// The host registers: that value is sealed again to its key.
+	// The host registers: that value is sealed again to its key, and the
+	// old ciphertext leaves the database files too.
+	oldBox := str(p.Store.Get("function_versions", functionVersionID(functionID(1, "hook"), v2))["env"])
 	key, _ := envSetKEM.GenerateKey()
 	if out := registerHostKey(t, a, key); out["state"] != "trusted" || integer(out["resealed"]) != 1 {
 		t.Fatalf("register %s", encoded(out))
@@ -93,7 +95,7 @@ func TestFunctionEnvironmentsAreSealedToTheHost(t *testing.T) {
 	}
 	for _, name := range []string{path, path + "-wal"} {
 		raw, _ := os.ReadFile(name)
-		for _, value := range []string{marker, old} {
+		for _, value := range []string{marker, old, oldBox} {
 			if bytes.Contains(raw, []byte(value)) {
 				t.Fatalf("%s holds %s", name, value)
 			}

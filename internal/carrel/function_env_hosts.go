@@ -83,6 +83,12 @@ func (p *Platform) AgentHostKey(ctx context.Context, token, source string, body 
 	rec := p.Store.SiteGet("function_host_keys", host.Name)
 	switch str(rec["public"]) {
 	case public:
+		if rec["pending"] != nil {
+			// The host came back with its trusted key: a key it no longer
+			// uses must not be trusted later.
+			delete(rec, "pending")
+			p.Store.SitePut("function_host_keys", host.Name, rec)
+		}
 		return D{"state": "trusted", "fingerprint": keyFingerprint(public)}
 	case "":
 	default:
@@ -99,8 +105,24 @@ func (p *Platform) AgentHostKey(ctx context.Context, token, source string, body 
 		s.SitePut("function_host_keys", host.Name, D{"name": host.Name, "public": public, "at": now()})
 		moved = p.sealHostValues(s, host.Name, public)
 	})
-	p.Store.Log("host:"+host.Name, nil, "function_host_key_register", D{"host": host.Name, "fingerprint": keyFingerprint(public), "resealed": moved}, "ok")
+	scrubbed := moved == 0 || p.scrubDatabase() == nil
+	p.Store.Log("host:"+host.Name, nil, "function_host_key_register", D{"host": host.Name, "fingerprint": keyFingerprint(public), "resealed": moved, "scrubbed": scrubbed}, "ok")
 	return D{"state": "trusted", "fingerprint": keyFingerprint(public), "resealed": moved}
+}
+
+// scrubDatabase removes copies of replaced rows from the database files:
+// the write-ahead log keeps old frames after a commit, and a page freed by
+// an update keeps its bytes. VACUUM rewrites the database, and a TRUNCATE
+// checkpoint empties the log before and after. Backups taken earlier still
+// hold the old values; they open only with function_env_key.
+func (p *Platform) scrubDatabase() error {
+	for _, q := range []string{"PRAGMA wal_checkpoint(TRUNCATE)", "VACUUM", "PRAGMA wal_checkpoint(TRUNCATE)"} {
+		if _, err := p.Store.DB.Exec(q); err != nil {
+			slog.Error("database_scrub_failed", "step", q, "error", err)
+			return err
+		}
+	}
+	return nil
 }
 
 // sealHostValues seals every version environment of the host's functions

@@ -51,7 +51,12 @@ func LoadEnvKey(path string) (hpke.PrivateKey, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// Synced and renamed into place: a power loss right after the first
+	// start must not leave a torn key, since carrel drops the values it
+	// could open once the key is registered.
+	pending := path + ".next"
+	_ = os.Remove(pending)
+	f, err := os.OpenFile(pending, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +64,19 @@ func LoadEnvKey(path string) (hpke.PrivateKey, error) {
 		f.Close()
 		return nil, err
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return nil, err
+	}
 	if err := f.Close(); err != nil {
 		return nil, err
+	}
+	if err := os.Rename(pending, path); err != nil {
+		return nil, err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		dir.Close()
 	}
 	return key, nil
 }
@@ -104,7 +120,7 @@ func (a *Agent) openEnv(id, box string) ([]string, error) {
 	}
 	plain, err := hpke.Open(a.EnvKey, envKDF, envAEAD, envInfo(id), raw)
 	if err != nil {
-		return nil, fmt.Errorf("the environment does not open with this host's key (%s); if the host was rebuilt, upload it again with function_env", Fingerprint(a.EnvKey.PublicKey().Bytes()))
+		return nil, fmt.Errorf("the environment does not open with this host's key (%s); if the host was rebuilt, an operator trusts its new key first, then the member uploads it again with function_env", Fingerprint(a.EnvKey.PublicKey().Bytes()))
 	}
 	var env []string
 	if json.Unmarshal(plain, &env) != nil {

@@ -831,6 +831,10 @@ them again with `function_registry`, then deploys again.
 Each function host's `carrel-fnd` makes its own key on the first start (`/etc/carrel-fn/env.key`)
 and registers the public key. From then on function environments are sealed to that key, and
 carrel cannot open them; `-reseal-function-values` counts them under `host` and leaves them alone.
+The first registration seals the host's older values again, then runs `VACUUM` and empties the
+write-ahead log, so the database files keep no copy under `function_env_key`. Backups taken before
+still hold those copies: they open with `function_env_key`, so keep that key as secret as the
+backups until they expire.
 
 After a function host is rebuilt, its agent logs `the control plane holds another key for this
 host` with the new fingerprint, and versions sealed to the old key fail. Check the fingerprint on
@@ -840,7 +844,12 @@ the host's log, then on the control plane run:
 carrel -trust-function-host-key fn01=SHA256:...
 ```
 
-Members then upload each function's environment again with `function_env`.
+Members then upload each function's environment again with `function_env`, after the trust:
+an upload before it is sealed to the old key and fails on the rebuilt host.
+
+Rolling carrel or `carrel-fnd` back to a release before host keys is one way for these values: an
+older carrel answers 409 for them, and an older `carrel-fnd` keeps asking for them. Members upload
+the environments again after such a rollback.
 
 ## NetBox sync
 
