@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 	"time"
 )
@@ -59,10 +60,11 @@ func lockSchema(lock *os.File, name string) error {
 // migrateSchema refuses a database newer than this release, then applies
 // each missing migration in its own transaction, which also records the new
 // version. A database that holds tables already is copied first, whole and
-// consistent, to <path>.schema-<from>-<stamp>; an older copy from the same
-// version goes, so a migration that keeps failing keeps one copy. Every
-// opener holds <path>-schema.lock meanwhile and reads the version under it,
-// so the service, -backup and -reseal never apply a migration twice.
+// consistent, to <path>.schema-<from>-<stamp>; of the earlier copies from the
+// same version only the oldest stays, so a migration that keeps failing keeps
+// at most 2 copies. Every opener holds <path>-schema.lock meanwhile and reads
+// the version under it, so the service, -backup and -reseal never apply a
+// migration twice.
 func migrateSchema(db *sql.DB, path string) (D, error) {
 	if path != ":memory:" {
 		lock, err := os.OpenFile(path+"-schema.lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -90,7 +92,11 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 		return nil, err
 	}
 	if tables > 0 && path != ":memory:" {
+		// Always copy the data about to be migrated. Of the earlier copies from
+		// this version keep the oldest, which the stamp sorts first, and drop
+		// the rest, so a migration that keeps failing keeps at most 2 copies.
 		earlier, _ := filepath.Glob(fmt.Sprintf("%s.schema-%d-*", path, version))
+		sort.Strings(earlier)
 		copy := fmt.Sprintf("%s.schema-%d-%s", path, version, time.Now().UTC().Format("20060102-150405.000000000"))
 		if _, err := db.Exec("VACUUM INTO ?", copy); err != nil {
 			return nil, fmt.Errorf("copy the database before migrating: %w", err)
@@ -98,12 +104,15 @@ func migrateSchema(db *sql.DB, path string) (D, error) {
 		if err := os.Chmod(copy, 0o600); err != nil {
 			return nil, err
 		}
-		for _, old := range earlier {
-			if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
-				slog.Warn("schema_copy_not_removed", "path", old, "error", err.Error())
+		out["backup"] = copy
+		if len(earlier) > 0 {
+			out["first_backup"] = earlier[0]
+			for _, old := range earlier[1:] {
+				if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+					slog.Warn("schema_copy_not_removed", "path", old, "error", err.Error())
+				}
 			}
 		}
-		out["backup"] = copy
 	}
 	for v := version; v < SchemaVersion; v++ {
 		tx, err := db.Begin()
