@@ -13,6 +13,10 @@ var terminal = []string{"succeeded", "failed", "rolled_back", "cleanup_failed"}
 
 func publicOperation(o D) D {
 	r := pick(o, "id", "tool", "state", "phase", "created_at", "updated_at", "attempts", "result", "error", "reserved", "resource_changes", "cleanup", "current_resource", "ready_at", "progress", "message")
+	// unfenced says who cleared the fence and when (machine_unfence).
+	if o["unfenced"] != nil {
+		r["unfenced"] = o["unfenced"]
+	}
 	if o["state"] == "waiting" && o["waiting_for"] != nil {
 		r["waiting_for"] = o["waiting_for"]
 	}
