@@ -357,7 +357,7 @@ func (p *Platform) Start() {
 			pushJump := false
 			err := attempt(func() {
 				e := p.execution(p.ctx)
-				if len(e.S.Tenants()) > 0 {
+				if e.maintenanceReconciles() {
 					e.ExpireGrants()
 					e.ExpireVPNClients()
 					e.ReapPreviews()
