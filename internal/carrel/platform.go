@@ -131,7 +131,16 @@ type Platform struct {
 	events   eventHub
 	// maintainKick wakes the maintenance loop before its 5 minutes are up,
 	// so a preview's domain is published at once (#645).
-	maintainKick       chan struct{}
+	maintainKick chan struct{}
+	// domainKick wakes the domain loop, which runs only MaintainDomains.
+	// domainTimer re-kicks it when a tenant's certificate is due (#780).
+	domainKick chan struct{}
+	domainMu   sync.Mutex
+	domainRun  sync.Mutex
+	// domainMinDelay is the shortest retry wait (5 s when zero; tests shorten it).
+	domainMinDelay     time.Duration
+	domainTimer        *time.Timer
+	domainTimerAt      time.Time
 	uploadMu           sync.Mutex
 	uploads            map[string]int64
 	sshProbe           func(context.Context, D) bool
@@ -155,7 +164,7 @@ type Execution struct {
 
 func NewPlatform(s *Store, b Backend, c Config) *Platform {
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1), maintainKick: make(chan struct{}, 1)}
+	p := &Platform{Store: s, Backend: b, Config: c, HTTP: &http.Client{Timeout: 20 * time.Second}, ctx: ctx, cancel: cancel, reports: map[int]chan struct{}{}, backfilling: map[int]bool{}, netboxKick: make(chan struct{}, 1), maintainKick: make(chan struct{}, 1), domainKick: make(chan struct{}, 1)}
 	p.Operations = NewOperations(p)
 	p.Hub = NewAgentHub()
 	if len(c.WebhookBlockedRanges) > 0 {

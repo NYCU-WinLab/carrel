@@ -80,9 +80,9 @@ func TestPullRequestPreviews(t *testing.T) {
 		t.Fatalf("domain %+v %v", d, found)
 	}
 	select {
-	case <-p.maintainKick:
+	case <-p.domainKick:
 	case <-time.After(time.Second):
-		t.Fatal("the maintenance loop was not woken")
+		t.Fatal("the domain loop was not woken")
 	}
 	// The status poll reads the preview's version with the same token.
 	if code, s := do(t, a, "GET", "/functions/v1/deploy/alice/hook/"+str(pf["pending"]), "pr7", nil); code != 200 || obj(s["version"])["state"] != "building" {

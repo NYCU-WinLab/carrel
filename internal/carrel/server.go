@@ -318,6 +318,18 @@ func (a *App) span(tool string, args, who D, start time.Time, result D) {
 }
 func (p *Platform) Start() {
 	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		for {
+			select {
+			case <-p.ctx.Done():
+				return
+			case <-p.domainKick:
+				p.execution(p.ctx).MaintainDomains()
+			}
+		}
+	}()
+	p.wg.Add(1)
 	go p.Operations.Loop()
 	p.Operations.Recover()
 	p.startNetBox()
@@ -393,6 +405,11 @@ func (p *Platform) Start() {
 	}()
 }
 func (p *Platform) Close() {
+	p.domainMu.Lock()
+	if p.domainTimer != nil {
+		p.domainTimer.Stop()
+	}
+	p.domainMu.Unlock()
 	// Closing the jump queue first means no handler can p.wg.Add(1) while Wait runs.
 	p.jumpQueueMu.Lock()
 	p.jumpClosed = true
@@ -404,6 +421,9 @@ func (p *Platform) Close() {
 // Slow certificate renewal runs without the infrastructure writer. Revalidate
 // each domain under the writer before routing an orphaned publication.
 func (e *Execution) MaintainDomains() {
+	// The full pass and the domain loop both call this; one at a time.
+	e.P.domainRun.Lock()
+	defer e.P.domainRun.Unlock()
 	for _, t := range e.S.Tenants() {
 		n := integer(t["n"])
 		err := attempt(func() {
@@ -463,6 +483,9 @@ func (e *Execution) MaintainDomains() {
 		// The next pass retries; operators read why in the log.
 		if w, ok := err.(Waiting); ok {
 			slog.Info("domain_maintenance_waiting", "tenant", n, "phase", w.Phase, "ready_at", w.ReadyAt)
+			if w.Phase == "waiting_for_certificate" {
+				e.P.kickDomainsAt(w.ReadyAt)
+			}
 		} else if err != nil {
 			failure := obj(failureResult(err)["error"])
 			slog.Warn("domain_maintenance_failed", "tenant", n, "code", failure["code"], "backend_code", failure["backend_code"])
@@ -618,6 +641,36 @@ func (a *App) mcpServer(admin bool, sel selection) *mcp.Server {
 		}
 	})
 	return server
+}
+
+// kickDomains runs only MaintainDomains now, without the full pass.
+func (p *Platform) kickDomains() {
+	select {
+	case p.domainKick <- struct{}{}:
+	default:
+	}
+}
+
+// kickDomainsAt kicks the domain loop when a certificate becomes ready. It
+// keeps the earliest pending time; a past or missing time retries in 5 s.
+func (p *Platform) kickDomainsAt(readyAt float64) {
+	delay := time.Duration((readyAt - now()) * float64(time.Second))
+	if min := p.domainMinDelay; delay < min {
+		delay = min
+	} else if min == 0 && delay < 5*time.Second {
+		delay = 5 * time.Second
+	}
+	at := time.Now().Add(delay)
+	p.domainMu.Lock()
+	defer p.domainMu.Unlock()
+	if p.domainTimer != nil && !p.domainTimerAt.IsZero() && p.domainTimerAt.After(time.Now()) && !p.domainTimerAt.After(at) {
+		return
+	}
+	if p.domainTimer != nil {
+		p.domainTimer.Stop()
+	}
+	p.domainTimerAt = at
+	p.domainTimer = time.AfterFunc(delay, p.kickDomains)
 }
 
 // kickMaintenance runs the maintenance loop's next pass now.
