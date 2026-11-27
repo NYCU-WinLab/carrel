@@ -20,13 +20,19 @@
   ],
   "packages": {
     ".": {
-      "exclude-paths": ["plugins/snapshot"],
+      "exclude-paths": ["plugins/snapshot", "plugins/freeze"],
       "extra-files": [
         { "type": "generic", "path": "internal/carrel/value.go" }
       ]
     },
     "plugins/snapshot": {
       "component": "snapshot",
+      "include-component-in-tag": true,
+      "initial-version": "0.1.0",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "plugins/freeze": {
+      "component": "freeze",
       "include-component-in-tag": true,
       "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md"

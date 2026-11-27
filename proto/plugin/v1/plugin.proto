@@ -124,6 +124,9 @@ message ObjectKind {
   // disk: an object may hold up to its machine's disk on the node's
   // storage, as a disk snapshot does; admission checks the node for it.
   bool disk = 4;
+  // gone: a record of this kind stands for a machine that has left the
+  // cluster (a frozen machine), not for an object on a live one.
+  bool gone = 5;
 }
 
 message DescribeResponse {
