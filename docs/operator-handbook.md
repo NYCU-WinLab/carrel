@@ -169,8 +169,9 @@ database:
 On the first exit node, run `python3 /var/lib/carrel/<newest go-upgrade-*>/install-control.py rollback`.
 It undoes the upgrade that installed the running release:
 
-- It picks the stage whose `release.json` matches the installed one, so a newer upgrade that failed
-  and put the previous release back is skipped.
+- It picks the newest stage whose `release.json` matches the installed one and whose previous
+  release differs. A newer upgrade that failed and put the previous release back is skipped, and so
+  is a deploy of the release that was already running.
 - It puts back the previous binary, units, configuration and node programs, and waits for the
   previous version's health check.
 - When that upgrade migrated the database, it stops and names `--database`. With `--database`, it
@@ -179,6 +180,8 @@ It undoes the upgrade that installed the running release:
   carrel starts again on the running release.
 - It holds the node's deploy lock, so no deploy or second rollback runs beside it. Running it again
   goes one more upgrade back.
+- It leaves `carrel-deployd` in CT 100, `carrel-fetch` in CT 103 and the running `carrel-agent` at
+  the newer release. Deploy the previous release again when those must match too.
 - It restores the node programs on the first exit node only. Run `configure-nodes.py` from the
   previous release's stage, or deploy that release again, so every node matches.
 

@@ -523,8 +523,11 @@ def roll_back(database):
     current = json.loads(installed.read_text()) if installed.exists() else None
     # The newest stage is not always the release in effect: a failed upgrade
     # leaves its stage behind after it put the previous release back.
+    # A deploy of the release already running changed nothing to go back to.
     stages = [s for s in sorted(STAGES.glob("go-upgrade-*"))
-              if (s / "release.json").exists() and json.loads((s / "release.json").read_text()) == current]
+              if (s / "release.json").exists() and json.loads((s / "release.json").read_text()) == current
+              and not ((s / "before-release.json").exists()
+                       and json.loads((s / "before-release.json").read_text()) == current)]
     if not stages:
         raise SystemExit("No kept upgrade installed the running release (" + str(LIB / "release.json") +
                          "): deploy the release you want instead")
@@ -561,10 +564,15 @@ def roll_back(database):
                 subprocess.run(["pct", "exec", CT, "--", "systemctl", "start", "carrel"], check=False)
                 raise
         undo(stage, stamp, before, False, True, True)
-        health = healthy(previous, host_name)
+        (stage / "rolled-back").write_text(json.dumps({"at": int(time.time()), "database": bool(database)}) + "\n")
+        try:
+            health = healthy(previous, host_name)
+        except SystemExit as error:
+            raise SystemExit(f"Rolled back to {previous}, database {'restored' if database else 'kept'}, but "
+                             f"{previous} failed its health check ({error}). Do not run rollback again: it would "
+                             "go one more upgrade back. See journalctl -u carrel in CT 100.") from None
     finally:
         subprocess.run(["pct", "exec", CT, "--", "systemctl", "enable", "--now", "carrel-backup.timer"], check=False)
-    (stage / "rolled-back").write_text(json.dumps({"at": int(time.time()), "database": bool(database)}) + "\n")
     print(json.dumps({"rolled_back": stamp, "version": previous, "database_restored": bool(database), "health": health}))
     print("Run configure-nodes.py from the previous release's stage on the other nodes, or deploy "
           f"{previous} again, so every node has the same programs.", file=sys.stderr)

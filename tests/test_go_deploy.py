@@ -587,6 +587,19 @@ def test_rollback_skips_a_newer_failed_upgrade(tmp_path, monkeypatch):
     assert not (failed / "rolled-back").exists()
 
 
+def test_rollback_skips_a_deploy_of_the_running_release(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    node, stage = rolled(tmp_path, module, monkeypatch, {"current": 2, "before": 2})
+    again = tmp_path / "go-upgrade-20261021-000000"
+    again.mkdir()
+    (again / "release.json").write_text('{"version": "1.0.0"}')
+    (again / "before-release.json").write_text('{"version": "1.0.0"}')
+    module.rollback(database=False)
+    assert (stage / "rolled-back").exists()
+    assert not (again / "rolled-back").exists()
+    assert (node.lib / "release.json").read_text() == '{"version": "0.9.0"}'
+
+
 def test_rollback_waits_for_no_other_deploy(tmp_path, monkeypatch):
     import fcntl
 
