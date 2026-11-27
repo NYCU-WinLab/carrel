@@ -209,7 +209,7 @@ func TestBackfillSkipsWhatItMust(t *testing.T) {
 func TestBackfillSkipsAVMWithSnapshots(t *testing.T) {
 	p, b, app := backfillFixture(t)
 	ctx, admin := context.Background(), person("root", true)
-	p.Store.Put("snapshots", "10200-before", 1, D{"id": "10200-before", "vmid": 10200, "name": "before", "disk_gb": 20, "state": "ready"})
+	putSnapshotRecord(p, 1, 10200, "before", 20, "ready", nil)
 	for _, dry := range []bool{true, false} {
 		r := app.Call(ctx, "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice", "dry_run": dry}, admin)
 		got := dicts(r["machines"])[0]
@@ -217,7 +217,7 @@ func TestBackfillSkipsAVMWithSnapshots(t *testing.T) {
 			t.Fatalf("dry=%v: %s", dry, encoded(r))
 		}
 	}
-	p.Store.Remove("snapshots", "10200-before")
+	p.Store.Remove(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10200, "before"))
 	r := app.Call(ctx, "machine_ca_backfill", D{"tenant": "alice", "machine": "old", "owner": "alice"}, admin)
 	if dicts(r["machines"])[0]["result"] != "backfilled" {
 		t.Fatalf("without snapshots: %s", encoded(r))
@@ -545,14 +545,17 @@ func TestBackfillRefusesASecondRunOnTheSameVM(t *testing.T) {
 func TestBackfillHoldsASnapshotUntilTheRecordIsSaved(t *testing.T) {
 	p, b, app := backfillFixture(t)
 	release, done := blockBackfill(t, b, app, "alice")
-	inner := b.call
+	inner, plugin := b.call, reportSnapshotPlugin(t, p)
 	var trusted []any
 	b.call = func(r D, target string) (any, error) {
 		switch {
 		case r["op"] == "inventory":
 			return baseInventory(), nil
-		case r["op"] == "action" && r["action"] == "snapshot":
-			trusted = append(trusted, storedMachine(p, 10200)["ssh_user_ca"])
+		case r["op"] == "plugin":
+			if r["call"] == "start" && r["operation"] == "create" && !boolean(r["dry_run"]) {
+				trusted = append(trusted, storedMachine(p, 10200)["ssh_user_ca"])
+			}
+			return plugin.call(r, target)
 		}
 		return inner(r, target)
 	}

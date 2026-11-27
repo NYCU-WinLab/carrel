@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // flakyBackend fails chosen adapter actions a set number of times.
@@ -26,8 +27,13 @@ type flakyBackend struct {
 }
 
 func (f *flakyBackend) Call(ctx context.Context, req D, target string) (any, error) {
-	if req["op"] == "action" {
+	if req["op"] == "action" || req["op"] == "plugin" && req["call"] == "start" && !boolean(req["dry_run"]) {
 		key := str(req["action"]) + ":" + str(req["name"])
+		if req["op"] == "plugin" {
+			// The plugin's operations under the names the core's adapter
+			// actions had, so the scenario fails the same steps.
+			key = map[string]string{"create": "snapshot", "delete": "delsnapshot", "rollback": "rollback"}[str(req["operation"])] + ":" + str(obj(req["params"])["name"])
+		}
 		f.fmu.Lock()
 		if f.fails[key] > 0 {
 			f.fails[key]--
@@ -56,6 +62,7 @@ func snapshotSetup(t *testing.T) (*goldenRun, *flakyBackend, *fakeBackend) {
 	rec := &recorder{fakeBackend: b, p: p}
 	fb := &flakyBackend{recorder: rec, fails: map[string]int{}}
 	p.Backend = fb
+	goldenSnapshotPlugin(t, p)
 	rec.startGuests(t)
 	runQueue(p)
 	return &goldenRun{t: t, p: p, app: NewApp(p, nil), rec: rec, tools: map[string]bool{}}, fb, b
@@ -77,7 +84,7 @@ func snapshotScenario(g *goldenRun, fb *flakyBackend, b *fakeBackend) {
 	alice, bob, admin := person("alice", false), person("bob", false), person("root", true)
 	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoldenGoldenGoldenGoldenGoldenGoldenGold golden"
 	rows := func(step string) {
-		for _, data := range g.p.Store.objectData("snapshots") {
+		for _, data := range g.p.Store.objectData(pluginObjectRows) {
 			g.lines = append(g.lines, step+" row "+normalize([]byte(data)))
 		}
 	}
@@ -181,6 +188,18 @@ func snapshotScenario(g *goldenRun, fb *flakyBackend, b *fakeBackend) {
 	put(fmt.Sprintf("%d-emptynics", dbID), 1, D{"id": fmt.Sprintf("%d-emptynics", dbID), "vmid": dbID, "name": "emptynics", "disk_gb": 20, "configuration": merge(pick(db, "cpu", "memory_mb", "disk_gb"), D{"nics": []any{}}), "state": "ready"})
 	put(fmt.Sprintf("%d-plain", dbID), 1, D{"id": fmt.Sprintf("%d-plain", dbID), "vmid": dbID, "name": "plain", "disk_gb": 20, "configuration": pick(db, "cpu", "memory_mb", "disk_gb", "nics"), "state": "ready"})
 	put("10999-orphan", 1, D{"id": "10999-orphan", "vmid": 10999, "name": "orphan", "disk_gb": 15, "state": "ready", "operation_id": "dead"})
+	// The switch moves such rows into the plugin ledger (#663). A row
+	// without its configuration stops the move, and carrel does not start;
+	// without those rows the move goes through.
+	migrate := func(step string) {
+		g.p.Store.SiteRemove("migration", snapshotMigration)
+		result, err := MigrateSnapshots(g.p.Store)
+		g.lines = append(g.lines, fmt.Sprintf("%s migrate %s %v", step, normalize(encoded(result)), err))
+	}
+	migrate("l")
+	g.p.Store.Remove("snapshots", fmt.Sprintf("%d-bare", webID))
+	g.p.Store.Remove("snapshots", "10999-orphan")
+	migrate("l")
 	rows("l")
 	call("l", "snapshot_list", D{"machine": "web"}, alice)
 	call("l", "snapshot_list", D{"machine": "db"}, alice)
@@ -218,7 +237,7 @@ func snapshotScenario(g *goldenRun, fb *flakyBackend, b *fakeBackend) {
 
 	// Admission: storage sized so the stored snapshot reservations decide.
 	reserved := 0.0
-	for _, s := range g.p.Store.Objects("snapshots") {
+	for _, s := range g.p.Store.Objects(pluginObjectRows) {
 		reserved += num(s["disk_gb"])
 	}
 	b.mu.Lock()
@@ -258,9 +277,11 @@ func TestGoldenSnapshotNodes(t *testing.T) {
 	put("machines", 10101, 1, D{"vmid": 10101, "tenant_n": 1, "name": "b", "node": "carrel02", "cpu": 1, "memory_mb": 1024, "disk_gb": 1000})
 	put("machines", 10200, 2, D{"vmid": 10200, "tenant_n": 2, "name": "c", "node": "carrel03", "cpu": 1, "memory_mb": 1024, "disk_gb": 40})
 	put("machines", 10201, 2, D{"vmid": 10201, "tenant_n": 2, "name": "d", "node": "carrel09", "cpu": 1, "memory_mb": 1024, "disk_gb": 40})
-	snap := func(vmid, n int, name string, gb any) {
-		id := fmt.Sprintf("%d-%s", vmid, name)
-		put("snapshots", id, n, D{"id": id, "vmid": vmid, "name": name, "disk_gb": gb, "state": "ready", "configuration": D{"cpu": 1}})
+	// The snapshot plugin's records, as the migration writes them (#663).
+	snap := func(vmid, n int, name string, gb int) {
+		id := pluginObjectID("snapshot", "snapshot", vmid, name)
+		put(pluginObjectRows, id, n, D{"id": id, "plugin": "snapshot", "kind": "snapshot", "vmid": vmid, "name": name, "disk_gb": gb, "state": "ready",
+			"charge": D{"snapshots": 1, "snapshot_gb": gb}, "holds": []string{"freeze", "migrate", "backfill"}, "configuration": D{"cpu": 1}})
 	}
 	snap(10100, 1, "a1", 10)
 	snap(10101, 1, "b1", 1000)
@@ -301,8 +322,21 @@ func TestGoldenSnapshotNodes(t *testing.T) {
 		}
 	}
 	record("n")
-	p.Store.Remove("snapshots", "10101-b2")
-	p.Store.Remove("snapshots", "10999-orphan")
+	p.Store.Remove(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10101, "b2"))
+	p.Store.Remove(pluginObjectRows, pluginObjectID("snapshot", "snapshot", 10999, "orphan"))
 	record("n2")
 	checkGolden(t, "snapshot-nodes.txt", strings.Join(lines, "\n")+"\n")
+}
+
+// goldenSnapshotPlugin makes every node report the snapshot plugin, as B09's
+// do once it is listed (#663), and polls its runs quickly.
+func goldenSnapshotPlugin(t *testing.T, p *Platform) {
+	t.Helper()
+	saved, recheck := pluginPoll, pluginRecheck
+	pluginPoll, pluginRecheck = 5*time.Millisecond, 0.05
+	t.Cleanup(func() { pluginPoll, pluginRecheck = saved, recheck })
+	for _, n := range p.Config.Nodes {
+		p.Hub.Hello(n.Name, "golden", AgentProtocol, "golden", []PluginInfo{snapshotPluginInfo()})
+		p.Hub.Heartbeat(n.Name, "golden", uint64(time.Now().UnixNano()), nil)
+	}
 }

@@ -2034,217 +2034,6 @@
       }
     },
     {
-      "name": "snapshot_create",
-      "description": "Create a disk snapshot. A snapshot starts near zero and grows as the disk changes; snapshot_gb counts the space the tenant's snapshots hold, not disk_gb. Refused while that space is over the limit. Without a recent measurement each snapshot counts at the size of its disk; snapshot_storage.snapshot_gb_counts says which applies (held or declared).",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "machine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 32
-          },
-          "name": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "tenant": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "idempotency_key": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 128,
-            "description": "Reuse to retry a lost submission with identical arguments."
-          },
-          "dry_run": {
-            "type": "boolean",
-            "default": false,
-            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
-          },
-          "detail": {
-            "type": "string",
-            "enum": [
-              "summary",
-              "full"
-            ],
-            "default": "summary",
-            "description": "summary (default) or full."
-          },
-          "wait_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 55,
-            "default": 55,
-            "description": "Seconds to wait for completion; 0 returns the job at once."
-          }
-        },
-        "required": [
-          "machine",
-          "name"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "snapshot_list",
-      "description": "List managed snapshots.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "machine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 32
-          },
-          "tenant": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          }
-        },
-        "required": [
-          "machine"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": true,
-        "destructiveHint": false,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "snapshot_delete",
-      "description": "Delete a managed snapshot.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "machine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 32
-          },
-          "name": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "tenant": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "idempotency_key": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 128,
-            "description": "Reuse to retry a lost submission with identical arguments."
-          },
-          "dry_run": {
-            "type": "boolean",
-            "default": false,
-            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
-          },
-          "detail": {
-            "type": "string",
-            "enum": [
-              "summary",
-              "full"
-            ],
-            "default": "summary",
-            "description": "summary (default) or full."
-          },
-          "wait_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 55,
-            "default": 55,
-            "description": "Seconds to wait for completion; 0 returns the job at once."
-          }
-        },
-        "required": [
-          "machine",
-          "name"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
-      "name": "snapshot_rollback",
-      "description": "Roll back disk contents; later changes are lost. Confirm snapshot name. Restores the previous power state and checks guest readiness. Brief downtime is expected; returns a background operation.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "machine": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 32
-          },
-          "name": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "confirm": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "tenant": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$"
-          },
-          "idempotency_key": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 128,
-            "description": "Reuse to retry a lost submission with identical arguments."
-          },
-          "dry_run": {
-            "type": "boolean",
-            "default": false,
-            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
-          },
-          "detail": {
-            "type": "string",
-            "enum": [
-              "summary",
-              "full"
-            ],
-            "default": "summary",
-            "description": "summary (default) or full."
-          },
-          "wait_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 55,
-            "default": 55,
-            "description": "Seconds to wait for completion; 0 returns the job at once."
-          }
-        },
-        "required": [
-          "machine",
-          "name",
-          "confirm"
-        ],
-        "additionalProperties": false
-      },
-      "annotations": {
-        "readOnlyHint": false,
-        "destructiveHint": true,
-        "idempotentHint": true,
-        "openWorldHint": false
-      }
-    },
-    {
       "name": "iso_import",
       "description": "Download an installer ISO into this tenant's images, from a public http(s) URL with its SHA-256. carrel's fetch container downloads it (public addresses only, at most 20 GB and the tenant's remaining images_gb, under 2 MB/s for 60 seconds aborts, 3 hours at most), checks the checksum and stores it read-only on the site's shared storage, private to the tenant. One import per tenant and three per site run at once; more wait. Waits up to 55 seconds; follow a longer download with operation_get.",
       "inputSchema": {
@@ -5382,9 +5171,6 @@
     "platform_power",
     "request_approve",
     "request_reject",
-    "snapshot_create",
-    "snapshot_delete",
-    "snapshot_rollback",
     "ssh_key_add",
     "ssh_key_remove",
     "tenant_suspend",
@@ -5428,9 +5214,6 @@
     "port_open",
     "reconcile_run",
     "platform_power",
-    "snapshot_create",
-    "snapshot_delete",
-    "snapshot_rollback",
     "tenant_suspend",
     "vip_add",
     "vip_remove",
@@ -5572,10 +5355,6 @@
       "machine_console_url",
       "machine_nic_attach",
       "machine_nic_detach",
-      "snapshot_create",
-      "snapshot_list",
-      "snapshot_delete",
-      "snapshot_rollback",
       "iso_import",
       "image_import",
       "image_list",

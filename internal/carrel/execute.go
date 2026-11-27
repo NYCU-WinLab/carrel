@@ -193,7 +193,7 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 	case "deployment_apply":
 		return e.DeploymentApply(t, a, w)
 	case "quota_get":
-		return e.quotaStorage(t, D{"quota": e.Quota(t), "snapshot_storage": e.SnapshotUsage(t)})
+		return e.quotaStorage(t, D{"quota": e.Quota(t)})
 	case "audit_log":
 		return D{"entries": e.S.Rows("SELECT * FROM audit WHERE tenant=? OR (tenant IS NULL AND actor=?) ORDER BY id DESC LIMIT 100", n, w["sub"])}
 	case "ssh_key_list":
@@ -293,8 +293,6 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.PlanImport(tool, a, t)
 	case "image_list", "image_delete":
 		return e.ImageAction(tool, a, t)
-	case "snapshot_create", "snapshot_list", "snapshot_delete", "snapshot_rollback":
-		return e.SnapshotAction(tool, a, t)
 	case "request_list":
 		return D{"requests": publicRequests(e.S.Objects("requests", n))}
 	case "quota_request":
@@ -348,19 +346,9 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 		for k, v := range delta {
 			delta[k] = -num(v)
 		}
-		for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains", "snapshots": "snapshots"} {
+		for kind, dim := range map[string]string{"ports": "public_ports", "domains": "domains"} {
 			owned := filter(e.S.Objects(kind, n), func(x D) bool { return integer(x["vmid"]) == integer(m["vmid"]) })
 			delta[dim] = -len(owned)
-			if held, measured := e.snapshotGB(n); kind == "snapshots" && !measured {
-				sum := 0.0
-				for _, x := range owned {
-					sum += num(x["disk_gb"])
-				}
-				delta["snapshot_gb"] = -sum
-			} else if kind == "snapshots" && len(owned) > 0 && len(owned) == len(e.snapshots(n)) {
-				// Measured: the tenant's last snapshots go with the machine.
-				delta["snapshot_gb"] = -held
-			}
 		}
 		e.pluginObjectsFreed(n, m, delta)
 	case "machine_power":

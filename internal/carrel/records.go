@@ -250,7 +250,8 @@ func domainNamed(domains []domainRecord, name string) (domainRecord, bool) {
 	return domainRecord{}, false
 }
 
-// snapshotRecord is a disk snapshot and the machine configuration it was
+// snapshotRecord is a core snapshot row as releases before #663 wrote it;
+// MigrateSnapshots reads it. It is a disk snapshot and the configuration it was
 // taken with; a rollback needs that configuration unchanged.
 type snapshotRecord struct {
 	Configuration D      `json:"configuration,omitempty"`
@@ -260,10 +261,6 @@ type snapshotRecord struct {
 	OperationID   string `json:"operation_id,omitempty"`
 	State         string `json:"state,omitempty"`
 	VMID          int    `json:"vmid"`
-}
-
-func (e *Execution) snapshots(n ...int) []snapshotRecord {
-	return rowsOf[snapshotRecord](e.S, "snapshots", n...)
 }
 
 // cloudInitRecord keeps the exact cloud-init files of a VM (issue #93).

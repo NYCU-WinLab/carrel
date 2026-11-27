@@ -54,6 +54,9 @@ type PluginOperation struct {
 	Rewinds bool `json:"rewinds,omitempty"`
 	// Confirm: the caller repeats the object's name in "confirm".
 	Confirm bool `json:"confirm,omitempty"`
+	// MaxSeconds: the longest the operation may run. Zero, a negative
+	// value or one above carrel's maximum means the carrel maximum.
+	MaxSeconds int `json:"max_seconds,omitempty"`
 }
 
 // PluginQuota is a quota dimension a plugin's objects are charged to.

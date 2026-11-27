@@ -381,8 +381,8 @@ func TestTheRunningNodeDecidesAccess(t *testing.T) {
 func TestABadPluginOperationIsLeftOutWithAReason(t *testing.T) {
 	p, b := fixture(t)
 	withPlugin(t, p, b)
-	reportPlugins(p, []PluginInfo{{Name: "snapshot", Contract: 1, Supported: true, Operations: []PluginOperation{
-		{Name: "create", Params: json.RawMessage(`{"type":"object"}`)},
+	reportPlugins(p, []PluginInfo{{Name: "port", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "open", Params: json.RawMessage(`{"type":"object"}`)},
 		{Name: "steal", Params: json.RawMessage(`{"type":"object","properties":{"tenant":{"type":"string"}}}`)},
 		{Name: "peek", Params: json.RawMessage(`{"type":"object","properties":{"x":{"$ref":"file:///etc/passwd"}}}`)},
 		{Name: "loose", Member: true, Params: json.RawMessage(`{"type":"object","properties":{"vmid":{"type":"integer"}}}`)},
@@ -390,19 +390,19 @@ func TestABadPluginOperationIsLeftOutWithAReason(t *testing.T) {
 	}}})
 	cat := p.pluginCatalog()
 	left := obj(cat["left_out"])
-	for name, want := range map[string]string{"snapshot_create": "core tool", "snapshot_steal": `"tenant"`, "snapshot_peek": "may not refer to file", "snapshot_loose": `require a top-level "machine"`} {
+	for name, want := range map[string]string{"port_open": "core tool", "port_steal": `"tenant"`, "port_peek": "may not refer to file", "port_loose": `require a top-level "machine"`} {
 		if !strings.Contains(str(left[name]), want) {
 			t.Fatalf("%s: %q", name, left[name])
 		}
 	}
-	if tools := dicts(cat["tools"]); len(tools) != 1 || tools[0]["tool"] != "snapshot_inspect" {
+	if tools := dicts(cat["tools"]); len(tools) != 1 || tools[0]["tool"] != "port_inspect" {
 		t.Fatalf("tools %v", tools)
 	}
 	root := NewApp(p, testVerifier{who: person("root", true)})
 	tools, _ := listedTools(t, root, "/mcp/read-only", nil)
 	found := false
 	for _, tool := range tools {
-		found = found || tool["name"] == "snapshot_inspect"
+		found = found || tool["name"] == "port_inspect"
 	}
 	if !found {
 		t.Fatal("a read-only plugin tool is missing from the read-only endpoint")
@@ -744,5 +744,23 @@ func TestAnAdminPluginOperationActsInAnyTenant(t *testing.T) {
 	assertCode(t, p.Execute(ctx, "backup_audit", D{"machine": "theirs", "tenant": "bob"}, root), "forbidden")
 	if len(f.starts) != 1 {
 		t.Fatalf("a refused call reached the node: %v", f.starts)
+	}
+}
+
+func TestAPluginOperationRunLimitIsClamped(t *testing.T) {
+	p, b := fixture(t)
+	withPlugin(t, p, b)
+	schema := json.RawMessage(`{"type":"object"}`)
+	reportPlugins(p, []PluginInfo{{Name: "snapshot", Contract: 1, Supported: true, Operations: []PluginOperation{
+		{Name: "short", ReadOnly: true, Params: schema, MaxSeconds: 60},
+		{Name: "long", ReadOnly: true, Params: schema, MaxSeconds: 86400},
+		{Name: "none", ReadOnly: true, Params: schema},
+		{Name: "neg", ReadOnly: true, Params: schema, MaxSeconds: -5},
+	}}})
+	tools := p.pluginTools()
+	for name, want := range map[string]time.Duration{"snapshot_short": time.Minute, "snapshot_long": pluginMaxRun, "snapshot_none": pluginMaxRun, "snapshot_neg": pluginMaxRun} {
+		if tools[name] == nil || tools[name].MaxRun != want {
+			t.Fatalf("%s: %+v, want %v", name, tools[name], want)
+		}
 	}
 }

@@ -42,6 +42,19 @@ var (
 	pluginRecheck = 10.0
 )
 
+// pluginMaxRun is the longest a plugin operation may run. A plugin may
+// declare a shorter max_seconds for an operation (#708).
+const pluginMaxRun = 2 * time.Hour
+
+// pluginRunLimit is the run time limit of an operation: its declared
+// max_seconds when that is positive and below pluginMaxRun, else pluginMaxRun.
+func pluginRunLimit(op PluginOperation) time.Duration {
+	if op.MaxSeconds > 0 && time.Duration(op.MaxSeconds) < pluginMaxRun/time.Second {
+		return time.Duration(op.MaxSeconds) * time.Second
+	}
+	return pluginMaxRun
+}
+
 type pluginTool struct {
 	Name, Plugin, Operation, Description string
 	// Schema is the plugin's own schema, as the first node in the
@@ -57,6 +70,8 @@ type pluginTool struct {
 	ObjectKind, ObjectEffect, Spec string
 	// Dims are the quota dimensions the operation's object kind charges.
 	Dims []string
+	// MaxRun is the longest an operation of this tool may run.
+	MaxRun time.Duration
 	// Nodes report the plugin supported with this operation, in
 	// configuration order.
 	Nodes []string
@@ -130,7 +145,7 @@ func (p *Platform) pluginRegistry() (map[string]*pluginTool, map[string]string) 
 				} else {
 					delete(left, name)
 					kind, _ := pl.kind(op.ObjectKind)
-					tools[name] = &pluginTool{Dims: pluginKindDims(kind), Name: name, Plugin: pl.Name, Operation: op.Name, Description: op.Description,
+					tools[name] = &pluginTool{Dims: pluginKindDims(kind), MaxRun: pluginRunLimit(op), Name: name, Plugin: pl.Name, Operation: op.Name, Description: op.Description,
 						Schema: op.Params, Member: op.Member, ReadOnly: op.ReadOnly, Destructive: op.Destructive,
 						Idempotent: op.Idempotent, Toolset: op.Toolset, ObjectKind: op.ObjectKind, ObjectEffect: op.ObjectEffect,
 						Spec: pluginObjectSpec(pl, op), Nodes: []string{n.Name}}

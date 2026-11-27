@@ -272,6 +272,7 @@ and follow `next_action`. Certificate-budget waits return `waiting` and `ready_a
 infrastructure writer and resume automatically. Use `operation_retry` to resume a failure.
 `done` is true once an operation has finished. `operation_cancel` ends an operation that has changed
 nothing yet (still queued, or waiting its turn), and asks a running plugin operation to cancel; `operation_retry` runs it again later.
+If a machine migrated to another node while a plugin operation was unfinished, a retry still waits for the node that ran it, because running it on a second node could run the work twice. When the retry fails with `unsupported`, submit the request again.
 An invalid request with no remaining reservations returns `next_action=revise_request` instead:
 correct the input, preview it and submit a new request. Retrying the old operation repeats its original arguments.
 Supply a stable `idempotency_key` when submitting;
