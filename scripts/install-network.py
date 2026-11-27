@@ -194,6 +194,12 @@ def public_interface(interface, cidr, gateway, address):
     ]) + "\n"
 
 
+# A site public address in these ranges would become a tenant entry above the
+# protected-host drops. Global addresses and 198.18.0.0/15 (staging) stay allowed.
+NOT_PUBLIC = ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+              "172.16.0.0/12", "192.168.0.0/16")
+
+
 def site_layout(node, site):
     """Return this node's address, the other nodes' addresses and the exit nodes."""
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in site["nodes"]}
@@ -203,6 +209,8 @@ def site_layout(node, site):
     if not exits or any(e not in addresses for e in exits):
         raise SystemExit("exit nodes must be site nodes")
     cidr = ipaddress.IPv4Interface(site["public"]["address"])
+    if any(cidr.ip in ipaddress.IPv4Network(n) for n in NOT_PUBLIC):
+        raise SystemExit(f"public.address {cidr.ip} is in a private, tenant, loopback or link-local range")
     public = str(cidr.ip) + "/32"
     protected = [a + "/32" for a in addresses.values()] + [public]
     protected += [str(ipaddress.IPv4Network(p)) for p in site.get("protected_addresses", [])]
