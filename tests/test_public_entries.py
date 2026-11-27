@@ -76,11 +76,26 @@ def staging_rules(tmp_path, entry, public="198.18.61.10/24"):
     module = load()
     site = tmp_path / "site.json"
     if public is not None:
-        site.write_text(public if isinstance(public, str) and public.startswith("{") else json.dumps({"public": {"address": public}}))
+        site.write_text(
+            public
+            if isinstance(public, str) and public.startswith("{")
+            else json.dumps({"public": {"address": public}})
+        )
     module.SITE = site
-    m = {"tenant_n": 3, "vmid": 10301, "host": 11, "name": "app", "kind": "vm", "ip": "10.200.3.11", "mac": "02:ca:00:00:03:0b"}
+    m = {
+        "tenant_n": 3,
+        "vmid": 10301,
+        "host": 11,
+        "name": "app",
+        "kind": "vm",
+        "ip": "10.200.3.11",
+        "mac": "02:ca:00:00:03:0b",
+    }
     state = {"peers": [], "ports": [], "domains": [], "machines": [m]}
-    config = {"protected_addresses": [entry, "198.18.61.10/32"], "public_entries": [{"address": entry, "port": 443}]}
+    config = {
+        "protected_addresses": [entry, "198.18.61.10/32"],
+        "public_entries": [{"address": entry, "port": 443}],
+    }
     return module.guest_firewall(m, state, config).splitlines()
 
 
