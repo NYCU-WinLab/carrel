@@ -709,8 +709,20 @@ func (e *Execution) runPlugin() {
 			// Only a refused first start proves the run never began; any
 			// other failure leaves its fate unknown, so a retry asks after
 			// the same key.
-			if call == "start" && first && (code == "invalid" || code == "conflict" || code == "plugin_refused") {
+			switch {
+			case call == "start" && first && (code == "invalid" || code == "conflict" || code == "plugin_refused"):
 				plug["ended"], plug["refused"] = true, true
+			case call == "start" && (code == "invalid" || code == "conflict"), call == "get" && code == "not_found":
+				// The plugin shows no run of the key (#682). A plugin that
+				// lost its state shows the same while its PVE worker may
+				// still wait for its lock, so nothing proves the run ended:
+				// the machine stays fenced, and the operation can be
+				// retried. An admin who checked the node clears the fence.
+				details := D{"recovery": "retry"}
+				if plug["power"] != nil {
+					details["machine_left_stopped"] = true
+				}
+				fail("plugin_failed", fmt.Sprintf("Plugin %s has no record of the operation", name), details)
 			}
 			first = false
 			pluginRefusal(code, name, str(plug["node"]))

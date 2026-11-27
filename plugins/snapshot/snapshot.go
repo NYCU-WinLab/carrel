@@ -170,11 +170,30 @@ func done(key, state string) *pluginpb.Operation {
 }
 
 func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest) (*pluginpb.Operation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runs.dir == "" {
+		// With no state it cannot tell a key it knows: it says nothing.
+		return nil, refuse(codes.Unavailable, "%s", s.problem)
+	}
+	// A key it knows is answered before any check: carrel takes a refusal
+	// of a key it sent before as proof that no run of it goes on.
+	if !req.DryRun && req.IdempotencyKey != "" && req.Operation != "list" {
+		if old, err := s.runs.load(req.IdempotencyKey); err != nil {
+			return nil, refuse(codes.Unavailable, "read the run: %v", err)
+		} else if old != nil {
+			if old.Operation != req.Operation {
+				return nil, refuse(codes.InvalidArgument, "the idempotency key names another operation")
+			}
+			if s.problem != "" {
+				return nil, refuse(codes.Unavailable, "%s", s.problem)
+			}
+			return s.answer(ctx, old), nil
+		}
+	}
 	if s.problem != "" {
 		return nil, refuse(codes.FailedPrecondition, "%s", s.problem)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	r, err := parse(req)
 	if err != nil {
 		return nil, err
@@ -188,14 +207,6 @@ func (s *server) StartOperation(ctx context.Context, req *pluginpb.StartRequest)
 			return nil, refuse(codes.Unavailable, "list the snapshots: %v", err)
 		}
 		return done(req.IdempotencyKey, "succeeded"), nil
-	}
-	if old, err := s.runs.load(req.IdempotencyKey); err != nil {
-		return nil, refuse(codes.Unavailable, "read the run: %v", err)
-	} else if old != nil {
-		if old.Operation != r.op || old.Kind != r.kind || old.VMID != r.vmid || old.Name != r.name {
-			return nil, refuse(codes.InvalidArgument, "the idempotency key names another operation")
-		}
-		return s.answer(ctx, old), nil
 	}
 	// Checked before anything is sent: a refusal proves nothing ran.
 	snaps, err := s.pve.snapshots(ctx, r.kind, r.vmid)
@@ -365,6 +376,9 @@ func (s *server) follow(ctx context.Context, r *run) {
 func (s *server) GetOperation(ctx context.Context, req *pluginpb.GetRequest) (*pluginpb.Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.runs.dir == "" {
+		return nil, refuse(codes.Unavailable, "%s", s.problem)
+	}
 	r, err := s.runs.load(req.IdempotencyKey)
 	if err != nil {
 		return nil, refuse(codes.Unavailable, "read the run: %v", err)
