@@ -201,7 +201,10 @@ def test_the_pinned_caddy_replaces_the_running_package_caddy(monkeypatch, tmp_pa
     calls = []
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
     module.caddy(101)
+    pushes = [a[4] for a in calls if a[:2] == ("pct", "push")]
+    assert "/usr/local/bin/caddy" not in pushes and "/usr/local/bin/caddy.carrel-next" in pushes
     steps = [a[4:] for a in calls if a[:2] == ("pct", "exec")]
+    assert ("mv", "-f", "/usr/local/bin/caddy.carrel-next", "/usr/local/bin/caddy") in steps
     assert steps.index(("systemctl", "daemon-reload")) < steps.index(("systemctl", "restart", "caddy"))
 
 
