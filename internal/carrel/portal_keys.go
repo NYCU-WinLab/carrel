@@ -64,6 +64,12 @@ func (e *Execution) withPortalKeys(tool string, a, w D) D {
 	if e.P.Config.PortalKeysURL == "" {
 		return a
 	}
+	// A tenant with saved keys uses them, so its creations never ask the
+	// portal. A caller outside the tenant fails later, when it is resolved.
+	var t D
+	if attempt(func() { t = e.Tenant(w, str(a["tenant"])) }) == nil && len(rowsOf[sshKey](e.S, "keys", integer(t["n"]))) > 0 {
+		return a
+	}
 	var keys []any
 	read := false
 	fill := func(m D) D {
