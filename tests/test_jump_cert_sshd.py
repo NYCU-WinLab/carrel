@@ -1,6 +1,6 @@
 """The jump host's certificate path against a real sshd run with the production config (issue #361).
 
-The two drop-ins are the real JUMP_SSHD (bootstrap-platform.py) and JUMP_CERT_SSHD
+The two drop-ins are the real jump_sshd (bootstrap-platform.py, for B09's site file) and JUMP_CERT_SSHD
 (configure-nodes.py). Only what an unprivileged sshd cannot do is swapped: the
 command's path, the user it runs as and the keys file's path. One local account
 stands in for both `ca` and `jump`.
@@ -29,6 +29,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 OWNER, OTHER = "10.200.1.10:22", "10.200.2.10:22"
+# The B09 site file, so the drop-in carries its jump_exempt_sources.
+B09_SITE = json.loads((ROOT / "sites/b09/cluster.json").read_text())
 
 
 # Directives newer than some supported sshd. Any other rejected directive is a
@@ -92,7 +94,7 @@ def jump(tmp_path_factory):
     pub = (tmp / "key.pub").read_text().strip()
     keys.write_text(f'restrict,port-forwarding,permitopen="{OWNER}" {pub}\n')
 
-    jump_sshd = load("bootstrap-platform.py").JUMP_SSHD
+    jump_sshd = load("bootstrap-platform.py").jump_sshd(B09_SITE)
     cert_sshd = load("configure-nodes.py").JUMP_CERT_SSHD
     for text, old in (
         (jump_sshd, "/etc/carrel-jump/%u"),
@@ -200,7 +202,7 @@ def test_the_match_block_does_not_leak_into_later_files(tmp_path):
     dropins = tmp_path / "sshd_config.d"
     dropins.mkdir()
     (dropins / "carrel-jump-certs.conf").write_text(cert_sshd)
-    (dropins / "carrel-jump.conf").write_text(load("bootstrap-platform.py").JUMP_SSHD)
+    (dropins / "carrel-jump.conf").write_text(load("bootstrap-platform.py").jump_sshd(B09_SITE))
     config = tmp_path / "sshd_config"
     config.write_text(f"Include {dropins}/*.conf\nHostKey {tmp_path / 'host'}\nClientAliveInterval 37\n")
 

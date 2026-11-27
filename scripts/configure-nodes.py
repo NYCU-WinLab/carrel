@@ -94,6 +94,8 @@ AGENT_TLS = "/etc/carrel/agent"
 # "certificate_nodes" sign in with it only, and their token is refused.
 AGENT_LAB_ROOT = Path("/etc/carrel/lab-root.pem")
 AGENT_IDENTITY = Path("/etc/carrel/agent-identity")
+# agent_identity.domain: the DNS suffix of agent certificate names. A site
+# file written before the field gets the first site's suffix.
 AGENT_DOMAIN = "agent.carrel.winlab.tw"
 LISTENER_LAB_ROOT = f"{AGENT_TLS}/lab-root.pem"
 # A CA for 10 years, the listener's certificate for 825 days, renewed by any
@@ -210,8 +212,10 @@ def agent_identity(site, nodes, agents):
     identity = site.get("agent_identity")
     if not identity:
         return None
-    if not isinstance(identity, dict) or set(identity) - {"ca_url", "lab_root", "provisioner", "certificate_nodes"}:
-        raise SystemExit("agent_identity takes ca_url, lab_root, provisioner and certificate_nodes")
+    if not isinstance(identity, dict) or set(identity) - {"ca_url", "lab_root", "provisioner", "certificate_nodes", "domain"}:
+        raise SystemExit("agent_identity takes ca_url, lab_root, provisioner, certificate_nodes and domain")
+    if "domain" in identity and not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", str(identity["domain"])):
+        raise SystemExit("agent_identity.domain must be a lower-case DNS name, such as agent.carrel.example.org")
     if not re.fullmatch(r"https://[a-z0-9.-]+(:[0-9]+)?", identity.get("ca_url", "")):
         raise SystemExit("agent_identity.ca_url must be an https URL with no path, such as https://ca.winlab.tw")
     if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", identity.get("provisioner", "")):
@@ -231,7 +235,8 @@ def agent_identity(site, nodes, agents):
 
 def agent_certificate_name(site, name):
     """The one name a node's agent certificate carries."""
-    return f"{name}.{site['site']}.{AGENT_DOMAIN}"
+    domain = site.get("agent_identity", {}).get("domain", AGENT_DOMAIN)
+    return f"{name}.{site['site']}.{domain}"
 
 
 def agent_config(site, identity, name):

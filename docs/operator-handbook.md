@@ -60,6 +60,11 @@ Each script is idempotent and runs where it acts (PLAN 8.1):
    `scripts/bootstrap-platform.py --firewall` on the first exit node: it rewrites only the infra
    firewalls. The infra CTs leave through the site file's `management_interface`, which defaults
    to `underlay_interface`.
+   Optional site file fields for this step: `infra_nameserver` (CT 100 and CT 101's resolver,
+   default `1.1.1.1`) and `jump_exempt_sources` (networks many members share, such as a campus
+   NAT, that the jump host's sshd never locks out; B09: `140.113.0.0/16`).
+   `install-network.py` also takes `evpn_asn` (default 65009) and `vrf_vxlan` (default 99999)
+   for a site whose network already uses those numbers.
 3. Every node: `scripts/build-templates.py` imports the prepared images (below).
 4. CT 100: write `/etc/carrel/config.json` from `sites/<site>/config.example.json`, mode 0640.
 5. Workstation, with binaries built on the sandbox:
@@ -273,9 +278,12 @@ The site file turns it on:
   "ca_url": "https://ca.winlab.tw",
   "lab_root": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
   "provisioner": "<the carrel-agents key id>",
-  "certificate_nodes": []
+  "certificate_nodes": [],
+  "domain": "agent.carrel.winlab.tw"
 }
 ```
+
+`domain` is the suffix of each agent certificate's name, `<node>.<site>.<domain>`.
 
 With `agent_identity`, a deploy writes the lab root to `/etc/carrel/lab-root.pem` on every agent
 node and to `/etc/carrel/agent/lab-root.pem` in CT 100, adds the certificate fields to each

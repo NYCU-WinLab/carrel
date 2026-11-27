@@ -203,8 +203,6 @@ GatewayPorts no
 AllowTcpForwarding local
 LogLevel VERBOSE
 MaxStartups 10:30:100
-# Members share the campus NAT: one mistyped key must not lock out the lab.
-PerSourcePenaltyExemptList 140.113.0.0/16
 LoginGraceTime 20
 """
 
@@ -249,7 +247,19 @@ OUT ACCEPT -p tcp -dport 443
 """.replace("TENANT_GATEWAYS", "\n".join(f"10.200.{n}.1" for n in range(1, 255)))
 
 
-def jump(vmid):
+def jump_sshd(site):
+    """The jump host's sshd settings. The site file's jump_exempt_sources are
+    networks many members share, such as a campus NAT: one mistyped key there
+    must not lock everyone out."""
+    exempt = site.get("jump_exempt_sources", [])
+    if not isinstance(exempt, list) or not all(isinstance(x, str) and x for x in exempt):
+        raise SystemExit("jump_exempt_sources must be a list of networks")
+    if not exempt:
+        return JUMP_SSHD
+    return JUMP_SSHD + "PerSourcePenaltyExemptList " + ",".join(exempt) + "\n"
+
+
+def jump(vmid, site):
     """The SSH jump host: locked accounts, forwarding only. jump takes saved
     keys; ca takes lab certificates (configure-nodes.py also adds it)."""
     run("pct", "exec", str(vmid), "--", "sh", "-c",
@@ -257,7 +267,7 @@ def jump(vmid):
         "id ca >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home-dir /nonexistent ca; "
         "install -d -m 755 /etc/carrel-jump; touch /etc/carrel-jump/jump; chmod 644 /etc/carrel-jump/jump")
     conf = Path("/tmp/carrel-jump-sshd.conf")
-    conf.write_text(JUMP_SSHD)
+    conf.write_text(jump_sshd(site))
     run("pct", "push", str(vmid), str(conf), "/etc/ssh/sshd_config.d/carrel-jump.conf", "--perms", "644")
     run("pct", "exec", str(vmid), "--", "sshd", "-t")
     # Restart, not reload: ssh.socket holds port 22 (PLAN 15.15).
@@ -390,8 +400,10 @@ iface vmbr98 inet static
         run("ifup", "vmbr98")
     infra_firewall(config, host)
     template = ct_template_file(*DEBIAN_CT, config)
-    ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, storage, template)
-    ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template)
+    ct(100, "carrel-control", "10.200.0.3", "vmbr98", "10.200.0.1", 2048, a.admin_key, storage, template,
+       nameserver=config.get("infra_nameserver", "1.1.1.1"))
+    ct(101, "carrel-gateway", "10.200.0.2", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template,
+       nameserver=config.get("infra_nameserver", "1.1.1.1"))
     packages(100, "control")
     packages(101, "gateway")
     caddy(101)
@@ -401,7 +413,7 @@ iface vmbr98 inet static
         ct(102, "carrel-jump", "10.200.0.4", "vmbr98", "10.200.0.1", 512, a.admin_key, storage, template,
            nameserver="10.200.0.2", firewall=True)
         packages(102, "jump")
-        jump(102)
+        jump(102, config)
         infra.append(102)
     if config.get("fetch"):
         # The fetch container (PLAN 7.8) on the fetch network t255, which the
