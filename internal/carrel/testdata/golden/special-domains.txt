@@ -327,9 +327,9 @@ m domains {"grant":"22a264ee63bc826a","id":"e85f440b865d705e","name":"www.lab.ex
 m record video.winlab.tw null
 m record *.lab.winlab.tw [{"comment":"carrel:b09:grant:4c0e071832d52769","content":"140.113.60.184","id":"r1","name":"*.lab.winlab.tw","proxied":false,"ttl":120,"type":"A"}]
 m record x.taken.winlab.tw [{"content":"140.113.194.230","id":"old2","name":"x.taken.winlab.tw","type":"A"}]
-db tenants n=1 subject=user:alice slug=alice quota={"disk_gb":200,"domains":10,"frozen_gb":200,"function_gb":20,"functions":20,"images_gb":20,"ips":8,"machines":8,"memory_mb":32768,"networks":4,"public_ports":10,"vcpu":16} status=active
-db tenants n=2 subject=user:bob slug=bob quota={"disk_gb":200,"domains":10,"frozen_gb":200,"function_gb":20,"functions":20,"images_gb":20,"ips":8,"machines":8,"memory_mb":32768,"networks":4,"public_ports":10,"vcpu":16} status=active
-db tenants n=3 subject=winlab-projects/shared slug=shared quota={"disk_gb":200,"domains":10,"frozen_gb":200,"function_gb":20,"functions":20,"images_gb":20,"ips":8,"machines":8,"memory_mb":32768,"networks":4,"public_ports":10,"vcpu":16} status=active
+db tenants n=1 subject=user:alice slug=alice quota={"disk_gb":200,"domains":10,"frozen_gb":200,"function_gb":20,"functions":20,"images_gb":20,"ips":8,"machines":8,"memory_mb":32768,"networks":4,"public_ports":10,"vcpu":16} status=active grace_started_at=null grace_reason=null
+db tenants n=2 subject=user:bob slug=bob quota={"disk_gb":200,"domains":10,"frozen_gb":200,"function_gb":20,"functions":20,"images_gb":20,"ips":8,"machines":8,"memory_mb":32768,"networks":4,"public_ports":10,"vcpu":16} status=active grace_started_at=null grace_reason=null
+db tenants n=3 subject=winlab-projects/shared slug=shared quota={"disk_gb":200,"domains":10,"frozen_gb":200,"function_gb":20,"functions":20,"images_gb":20,"ips":8,"machines":8,"memory_mb":32768,"networks":4,"public_ports":10,"vcpu":16} status=active grace_started_at=null grace_reason=null
 db objects kind=delegated_names id=a.b.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"7a42e3892368f826","id":"a.b.d.lab.example","tenant_n":1,"zone":"lab.example"}
 db objects kind=delegated_names id=n0.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"7a42e3892368f826","id":"n0.d.lab.example","tenant_n":1,"zone":"lab.example"}
 db objects kind=delegated_names id=n1.d.lab.example tenant=1 data={"first_at":"<time:int>","grant":"7a42e3892368f826","id":"n1.d.lab.example","tenant_n":1,"zone":"lab.example"}
