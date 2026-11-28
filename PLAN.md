@@ -568,6 +568,14 @@ public interface. Proxmox creates VXLAN devices that listen on every address and
 MACs, so without this filter anyone who can reach a node could inject frames into a tenant network
 by guessing its VNI. VNIs are not secrets; this filter is the protection.
 
+The limit of this protection: on a node network that other hosts share, any host can forge a
+peer's underlay address, so the source check plus the interface does not stop it. The optional
+per-node `mac` in the site file closes the gap for hosts that do not also forge the peer's MAC:
+the accept rule then matches the source MAC as well as the source address. It works on the same
+layer 2 segment only, and a host that forges the MAC too still passes. Two fixes are stronger for
+a shared network: a dedicated VLAN or interface for the node network (option 2), and an encrypted
+underlay such as WireGuard between nodes (option 3), where a forged packet fails authentication.
+
 ### 6.4 Ingress
 
 - **SSH and opened ports**: DNAT on the exit node from the tenant's public port block to the

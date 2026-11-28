@@ -95,6 +95,13 @@ Step 4 and the release stay separate. The steps one by one (PLAN 8.1):
    Optional site file fields for this step: `infra_nameserver` (CT 100 and CT 101's resolver,
    default `1.1.1.1`) and `jump_exempt_sources` (networks many members share, such as a campus
    NAT, that the jump host's sshd never locks out; B09: `140.113.0.0/16`).
+   Each entry in `nodes` may carry an optional `mac`, the node's underlay MAC in lowercase
+   `aa:bb:cc:dd:ee:ff` form. When every peer has one, the VXLAN and BGP accept rules match the
+   peer's source MAC as well as its address, so a host on a shared node network cannot pass by
+   forging only the address. If some peers lack a `mac`, the rules stay address only and
+   `install-network.py` warns. The MAC check covers the same layer 2 segment only and does not
+   stop a host that forges the MAC too; on a shared network prefer a dedicated VLAN or interface,
+   or an encrypted underlay (PLAN 6.3).
    `install-network.py` also takes `evpn_asn` (default 65009) and `vrf_vxlan` (default 99999)
    for a site whose network already uses those numbers.
 3. Every node: `scripts/build-templates.py` imports the prepared images (below).
