@@ -206,7 +206,7 @@ func (e *Execution) importStart(a D, c importContext, plan D) D {
 	job := D{"source": c.Source, "guest": c.VMID, "node": c.SourceNode, "api": c.API, "kind": c.Kind, "running": c.Running,
 		"cloud_init_key": cloudInitKey, "hop": hop, "target_node": c.Target.Name, "target_vmid": integer(obj(obj(plan["plan"])["target"])["vmid"])}
 	spec := D{"name": name, "kind": c.Kind, "image": "imported", "cpu": c.CPU, "memory_mb": c.Memory, "disk_gb": c.DiskGiB, "node": c.Target.Name,
-		"public_ssh": false, "imported": true, "import": pickImport(job),
+		"public_ssh": false, "imported": true, "nested_virt": c.Kind == "vm" && boolean(a["nested_virt"]), "import": pickImport(job),
 		// An imported guest has no carrel reporter: unmanaged, so its
 		// readiness follows SSH alone, as the verification does.
 		"guest_management": 0}

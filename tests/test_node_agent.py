@@ -575,9 +575,11 @@ def test_migrate_unlinks_a_linked_clone_through_shared_storage_and_is_idempotent
     # The old node removes its copy of the cloud-init files only once the VM left.
     monkeypatch.setattr(module, "SNIPPETS", tmp_path)
     (tmp_path / "carrel-10100-user.json").write_text("u")
+    (tmp_path / "carrel-10100-vendor.json").write_text("v")
     monkeypatch.setattr(module, "NODE", "carrel01")
     module.cloud_init_remove({"machine": vm})
     assert not (tmp_path / "carrel-10100-user.json").exists()
+    assert not (tmp_path / "carrel-10100-vendor.json").exists()
     monkeypatch.setattr(module, "NODE", "carrel02")
     with pytest.raises(ValueError):
         module.cloud_init_remove({"machine": vm})
@@ -594,6 +596,18 @@ def test_delete_refuses_a_machine_that_moved_to_another_node(monkeypatch, tmp_pa
         module.action({"machine": vm, "action": "delete", "confirm": "linked"})
     (nodes / "carrel02" / "qemu-server" / "10100.conf").unlink()
     assert module.action({"machine": vm, "action": "delete", "confirm": "linked"}) == {"state": "absent"}
+
+
+def test_delete_removes_the_vendor_data_of_an_imported_vm(monkeypatch):
+    module = load("node-agent.py")
+    vm = dict(MACHINE, vmid=10100, kind="vm", name="linked")
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {})
+    monkeypatch.setattr(module, "run", lambda *a, **k: "status: stopped")
+    monkeypatch.setattr(module.Path, "exists", lambda self: str(self) == "/etc/pve/qemu-server/10100.conf")
+    removed = []
+    monkeypatch.setattr(module.Path, "unlink", lambda self, missing_ok=False: removed.append(str(self)))
+    module.action({"machine": vm, "action": "delete", "confirm": "linked"})
+    assert "/var/lib/vz/snippets/carrel-10100-vendor.json" in removed
 
 
 def test_jump_sync_accepts_only_forwarding_lines_to_tenant_ssh():
@@ -3110,6 +3124,7 @@ def test_import_network_normalizes_net0_and_the_address(monkeypatch, kind):
     monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
     monkeypatch.setattr(module, "first_firewall", lambda m: firewall.append(m["vmid"]))
     monkeypatch.setattr(module, "guest_mtu", lambda m: 1450)
+    monkeypatch.setattr(module, "storage_id", lambda: "tank")
     assert module.import_network({"machine": m}) == {"state": "done"}
     assert firewall == [10100]
     [call] = calls
@@ -3124,6 +3139,12 @@ def test_import_network_normalizes_net0_and_the_address(monkeypatch, kind):
             "ip=10.200.1.10/24,gw=10.200.1.1",
             "--nameserver",
             "10.200.0.2",
+            "--ciupgrade",
+            "0",
+            "--cpu",
+            "x86-64-v3",
+            "--ide2",
+            "tank:cloudinit",
         )
     else:
         assert call == (
@@ -3250,6 +3271,125 @@ def test_import_verify_refuses_a_guest_with_a_second_nic(monkeypatch):
     with pytest.raises(ValueError, match="net1"):
         module.import_verify({"machine": {**MACHINE, "kind": "vm"}})
     assert calls == []
+
+
+def import_cleanup(module, monkeypatch, kind, cfg, **machine):
+    m = {**MACHINE, "kind": kind, **machine}
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    monkeypatch.setattr(module, "located", lambda m: "pve1")
+    monkeypatch.setattr(module, "owned", lambda m, **kw: cfg)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    monkeypatch.setattr(module, "first_firewall", lambda m: None)
+    monkeypatch.setattr(module, "guest_mtu", lambda m: 1450)
+    monkeypatch.setattr(module, "storage_id", lambda: "tank")
+    monkeypatch.setattr(
+        module, "write", lambda path, data, mode=0o640: calls.append(("write", str(path), data))
+    )
+    module.import_network({"machine": m})
+    return calls
+
+
+OLD_VM = {
+    "net0": "virtio=aa:bb:cc:dd:ee:ff,bridge=vmbr0",
+    "cicustom": "user=old:snippets/u.yaml",
+    "hookscript": "old:snippets/hook.pl",
+    "hostpci0": "0000:01:00.0",
+    "usb1": "host=1-1",
+    "cpu": "host",
+}
+
+
+def test_import_network_cleans_a_vm(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", OLD_VM)
+    [(_, path, data)] = [c for c in calls if c[0] == "write"]
+    assert path == "/var/lib/vz/snippets/carrel-10100-vendor.json"
+    assert "block-rpcs=" in data
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert qm[qm.index("--cicustom") + 1] == "vendor=local:snippets/carrel-10100-vendor.json"
+    assert qm[qm.index("--cpu") + 1] == "x86-64-v3"
+    assert qm[qm.index("--delete") + 1] == "hookscript,hostpci0,usb1"
+    assert qm[qm.index("--ciupgrade") + 1] == "0"
+
+
+def test_import_network_keeps_the_cpu_type_for_nested_virt(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", OLD_VM, nested_virt=True)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert "--cpu" not in qm
+
+
+def test_import_network_leaves_a_clean_vm_alone(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", {"net0": "virtio=aa:bb:cc:dd:ee:ff,bridge=vmbr0"})
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert "--delete" not in qm and "--cicustom" not in qm
+    assert not [c for c in calls if c[0] == "write"]
+
+
+def test_import_network_drops_the_hookscript_of_a_container(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(
+        module,
+        monkeypatch,
+        "ct",
+        {"net0": "name=eth0,bridge=vmbr0", "hookscript": "old:snippets/h.pl", "usb0": "x"},
+    )
+    [pct] = [c for c in calls if c[0] == "pct"]
+    assert pct[pct.index("--delete") + 1] == "hookscript"
+    assert "--cpu" not in pct and "--cicustom" not in pct
+
+
+def test_import_network_adds_one_cloud_init_drive(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", OLD_VM)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert qm[qm.index("--ide2") + 1] == "tank:cloudinit"
+    # A retry finds the drive Proxmox made and adds no second one.
+    made = {**OLD_VM, "ide2": "tank:vm-10100-cloudinit,media=cdrom"}
+    calls = import_cleanup(module, monkeypatch, "vm", made)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert not [a for a in qm if str(a).endswith(":cloudinit")]
+
+
+def test_import_network_drops_the_old_cloud_init_credentials(monkeypatch):
+    module = load("node-agent.py")
+    old = {**OLD_VM, "ciuser": "lab", "sshkeys": "ssh-ed25519%20AAAA%20admin", "cipassword": "$5$x"}
+    calls = import_cleanup(module, monkeypatch, "vm", old)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert qm[qm.index("--delete") + 1] == "cipassword,hookscript,hostpci0,sshkeys,usb1"
+    assert "ciuser" not in qm[qm.index("--delete") + 1]
+    # A retry, the keys gone, deletes nothing for them.
+    calls = import_cleanup(module, monkeypatch, "vm", {"net0": OLD_VM["net0"], "ciuser": "lab"})
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert "--delete" not in qm
+
+
+def test_import_network_turns_off_the_cloud_init_upgrade(monkeypatch):
+    module = load("node-agent.py")
+    # Proxmox defaults ciupgrade to 1; an explicit 1 or a retry with 0 set
+    # both end with 0, so the first boot upgrades no package.
+    for old in (OLD_VM, {**OLD_VM, "ciupgrade": 1}, {**OLD_VM, "ciupgrade": 0}):
+        calls = import_cleanup(module, monkeypatch, "vm", old)
+        [qm] = [c for c in calls if c[0] == "qm"]
+        assert qm[qm.index("--ciupgrade") + 1] == "0"
+        assert "ciupgrade" not in qm[qm.index("--delete") + 1]
+    calls = import_cleanup(module, monkeypatch, "ct", {"net0": "name=eth0,bridge=vmbr0"})
+    [pct] = [c for c in calls if c[0] == "pct"]
+    assert "--ciupgrade" not in pct
+
+
+def test_import_network_puts_the_cloud_init_drive_in_a_free_slot(monkeypatch):
+    module = load("node-agent.py")
+    cd = {**OLD_VM, "ide2": "none,media=cdrom", "ide0": "tank:vm-10100-disk-0"}
+    calls = import_cleanup(module, monkeypatch, "vm", cd)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert qm[qm.index("--ide1") + 1] == "tank:cloudinit"
+    assert "--ide2" not in qm
+    full = {**OLD_VM, **{f"ide{i}": "x" for i in range(4)}, **{f"sata{i}": "x" for i in range(6)}}
+    with pytest.raises(ValueError, match="free"):
+        import_cleanup(module, monkeypatch, "vm", full)
 
 
 def test_import_network_refuses_a_guest_on_another_node(monkeypatch):
