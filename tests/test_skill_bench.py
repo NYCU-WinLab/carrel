@@ -88,7 +88,7 @@ def test_result_file_shape_and_masking(tmp_path, monkeypatch):
         tmp_path,
         [
             call({"machine": "dev1"}),
-            call({"ssh_key": "SECRETVALUE"}),
+            call({"api_token": "SECRETVALUE"}),
             {"type": "result", "result": "done", "total_cost_usd": 0.5},
         ],
     )

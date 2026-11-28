@@ -41,6 +41,7 @@ URL = os.environ.get("CARREL_URL", "https://carrel.zhanyongxiang.com").rstrip("/
 STG_ROOT = os.environ.get("STG_ROOT", "root@10.10.11.110")
 STG_CT = os.environ.get("STG_CT", "100")
 SSH_HOST = os.environ.get("BENCH_SSH_HOST", "198.18.61.10")
+SSH_WAIT = 120
 CONFIG = "/etc/carrel/config.json"
 
 
@@ -193,7 +194,15 @@ def ssh_ok(port):
         f"user@{SSH_HOST}",
         "true",
     ]
-    return subprocess.run(cmd, capture_output=True, timeout=40, check=False).returncode == 0
+    # A reset reboots the VM, and the agent may finish before sshd is back: a member would retry, so
+    # the oracle keeps trying for SSH_WAIT seconds before it calls access lost.
+    deadline = time.monotonic() + SSH_WAIT
+    while True:
+        if subprocess.run(cmd, capture_output=True, timeout=40, check=False).returncode == 0:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(5)
 
 
 class Oracle(BaseHTTPRequestHandler):

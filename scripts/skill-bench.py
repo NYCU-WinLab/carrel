@@ -228,7 +228,8 @@ def summarize(lines):
 
 def admin_get(url, token, path):
     req = urllib.request.Request(url.rstrip("/") + path, headers={"Authorization": f"Bearer {token}"} if token else {})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    # The oracle may wait for a rebooted machine before it answers.
+    with urllib.request.urlopen(req, timeout=300) as resp:
         return json.load(resp)
 
 
