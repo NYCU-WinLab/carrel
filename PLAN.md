@@ -2057,8 +2057,24 @@ one exists, changes are checked on disposable tenant machines.
 
 - **Sources**: a Proxmox host registered with `source_add` (an API token on that host), moved with
   Proxmox's `qm remote-migrate` or `pct remote-migrate`, which leaves the source stopped as a
-  rollback; or a vzdump archive, restored. Proxmox marks remote migration experimental, so staging
-  proves it on test guests before M9, and the archive path is the fallback.
+  rollback. Proxmox marks remote migration experimental; staging proved it on test guests
+  (anvil, PVE 9.2.21, `local-lvm`, to carrel-stg01, PVE 9.3.1, `tank`, ZFS), so it is the default
+  path. The vzdump archive restore stays a documented fallback and is not built for M9.
+- **Storage rules**: ZFS imports only the `zfs` stream format and LVM-thin exports only
+  `raw+size`. A running VM's disks move over the NBD mirror, which ignores format. Every disk
+  copied offline uses `disk-import` and needs a format both sides share: the cloud-init disk,
+  every disk of a stopped VM, and every CT volume. So, by the source's storage type (checked
+  first, `dry_run` reports it):
+  - ZFS to ZFS: migrate directly to `tank`.
+  - Any other source: drop the cloud-init disk before migrating (carrel writes its own, see
+    Normalization); land every offline volume on a directory storage on the target; then
+    `move-volume` (`qm move-disk` or `pct move-volume`) each one to `tank` on the target.
+  - A running VM without a cloud-init disk (or with it dropped) migrates online to `tank` in one
+    step; staging saw 38 ms of downtime.
+- **Rollback state**: the source ends stopped with `lock: migrate`. This is the rollback state
+  of section 10.7. Starting it again on the old host needs `qm unlock` (`pct unlock` for a CT).
+- **Stopping a CT**: `pct shutdown` timed out on a Debian 13 CT without `nesting=1`, and
+  `pct stop` worked. The import reports whether it used `pct shutdown` or `pct stop`.
 - **Plan first**: `dry_run` returns the target VMID and address, disk sizes, the quota it takes,
   every configuration change, and warnings. The call with `confirm` runs it.
 - **Normalization**: the NIC moves to the tenant's primary network with `firewall=1`, `mtu=1`, the
