@@ -3124,6 +3124,8 @@ def test_import_network_normalizes_net0_and_the_address(monkeypatch, kind):
             "ip=10.200.1.10/24,gw=10.200.1.1",
             "--nameserver",
             "10.200.0.2",
+            "--cpu",
+            "x86-64-v3",
         )
     else:
         assert call == (
@@ -3135,6 +3137,72 @@ def test_import_network_normalizes_net0_and_the_address(monkeypatch, kind):
             "--nameserver",
             "10.200.0.2",
         )
+
+
+def import_cleanup(module, monkeypatch, kind, cfg, **machine):
+    m = {**MACHINE, "kind": kind, **machine}
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    monkeypatch.setattr(module, "located", lambda m: "pve1")
+    monkeypatch.setattr(module, "owned", lambda m, **kw: cfg)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    monkeypatch.setattr(module, "first_firewall", lambda m: None)
+    monkeypatch.setattr(module, "guest_mtu", lambda m: 1450)
+    monkeypatch.setattr(
+        module, "write", lambda path, data, mode=0o640: calls.append(("write", str(path), data))
+    )
+    module.import_network({"machine": m})
+    return calls
+
+
+OLD_VM = {
+    "net0": "virtio=aa:bb:cc:dd:ee:ff,bridge=vmbr0",
+    "cicustom": "user=old:snippets/u.yaml",
+    "hookscript": "old:snippets/hook.pl",
+    "hostpci0": "0000:01:00.0",
+    "usb1": "host=1-1",
+    "cpu": "host",
+}
+
+
+def test_import_network_cleans_a_vm(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", OLD_VM)
+    [(_, path, data)] = [c for c in calls if c[0] == "write"]
+    assert path == "/var/lib/vz/snippets/carrel-10100-vendor.json"
+    assert "block-rpcs=" in data
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert qm[qm.index("--cicustom") + 1] == "vendor=local:snippets/carrel-10100-vendor.json"
+    assert qm[qm.index("--cpu") + 1] == "x86-64-v3"
+    assert qm[qm.index("--delete") + 1] == "hookscript,hostpci0,usb1"
+
+
+def test_import_network_keeps_the_cpu_type_for_nested_virt(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", OLD_VM, nested_virt=True)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert "--cpu" not in qm
+
+
+def test_import_network_leaves_a_clean_vm_alone(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(module, monkeypatch, "vm", {"net0": "virtio=aa:bb:cc:dd:ee:ff,bridge=vmbr0"})
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert "--delete" not in qm and "--cicustom" not in qm
+    assert not [c for c in calls if c[0] == "write"]
+
+
+def test_import_network_drops_the_hookscript_of_a_container(monkeypatch):
+    module = load("node-agent.py")
+    calls = import_cleanup(
+        module,
+        monkeypatch,
+        "ct",
+        {"net0": "name=eth0,bridge=vmbr0", "hookscript": "old:snippets/h.pl", "usb0": "x"},
+    )
+    [pct] = [c for c in calls if c[0] == "pct"]
+    assert pct[pct.index("--delete") + 1] == "hookscript"
+    assert "--cpu" not in pct and "--cicustom" not in pct
 
 
 def test_import_network_refuses_a_guest_on_another_node(monkeypatch):

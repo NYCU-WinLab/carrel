@@ -1834,6 +1834,19 @@ def ca_files(m, user):
     ]
 
 
+GUEST_BLOCKED_RPCS = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
+
+
+def vendor_data(m):
+    """Carrel's vendor data for an imported VM (PLAN 10.6, #919): it replaces
+    the old `cicustom`, so the guest agent keeps the same blocked commands as
+    every carrel VM. It carries no user, key or network of the old cluster."""
+    name = f"carrel-{m['vmid']}-vendor.json"
+    data = {"write_files": [{"path": "/etc/qemu/qemu-ga.conf", "content": "[general]\nblock-rpcs=" + GUEST_BLOCKED_RPCS + "\n"}]}
+    write("/var/lib/vz/snippets/" + name, "#cloud-config\n" + json.dumps(data), 0o600)
+    return "vendor=local:snippets/" + name
+
+
 def cloud_init(m, *, prepared=False, environment="development"):
     name = f"carrel-{m['vmid']}-user.json"
     if m.get("service_ports"):
@@ -1846,7 +1859,7 @@ def cloud_init(m, *, prepared=False, environment="development"):
         write("/var/lib/vz/snippets/" + name, user, 0o600)
         return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
     keys(m["ssh_keys"])
-    blocked = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
+    blocked = GUEST_BLOCKED_RPCS
     data = {
         "hostname": m["name"],
         "manage_etc_hosts": True,
@@ -2321,7 +2334,10 @@ def import_network(req):
     used DHCP gets the static address instead of a reservation. No `rate`:
     the NIC limits were removed (PLAN 12.4). The guest firewall file carries
     `ipfilter` and the tenant's rules. The guest stays stopped; every step
-    sets the same values again, so a retry is safe."""
+    sets the same values again, so a retry is safe. The same call (#919)
+    removes the foreign keys of the old cluster (hookscript, host PCI and USB
+    mappings), replaces an old `cicustom` with carrel's vendor data and sets
+    the CPU type to `x86-64-v3`, unless the owner asked for `nested_virt`."""
     m = req["machine"]
     vmid = machine(m)
     if located(m) != NODE:
@@ -2329,16 +2345,20 @@ def import_network(req):
     n = m["tenant_n"]
     cfg = owned(m)
     gateway = f"10.200.{n}.1"
+    foreign = sorted(k for k in cfg if k == "hookscript" or (m["kind"] == "vm" and re.fullmatch(r"hostpci[0-9]+|usb[0-9]+", k)))
+    drop = ["--delete", ",".join(foreign)] if foreign else []
     if m["kind"] == "vm":
+        cpu = [] if m.get("nested_virt") else ["--cpu", "x86-64-v3"]
+        vendor = ["--cicustom", vendor_data(m)] if cfg.get("cicustom") else []
         run("qm", "set", vmid, "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
-            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2")
+            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2", *cpu, *vendor, *drop)
     else:
         # The guest keeps its interface name: its own network setup names it.
         found = re.search(r"(?:^|,)name=([a-z][a-z0-9]{0,14})(?:,|$)", str(cfg.get("net0", "")))
         name = found.group(1) if found else "eth0"
         run("pct", "set", vmid, "--net0",
             f"name={name},bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu={guest_mtu(m)},ip={m['ip']}/24,gw={gateway},type=veth",
-            "--nameserver", "10.200.0.2")
+            "--nameserver", "10.200.0.2", *drop)
     first_firewall(m)
     return {"state": "done"}
 
