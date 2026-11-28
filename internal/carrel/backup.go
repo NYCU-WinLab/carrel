@@ -117,6 +117,13 @@ func (p *Platform) Backup(ctx context.Context, configDir string) (result D, err 
 			return nil, e
 		}
 	}
+	// Source secrets too (sources.go).
+	sources := p.execution(ctx).sourceDir()
+	if _, e = os.Stat(sources); e == nil {
+		if e = add(sources, "sources"); e != nil {
+			return nil, e
+		}
+	}
 	// Node files a reconcile cannot derive (PLAN 15.15 gap 8). A node that
 	// does not answer is reported; the backup of everything else still lands.
 	missing := []any{}

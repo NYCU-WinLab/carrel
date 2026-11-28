@@ -3282,6 +3282,59 @@
       }
     },
     {
+      "name": "source_add",
+      "description": "Admin: register a Proxmox host as a source machine_import can bring guests from, or give a registered source a new token. carrel pins the host's certificate by fingerprint, checks the token by reading the version and the storage list, and records the storage types. The token secret is kept as a server secret, never in results, logs or the audit log.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "api_url": {
+            "type": "string",
+            "minLength": 9,
+            "maxLength": 253,
+            "description": "https://host or https://host:8006 of the Proxmox API."
+          },
+          "token_id": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 200,
+            "description": "API token id, user@realm!tokenname."
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 100,
+            "description": "API token secret. Omit it to use the secret an admin placed in source_dir/<name>.secret on the control plane, so that it never passes through a client."
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$",
+            "description": "SHA-256 fingerprint of the host's TLS certificate, as Proxmox shows it."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Preview only: no resource writes or reservations (audit is recorded). Returns quota_before, delta, quota_after, requirements and ready_to_apply. No follow-up list/quota/key checks are needed to prove it made no changes."
+          }
+        },
+        "required": [
+          "name",
+          "api_url",
+          "token_id",
+          "fingerprint"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "zone_add",
       "description": "Admin: add a Cloudflare DNS zone special domains can live in, or give an added zone a new token or tenant list. carrel checks that the token sees exactly this zone and can write a record, then keeps the token as a server secret, never in results or the audit log. tenants limits the zone to those tenant slugs; omitted, every tenant may request names in it.",
       "inputSchema": {
@@ -5669,6 +5722,7 @@
     "tenant_list",
     "tenant_suspend",
     "usage_report",
+    "source_add",
     "zone_add",
     "zone_list",
     "zone_remove"
@@ -5730,6 +5784,7 @@
     "vip_remove",
     "vpn_client_add",
     "vpn_client_remove",
+    "source_add",
     "zone_add",
     "zone_remove",
     "function_deploy",
@@ -6005,6 +6060,7 @@
       "tenant_list",
       "tenant_suspend",
       "usage_report",
+      "source_add",
       "zone_add",
       "zone_list",
       "zone_remove"
