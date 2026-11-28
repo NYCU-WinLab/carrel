@@ -155,6 +155,10 @@ func TestAMachineInstalledFromAnISO(t *testing.T) {
 	if m["state"] != "installing" || install["media"] != "inserted" || install["gateway"] != "10.200.1.1" || install["dns"] != "10.200.0.2" {
 		t.Fatal(m)
 	}
+	// No DHCP on the primary network: the installer is given these four values to type in.
+	if ip := str(m["ip"]); install["address"] != ip+"/24" || install["gateway"] != ip[:strings.LastIndex(ip, ".")]+".1" || install["dns"] != "10.200.0.2" || integer(install["mtu"]) != 1450 {
+		t.Fatal(install)
+	}
 	var create D
 	settleGateway(t, p)
 	mu.Lock()
