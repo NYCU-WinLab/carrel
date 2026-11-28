@@ -90,6 +90,33 @@ func TestAMoveThatFailsAfterTheMigrationKeepsTheNewNode(t *testing.T) {
 	}
 }
 
+// A migrate that fails after the cutover answers moved with a warning; the
+// warning ends in the operation result (#878).
+func TestAMigrateWarningEndsInTheOperationResult(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		switch r["op"] {
+		case "migrate":
+			return D{"state": "moved", "warning": "qm migrate failed: could not remove the old disk"}, nil
+		case "migrate_prepare", "migrate_finish", "cloud_init_remove":
+			return D{"state": "done"}, nil
+		case "cloud_init_read":
+			return D{"cloud_init": D{"user": "u", "network": "n"}}, nil
+		}
+		return inner(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	runQueue(p)
+	r := p.Execute(context.Background(), "machine_migrate", D{"tenant": "alice", "machine": "web", "node": "carrel02"}, person("root", true))
+	op := obj(r["operation"])
+	warnings := dicts(obj(op["result"])["warnings"])
+	if op["state"] != "succeeded" || p.Store.Get("machines", "10100")["node"] != "carrel02" || len(warnings) != 1 ||
+		warnings[0]["code"] != "migration_cleanup_failed" || warnings[0]["message"] != "qm migrate failed: could not remove the old disk" {
+		t.Fatal("the warning must reach the operation result", r)
+	}
+}
+
 func TestOtherJobsOnAMachineWaitWhileItMoves(t *testing.T) {
 	p, b, _ := nodeFixture(t)
 	inner := b.call

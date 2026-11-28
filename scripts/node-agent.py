@@ -2220,13 +2220,47 @@ def migrate(req):
             if entry is None or entry["type"] not in ("nfs", "cifs") or "images" not in entry.get("content", ""):
                 raise ValueError("moving a linked clone needs the site's shared images storage")
             run("qm", "disk", "move", vmid, "scsi0", transit, "--format", "qcow2", "--delete", "1", "--bwlimit", bw, timeout=4 * 3600)
-        run("qm", "migrate", vmid, target, "--with-local-disks", "--bwlimit", bw, *(["--online"] if running else []), timeout=4 * 3600)
+        command = ("qm", "migrate", vmid, target, "--with-local-disks", "--bwlimit", bw, *(["--online"] if running else []))
     else:
         running = "running" in run("pct", "status", vmid)
-        run("pct", "migrate", vmid, target, "--bwlimit", bw, *(["--restart"] if running else []), timeout=4 * 3600)
+        command = ("pct", "migrate", vmid, target, "--bwlimit", bw, *(["--restart"] if running else []))
+    warning = None
+    try:
+        run(*command, timeout=4 * 3600)
+    except CommandFailure as failure:
+        # Proxmox can fail after the cutover, while it removes the old disk
+        # copy. A machine that already sits on the target moved; the failure
+        # is a warning, so the control plane records the new node (issue #878).
+        if located(m) != target:
+            raise
+        # The Proxmox output stays in the journal: the warning travels to tenants.
+        log_warning(f"migrate {vmid} to {target} failed after the cutover: {failure}")
+        warning = f"Proxmox reported a failure after the machine reached {target}; a copy of its disk may remain on {NODE}, see the carrel-node-agent journal there"
+        if running and not guest_running(m, target):
+            warning = f"The machine did not run again on {target}. " + warning
     if located(m) != target:
         raise CommandFailure("migration did not reach the target")
-    return {"state": "moved"}
+    return {"state": "moved", "warning": warning} if warning else {"state": "moved"}
+
+
+def guest_running(m, node):
+    """Whether the machine runs on that node; False when the read fails."""
+    kind = "qemu" if m["kind"] == "vm" else "lxc"
+    try:
+        return pve_get(f"/nodes/{node}/{kind}/{machine(m)}/status/current").get("status") == "running"
+    except (OSError, ValueError, RuntimeError, http.client.HTTPException):
+        return False
+
+
+def log_warning(message):
+    """A warning to the node journal as carrel-node-agent."""
+    import syslog
+
+    try:
+        syslog.openlog("carrel-node-agent", 0, syslog.LOG_DAEMON)
+        syslog.syslog(syslog.LOG_WARNING, message)
+    except OSError:
+        pass  # a node without /dev/log still answers
 
 
 def migrate_finish(req):

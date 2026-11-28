@@ -136,12 +136,18 @@ func (e *Execution) PerformMigration() {
 	}()
 	bw := e.P.Config.MigrationBwlimitKiB
 	e.Call(D{"op": "migrate_prepare", "machine": m, "cloud_init": e.cloudInitFiles(m)}, to.Target)
-	e.Call(D{"op": "migrate", "machine": m, "target": to.Name, "bwlimit": bw}, from.Target)
+	moved := obj(e.Call(D{"op": "migrate", "machine": m, "target": to.Name, "bwlimit": bw}, from.Target))
 	// The machine runs on the target now: record it before the disk goes
 	// back to local storage, so a failure there leaves the record right.
 	func() {
 		e.P.writer.Lock()
 		defer e.P.writer.Unlock()
+		// Proxmox failed after the cutover, for example while it removed the
+		// old disk copy: kept for the result, so the copy is not silent (#878).
+		if warning := str(moved["warning"]); warning != "" {
+			e.Op["migration_warning"] = warning
+			e.P.Operations.Save(e.Op)
+		}
 		if current := e.S.Get("machines", str(plan["vmid"])); current != nil {
 			current["node"] = to.Name
 			e.Put("machines", current["vmid"], integer(current["tenant_n"]), current)
@@ -180,7 +186,11 @@ func (e *Execution) FinishMigration(t D) D {
 	// The files on the old node are a copy: best effort, collected again by
 	// the next move from there.
 	_ = attempt(func() { e.Call(D{"op": "cloud_init_remove", "machine": m}, from.Target) })
-	return D{"machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "from": plan["from"], "to": plan["to"], "state": "moved"}
+	r := D{"machine": e.PublicMachine(m, e.ports(integer(t["n"]))), "from": plan["from"], "to": plan["to"], "state": "moved"}
+	if warning := str(e.Op["migration_warning"]); warning != "" {
+		r["warnings"] = []D{{"code": "migration_cleanup_failed", "message": warning}}
+	}
+	return r
 }
 
 // DrainNode takes a node out of placement and queues a move for each of its
