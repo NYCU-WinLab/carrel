@@ -200,6 +200,19 @@ NOT_PUBLIC = ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.25
               "172.16.0.0/12", "192.168.0.0/16")
 
 
+def local_content(site, content):
+    """What the "local" storage must hold: cloud-init snippets always, and with
+    the fetch container (PLAN 7.8) the ISOs and imported images of every kind
+    the site file does not send elsewhere (content_storage, issue #92).
+    Proxmox makes a kind's folder, such as import/, only once it is enabled.
+    """
+    wanted = set(content) | {"snippets"}
+    if site.get("fetch"):
+        kinds = site.get("content_storage", {})
+        wanted |= {kind for kind in ("iso", "import") if kinds.get(kind, "local") == "local"}
+    return wanted
+
+
 def site_layout(node, site):
     """Return this node's address, the other nodes' addresses and the exit nodes."""
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in site["nodes"]}
@@ -443,8 +456,9 @@ WantedBy=multi-user.target
     run("systemctl", "reload", "carrel-tenant-host")
     storage = json.loads(run("pvesh", "get", "/storage/local", "--output-format", "json"))
     content = set(storage["content"].split(","))
-    if "snippets" not in content:
-        run("pvesm", "set", "local", "--content", ",".join(sorted(content | {"snippets"})))
+    wanted = local_content(site, content)
+    if wanted != content:
+        run("pvesm", "set", "local", "--content", ",".join(sorted(wanted)))
     print(json.dumps({"node": node, "zones": ["tenants", "private"], "firewall": "nftables",
                       "peers": layout["peers"], "exit_nodes": layout["exit_nodes"],
                       "public": (public or {}).get("cidr")}))
