@@ -242,3 +242,23 @@ func TestResetAccessLogsANoticeForTheAlerts(t *testing.T) {
 		t.Fatal("the notice must not carry key material", out)
 	}
 }
+
+// A reset that does not start the VM waits for no guest report (issue #832).
+func TestResetAccessOnAStoppedVMNotReadyDoesNotWaitForTheGuest(t *testing.T) {
+	for _, state := range []string{"initializing", "needs_owner_fix"} {
+		t.Run(state, func(t *testing.T) {
+			p, b := fixture(t)
+			var actions []D
+			resetNode(b, "stopped", &actions)
+			m := seedMachine(p, "web", 10100)
+			m["state"] = state
+			p.Store.Put("machines", 10100, 1, m)
+			runQueue(p)
+			r := p.Execute(context.Background(), "machine_reset_access", D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAnew"}, "wait_seconds": 0}, person("alice", false))
+			op := awaitState(t, p, str(obj(r["operation"])["id"]), "succeeded")
+			if obj(op["error"])["code"] == "guest_not_ready" || b.count("action") != 1 {
+				t.Fatal("no wait and no start for a stopped VM", op, actions)
+			}
+		})
+	}
+}

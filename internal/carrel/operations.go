@@ -401,6 +401,11 @@ func (o *Operations) apply(id string) {
 				machines = append(machines, m)
 			}
 			for _, m := range machines {
+				// A reset that did not start the VM has nothing to wait for:
+				// a stopped VM cannot report (issue #832).
+				if op["tool"] == "machine_reset_access" && obj(op["reset"])["restart"] != true {
+					continue
+				}
 				if contains([]string{"initializing", "provisioning", "needs_owner_fix"}, m["state"]) {
 					previous := ""
 					if op["tool"] == "machine_power" {
