@@ -340,6 +340,24 @@ func TestWorkflowSnippetDoesNotPackItself(t *testing.T) {
 	}
 }
 
+// carrel-deploy defaults to the B09 origin, so a workflow from any other
+// site must name its own, or its pushes deploy to B09 (#569 M11).
+func TestWorkflowsNameTheirOwnOrigin(t *testing.T) {
+	p, _, _ := appFixture(t)
+	p.Config.Origin = "https://carrel.staging.test"
+	e := p.execution(context.Background())
+	for name, w := range map[string]string{
+		"app":      e.appWorkflow(D{"slug": "alice"}, D{"name": "site", "branch": "main"}),
+		"function": e.functionWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main", false),
+		"preview":  e.previewWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main"),
+	} {
+		uses := strings.Count(w, "NYCU-WinLab/carrel-deploy@v1")
+		if uses == 0 || strings.Count(w, "url: https://carrel.staging.test\n") != uses {
+			t.Fatalf("%s workflow does not pass its origin to every deploy step:\n%s", name, w)
+		}
+	}
+}
+
 const labGitLab = "https://gitlab.winlab.test"
 
 func TestGitLabAppIsBoundToItsIssuerAndProject(t *testing.T) {
