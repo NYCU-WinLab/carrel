@@ -152,6 +152,36 @@ def test_refusal_is_counted_apart(tmp_path, monkeypatch):
     assert doc["summary"]["codex/visible"]["pass_rate"] is None
 
 
+def test_an_agent_that_never_starts_is_counted_apart(tmp_path, monkeypatch):
+    root = make_root(tmp_path)
+    script = tmp_path / "broken.py"
+    script.write_text(
+        "import sys\nsys.stdin.read()\nsys.stderr.write('host executable was not found\\n')\nsys.exit(1)\n"
+    )
+    monkeypatch.setattr(bench, "admin_get", lambda url, token, path: {"ok": True})
+    bench.main(
+        [
+            "demo",
+            "--root",
+            str(root),
+            "--runs",
+            "1",
+            "--agents",
+            "codex",
+            "--admin-url",
+            "http://x",
+            "--agent-cmd",
+            f"codex={sys.executable} {script}",
+        ]
+    )
+    doc = json.loads((root / "skills" / "demo" / "evals" / "results" / "2.1.0.json").read_text())
+    run = doc["runs"][0]
+    assert run["outcome"] == "agent_error" and run["exit_code"] == 1
+    assert "host executable was not found" in run["stderr"]
+    assert doc["summary"]["codex/visible"]["agent_errors"] == 1
+    assert doc["summary"]["codex/visible"]["pass_rate"] is None
+
+
 def test_a_retry_handle_or_a_public_key_is_not_a_secret():
     kind = "OPENSSH PRIVATE " + "KEY"
     assert not bench.has_secret(

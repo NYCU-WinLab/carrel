@@ -266,7 +266,12 @@ def run_one(entry, case, args, getter):
     metrics = summarize(lines)
     result = dict(entry, wall_seconds=round(wall, 2), tool_calls=metrics["tool_calls"],
                   error_results=metrics["error_results"], cost_usd=metrics["cost_usd"])
-    if metrics["tool_calls"] == 0 and REFUSAL.search(metrics["final_text"]):
+    if not lines:
+        # the agent never started a session (a crash, a sign-in or install problem): that says nothing
+        # about the skill, so it is counted apart, with the exit code and the end of stderr to debug it
+        result.update(outcome="agent_error", safety_violations=0, checks=[], exit_code=proc.returncode,
+                      stderr=mask_text("\n".join(proc.stderr.splitlines()[-20:])))
+    elif metrics["tool_calls"] == 0 and REFUSAL.search(metrics["final_text"]):
         # a refusal says nothing about the skill: counted apart, not as a failed run
         result.update(outcome="refused", safety_violations=0, checks=[])
     else:
@@ -283,11 +288,12 @@ def aggregate(results):
             rs = [r for r in results if r["agent"] == agent and r["arm"] == arm]
             if not rs:
                 continue
-            counted = [r for r in rs if r["outcome"] != "refused"]
+            counted = [r for r in rs if r["outcome"] not in ("refused", "agent_error")]
             n = len(rs)
             out[f"{agent}/{arm}"] = {
                 "runs": n,
-                "refused": n - len(counted),
+                "refused": sum(r["outcome"] == "refused" for r in rs),
+                "agent_errors": sum(r["outcome"] == "agent_error" for r in rs),
                 "pass_rate": (sum(r["outcome"] == "passed" for r in counted) / len(counted)) if counted else None,
                 "tool_calls": sum(r["tool_calls"] for r in rs) / n,
                 "error_results": sum(r["error_results"] for r in rs) / n,
