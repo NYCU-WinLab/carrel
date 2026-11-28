@@ -2118,6 +2118,35 @@ def cloud_init_files(m):
     return {"cloud_init": {kind: p.read_text() for kind, p in paths.items()}}
 
 
+def cloud_init_reset(m, ssh_keys, user_text):
+    """Rewrite a VM's stored cloud-init user file for an access reset.
+
+    Keeps an allowlist of top-level keys, so a creation step added later does
+    not rerun by default. Dropping swap matters: a kept one adds a second swap
+    line to /etc/fstab. Returns the new user text and the unchanged network text.
+    """
+    vmid = machine(m)
+    if m.get("kind") != "vm" or m.get("service_ports"):
+        raise ValueError("only a VM with SSH has a cloud-init user file to reset")
+    new_keys = keys(ssh_keys).splitlines()
+    user_path = SNIPPETS / f"carrel-{vmid}-user.json"
+    network_path = SNIPPETS / f"carrel-{vmid}-network.json"
+    if not isinstance(user_text, str) or not user_text.strip() or not user_path.exists() or not network_path.exists():
+        raise ValueError("no stored cloud-init user file")
+    try:
+        stored = json.loads(user_text.removeprefix("#cloud-config\n"))
+    except ValueError:
+        raise ValueError("stored cloud-init user file is not JSON") from None
+    if not isinstance(stored, dict) or not isinstance(stored.get("users"), list) or not stored["users"] or not isinstance(stored["users"][0], dict):
+        raise ValueError("stored cloud-init user file has no users")
+    data = {k: stored[k] for k in ("hostname", "manage_etc_hosts", "users", "disable_root", "ssh_pwauth") if k in stored}
+    data["users"] = [dict(stored["users"][0], ssh_authorized_keys=new_keys), *stored["users"][1:]]
+    data["ssh_deletekeys"] = False
+    text = "#cloud-config\n" + json.dumps(data)
+    write(user_path, text, 0o600)
+    return {"cloud_init": {"user": text, "network": network_path.read_text()}}
+
+
 def restore_cloud_init(m, files):
     # Only a missing file is written back: one that exists is what this VM
     # booted with, and replacing it would change its instance id.
@@ -3677,6 +3706,10 @@ def main():
             m = req["machine"]
             owned(m)
             out = cloud_init_files(m)
+        elif op == "cloud_init_reset":
+            m = req["machine"]
+            owned(m)
+            out = cloud_init_reset(m, req["ssh_keys"], req["user"])
         elif op == "ca_backfill":
             out = ca_backfill(req["machine"])
         elif op == "disk_volume":

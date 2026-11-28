@@ -120,7 +120,7 @@ func callTimeout(request D, target string) time.Duration {
 // are quick; a reconcile can wait for an SDN reload; creation clones disks.
 func adapterTimeout(op string) time.Duration {
 	switch op {
-	case "inventory", "guest_memory", "status", "metrics", "node_files", "storage_usage", "cloud_init_read", "disk_volume", "vmids_present", "guest_tasks":
+	case "inventory", "guest_memory", "status", "metrics", "node_files", "storage_usage", "cloud_init_read", "cloud_init_reset", "disk_volume", "vmids_present", "guest_tasks":
 		return 60 * time.Second
 	case "reconcile":
 		return 300 * time.Second
