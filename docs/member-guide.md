@@ -463,6 +463,8 @@ keys, and `confirm` with the machine's name. Carrel writes the keys into the VM'
 shuts down and starts a running VM; a stopped VM takes them at its next start.
 
 - Keys already on the machine stay. Remove the ones you no longer trust from `~/.ssh/authorized_keys`.
+- A key already there with `command=` or `from=` is rewritten without its options. Re-add them by hand after the reset.
+- A reset reruns the per-instance modules `lock_passwd`, `timezone` and `ssh_pwauth` with their creation values. If you changed them in the guest, you see the old values again.
 - The SSH host key does not change, so your client shows no warning.
 - Commands, packages, files and apt sources from creation are not applied again.
 - A VM that does not shut down is never forced off: the keys wait for its next start.

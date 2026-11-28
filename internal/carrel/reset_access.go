@@ -79,7 +79,7 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 		fail("invalid", "The machine already holds 50 keys; recreate it to start a new list", D{"recovery": "revise_request"})
 	}
 	plan := D{"machine": m["name"], "keys_added": len(keys), "restart": restart, "host_keys": "kept",
-		"note": "Keys already on the machine stay; remove any you no longer trust from ~/.ssh/authorized_keys."}
+		"note": "Keys already on the machine stay; remove any you no longer trust from ~/.ssh/authorized_keys. A key already there with command= or from= is rewritten without its options; re-add them by hand after the reset. A reset reruns the per-instance modules lock_passwd, timezone and ssh_pwauth with their creation values, so settings you changed in the guest return to the old values."}
 	if dry {
 		return merge(plan, D{"dry_run": true, "requirements": []any{}, "ready_to_apply": true})
 	}
