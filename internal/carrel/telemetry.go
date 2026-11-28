@@ -179,7 +179,7 @@ func (t *Telemetry) Span(tool string, tenant int, start time.Time, outcome strin
 	ids := make([]byte, 24)
 	_, _ = rand.Read(ids)
 	status := D{"code": 1}
-	if outcome != "ok" {
+	if outcome != "ok" && !callerRefusal(outcome) {
 		status = D{"code": 2, "message": outcome}
 	}
 	attrs := []D{otlpString("carrel.tool", tool), otlpString("carrel.outcome", outcome)}
@@ -199,6 +199,17 @@ func (t *Telemetry) Span(tool string, tenant int, start time.Time, outcome strin
 		"attributes":        attrs,
 		"status":            status,
 	}})
+}
+
+// callerRefusal reports whether an error code is an expected refusal of the
+// caller's input, not a fault of the service. Such a span keeps status OK and
+// carries the code in carrel.outcome, so usage_report still counts it.
+func callerRefusal(code string) bool {
+	switch code {
+	case "not_found", "invalid", "forbidden":
+		return true
+	}
+	return false
 }
 
 func (t *Telemetry) enqueue(item telemetryItem) {
