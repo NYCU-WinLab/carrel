@@ -176,6 +176,37 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 	running := guest["status"] == "running"
 	disks := importDisks(config, storageTypes)
 
+	// Guests the import cannot move safely are refused here, before confirm
+	// touches the source: HA would force-stop the guest on shutdown and
+	// Proxmox refuses to migrate it, protection blocks the cloud-init delete,
+	// detached volumes would be copied but never counted or moved, and one
+	// migration takes one target storage.
+	if str(guest["hastate"]) != "" {
+		fail("conflict", "The guest is managed by Proxmox HA on the source; remove it from HA there first", D{"recovery": "resolve_prerequisite"})
+	}
+	if num(config["protection"]) != 0 {
+		fail("conflict", "The guest has protection set on the source; clear it there first", D{"recovery": "resolve_prerequisite"})
+	}
+	for key := range config {
+		if matches(`^unused[0-9]+$`, key) {
+			fail("conflict", "The guest has a detached disk ("+key+"); delete or reattach it on the source first", D{"recovery": "resolve_prerequisite"})
+		}
+	}
+	zfs, other := false, false
+	for _, d := range disks {
+		if d.CloudInit {
+			continue
+		}
+		if d.Type == "zfspool" {
+			zfs = true
+		} else {
+			other = true
+		}
+	}
+	if zfs && other {
+		fail("conflict", "The guest has disks on ZFS and on other storage; move them to one kind on the source first", D{"recovery": "resolve_prerequisite"})
+	}
+
 	// What it would take: sizes, quota, the target slot. Nothing is written.
 	var diskGiB float64
 	volumes := []D{}
@@ -205,7 +236,8 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 	allZFS, hasCloudInit, offline := true, false, []string{}
 	for _, d := range disks {
 		hasCloudInit = hasCloudInit || d.CloudInit
-		if d.Type != "zfspool" {
+		// The cloud-init disk is dropped, so it does not decide the path.
+		if d.Type != "zfspool" && !d.CloudInit {
 			allZFS = false
 		}
 		if !d.CloudInit {

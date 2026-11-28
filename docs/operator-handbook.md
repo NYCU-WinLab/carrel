@@ -627,7 +627,13 @@ ran with exactly these privileges:
 
 Put the source secret in `source_dir/<name>.secret` and the target secret in
 `source_dir/_target.secret` (owner `carrel`, mode 0600), then call `source_add` without `secret`.
-The control plane must reach the source's API port. Revoke both tokens after the imports.
+The control plane must reach the source's API port. On `import_target_node`, the storage named by
+`import_hop_storage` (default `local`) must accept `images` and `rootdir`; a stock `local` does
+not, and the migration then fails after the guest was shut down. Revoke both tokens after the
+imports.
+
+`dry_run` and `confirm` refuse a guest under Proxmox HA, with `protection` set, with a detached
+(`unusedN`) disk, or with disks on both ZFS and other storage. Fix those on the source first.
 
 ## Roll back an imported machine
 

@@ -2061,11 +2061,11 @@ one exists, changes are checked on disposable tenant machines.
   (anvil, PVE 9.2.21, `local-lvm`, to carrel-stg01, PVE 9.3.1, `tank`, ZFS), so it is the default
   path. The vzdump archive restore stays a documented fallback and is not built for M9.
 - **Storage rules**: ZFS imports only the `zfs` stream format and LVM-thin exports only
-  `raw+size`. A running VM's disks move over the NBD mirror, which ignores format. Every disk
-  copied offline uses `disk-import` and needs a format both sides share: the cloud-init disk,
-  every disk of a stopped VM, and every CT volume. So, by the source's storage type (checked
+  `raw+size`. Every guest moves offline (see the running VM rule below), and every disk copied
+  offline uses `disk-import`, which needs a format both sides share. The cloud-init disk is
+  dropped first and does not decide the path. So, by the source's storage type (checked
   first, `dry_run` reports it):
-  - ZFS to ZFS: migrate directly to `tank`.
+  - ZFS to ZFS: drop the cloud-init disk, then migrate directly to `tank`.
   - Any other source: drop the cloud-init disk before migrating (carrel writes its own, see
     Normalization); land every offline volume on a directory storage on the target; then
     `move-volume` (`qm move-disk` or `pct move-volume`) each one to `tank` on the target.

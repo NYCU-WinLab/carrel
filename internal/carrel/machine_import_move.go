@@ -27,8 +27,10 @@ var (
 	importPoll = 5 * time.Second
 	// importTaskLimit bounds one task: a disk copy at the migration limit.
 	importTaskLimit = 4 * time.Hour
-	// importShutdownSeconds is how long a shutdown gets before a stop.
-	importShutdownSeconds = 60
+	// importShutdownSeconds is how long a CT's shutdown gets before pct stop;
+	// importVMShutdownSeconds is how long a VM gets (Proxmox's own default).
+	importShutdownSeconds   = 60
+	importVMShutdownSeconds = 180
 
 	importLabel      = regexp.MustCompile(`[^a-z0-9-]+`)
 	importTargetHost = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$`)
@@ -275,16 +277,24 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	// finish is stopped (PLAN 10.6). A VM is never stopped by force: the
 	// source is the rollback copy, so a VM that does not shut down stays
 	// running and the import ends before anything moved.
+	// A shutdown that times out is not cancelled: the guest may still power
+	// off later, so its state is read again instead of trusted.
+	stopped := func() bool {
+		return str(obj(sourceGet(e.Ctx, client, base, tokenID, secret, path+"/status/current")["data"])["status"]) == "stopped"
+	}
 	if job["running"] == true && str(job["stopped_with"]) == "" {
 		note("step", "stop")
-		shutdown := sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(importShutdownSeconds)}})
-		used := "qm shutdown"
+		cmd, seconds := "qm", importVMShutdownSeconds
 		if job["kind"] == "ct" {
-			used = "pct shutdown"
+			cmd, seconds = "pct", importShutdownSeconds
 		}
-		if !wait(shutdown) {
+		used := cmd + " shutdown"
+		if stopped() {
+			// A resumed job, or the owner shut it down meanwhile.
+			used = "already stopped"
+		} else if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(seconds)}})) && !stopped() {
 			if job["kind"] != "ct" {
-				fail("conflict", "The VM did not shut down; it still runs on the source. Shut it down there, then import again", D{"component": "source", "backend_code": "source_shutdown_timeout", "recovery": "resolve_prerequisite"})
+				fail("conflict", "The VM did not shut down in time and was not stopped by force. It may still power off by itself; check it on the source, then import again", D{"component": "source", "backend_code": "source_shutdown_timeout", "recovery": "resolve_prerequisite"})
 			}
 			used = "pct stop"
 			if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/stop", url.Values{})) {
@@ -293,10 +303,20 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 		}
 		note("stopped_with", used)
 	}
+	// Nothing changes on a guest that runs: it may have been started again on
+	// the source since the plan or since a saved stop.
+	if !stopped() {
+		fail("conflict", "The guest runs on the source; shut it down there or import again", D{"component": "source", "backend_code": "source_running", "recovery": "resolve_prerequisite"})
+	}
 	// The cloud-init disk does not move: carrel writes its own after the
 	// move. The guest is stopped, so the delete applies at once instead of
-	// staying pending.
+	// staying pending. The slot is read again, so a disk put there since the
+	// plan is never detached.
 	if key := str(job["cloud_init_key"]); key != "" && job["cloud_init_dropped"] != true {
+		current := str(obj(sourceGet(e.Ctx, client, base, tokenID, secret, path+"/config")["data"])[key])
+		if !strings.Contains(strings.SplitN(current, ",", 2)[0], "cloudinit") {
+			fail("conflict", "The guest's "+key+" is no longer its cloud-init disk; plan the import again", D{"component": "source", "backend_code": "source_changed", "recovery": "revise_request"})
+		}
 		sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", url.Values{"delete": {key}})
 		note("cloud_init_dropped", true)
 	}

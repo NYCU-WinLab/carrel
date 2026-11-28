@@ -26,7 +26,7 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 	importPoll = time.Millisecond
 	p.wg.Add(1)
 	go p.Operations.Loop()
-	importFailTask, seenForms, importPollErrors = "none", nil, 0
+	importFailTask, seenForms, importPollErrors, importGuestStatus = "none", nil, 0, nil
 	srv, fp, _ := importFake(t)
 	admin := person("root", true)
 	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
@@ -179,6 +179,46 @@ func TestMachineImportConfirmVMShutdownTimeoutNeverForcesStop(t *testing.T) {
 	}
 }
 
+func TestMachineImportConfirmVMThatStopsLateContinues(t *testing.T) {
+	_, _, run := importSite(t)
+	// The shutdown task times out, but the guest powered off meanwhile: its
+	// state is read again and the import goes on.
+	importFailTask = "status-shutdown"
+	importGuestStatus = []string{"running", "stopped"}
+	op := run(104)
+	if op["state"] != "succeeded" || obj(op["result"])["stopped_with"] != "qm shutdown" {
+		t.Fatalf("operation: %v", op)
+	}
+	if strings.Contains(joined(), "status/stop") {
+		t.Errorf("a VM must never be stopped by force:\n%s", joined())
+	}
+}
+
+func TestMachineImportConfirmAlreadyStoppedGuestIsNotShutDown(t *testing.T) {
+	_, _, run := importSite(t)
+	// A resumed job, or the owner shut the guest down after the plan.
+	importGuestStatus = []string{"stopped"}
+	op := run(106)
+	if op["state"] != "succeeded" || obj(op["result"])["stopped_with"] != "already stopped" {
+		t.Fatalf("operation: %v", op)
+	}
+	if strings.Contains(joined(), "status/") {
+		t.Errorf("no power call was needed:\n%s", joined())
+	}
+}
+
+func TestMachineImportZFSVMWithLVMCloudInitMovesDirect(t *testing.T) {
+	_, _, run := importSite(t)
+	// The cloud-init disk is dropped, so only the ZFS disk decides the path.
+	op := run(109)
+	if op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	if !strings.Contains(joined(), "target-storage=tank") {
+		t.Errorf("a ZFS VM must move straight to tank:\n%s", joined())
+	}
+}
+
 func TestMachineImportConfirmFailureBeforeMigrateRollsBack(t *testing.T) {
 	p, _, run := importSite(t)
 	// Neither pct shutdown nor pct stop finishes: nothing was sent to migrate.
@@ -326,5 +366,32 @@ func TestMachineImportConfirmRefusals(t *testing.T) {
 	p.Config.ImportTargetNode = ""
 	if op := run(104); op["state"] != "failed" || len(seenForms) != 0 {
 		t.Errorf("no target settings: %v / %v", op, seenForms)
+	}
+}
+
+func TestMachineImportRefusesGuestsItCannotMoveSafely(t *testing.T) {
+	_, _, run := importSite(t)
+	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk"} {
+		seenForms = nil
+		op := run(vmid)
+		if op["state"] != "failed" || !strings.Contains(str(obj(op["error"])["message"]), why) {
+			t.Errorf("guest %d: %v", vmid, op["error"])
+		}
+		if len(seenForms) != 0 {
+			t.Errorf("guest %d: the source was touched:\n%s", vmid, joined())
+		}
+	}
+}
+
+func TestMachineImportGuestStartedAgainIsNotChanged(t *testing.T) {
+	_, _, run := importSite(t)
+	// The stopped VM was started on the source after the plan.
+	importGuestStatus = []string{"running"}
+	op := run(107)
+	if op["state"] != "failed" || obj(op["error"])["backend_code"] != "source_running" {
+		t.Fatalf("operation: %v", op)
+	}
+	if len(seenForms) != 0 {
+		t.Errorf("a running guest was changed:\n%s", joined())
 	}
 }
