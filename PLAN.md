@@ -2150,6 +2150,8 @@ old host.
 | M10 Second node | `install.sh --join` adds a node, `node_drain` empties the first one with no tenant noticing (a machine with an ISO attached included), and machines land on both nodes; with real peers now, a VXLAN or BGP packet carrying a forged node address on the public interface and a frame with a guessed VNI never arrive (the cases of M1 and M5); a machine created on the new node from an image fetched on the first gets a verified copy |
 | M11 Apps | A clean agent given "Deploy this Next.js repo to my machine on every push" ends with the site answering on its domain; the next push serves the new commit; a push that fails its health check leaves the previous release serving; a workflow in another repository, or on another branch, is refused |
 
+M3 note: `machine_reset_access` exists (section 7.10) and the M3 sentence about it can be run. It does not email the owner, because carrel has no sender; every reset writes an audit row with the actor, the machine and the key count. The owner notice is tracked in issue #821 and lands once carrel can send mail.
+
 ## 12. Lessons carried from the old host
 
 | Lesson | Rule here |

@@ -35,6 +35,15 @@ claude mcp login carrel
 Sign in with your WinLab account, then start a new session. Codex and other clients are in the
 member guide.
 
+## Lost every key
+
+If no saved key logs in to a VM, ask the agent to run `machine_reset_access` for it. It adds your
+public key (or the keys you pass as `ssh_keys`) through cloud-init and restarts a running VM; keys
+already on the VM stay and the host key does not change. Only a VM that carrel configures through
+cloud-init can be reset, and the call needs `confirm` equal to the machine name. Every reset is
+audited; the owner is not emailed yet (issue #821). Details are in the `rescue` skill and PLAN
+section 7.10.
+
 ## Documentation
 
 | Reader | Document |
