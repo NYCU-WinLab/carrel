@@ -385,7 +385,7 @@ func TestMachineImportConfirmRefusals(t *testing.T) {
 
 func TestMachineImportRefusesGuestsItCannotMoveSafely(t *testing.T) {
 	_, _, run := importSite(t)
-	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk", 114: "ISO"} {
+	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk", 114: "ISO", 115: "more than one network device (net1)"} {
 		seenForms = nil
 		op := run(vmid)
 		if op["state"] != "failed" || !strings.Contains(str(obj(op["error"])["message"]), why) {

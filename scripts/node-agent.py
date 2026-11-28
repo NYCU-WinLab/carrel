@@ -2354,7 +2354,13 @@ def import_verify(req):
     vmid = machine(m)
     if located(m) != NODE:
         raise ValueError("machine is not on this node")
-    owned(m)
+    cfg = owned(m)
+    # import_network normalizes net0 only and the guest firewall covers net0
+    # only: a job planned before the import check refused extra NICs must not
+    # boot one onto the tenant bridge.
+    extra = sorted(k for k in cfg if re.fullmatch(r"net\d+", k) and k != "net0")
+    if extra:
+        raise ValueError(f"guest has a network device other than net0 ({', '.join(extra)})")
     seconds = integer(req.get("seconds", 120), 1, 240)
     vm = m["kind"] == "vm"
     kind = "qemu" if vm else "lxc"
