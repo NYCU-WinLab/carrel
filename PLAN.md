@@ -660,10 +660,11 @@ nobody). Every machine gets a static address: cloud-init network configuration f
 `ip=` for CTs. `ipfilter` enforces the address. Managed private networks (section 6.8) keep their
 DHCP, one server in its own namespace on the first exit node.
 
-The machines that would need DHCP on a primary network are ISO installs (section 7.8), imported
-guests configured for DHCP (section 10.6) and images without cloud-init. When one of those ships,
-it brings back a reservations-only server (each MAC to its address, no dynamic range); Proxmox's
-built-in SDN DHCP works only in simple zones.
+ISO installs (section 7.8) get no DHCP either: the tenant enters the reserved address by hand in
+the installer, using the `install` block that `machine_create` returns (`address`, `gateway`,
+`dns`, `mtu`). A reservations-only server (each MAC to its address, no dynamic range) stays the
+option for imported guests configured for DHCP (section 10.6) and images without cloud-init, and
+is built only when one of those ships; Proxmox's built-in SDN DHCP works only in simple zones.
 
 ### 6.10 Special domains and ports
 
@@ -2144,7 +2145,7 @@ old host.
 | M3 Access | The same agent opens a port and a domain under the tenant's wildcard certificate, a second tenant cannot reach the machine until `peer_allow`, and `machine_reset_access` recovers a machine whose keys were deleted |
 | M4 Quotas and requests | A project tenant runs out of quota, files `quota_request`, an admin approves it, and the retry succeeds; a temporary grant expires on its date; the project requests a name that already exists, such as `afc.winlab.tw` (its twin in the staging zone on staging), an admin approves it with `adopt: true`, and the site answers over HTTPS on that name |
 | M5 Private networks | Two host VMs on two private networks reach each other only through a router VM, a machine of another tenant on the same node captures no frame from those networks, a frame sent from outside with a guessed VNI never arrives, and 1450 byte packets pass end to end |
-| M6 Custom images | A tenant imports a cloud image by URL and checksum and gets a managed machine with an SSH line; another installs Debian from an ISO through `machine_console_url`, gets its reserved address by DHCP, and both files show in `quota_get`; an import URL that points at an internal address such as `10.0.0.0/8` is refused, and so is a qcow2 image with a backing file; a second import by the same tenant waits in `queued` until the first ends |
+| M6 Custom images | A tenant imports a cloud image by URL and checksum and gets a managed machine with an SSH line; another installs Debian from an ISO through `machine_console_url`, enters its reserved address in the installer, and both files show in `quota_get`; an import URL that points at an internal address such as `10.0.0.0/8` is refused, and so is a qcow2 image with a backing file; a second import by the same tenant waits in `queued` until the first ends |
 | M7 Skills | Every skill in 4.5.1 has evaluation cases, passes the release gate of 4.5.3 on staging for both Claude Code and Codex, `usage_report` shows reads per skill version, and an agent that hits a known problem finds its issue with `issue_search` instead of filing a duplicate |
 | M8 Operations | Killing the metric pipeline raises the freshness alert, a restore from Proxmox Backup Server brings back a deleted infra machine, and an alumni member's machines stop on schedule |
 | M9 Import (production only) | Every guest chosen under section 10.7 runs on the new site under its owner, its names answer from outside the campus, every check of 10.7 that applies to it passes, and its source stays stopped on the old host for 14 days |
