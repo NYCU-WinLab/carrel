@@ -4,10 +4,11 @@
   "storage": "tank",
   "underlay_interface": "vmbr0",
   "nodes": [
-    {"name": "carrel-stg01", "address": "10.10.11.110"}
+    {"name": "carrel-stg01", "address": "10.10.11.110"},
+    {"name": "carrel-stg02", "address": "10.10.11.112"}
   ],
   "exit_nodes": ["carrel-stg01"],
-  "agent_nodes": ["carrel-stg01"],
+  "agent_nodes": ["carrel-stg01", "carrel-stg02"],
   "ssh_jump": true,
   "fetch": true,
   "public": {
