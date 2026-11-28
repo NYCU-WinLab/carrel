@@ -39,7 +39,7 @@ member guide.
 
 If no saved key logs in to a VM, ask the agent to run `machine_reset_access` for it. It adds your
 public key (or the keys you pass as `ssh_keys`) through cloud-init and restarts a running VM; keys
-already on the VM stay and the host key does not change. Only a VM that carrel configures through
+already on the VM stay and the host key does not change. A key that had `command=` or `from=` options comes back without them, so re-add them by hand, and the guest's `lock_passwd`, `timezone` and `ssh_pwauth` settings return to their creation values. Only a VM that carrel configures through
 cloud-init can be reset, and the call needs `confirm` equal to the machine name. Every reset is
 audited; the owner is not emailed yet (issue #821). Details are in the `rescue` skill and PLAN
 section 7.10.

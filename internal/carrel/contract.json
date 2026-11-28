@@ -681,7 +681,7 @@
     },
     {
       "name": "machine_reset_access",
-      "description": "Let the owner back into a VM that accepts none of their keys. Adds ssh_keys (default: the tenant's saved keys) through cloud-init and shuts down and starts a running VM so they take (never forced off: if it does not shut down, the keys wait for its next start); keys already on the machine stay, and the SSH host key does not change. Commands, packages, files and apt sources from creation are not applied again. A machine holds at most 50 keys. Only for a VM Carrel configures: not a CT, a machine installed from an ISO or one that serves its own ports. confirm must equal the machine name. Recorded in the audit log.",
+      "description": "Let the owner back into a VM that accepts none of their keys. Adds ssh_keys (default: the tenant's saved keys) through cloud-init and shuts down and starts a running VM so they take (never forced off: if it does not shut down, the keys wait for its next start); keys already on the machine stay, and the SSH host key does not change. Commands, packages, files and apt sources from creation are not applied again. A key already in authorized_keys with command= or from= is rewritten without its options; re-add them by hand. The per-instance modules lock_passwd, timezone and ssh_pwauth rerun with their creation values, so a guest whose owner changed them sees the old values again. A machine holds at most 50 keys. Only for a VM Carrel configures: not a CT, a machine installed from an ISO or one that serves its own ports. confirm must equal the machine name. Recorded in the audit log.",
       "inputSchema": {
         "type": "object",
         "properties": {
