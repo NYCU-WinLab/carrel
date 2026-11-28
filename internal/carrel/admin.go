@@ -159,6 +159,8 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		return e.ZoneAction(tool, a, w)
 	case "source_add":
 		return e.SourceAction(a, w)
+	case "machine_import":
+		return e.MachineImport(a, w)
 	case "domain_proxy":
 		return e.DomainProxy(a, w)
 	case "domain_transfer":

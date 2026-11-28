@@ -488,6 +488,7 @@ func goldenScenario(g *goldenRun) {
 	call("admin", "request_approve", D{"id": obj(approved["request"])["id"]}, admin)
 	call("admin", "request_reject", D{"id": obj(rejected["request"])["id"]}, admin)
 	call("admin", "source_add", D{"name": "old-lab", "api_url": "https://old.example:8006", "token_id": "carrel@pve!import", "secret": "11111111-2222-3333-4444-555555555555", "fingerprint": "bad"}, admin)
+	call("admin", "machine_import", D{"tenant": "alice", "source": "old-lab", "guest": 104, "dry_run": true}, admin)
 	call("admin", "zone_list", D{}, admin)
 	call("admin", "zone_add", D{"name": "lab.example", "token": "zone-token-0123456789abcdef"}, admin)
 	call("admin", "zone_remove", D{"name": "lab.example", "confirm": "lab.example"}, admin)

@@ -3335,6 +3335,55 @@
       }
     },
     {
+      "name": "machine_import",
+      "description": "Admin: plan the import of a guest from a registered source (source_add) into a tenant. Only dry_run is built: it returns the target VMID, address and node, disk sizes, the quota the machine takes, every configuration change and warnings (a cloud-init disk to drop, offline volumes that need a directory storage hop, source and target storage types). It reserves and changes nothing on either side. With confirm it answers not_implemented.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "Name of a source registered with source_add."
+          },
+          "guest": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 999999999,
+            "description": "VMID of the guest on the source."
+          },
+          "nested_virt": {
+            "type": "boolean",
+            "default": false,
+            "description": "Keep the guest's CPU type instead of x86-64-v3."
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "Run the import. Not built yet: answers not_implemented."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "Plan only: nothing is allocated or changed on either side (audit is recorded). Returns plan, quota_before, delta, quota_after, requirements and ready_to_apply."
+          }
+        },
+        "required": [
+          "tenant",
+          "source",
+          "guest"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "zone_add",
       "description": "Admin: add a Cloudflare DNS zone special domains can live in, or give an added zone a new token or tenant list. carrel checks that the token sees exactly this zone and can write a record, then keeps the token as a server secret, never in results or the audit log. tenants limits the zone to those tenant slugs; omitted, every tenant may request names in it.",
       "inputSchema": {
@@ -5723,6 +5772,7 @@
     "tenant_suspend",
     "usage_report",
     "source_add",
+    "machine_import",
     "zone_add",
     "zone_list",
     "zone_remove"
@@ -5785,6 +5835,7 @@
     "vpn_client_add",
     "vpn_client_remove",
     "source_add",
+    "machine_import",
     "zone_add",
     "zone_remove",
     "function_deploy",
@@ -6061,6 +6112,8 @@
       "tenant_suspend",
       "usage_report",
       "source_add",
+      "machine_import",
+    "machine_import",
       "zone_add",
       "zone_list",
       "zone_remove"
