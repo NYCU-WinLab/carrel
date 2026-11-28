@@ -2928,3 +2928,50 @@ def test_a_reset_after_a_thaw_writes_the_stored_files_back_first(monkeypatch, tm
     got = module.action({**request, "cloud_init": {"user": created, "network": '{"version": 2}'}})
     assert got["cloud_init"]["user"] == module.reset_user_data(created, [KEY], "op-00000001")
     assert got["cloud_init"]["network"] == '{"version": 2}'
+
+
+def test_a_reset_with_no_network_file_leaves_the_user_file_untouched(monkeypatch, tmp_path):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {})
+    monkeypatch.setattr(module, "write", lambda path, data, mode: Path(path).write_text(data))
+    (tmp_path / "carrel-10100-user.json").write_text(created)
+    with pytest.raises(ValueError):
+        module.action(
+            {"machine": MACHINE, "action": "reset_access", "ssh_keys": [KEY], "reset_id": "op-00000001"}
+        )
+    assert (tmp_path / "carrel-10100-user.json").read_text() == created
+
+
+def test_a_retried_create_keeps_the_user_file_a_reset_wrote(monkeypatch, tmp_path):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    snippets = tmp_path / "snippets"
+    state = tmp_path / "state"
+    snippets.mkdir()
+    state.mkdir()
+    monkeypatch.setattr(module, "SNIPPETS", snippets)
+    monkeypatch.setattr(module, "STATE", state)
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {})
+    monkeypatch.setattr(module, "write", lambda path, data, mode: Path(path).write_text(data))
+    monkeypatch.setattr(module, "run", lambda *a, **k: pytest.fail("a retry must not reconfigure the VM"))
+    real_exists = Path.exists
+    monkeypatch.setattr(
+        module.Path,
+        "exists",
+        lambda self: True if str(self) == "/etc/pve/qemu-server/10100.conf" else real_exists(self),
+    )
+    (snippets / "carrel-10100-user.json").write_text(created)
+    (snippets / "carrel-10100-network.json").write_text('{"version": 2}')
+    reset = module.action(
+        {"machine": MACHINE, "action": "reset_access", "ssh_keys": [KEY], "reset_id": "op-00000001"}
+    )["cloud_init"]["user"]
+    marker = module.provision_marker(MACHINE)
+    (state / "create-10100.json").write_text(json.dumps({"marker": marker, "complete": True}))
+    got = module.create(MACHINE)
+    assert got["state"] == "exists"
+    assert (snippets / "carrel-10100-user.json").read_text() == reset
+    assert got["cloud_init"]["user"] == reset
