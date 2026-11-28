@@ -474,8 +474,20 @@ def test_migrate_reports_a_cleanup_failure_after_cutover_as_a_warning(monkeypatc
         return "status: running"
 
     monkeypatch.setattr(module, "run", run)
+    logged = []
+    monkeypatch.setattr(module, "log_warning", logged.append)
+    status = {"status": "running"}
+    monkeypatch.setattr(module, "pve_get", lambda path: status)
     out = module.migrate({"machine": vm, "target": "carrel02"})
-    assert out["state"] == "moved" and "old disk" in out["warning"]
+    assert out["state"] == "moved" and "copy of its disk may remain on carrel01" in out["warning"]
+    # The Proxmox output goes to the journal only, never to the tenant.
+    assert "did not run again" not in out["warning"] and "old disk" not in out["warning"]
+    assert len(logged) == 1 and "old disk" in logged[0]
+    # A machine that ran before the move and does not run on the target says so.
+    nodes.joinpath("carrel02", "qemu-server", "10100.conf").rename(conf)
+    status["status"] = "stopped"
+    out = module.migrate({"machine": vm, "target": "carrel02"})
+    assert out["warning"].startswith("The machine did not run again on carrel02.") and len(logged) == 2
     # A failure before the cutover, with the machine still here, stays an error.
     nodes.joinpath("carrel02", "qemu-server", "10100.conf").rename(conf)
     moves[0] = False
