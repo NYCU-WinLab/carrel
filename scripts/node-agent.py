@@ -2369,10 +2369,14 @@ def import_network(req):
     foreign = sorted(k for k in cfg if k == "hookscript" or (m["kind"] == "vm" and re.fullmatch(vm_keys, k)))
     drop = ["--delete", ",".join(foreign)] if foreign else []
     if m["kind"] == "vm":
+        # Proxmox writes `package_upgrade: true` into the generated user data
+        # unless ciupgrade is 0, and the new ipconfig0 makes cloud-init run it:
+        # an import must not upgrade the guest's software.
         cpu = [] if m.get("nested_virt") else ["--cpu", "x86-64-v3"]
         vendor = ["--cicustom", vendor_data(m)] if cfg.get("cicustom") else []
         run("qm", "set", vmid, "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
-            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2", *cpu, *vendor,
+            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2",
+            "--ciupgrade", "0", *cpu, *vendor,
             *cloud_init_drive(cfg), *drop)
     else:
         # The guest keeps its interface name: its own network setup names it.

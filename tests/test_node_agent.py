@@ -3139,6 +3139,8 @@ def test_import_network_normalizes_net0_and_the_address(monkeypatch, kind):
             "ip=10.200.1.10/24,gw=10.200.1.1",
             "--nameserver",
             "10.200.0.2",
+            "--ciupgrade",
+            "0",
             "--cpu",
             "x86-64-v3",
             "--ide2",
@@ -3193,6 +3195,7 @@ def test_import_network_cleans_a_vm(monkeypatch):
     assert qm[qm.index("--cicustom") + 1] == "vendor=local:snippets/carrel-10100-vendor.json"
     assert qm[qm.index("--cpu") + 1] == "x86-64-v3"
     assert qm[qm.index("--delete") + 1] == "hookscript,hostpci0,usb1"
+    assert qm[qm.index("--ciupgrade") + 1] == "0"
 
 
 def test_import_network_keeps_the_cpu_type_for_nested_virt(monkeypatch):
@@ -3246,6 +3249,20 @@ def test_import_network_drops_the_old_cloud_init_credentials(monkeypatch):
     calls = import_cleanup(module, monkeypatch, "vm", {"net0": OLD_VM["net0"], "ciuser": "lab"})
     [qm] = [c for c in calls if c[0] == "qm"]
     assert "--delete" not in qm
+
+
+def test_import_network_turns_off_the_cloud_init_upgrade(monkeypatch):
+    module = load("node-agent.py")
+    # Proxmox defaults ciupgrade to 1; an explicit 1 or a retry with 0 set
+    # both end with 0, so the first boot upgrades no package.
+    for old in (OLD_VM, {**OLD_VM, "ciupgrade": 1}, {**OLD_VM, "ciupgrade": 0}):
+        calls = import_cleanup(module, monkeypatch, "vm", old)
+        [qm] = [c for c in calls if c[0] == "qm"]
+        assert qm[qm.index("--ciupgrade") + 1] == "0"
+        assert "ciupgrade" not in qm[qm.index("--delete") + 1]
+    calls = import_cleanup(module, monkeypatch, "ct", {"net0": "name=eth0,bridge=vmbr0"})
+    [pct] = [c for c in calls if c[0] == "pct"]
+    assert "--ciupgrade" not in pct
 
 
 def test_import_network_puts_the_cloud_init_drive_in_a_free_slot(monkeypatch):
