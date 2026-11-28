@@ -635,6 +635,45 @@ def test_a_talos_vm_moves_with_its_cloud_init_and_takes_no_media(monkeypatch, tm
         module.set_media(talos, {}, {"iso_volume": None})
 
 
+def test_an_iso_install_moves_only_where_its_iso_is_readable(monkeypatch):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "located", lambda m: "carrel02")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    monkeypatch.setattr(module, "owned", lambda m, **k: {})
+    storages = {
+        "old-nas": {"type": "nfs", "path": "/mnt/pve/old-nas"},
+        "installers": {"type": "dir", "path": "/srv/installers"},
+        "mirrored": {"type": "dir", "path": "/srv/mirrored", "shared": "1"},
+    }
+    monkeypatch.setattr(module, "storage_entry", lambda s: storages.get(s))
+    probed = []
+    monkeypatch.setattr(module, "probe", lambda path: probed.append(str(path)))
+    name = "carrel-t001-netinst-0123456789ab.iso"
+    iso = dict(MACHINE, kind="vm", guest_management=0, iso_volume=f"old-nas:iso/{name}")
+    # Shared storage, even one the site no longer imports to: probed, then ready.
+    assert module.migrate_prepare({"machine": iso}) == {"state": "ready"}
+    mirrored = dict(iso, iso_volume=f"mirrored:iso/{name}")
+    assert module.migrate_prepare({"machine": mirrored}) == {"state": "ready"}
+    assert probed == [f"/mnt/pve/old-nas/template/iso/{name}", f"/srv/mirrored/template/iso/{name}"]
+    # Storage only one node reads, whatever its name: refused before the move.
+    for volume in (f"installers:iso/{name}", f"local:iso/{name}"):
+        with pytest.raises(module.StorageUnavailable, match="machine_media"):
+            module.migrate_prepare({"machine": dict(iso, iso_volume=volume)})
+    # Another tenant's ISO.
+    with pytest.raises(ValueError, match="invalid ISO"):
+        other = "old-nas:iso/carrel-t002-netinst-0123456789ab.iso"
+        module.migrate_prepare({"machine": dict(iso, iso_volume=other)})
+
+    def unreadable(path):
+        raise module.StorageUnavailable("missing or its storage unreachable")
+
+    monkeypatch.setattr(module, "probe", unreadable)
+    with pytest.raises(module.StorageUnavailable):
+        module.migrate_prepare({"machine": iso})
+    # Ejected: nothing to read.
+    assert module.migrate_prepare({"machine": dict(iso, iso_volume=None)}) == {"state": "ready"}
+
+
 def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
     module = load("jump-sync.py")
     line = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22" ssh-ed25519 AAAA'

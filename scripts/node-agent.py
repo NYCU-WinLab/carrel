@@ -2152,6 +2152,10 @@ def migrate_prepare(req):
     if where is None:
         raise ValueError("machine not found in the cluster")
     owned(m, node=where)
+    # An installer ISO must be readable here before the machine moves, or it
+    # arrives with a CD-ROM the node cannot open (issue #874).
+    if where != NODE and m["kind"] == "vm" and m.get("iso_volume"):
+        moving_iso(m, m["iso_volume"])
     # Every VM with cloud-init: managed, or without SSH (issue #94).
     if m["kind"] == "vm" and (m.get("guest_management", 1) or m.get("service_ports")):
         if not req.get("cloud_init"):
@@ -2422,6 +2426,19 @@ def iso_volume(m, volume):
         raise ValueError("the ISO storage is not a directory storage")
     probe(Path(entry["path"]) / "template" / "iso" / rest)
     return f"{storage}:iso/{rest}"
+
+
+def moving_iso(m, volume):
+    # A moving machine keeps the ISO it has, even after the site names another
+    # ISO storage for new imports; it must be on storage every node mounts.
+    storage, _, rest = str(volume).partition(":iso/")
+    match = VOLUME.fullmatch(rest)
+    if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", storage) or not match or int(match[1]) != m["tenant_n"] or not rest.endswith(".iso"):
+        raise ValueError("invalid ISO volume")
+    entry = storage_entry(storage)
+    if entry is None or "path" not in entry or not (entry["type"] in ("nfs", "cifs", "cephfs", "glusterfs") or entry.get("shared") == "1"):
+        raise StorageUnavailable(f"{rest} is on storage only one node reads; eject it with machine_media before moving the machine")
+    probe(Path(entry["path"]) / "template" / "iso" / rest)
 
 
 def probe(path):

@@ -3,6 +3,7 @@ package carrel
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Moving machines between nodes (PLAN 7.10). Validation and the plan run
@@ -16,6 +17,31 @@ func (e *Execution) nodeNamed(name string) (nodeRef, bool) {
 		}
 	}
 	return nodeRef{}, false
+}
+
+// movable reports a machine a move can take: ready, running or stopped, or
+// installing from an ISO on shared storage (PLAN 7.8), which Proxmox moves
+// with the ISO attached, so the install goes on and a drain can empty a node
+// that holds one (PLAN 11.3 M10). An ISO on "local" exists on one node only,
+// as one imported while the site had a single node: Proxmox refuses that
+// CD-ROM, so the machine stays until the member ejects it.
+func movable(m D) bool {
+	if isoOnLocal(m) {
+		return false
+	}
+	return contains([]string{"ready", "running", "stopped"}, m["state"]) || m["state"] == "installing" && unmanaged(m)
+}
+
+func isoOnLocal(m D) bool {
+	return m["iso_volume"] != nil && strings.HasPrefix(str(m["iso_volume"]), "local:")
+}
+
+// unmovableReason names why a drain leaves a machine.
+func unmovableReason(m D) string {
+	if isoOnLocal(m) && (contains([]string{"ready", "running", "stopped"}, m["state"]) || m["state"] == "installing" && unmanaged(m)) {
+		return "iso_on_local_storage"
+	}
+	return "machine_" + str(m["state"])
 }
 
 func (e *Execution) PlanMigration(a D) D {
@@ -56,8 +82,11 @@ func (e *Execution) PlanMigration(a D) D {
 	if from.Name == target.Name {
 		fail("conflict", "The machine is already on that node", D{"recovery": "revise_request"})
 	}
-	if !contains([]string{"ready", "running", "stopped"}, m["state"]) {
-		fail("conflict", "Only a ready or stopped machine can move", D{"recovery": "resolve_prerequisite"})
+	if !movable(m) {
+		if unmovableReason(m) == "iso_on_local_storage" {
+			fail("conflict", "The machine's ISO is on one node's local storage; eject it with machine_media first", D{"recovery": "resolve_prerequisite"})
+		}
+		fail("conflict", "Only a ready or stopped machine, or one installing from an ISO, can move", D{"recovery": "resolve_prerequisite"})
 	}
 	e.refusePluginHeld(integer(t["n"]), m["vmid"], "migrate", "a machine that moves")
 	if obj(e.Call(D{"op": "inventory"}, target.Target))["tenant_route"] == false {
@@ -201,8 +230,8 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 		switch {
 		case t["status"] != "active":
 			reason = "tenant_suspended"
-		case !contains([]string{"ready", "running", "stopped"}, m["state"]):
-			reason = "machine_" + str(m["state"])
+		case !movable(m):
+			reason = unmovableReason(m)
 		case len(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate")) > 0:
 			reason = heldReason(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate"))
 		}
