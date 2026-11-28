@@ -206,7 +206,10 @@ func (e *Execution) importStart(a D, c importContext, plan D) D {
 	job := D{"source": c.Source, "guest": c.VMID, "node": c.SourceNode, "api": c.API, "kind": c.Kind, "running": c.Running,
 		"cloud_init_key": cloudInitKey, "hop": hop, "target_node": c.Target.Name, "target_vmid": integer(obj(obj(plan["plan"])["target"])["vmid"])}
 	spec := D{"name": name, "kind": c.Kind, "image": "imported", "cpu": c.CPU, "memory_mb": c.Memory, "disk_gb": c.DiskGiB, "node": c.Target.Name,
-		"public_ssh": false, "imported": true, "import": pickImport(job)}
+		"public_ssh": false, "imported": true, "import": pickImport(job),
+		// An imported guest has no carrel reporter: unmanaged, so its
+		// readiness follows SSH alone, as the verification does.
+		"guest_management": 0}
 	m, _ := e.AllocateMachine(t, spec)
 	if integer(m["vmid"]) != integer(job["target_vmid"]) {
 		e.S.Remove("machines", m["vmid"])
@@ -573,8 +576,10 @@ func (e *Execution) FinishMachineImport(t D) D {
 	state := "needs_owner_fix"
 	verify := obj(job["verify"])
 	delete(m, "reason")
+	// A record created before imports were unmanaged gets the same setting.
+	m["guest_management"] = 0
 	if verify["ok"] == true {
-		state = "running"
+		state = bootState(m)
 		m["power_state"], m["network_verification"] = "running", "verified"
 		m["ssh_ready"], m["ssh_checked_at"] = true, now()
 	} else {

@@ -2361,6 +2361,9 @@ def import_verify(req):
     status = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/status/current").get("status")
     if status != "running":
         run("qm" if vm else "pct", "start", vmid)
+    # Loopback comes up first, and a DHCP or cloud-init guest gets its address
+    # seconds later: wait for the expected address, not for any report.
+    want = str(m.get("ip") or "")
     addresses, info = [], None
     deadline = time.monotonic() + seconds
     while True:
@@ -2372,12 +2375,14 @@ def import_verify(req):
                 addresses = run("lxc-info", "-n", vmid, "-iH", timeout=30).split()
         except (CommandFailure, subprocess.TimeoutExpired, ValueError):
             addresses = []
-        if addresses or time.monotonic() >= deadline:
+        addresses = [a for a in addresses if not a.startswith("127.")]
+        if (want in addresses if want else addresses) or time.monotonic() >= deadline:
             break
         time.sleep(3)
     if vm and addresses:
         try:
-            raw = json.loads(run("qm", "guest", "cmd", vmid, "guest-info", timeout=30))
+            # qm adds the guest- prefix itself: its command is `info`.
+            raw = json.loads(run("qm", "guest", "cmd", vmid, "info", timeout=30))
             commands = raw.get("supported_commands", []) if isinstance(raw, dict) else []
             info = {"version": str(raw.get("version", "")), "enabled": sorted(c["name"] for c in commands if isinstance(c, dict) and c.get("enabled") and isinstance(c.get("name"), str))}
         except (CommandFailure, subprocess.TimeoutExpired, ValueError):

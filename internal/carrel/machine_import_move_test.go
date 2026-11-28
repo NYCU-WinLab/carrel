@@ -86,7 +86,7 @@ func TestMachineImportConfirmRunningVM(t *testing.T) {
 		t.Errorf("result: %v", op["result"])
 	}
 	m := p.Store.Get("machines", "10100")
-	if m == nil || m["state"] != "running" || m["node"] != "carrel01" || m["imported"] != true {
+	if m == nil || m["state"] != "ready" || m["node"] != "carrel01" || m["imported"] != true {
 		t.Fatalf("machine: %v", m)
 	}
 	if num((&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))["vcpu"]) != 4 {
@@ -312,7 +312,7 @@ func TestMachineImportPollErrorIsRetried(t *testing.T) {
 	if importPollErrors != 0 {
 		t.Errorf("the failing reads were not made")
 	}
-	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "running" {
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "ready" {
 		t.Errorf("machine: %v", m)
 	}
 }
@@ -447,7 +447,7 @@ func TestMachineImportedGuestCanBeReadAndDeleted(t *testing.T) {
 		t.Fatalf("operation: %v", op)
 	}
 	m := p.Store.Get("machines", "10100")
-	if m == nil || m["state"] != "running" {
+	if m == nil || m["state"] != "ready" {
 		t.Fatalf("machine: %v", m)
 	}
 	alice := person("alice", false)
@@ -476,11 +476,15 @@ func TestMachineImportedGuestIsGatedUntilNormalized(t *testing.T) {
 		t.Errorf("a direct ZFS import must still call import_finish: %v", b.calls)
 	}
 	m := p.Store.Get("machines", "10100")
-	if m == nil || m["state"] != "running" {
+	if m == nil || m["state"] != "ready" {
 		t.Fatalf("machine: %v", m)
 	}
 	// A record from before verification (#920) still sits in the gated state.
+	// Such a record has none of the fields a verification sets.
 	m["state"] = "imported_unverified"
+	for _, k := range []string{"power_state", "network_verification", "ssh_ready", "ssh_checked_at", "guest_management"} {
+		delete(m, k)
+	}
 	p.Store.Put("machines", 10100, 1, m)
 	// The imported guest arrives stopped; the node only ever confirms a stop.
 	var actions []D
@@ -584,7 +588,7 @@ func TestMachineImportRetryResumesFailedImport(t *testing.T) {
 	if op["state"] != "succeeded" {
 		t.Fatalf("retried operation: %v", op)
 	}
-	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "running" {
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "ready" {
 		t.Errorf("machine: %v", m)
 	}
 	// One refused request and one that went through; the shutdown happened once.
@@ -626,13 +630,13 @@ func TestMachineImportVerifyPassKeepsGuestUsable(t *testing.T) {
 		t.Fatalf("operation: %v", op)
 	}
 	m := p.Store.Get("machines", "10100")
-	if m["state"] != "running" || m["reason"] != nil || m["ssh_ready"] != true {
+	if m["state"] != "ready" || m["reason"] != nil || m["ssh_ready"] != true {
 		t.Errorf("machine: %v", m)
 	}
 	if b.count("import_verify") != 1 {
 		t.Errorf("the guest is verified once, got %d", b.count("import_verify"))
 	}
-	if obj(op["result"])["state"] != "running" {
+	if obj(op["result"])["state"] != "ready" {
 		t.Errorf("result: %v", op["result"])
 	}
 }
@@ -701,4 +705,40 @@ func verifyFallback(r D) any {
 		return []D{}
 	}
 	return D{"status": "running"}
+}
+
+// An imported guest has no carrel reporter, so it is unmanaged: a passed
+// verification makes it ready, and a later reboot waits for SSH alone instead
+// of a guest report that never comes (#931 review).
+func TestMachineImportedGuestRebootsWithoutGuestReport(t *testing.T) {
+	p, b, run := importSite(t)
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m["state"] != "ready" || !unmanaged(m) {
+		t.Fatalf("machine: %v", m)
+	}
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "action" {
+			return D{"power_state": "running", "changed": true, "boot_id": "after-reboot"}, nil
+		}
+		return verifyFallback(r), nil
+	}
+	alice := person("alice", false)
+	r := p.Execute(context.Background(), "machine_power", D{"machine": str(m["name"]), "action": "reboot"}, alice)
+	if r["ok"] != true {
+		t.Fatalf("machine_power: %v", r)
+	}
+	op := obj(r["operation"])
+	for i := 0; i < 400 && !boolean(op["done"]); i++ {
+		time.Sleep(10 * time.Millisecond)
+		op = publicOperation(p.Store.Get("operations", str(op["id"])))
+	}
+	if op["state"] != "succeeded" {
+		t.Fatalf("reboot: %v", op)
+	}
+	if m := p.Store.Get("machines", "10100"); m["state"] == "needs_owner_fix" || m["state"] == "initializing" {
+		t.Errorf("machine after reboot: %v", m)
+	}
 }

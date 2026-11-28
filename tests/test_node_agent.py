@@ -3161,7 +3161,7 @@ def test_import_verify_boots_a_vm_and_reads_the_agent(monkeypatch):
                     },
                 ]
             )
-        if a[-1] == "guest-info":
+        if a[-1] == "info":
             return json.dumps(
                 {
                     "version": "9.0",
@@ -3176,8 +3176,35 @@ def test_import_verify_boots_a_vm_and_reads_the_agent(monkeypatch):
     monkeypatch.setattr(module, "run", fake_run)
     out = module.import_verify({"machine": {**MACHINE, "kind": "vm"}})
     assert calls[0] == ("qm", "start", 10100)
-    assert out["addresses"] == ["10.200.1.10", "127.0.0.1"]
+    assert calls[-1] == ("qm", "guest", "cmd", 10100, "info")
+    assert out["addresses"] == ["10.200.1.10"]
     assert out["guest_info"] == {"version": "9.0", "enabled": ["guest-ping"]}
+
+
+def test_import_verify_waits_past_a_loopback_only_report(monkeypatch):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    monkeypatch.setattr(module, "located", lambda m: "pve1")
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {})
+    monkeypatch.setattr(module, "pve_get", lambda *a, **k: {"status": "running"})
+    monkeypatch.setattr(module.time, "sleep", lambda s: None)
+    lo = {"name": "lo", "ip-addresses": [{"ip-address": "127.0.0.1", "ip-address-type": "ipv4"}]}
+    eth = {"name": "eth0", "ip-addresses": [{"ip-address": "10.200.1.10", "ip-address-type": "ipv4"}]}
+    reports = [[lo], [lo, {"name": "eth0", "ip-addresses": []}], [lo, eth]]
+    calls = []
+
+    def fake_run(*a, **k):
+        calls.append(a)
+        if a[-1] == "network-get-interfaces":
+            return json.dumps(reports.pop(0))
+        return json.dumps({"version": "9.0", "supported_commands": []})
+
+    monkeypatch.setattr(module, "run", fake_run)
+    out = module.import_verify({"machine": {**MACHINE, "kind": "vm"}})
+    assert reports == []
+    assert out["addresses"] == ["10.200.1.10"]
+    assert out["guest_info"] == {"version": "9.0", "enabled": []}
+    assert calls[-1] == ("qm", "guest", "cmd", 10100, "info")
 
 
 def test_import_verify_a_ct_reads_lxc_info_and_has_no_guest_info(monkeypatch):
