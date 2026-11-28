@@ -93,8 +93,18 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	login = "alice"
 	// A page, not a redirect: a redirect that ends a chain from the login
 	// site does not carry the SameSite=Strict session cookie.
-	if r := open(link); r.StatusCode != 200 || !strings.Contains(readAll(r), `content="0;url=/console/view"`) {
+	r := open(link)
+	if r.StatusCode != 200 || !strings.Contains(readAll(r), `content="0;url=/console/view"`) {
 		t.Fatal("the member could not log in", r.StatusCode)
+	}
+	// No script, no framing, no referrer with the code, nothing cached, and
+	// the session cookie still Strict.
+	if h := r.Header; !strings.Contains(h.Get("Content-Security-Policy"), "default-src 'none'") || !strings.Contains(h.Get("Content-Security-Policy"), "frame-ancestors 'none'") ||
+		h.Get("Referrer-Policy") != "no-referrer" || h.Get("Cache-Control") != "no-store" || h.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal(h)
+	}
+	if c := r.Cookies(); len(c) != 1 || c[0].Name != consoleCookie || c[0].SameSite != http.SameSiteStrictMode || !c[0].HttpOnly || !c[0].Secure {
+		t.Fatal("the session cookie changed", c)
 	}
 	if r := open(link); r.StatusCode != 404 {
 		t.Fatal("a link worked twice", r.StatusCode)

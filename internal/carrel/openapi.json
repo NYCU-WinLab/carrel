@@ -305,8 +305,8 @@
         "x-carrel-audience": "public",
         "summary": "Keycloak returns here",
         "responses": {
-          "302": {
-            "description": "Redirect"
+          "200": {
+            "description": "HTML page"
           }
         }
       }
