@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.20.0](https://github.com/NYCU-WinLab/carrel/compare/v0.19.0...v0.20.0) (2026-11-28)
+
+
+### Features
+
+* machine_get lists owner checks for an imported machine ([#925](https://github.com/NYCU-WinLab/carrel/issues/925)) ([6c0bb57](https://github.com/NYCU-WinLab/carrel/commit/6c0bb579e0066550fdcc7c31b69322b91f16be05))
+* normalize the network of an imported guest ([#929](https://github.com/NYCU-WinLab/carrel/issues/929)) ([8dfb058](https://github.com/NYCU-WinLab/carrel/commit/8dfb0581420b5d1df0627f736a6c8416ff8ca03e))
+* remove foreign keys and set CPU type on an imported guest ([#930](https://github.com/NYCU-WinLab/carrel/issues/930)) ([e298cc5](https://github.com/NYCU-WinLab/carrel/commit/e298cc56c39c32b57ff9c121f39b57f7b88b97c8))
+* verify an imported guest and set needs_owner_fix on failure ([#931](https://github.com/NYCU-WinLab/carrel/issues/931)) ([d03abb6](https://github.com/NYCU-WinLab/carrel/commit/d03abb67742c956d5f8fd7ac209a954b31d0af7e))
+
+
+### Bug fixes
+
+* machine_import retry resumes the job and shows the Proxmox error ([#927](https://github.com/NYCU-WinLab/carrel/issues/927)) ([7ffe888](https://github.com/NYCU-WinLab/carrel/commit/7ffe8883f57411a4f13bb625bd7d27ec1b480af1))
+* recompute renamed idempotency fingerprints after the service rename ([#923](https://github.com/NYCU-WinLab/carrel/issues/923)) ([1ac560f](https://github.com/NYCU-WinLab/carrel/commit/1ac560faf6c6d33007af82f0d1902da28172fb38))
+* tag imported guests so node actions accept them ([#924](https://github.com/NYCU-WinLab/carrel/issues/924)) ([ee419b0](https://github.com/NYCU-WinLab/carrel/commit/ee419b06c811c96980f0230e8db80f25b770393e))
+
 ## [0.19.0](https://github.com/NYCU-WinLab/carrel/compare/v0.18.0...v0.19.0) (2026-11-28)
 
 
