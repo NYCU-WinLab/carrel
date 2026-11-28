@@ -418,7 +418,7 @@ func (e *Execution) Media(m, a, t D) D {
 }
 
 // installInfo is what an installer asks for: carrel gives no DHCP on the
-// primary network, so the address is typed in.
+// primary network, so the installer gets the address typed in by hand.
 func installInfo(m D) D {
 	ip := str(m["ip"])
 	gateway := ip[:len(ip)-len(ip[lastDot(ip):])] + ".1"

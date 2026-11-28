@@ -450,6 +450,14 @@ management jump account. [sites/b09/ssh-config.example](../sites/b09/ssh-config.
 administrator aliases. Hypervisor administrators can technically read disks; Carrel exposes no general guest
 execution or file-reading API. Verification uses disposable guests and their owner's SSH key.
 
+## Install from an ISO
+
+`machine_create` with `iso` boots a VM from an ISO you imported, and the machine reports
+`state: installing` with an `install` block. Carrel runs no DHCP on the primary network, so the
+installer finds no address by itself. In the installer choose manual network configuration and type
+the four values from `install`: `address` (for example `10.200.1.5/24`), `gateway`, `dns` and `mtu`.
+When the install finishes, eject the ISO with `machine_media` (`action: eject`).
+
 ## Saved keys
 
 Saved SSH keys apply to future creations, and to existing machines only where carrel-keys is
