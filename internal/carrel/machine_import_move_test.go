@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,9 +25,11 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 		t.Fatal(err)
 	}
 	importPoll = time.Millisecond
+	importVerifyPoll, importVerifySeconds = time.Millisecond, 1
+	p.sshProbe = func(context.Context, D) bool { return true }
 	p.wg.Add(1)
 	go p.Operations.Loop()
-	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse, importTruncate = "none", nil, 0, nil, "", false
+	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse, importTruncate, importLateConfig = "none", nil, 0, nil, "", false, ""
 	srv, fp, _ := importFake(t)
 	admin := person("root", true)
 	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
@@ -83,7 +86,7 @@ func TestMachineImportConfirmRunningVM(t *testing.T) {
 		t.Errorf("result: %v", op["result"])
 	}
 	m := p.Store.Get("machines", "10100")
-	if m == nil || m["state"] != "imported_unverified" || m["node"] != "carrel01" || m["imported"] != true {
+	if m == nil || m["state"] != "ready" || m["node"] != "carrel01" || m["imported"] != true {
 		t.Fatalf("machine: %v", m)
 	}
 	if num((&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))["vcpu"]) != 4 {
@@ -309,7 +312,7 @@ func TestMachineImportPollErrorIsRetried(t *testing.T) {
 	if importPollErrors != 0 {
 		t.Errorf("the failing reads were not made")
 	}
-	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "imported_unverified" {
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "ready" {
 		t.Errorf("machine: %v", m)
 	}
 }
@@ -382,7 +385,7 @@ func TestMachineImportConfirmRefusals(t *testing.T) {
 
 func TestMachineImportRefusesGuestsItCannotMoveSafely(t *testing.T) {
 	_, _, run := importSite(t)
-	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk", 114: "ISO"} {
+	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk", 114: "ISO", 115: "more than one network device (net1)"} {
 		seenForms = nil
 		op := run(vmid)
 		if op["state"] != "failed" || !strings.Contains(str(obj(op["error"])["message"]), why) {
@@ -444,7 +447,7 @@ func TestMachineImportedGuestCanBeReadAndDeleted(t *testing.T) {
 		t.Fatalf("operation: %v", op)
 	}
 	m := p.Store.Get("machines", "10100")
-	if m == nil || m["state"] != "imported_unverified" {
+	if m == nil || m["state"] != "ready" {
 		t.Fatalf("machine: %v", m)
 	}
 	alice := person("alice", false)
@@ -473,9 +476,16 @@ func TestMachineImportedGuestIsGatedUntilNormalized(t *testing.T) {
 		t.Errorf("a direct ZFS import must still call import_finish: %v", b.calls)
 	}
 	m := p.Store.Get("machines", "10100")
-	if m == nil || m["state"] != "imported_unverified" {
+	if m == nil || m["state"] != "ready" {
 		t.Fatalf("machine: %v", m)
 	}
+	// A record from before verification (#920) still sits in the gated state.
+	// Such a record has none of the fields a verification sets.
+	m["state"] = "imported_unverified"
+	for _, k := range []string{"power_state", "network_verification", "ssh_ready", "ssh_checked_at", "guest_management"} {
+		delete(m, k)
+	}
+	p.Store.Put("machines", 10100, 1, m)
 	// The imported guest arrives stopped; the node only ever confirms a stop.
 	var actions []D
 	b.call = func(r D, _ string) (any, error) {
@@ -578,7 +588,7 @@ func TestMachineImportRetryResumesFailedImport(t *testing.T) {
 	if op["state"] != "succeeded" {
 		t.Fatalf("retried operation: %v", op)
 	}
-	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "imported_unverified" {
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "ready" {
 		t.Errorf("machine: %v", m)
 	}
 	// One refused request and one that went through; the shutdown happened once.
@@ -607,5 +617,210 @@ func TestMachineImportTruncatedMigrateAnswerKeepsRecord(t *testing.T) {
 	}
 	if u := importUsage(p); num(u["machines"]) != 1 {
 		t.Errorf("quota released: %v", u)
+	}
+}
+
+// The verification after normalization (#920): a passing guest leaves
+// imported_unverified and stays usable; each failed check gives
+// needs_owner_fix with its reason.
+func TestMachineImportVerifyPassKeepsGuestUsable(t *testing.T) {
+	p, b, run := importSite(t)
+	op := run(104)
+	if op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m["state"] != "ready" || m["reason"] != nil || m["ssh_ready"] != true {
+		t.Errorf("machine: %v", m)
+	}
+	if b.count("import_verify") != 1 {
+		t.Errorf("the guest is verified once, got %d", b.count("import_verify"))
+	}
+	if obj(op["result"])["state"] != "ready" {
+		t.Errorf("result: %v", op["result"])
+	}
+}
+
+func TestMachineImportVerifyFailuresNeedOwnerFix(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		ssh        bool
+		verify     any
+		kind       int
+	}{
+		{"no address", "does not report the address", true, D{"addresses": []any{"10.200.1.99"}, "guest_info": D{"enabled": []any{}}}, 104},
+		{"no addresses at all", "does not report the address", true, D{"addresses": []any{}, "guest_info": nil}, 104},
+		{"ssh closed", "SSH port 22 does not answer", false, nil, 104},
+		{"no guest-info", "does not answer guest-info", true, D{"addresses": []any{"10.200.1.10"}, "guest_info": nil}, 104},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, b, run := importSite(t)
+			p.sshProbe = func(context.Context, D) bool { return tc.ssh }
+			if tc.verify != nil {
+				b.call = func(r D, _ string) (any, error) {
+					if r["op"] == "import_verify" {
+						return tc.verify, nil
+					}
+					return verifyFallback(r), nil
+				}
+			}
+			op := run(tc.kind)
+			if op["state"] != "succeeded" {
+				t.Fatalf("a failed check does not fail the import: %v", op)
+			}
+			m := p.Store.Get("machines", "10100")
+			if m["state"] != "needs_owner_fix" || !strings.Contains(str(m["reason"]), tc.want) {
+				t.Errorf("machine: %v", m)
+			}
+			if obj(op["result"])["state"] != "needs_owner_fix" || !strings.Contains(str(obj(op["result"])["reason"]), tc.want) {
+				t.Errorf("result: %v", op["result"])
+			}
+		})
+	}
+}
+
+func TestMachineImportVerifyCallErrorNeedsOwnerFix(t *testing.T) {
+	p, b, run := importSite(t)
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "import_verify" {
+			return nil, errors.New("node unreachable")
+		}
+		return verifyFallback(r), nil
+	}
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	if m := p.Store.Get("machines", "10100"); m["state"] != "needs_owner_fix" || m["reason"] == nil {
+		t.Errorf("machine: %v", m)
+	}
+}
+
+// verifyFallback answers the calls a test that replaces the backend's
+// function still needs: the inventory the plan reads, and the rest as usual.
+func verifyFallback(r D) any {
+	switch r["op"] {
+	case "inventory":
+		return baseInventory()
+	case "storage_usage":
+		return []D{}
+	}
+	return D{"status": "running"}
+}
+
+// An imported guest has no carrel reporter, so it is unmanaged: a passed
+// verification makes it ready, and a later reboot waits for SSH alone instead
+// of a guest report that never comes (#931 review).
+func TestMachineImportedGuestRebootsWithoutGuestReport(t *testing.T) {
+	p, b, run := importSite(t)
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m["state"] != "ready" || !unmanaged(m) {
+		t.Fatalf("machine: %v", m)
+	}
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "action" {
+			return D{"power_state": "running", "changed": true, "boot_id": "after-reboot"}, nil
+		}
+		return verifyFallback(r), nil
+	}
+	alice := person("alice", false)
+	r := p.Execute(context.Background(), "machine_power", D{"machine": str(m["name"]), "action": "reboot"}, alice)
+	if r["ok"] != true {
+		t.Fatalf("machine_power: %v", r)
+	}
+	op := obj(r["operation"])
+	for i := 0; i < 400 && !boolean(op["done"]); i++ {
+		time.Sleep(10 * time.Millisecond)
+		op = publicOperation(p.Store.Get("operations", str(op["id"])))
+	}
+	if op["state"] != "succeeded" {
+		t.Fatalf("reboot: %v", op)
+	}
+	if m := p.Store.Get("machines", "10100"); m["state"] == "needs_owner_fix" || m["state"] == "initializing" {
+		t.Errorf("machine after reboot: %v", m)
+	}
+}
+
+// A failed verification stays needs_owner_fix in the public view of the
+// unmanaged import until SSH answers (#931 review round 2).
+func TestMachineImportFailedVerifyShowsNeedsOwnerFix(t *testing.T) {
+	p, _, run := importSite(t)
+	p.sshProbe = func(context.Context, D) bool { return false }
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	listed := dicts(member(p, "machine_list", D{})["machines"])
+	if len(listed) != 1 || listed[0]["state"] != "needs_owner_fix" || !strings.Contains(str(listed[0]["reason"]), "SSH port 22") {
+		t.Fatalf("machine_list: %v", listed)
+	}
+	got := dicts(member(p, "machine_get", D{"machine": str(listed[0]["name"])})["machines"])
+	if len(got) != 1 || got[0]["state"] != "needs_owner_fix" || got[0]["reason"] == nil {
+		t.Fatalf("machine_get: %v", got)
+	}
+	p.sshProbe = func(context.Context, D) bool { return true }
+	got = dicts(member(p, "machine_get", D{"machine": str(listed[0]["name"])})["machines"])
+	if len(got) != 1 || got[0]["state"] != "ready" || got[0]["reason"] != nil {
+		t.Fatalf("machine_get once SSH answers: %v", got)
+	}
+}
+
+// A NIC the owner adds on the source after confirm, while the guest shuts
+// down, is refused before the migration, like a late unusedN (#931 review
+// round 4).
+func TestMachineImportRefusesNICAddedAfterConfirm(t *testing.T) {
+	p, _, run := importSite(t)
+	importLateConfig = `,"net1":"virtio=AA:BB:CC:DD:EE:11,bridge=vmbr1,firewall=0"`
+	op := run(104)
+	if op["state"] != "failed" || obj(op["error"])["backend_code"] != "source_changed" || !strings.Contains(str(obj(op["error"])["message"]), "net1") {
+		t.Fatalf("operation: %v", op)
+	}
+	if strings.Contains(joined(), "remote_migrate") {
+		t.Errorf("the guest moved with net1:\n%s", joined())
+	}
+	if m := p.Store.Get("machines", "10100"); m != nil && m["state"] == "ready" {
+		t.Errorf("machine: %v", m)
+	}
+}
+
+// A guest that still moved with an extra NIC (a job from before the source
+// re-check) is not started by the node and keeps the start gate.
+func TestMachineImportExtraNICKeepsStartGate(t *testing.T) {
+	p, b, run := importSite(t)
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "import_verify" {
+			return D{"state": "done", "addresses": []any{}, "guest_info": nil, "extra_nics": []any{"net1"}}, nil
+		}
+		return verifyFallback(r), nil
+	}
+	op := run(104)
+	if op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m["state"] != "imported_unverified" || m["power_state"] != "stopped" || !strings.Contains(str(m["reason"]), "net1") {
+		t.Fatalf("machine: %v", m)
+	}
+	if res := obj(op["result"]); res["state"] != "imported_unverified" || !strings.Contains(str(res["reason"]), "net1") {
+		t.Errorf("result: %v", res)
+	}
+	// The fake node reports it running, as if started outside carrel: the
+	// gate still shows.
+	got := dicts(member(p, "machine_get", D{"machine": str(m["name"])})["machines"])
+	if len(got) != 1 || got[0]["state"] != "imported_unverified" {
+		t.Errorf("machine_get: %v", got)
+	}
+	r := p.Execute(context.Background(), "machine_power", D{"machine": str(m["name"]), "action": "start"}, person("alice", false))
+	started := obj(r["operation"])
+	for i := 0; i < 400 && r["ok"] == true && !boolean(started["done"]); i++ {
+		time.Sleep(10 * time.Millisecond)
+		started = publicOperation(p.Store.Get("operations", str(started["id"])))
+	}
+	if started["state"] != "failed" || obj(started["error"])["code"] != "conflict" {
+		t.Errorf("machine_power start: %v", r)
+	}
+	if b.count("action") != 0 {
+		t.Errorf("the guest was started: %d action calls", b.count("action"))
 	}
 }

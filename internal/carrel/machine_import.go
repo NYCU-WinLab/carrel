@@ -184,7 +184,8 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 	// Guests the import cannot move safely are refused here, before confirm
 	// touches the source: HA would force-stop the guest on shutdown and
 	// Proxmox refuses to migrate it, protection blocks the cloud-init delete,
-	// detached volumes would be copied but never counted or moved, and one
+	// detached volumes would be copied but never counted or moved, a second
+	// NIC would skip normalization and the firewall, and one
 	// migration takes one target storage.
 	if str(guest["hastate"]) != "" {
 		fail("conflict", "The guest is managed by Proxmox HA on the source; remove it from HA there first", D{"recovery": "resolve_prerequisite"})
@@ -193,6 +194,11 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 		fail("conflict", "The guest has protection set on the source; clear it there first", D{"recovery": "resolve_prerequisite"})
 	}
 	for key, value := range config {
+		// import_network normalizes net0 only and the guest firewall covers
+		// net0 only: another NIC would boot on the tenant bridge unfiltered.
+		if matches(`^net[0-9]+$`, key) && key != "net0" {
+			fail("conflict", "The guest has more than one network device ("+key+"); remove it on the source first", D{"recovery": "resolve_prerequisite"})
+		}
 		if matches(`^unused[0-9]+$`, key) {
 			fail("conflict", "The guest has a detached disk ("+key+"); delete or reattach it on the source first", D{"recovery": "resolve_prerequisite"})
 		}

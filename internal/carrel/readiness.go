@@ -45,10 +45,23 @@ func readinessState(m D) {
 	if contains([]string{"stopped", "paused", "deleting", "error", "provisioning", "initializing"}, m["state"]) {
 		return
 	}
+	// An import gate is lifted by the import alone, not by an observation.
+	if contains(importNotNormalized, m["state"]) {
+		return
+	}
 	if unmanaged(m) {
 		// No guest reports: SSH is only a hint for these machines. One with
 		// service ports keeps the state its port probe gave it.
 		if len(servicePortsOf(m)) > 0 && m["state"] == "ready" {
+			return
+		}
+		// A failed import verification is the only needs_owner_fix of an
+		// unmanaged machine (#920): it stays until SSH answers.
+		if m["state"] == "needs_owner_fix" {
+			if boolean(m["ssh_ready"]) {
+				m["state"] = bootState(m)
+				delete(m, "reason")
+			}
 			return
 		}
 		if m["power_state"] == "running" || m["state"] == "readiness_unknown" {
