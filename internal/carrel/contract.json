@@ -388,7 +388,7 @@
     },
     {
       "name": "machine_get",
-      "description": "Show status or connect to a known machine by name in one call. Returns live normalized power state, readiness and SSH configuration. No machine_list or metrics call is needed first. detail=full includes network rules and internal identifiers. A running hypervisor alone does not mean SSH or applications are ready. For connection requests from a local CLI client, merge returned ssh_config while preserving existing entries, verify its tenant-qualified alias with ssh -G, then present ssh_short. Observes power and SSH now; guest report freshness is separate. Stale or previous-boot reports do not prove application health.",
+      "description": "Show status or connect to a known machine by name in one call. Returns live normalized power state, readiness and SSH configuration. No machine_list or metrics call is needed first. detail=full includes network rules and internal identifiers. A running hypervisor alone does not mean SSH or applications are ready. For connection requests from a local CLI client, merge returned ssh_config while preserving existing entries, verify its tenant-qualified alias with ssh -G, then present ssh_short. Observes power and SSH now; guest report freshness is separate. Stale or previous-boot reports do not prove application health. An imported machine also returns owner_checks: what carrel cannot fix from outside (old keys, guest-exec, host key change, old addresses, resolvers).",
       "inputSchema": {
         "type": "object",
         "properties": {
