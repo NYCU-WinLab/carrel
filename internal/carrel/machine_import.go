@@ -105,6 +105,32 @@ func (e *Execution) MachineImport(a, w D) D {
 	return e.importStart(a, c, r)
 }
 
+// importPlace picks the node the guest lands on. Proxmox remote migration
+// puts it on the node behind import_target_endpoint, whose certificate the
+// pinned fingerprint names, so with import_target_node set that node is the
+// only choice; without it the plan shows where Place would put the machine.
+func (e *Execution) importPlace(cpu, memory, disk float64) (nodeRef, D) {
+	name := e.P.Config.ImportTargetNode
+	if name == "" {
+		return e.Place(cpu, memory, disk)
+	}
+	node, ok := e.nodeNamed(name)
+	if !ok {
+		fail("invalid", "import_target_node is not a configured node", D{"recovery": "contact_administrator"})
+	}
+	if e.drained(name) {
+		fail("conflict", "The import target node is drained", D{"recovery": "resolve_prerequisite", "node": name})
+	}
+	var admission D
+	if f := attempt(func() { admission, _ = e.admitOn(node, cpu, memory, disk, nil, false) }); f != nil {
+		if failure, ok := f.(Failure); ok && obj(failure.Result["error"])["code"] == "capacity_exhausted" {
+			fail("conflict", "The import target node has no room for this guest", merge(pick(obj(failure.Result["error"]), "dimension", "requested", "remaining"), D{"recovery": "resolve_prerequisite", "node": name}))
+		}
+		panic(f)
+	}
+	return node, admission
+}
+
 // importPlan reads the guest from its source and works out the import. It
 // reserves, allocates and changes nothing.
 func (e *Execution) importPlan(a D) (D, importContext) {
@@ -173,7 +199,7 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 	delta := D{"vcpu": cpu, "memory_mb": memory, "disk_gb": math.Ceil(diskGiB), "machines": 1, "ips": 1, "public_ports": 0}
 	n := integer(t["n"])
 	slot := e.freeSlot(t)
-	target, admission := e.Place(cpu, memory, math.Ceil(diskGiB))
+	target, admission := e.importPlace(cpu, memory, math.Ceil(diskGiB))
 
 	// Which way the disks move (PLAN 10.6, storage rules).
 	allZFS, hasCloudInit, offline := true, false, []string{}

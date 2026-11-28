@@ -15,6 +15,8 @@ import (
 var (
 	seenForms      []string
 	importFailTask = "none"
+	// importPollErrors is how many task reads fail before one answers.
+	importPollErrors int
 )
 
 // importFake is a source with one running VM on LVM-thin and one CT.
@@ -34,6 +36,11 @@ func importFake(t *testing.T) (*httptest.Server, string, *[]string) {
 			return
 		}
 		if strings.Contains(r.URL.Path, "/tasks/") {
+			if importPollErrors > 0 {
+				importPollErrors--
+				http.Error(w, `{"data":null}`, http.StatusInternalServerError)
+				return
+			}
 			status := "OK"
 			if strings.Contains(r.URL.Path, importFailTask) {
 				status = "command failed"
@@ -47,13 +54,15 @@ func importFake(t *testing.T) (*httptest.Server, string, *[]string) {
 		case "/api2/json/storage":
 			fmt.Fprint(w, `{"data":[{"storage":"local","type":"dir"},{"storage":"local-lvm","type":"lvmthin"},{"storage":"tank","type":"zfspool"}]}`)
 		case "/api2/json/cluster/resources":
-			fmt.Fprint(w, `{"data":[{"vmid":104,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":105,"type":"lxc","node":"anvil","status":"stopped"},{"vmid":106,"type":"lxc","node":"anvil","status":"running","template":0},{"vmid":107,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":9000,"type":"qemu","node":"anvil","status":"stopped","template":1}]}`)
+			fmt.Fprint(w, `{"data":[{"vmid":104,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":105,"type":"lxc","node":"anvil","status":"stopped"},{"vmid":106,"type":"lxc","node":"anvil","status":"running","template":0},{"vmid":107,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":108,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":9000,"type":"qemu","node":"anvil","status":"stopped","template":1}]}`)
 		case "/api2/json/nodes/anvil/qemu/104/config":
 			fmt.Fprint(w, `{"data":{"name":"sandbox","cores":4,"sockets":1,"memory":8192,"cpu":"host","scsi0":"local-lvm:vm-104-disk-0,size=32G","ide2":"local-lvm:vm-104-cloudinit,media=cdrom,size=4M","ide0":"local:iso/x.iso,media=cdrom","net0":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig0":"ip=dhcp","cicustom":"user=local:snippets/u.yaml"}}`)
 		case "/api2/json/nodes/anvil/lxc/106/config":
 			fmt.Fprint(w, `{"data":{"hostname":"Web_CT","cores":1,"memory":512,"rootfs":"local-lvm:vm-106-disk-0,size=4G","net0":"name=eth0,bridge=vmbr0,ip=10.0.0.6/24"}}`)
 		case "/api2/json/nodes/anvil/qemu/107/config":
 			fmt.Fprint(w, `{"data":{"name":"cold","cores":2,"sockets":1,"memory":2048,"scsi0":"local-lvm:vm-107-disk-0,size=10G","net0":"virtio=AA:BB:CC:DD:EE:00,bridge=vmbr0"}}`)
+		case "/api2/json/nodes/anvil/qemu/108/config":
+			fmt.Fprint(w, `{"data":{"name":"huge","cores":2,"sockets":1,"memory":2097152,"scsi0":"tank:vm-108-disk-0,size=10G","net0":"virtio=AA:BB:CC:DD:EE:08,bridge=vmbr0"}}`)
 		case "/api2/json/nodes/anvil/lxc/105/config":
 			fmt.Fprint(w, `{"data":{"hostname":"ct","cores":2,"memory":1024,"rootfs":"tank:subvol-105-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=10.0.0.5/24"}}`)
 		default:

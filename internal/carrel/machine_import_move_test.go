@@ -16,6 +16,7 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 	p, b := fixture(t)
 	p.Config.SourceDir = t.TempDir()
 	p.Config.ImportTargetEndpoint = "target.test:8006"
+	p.Config.ImportTargetNode = "carrel01"
 	p.Config.ImportTargetTokenID = "carrel@pve!import"
 	p.Config.ImportTargetFingerprint = strings.Repeat("AB:", 31) + "AB"
 	p.Config = p.Config.WithDefaults()
@@ -25,7 +26,7 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 	importPoll = time.Millisecond
 	p.wg.Add(1)
 	go p.Operations.Loop()
-	importFailTask, seenForms = "none", nil
+	importFailTask, seenForms, importPollErrors = "none", nil, 0
 	srv, fp, _ := importFake(t)
 	admin := person("root", true)
 	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
@@ -57,10 +58,13 @@ func TestMachineImportConfirmRunningVM(t *testing.T) {
 	}
 	log := joined()
 	// The cloud-init disk goes, the VM moves online straight to tank.
-	for _, want := range []string{"PUT /api2/json/nodes/anvil/qemu/104/config delete=ide2", "POST /api2/json/nodes/anvil/qemu/104/remote_migrate", "online=1", "target-storage=tank", "target-vmid=10100", "target-bridge=vmbr0"} {
+	for _, want := range []string{"PUT /api2/json/nodes/anvil/qemu/104/config delete=ide2", "POST /api2/json/nodes/anvil/qemu/104/remote_migrate", "online=1", "target-storage=tank", "target-vmid=10100", "target-bridge=t001"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("missing %q in\n%s", want, log)
 		}
+	}
+	if strings.Contains(log, "vmbr0") {
+		t.Errorf("the guest must not join the node underlay:\n%s", log)
 	}
 	if strings.Contains(log, "delete=1") || strings.Contains(log, "DELETE ") {
 		t.Errorf("the source must not be deleted:\n%s", log)
@@ -131,36 +135,146 @@ func TestMachineImportConfirmStoppedVMHop(t *testing.T) {
 	}
 }
 
-func TestMachineImportConfirmFailureRollsBack(t *testing.T) {
-	p, b, run := importSite(t)
+func importUsage(p *Platform) D {
+	return (&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))
+}
+
+func TestMachineImportConfirmFailureBeforeMigrateRollsBack(t *testing.T) {
+	p, _, run := importSite(t)
+	// Neither pct shutdown nor pct stop finishes: nothing was sent to migrate.
+	importFailTask = "status-"
+	op := run(106)
+	if op["state"] != "failed" {
+		t.Fatalf("operation: %v", op)
+	}
+	if strings.Contains(joined(), "remote_migrate") {
+		t.Fatalf("migrated after a failed stop:\n%s", joined())
+	}
+	if m := p.Store.Get("machines", "10100"); m != nil {
+		t.Errorf("record kept: %v", m)
+	}
+	if u := importUsage(p); num(u["vcpu"]) != 0 || num(u["machines"]) != 0 {
+		t.Errorf("quota still reserved: %v", u)
+	}
+	if strings.Contains(joined(), "DELETE") {
+		t.Errorf("the source was touched destructively")
+	}
+}
+
+func TestMachineImportConfirmFailureAfterMigrateKeepsRecord(t *testing.T) {
+	p, _, run := importSite(t)
+	// The migration task fails: the guest may be half on the target, so the
+	// VMID and the quota stay held for an admin.
 	importFailTask = "remote_migrate"
 	op := run(104)
 	if op["state"] != "failed" {
 		t.Fatalf("operation: %v", op)
 	}
-	if m := p.Store.Get("machines", "10100"); m != nil {
-		t.Errorf("record kept: %v", m)
+	m := p.Store.Get("machines", "10100")
+	if m == nil || m["state"] != "import_failed" {
+		t.Fatalf("record: %v", m)
 	}
-	if num((&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))["vcpu"]) != 0 || num((&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))["machines"]) != 0 {
-		t.Errorf("quota still reserved: %v", (&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1)))
+	if u := importUsage(p); num(u["vcpu"]) != 4 || num(u["machines"]) != 1 {
+		t.Errorf("quota released: %v", u)
 	}
 	if strings.Contains(joined(), "DELETE") {
 		t.Errorf("the source was touched destructively")
 	}
+	// The same guest is not imported again while that record stands.
+	if op := run(104); op["state"] != "failed" || obj(op["error"])["code"] != "conflict" {
+		t.Errorf("second import: %v", op)
+	}
+}
 
-	// A failure on the target after the move rolls back as well.
+func TestMachineImportConfirmFailedVolumeMoveKeepsRecord(t *testing.T) {
+	p, b, run := importSite(t)
+	// A failure on the target after the move keeps the record as well.
 	b.call = func(r D, _ string) (any, error) {
 		if r["op"] == "import_finish" {
 			return nil, Failure{D{"ok": false, "error": D{"code": "backend_unavailable", "message": "x"}}}
 		}
-		return nil, nil
+		if r["op"] == "inventory" {
+			return baseInventory(), nil
+		}
+		return D{"status": "running"}, nil
 	}
 	importFailTask = "none"
-	if op := run(107); op["state"] != "failed" {
+	op := run(107)
+	if op["state"] != "failed" {
 		t.Fatalf("hop failure: %v", op)
 	}
-	if p.Store.Get("machines", "10100") != nil {
-		t.Errorf("record kept after a failed volume move")
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "import_failed" || obj(m["import"])["failed_at"] != "move_volumes" {
+		t.Errorf("record after a failed volume move: %v", m)
+	}
+}
+
+func TestMachineImportPollErrorIsRetried(t *testing.T) {
+	p, _, run := importSite(t)
+	// The source answers 500 to a few task reads during the copy.
+	importPollErrors = 3
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	if importPollErrors != 0 {
+		t.Errorf("the failing reads were not made")
+	}
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "imported_unverified" {
+		t.Errorf("machine: %v", m)
+	}
+}
+
+func TestMachineImportResumesSavedTask(t *testing.T) {
+	p, _, run := importSite(t)
+	importFailTask = "remote_migrate"
+	op := run(104)
+	raw := p.Store.Get("operations", str(op["id"]))
+	job := obj(raw["import"])
+	if !strings.HasPrefix(str(job["upid"]), "UPID:") || job["migrate_sent"] != true {
+		t.Fatalf("task ID not saved: %v", job)
+	}
+	// A restarted job polls the saved task and sends nothing new.
+	importFailTask, seenForms = "none", nil
+	job["migrated"] = nil
+	e := p.execution(context.Background())
+	e.Op = raw
+	if f := attempt(e.PerformMachineImport); f != nil {
+		t.Fatalf("resume: %v", f)
+	}
+	if len(seenForms) != 0 {
+		t.Errorf("a resumed job wrote to the source: %v", seenForms)
+	}
+}
+
+func TestMachineImportPinsTargetNode(t *testing.T) {
+	p, _, _ := nodeFixture(t)
+	p.Config.SourceDir = t.TempDir()
+	srv, fp, _ := importFake(t)
+	admin := person("root", true)
+	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
+		t.Fatalf("source_add: %v", r)
+	}
+	plan := func(guest int) D {
+		return p.Execute(context.Background(), "machine_import", D{"tenant": "alice", "source": "old-lab", "guest": guest, "dry_run": true}, admin)
+	}
+	// Place alone picks carrel02; the endpoint serves carrel01.
+	if r := plan(107); obj(obj(obj(r["plan"])["target"]))["node"] != "carrel02" {
+		t.Fatalf("unpinned plan: %v", r)
+	}
+	p.Config.ImportTargetNode = "carrel01"
+	if r := plan(107); obj(obj(obj(r["plan"])["target"]))["node"] != "carrel01" {
+		t.Errorf("pinned plan: %v", r)
+	}
+	// No room on the pinned node is a conflict, not another node.
+	if r := plan(108); obj(r["error"])["code"] != "conflict" {
+		t.Errorf("full node: %v", r)
+	}
+	p.Store.SitePut("node", "carrel01", D{"drained": true})
+	if r := plan(107); obj(r["error"])["code"] != "conflict" {
+		t.Errorf("drained node: %v", r)
+	}
+	p.Config.ImportTargetNode = "carrel09"
+	if r := plan(107); obj(r["error"])["code"] != "invalid" {
+		t.Errorf("unknown node: %v", r)
 	}
 }
 
@@ -169,7 +283,7 @@ func TestMachineImportConfirmRefusals(t *testing.T) {
 	if r := p.Execute(context.Background(), "machine_import", D{"tenant": "alice", "source": "old-lab", "guest": 104, "confirm": true}, person("alice", false)); r["ok"] == true {
 		t.Errorf("non-admin: %v", r)
 	}
-	p.Config.ImportTargetEndpoint = ""
+	p.Config.ImportTargetNode = ""
 	if op := run(104); op["state"] != "failed" || len(seenForms) != 0 {
 		t.Errorf("no target settings: %v / %v", op, seenForms)
 	}

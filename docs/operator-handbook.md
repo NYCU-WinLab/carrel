@@ -625,6 +625,11 @@ Disks that were dropped before the move (the cloud-init disk) are not restored; 
 the old guest needs it. If the import report says `pct stop` was used instead of `pct shutdown`,
 check the guest's filesystem after the first start.
 
+A machine in state `import_failed` failed after the source was asked to migrate it: the guest may
+exist on `import_target_node` under that VMID, so carrel keeps the record, the VMID and the quota.
+Check the target with `qm config <vmid>` or `pct config <vmid>` and the source's task log, then
+either finish the move by hand or remove the partial guest on the target and delete the machine.
+
 ## Identity provider
 
 `issuer` in `config.json` names the OIDC provider members sign in with. Carrel reads its

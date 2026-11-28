@@ -60,14 +60,23 @@ func sourceWrite(ctx context.Context, client *http.Client, method, base, tokenID
 }
 
 // sourceTask waits for a task of the source to stop and returns whether it
-// finished OK. The task's own log never reaches a result.
+// finished OK. A read that fails on the way (the source busy or briefly
+// unreachable during an hours long copy) is tried again until the task's
+// time is up. The task's own log never reaches a result.
 func sourceTask(ctx context.Context, client *http.Client, base, tokenID, secret, node, upid string) bool {
 	if !matches(`^UPID:[A-Za-z0-9.:@!_-]{1,300}$`, upid) {
 		fail("backend_unavailable", "The source did not answer as a Proxmox host", D{"component": "source", "backend_code": "source_response_invalid", "recovery": "retry_infrastructure"})
 	}
 	deadline := time.Now().Add(importTaskLimit)
 	for time.Now().Before(deadline) {
-		st := obj(sourceGet(ctx, client, base, tokenID, secret, "/nodes/"+url.PathEscape(node)+"/tasks/"+url.PathEscape(upid)+"/status")["data"])
+		var st D
+		if f := attempt(func() {
+			st = obj(sourceGet(ctx, client, base, tokenID, secret, "/nodes/"+url.PathEscape(node)+"/tasks/"+url.PathEscape(upid)+"/status")["data"])
+		}); f != nil {
+			if failure, ok := f.(Failure); !ok || obj(failure.Result["error"])["code"] != "backend_unavailable" {
+				panic(f)
+			}
+		}
 		if st["status"] == "stopped" {
 			return st["exitstatus"] == "OK"
 		}
@@ -117,20 +126,23 @@ func (e *Execution) importTargetSecret() string {
 // slow part to PerformMachineImport.
 func (e *Execution) importStart(a D, c importContext, plan D) D {
 	cfg := e.P.Config
-	if cfg.ImportTargetEndpoint == "" || cfg.ImportTargetTokenID == "" || cfg.ImportTargetFingerprint == "" {
-		fail("invalid", "This site does not say where imported guests go: set import_target_endpoint, import_target_token_id and import_target_fingerprint", D{"recovery": "resolve_prerequisite"})
+	if cfg.ImportTargetEndpoint == "" || cfg.ImportTargetNode == "" || cfg.ImportTargetTokenID == "" || cfg.ImportTargetFingerprint == "" {
+		fail("invalid", "This site does not say where imported guests go: set import_target_endpoint, import_target_node, import_target_token_id and import_target_fingerprint", D{"recovery": "resolve_prerequisite"})
 	}
 	if !importTargetHost.MatchString(cfg.ImportTargetEndpoint) || !sourceTokenID.MatchString(cfg.ImportTargetTokenID) || !sourceFingerprint.MatchString(cfg.ImportTargetFingerprint) ||
-		!matches(`^[a-z][a-z0-9_.-]{0,62}$`, cfg.ImportHopStorage) || !matches(`^[a-zA-Z][a-zA-Z0-9_]{0,15}$`, cfg.ImportBridge) {
+		!matches(`^[a-z][a-z0-9_.-]{0,62}$`, cfg.ImportHopStorage) {
 		fail("invalid", "The import target settings of this site are malformed", D{"recovery": "contact_administrator"})
 	}
 	e.importTargetSecret()
+	if c.Target.Name != cfg.ImportTargetNode {
+		fail("conflict", "The import was planned for another node; plan it again", D{"recovery": "revise_request"})
+	}
 	t := c.Tenant
 	e.RequireActive(integer(t["n"]))
 	name := e.importName(t, c.Config, c.VMID)
 	// The same guest is not imported twice at once.
 	for _, m := range e.S.Objects("machines", integer(t["n"])) {
-		if m["state"] == "importing" && obj(m["import"])["source"] == c.Source && integer(obj(m["import"])["guest"]) == c.VMID {
+		if (m["state"] == "importing" || m["state"] == "import_failed") && obj(m["import"])["source"] == c.Source && integer(obj(m["import"])["guest"]) == c.VMID {
 			fail("conflict", "This guest is already being imported", D{"recovery": "resolve_prerequisite"})
 		}
 	}
@@ -168,23 +180,35 @@ func init() {
 	registerPhases(Phases{Perform: (*Execution).PerformMachineImport, Finish: func(e *Execution, t D) D { return e.FinishMachineImport(t) }}, "machine_import")
 }
 
-// PerformMachineImport moves the guest without the writer lock. A failure removes
-// the machine record, which gives the quota back; the source is left as it
-// was or stopped, never deleted.
+// PerformMachineImport moves the guest without the writer lock. A failure
+// before the remote_migrate request is sent removes the machine record, which
+// gives the quota back. Once it is sent the guest may exist on the target, so
+// a failure keeps the record (its VMID and quota) as import_failed for an
+// admin to finish or delete. The source is left as it was or stopped, never
+// deleted.
 func (e *Execution) PerformMachineImport() {
 	if e.Op["tool"] != "machine_import" || e.Op["import"] == nil {
 		return
 	}
-	job := obj(e.Op["import"])
-	vmid := integer(job["target_vmid"])
-	problem := attempt(func() { e.moveGuest(job) })
+	vmid := integer(obj(e.Op["import"])["target_vmid"])
+	problem := attempt(func() { e.moveGuest(obj(e.Op["import"])) })
 	if problem == nil {
 		return
 	}
 	e.P.writer.Lock()
 	defer e.P.writer.Unlock()
+	if e.P.ctx.Err() != nil {
+		// The control plane is stopping; the job resumes from its record.
+		panic(problem)
+	}
 	if m := e.S.Get("machines", str(vmid)); m != nil && m["operation_id"] == e.Op["id"] {
-		e.S.Remove("machines", vmid)
+		if obj(e.Op["import"])["migrate_sent"] == true {
+			m["state"] = "import_failed"
+			m["import"] = merge(obj(m["import"]), D{"failed_at": str(obj(e.Op["import"])["step"])})
+			e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
+		} else {
+			e.S.Remove("machines", vmid)
+		}
 	}
 	panic(problem)
 }
@@ -196,7 +220,6 @@ func (e *Execution) moveGuest(job D) {
 		fail("not_found", "This source is not registered; add it with source_add", D{"recovery": "resolve_prerequisite"})
 	}
 	secret, _ := e.sourceSecretOf(D{}, str(job["source"]))
-	targetSecret := e.importTargetSecret()
 	client := sourceClient(str(rec["fingerprint"]))
 	defer client.CloseIdleConnections()
 	base, tokenID := str(rec["api_url"]), str(rec["token_id"])
@@ -212,6 +235,35 @@ func (e *Execution) moveGuest(job D) {
 		e.Op["phase"] = "importing_guest"
 		e.P.Operations.Save(e.Op)
 	}
+	// A job resumed after a restart skips what it already did.
+	if job["migrated"] != true {
+		if upid := str(job["upid"]); upid != "" {
+			note("step", "remote_migrate")
+			if !sourceTask(e.Ctx, client, base, tokenID, secret, node, upid) {
+				fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped if it was a container", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
+			}
+		} else {
+			if job["migrate_sent"] == true {
+				// The request went out but its task ID was not saved.
+				fail("backend_unavailable", "The import was interrupted while the migration started; check both sides", D{"component": "source", "backend_code": "remote_migrate_unknown", "recovery": "contact_administrator"})
+			}
+			e.startMigration(job, client, base, tokenID, secret, path, note)
+		}
+		note("migrated", true)
+	}
+
+	if job["hop"] == true {
+		note("step", "move_volumes")
+		e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": cfg.ImportHopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
+	}
+}
+
+// startMigration prepares the guest on the source, sends remote_migrate and
+// waits for its task. The task ID is saved before the wait, so a restarted
+// job polls the same task instead of starting another.
+func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, secret, path string, note func(string, any)) {
+	cfg := e.P.Config
+	node := str(job["node"])
 	wait := func(r D) bool {
 		return sourceTask(e.Ctx, client, base, tokenID, secret, node, str(r["data"]))
 	}
@@ -219,12 +271,13 @@ func (e *Execution) moveGuest(job D) {
 
 	// A guest that moved offline cannot carry the cloud-init disk: carrel
 	// writes its own after the move.
-	if key := str(job["cloud_init_key"]); key != "" {
+	if key := str(job["cloud_init_key"]); key != "" && job["cloud_init_dropped"] != true {
 		sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", url.Values{"delete": {key}})
+		note("cloud_init_dropped", true)
 	}
 	// A CT moves stopped. pct shutdown first; when it does not finish, pct
 	// stop, and the result says which one was used.
-	if job["kind"] == "ct" && job["running"] == true {
+	if job["kind"] == "ct" && job["running"] == true && str(job["stopped_with"]) == "" {
 		note("step", "stop")
 		used := "pct shutdown"
 		if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(importShutdownSeconds)}})) {
@@ -240,22 +293,29 @@ func (e *Execution) moveGuest(job D) {
 	if job["hop"] == true {
 		storage = cfg.ImportHopStorage
 	}
+	targetSecret := e.importTargetSecret()
 	endpoint := "apitoken=PVEAPIToken=" + cfg.ImportTargetTokenID + "=" + targetSecret + ",host=" + cfg.ImportTargetEndpoint + ",fingerprint=" + strings.ToUpper(cfg.ImportTargetFingerprint)
 	if host, port, ok := strings.Cut(cfg.ImportTargetEndpoint, ":"); ok {
 		endpoint = "apitoken=PVEAPIToken=" + cfg.ImportTargetTokenID + "=" + targetSecret + ",host=" + host + ",port=" + port + ",fingerprint=" + strings.ToUpper(cfg.ImportTargetFingerprint)
 	}
-	form := url.Values{"target-endpoint": {endpoint}, "target-vmid": {strconv.Itoa(integer(job["target_vmid"]))}, "target-bridge": {cfg.ImportBridge}, "target-storage": {storage}}
+	// The guest joins its tenant's bridge, the one carrel machines use, never
+	// the node underlay: it arrives isolated, and normalization only changes
+	// its address.
+	bridge := fmt.Sprintf("t%03d", integer(e.Op["tenant_n"]))
+	form := url.Values{"target-endpoint": {endpoint}, "target-vmid": {strconv.Itoa(integer(job["target_vmid"]))}, "target-bridge": {bridge}, "target-storage": {storage}}
 	if job["kind"] == "vm" && job["running"] == true {
 		form.Set("online", "1")
 	}
 	note("step", "remote_migrate")
-	if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/remote_migrate", form)) {
-		fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped if it was a container", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
+	// From here the guest may exist on the target: a failure keeps the record.
+	note("migrate_sent", true)
+	r := sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/remote_migrate", form)
+	upid := str(r["data"])
+	if matches(`^UPID:[A-Za-z0-9.:@!_-]{1,300}$`, upid) {
+		note("upid", upid)
 	}
-
-	if job["hop"] == true {
-		note("step", "move_volumes")
-		e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": cfg.ImportHopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
+	if !wait(r) {
+		fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped if it was a container", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
 	}
 }
 
