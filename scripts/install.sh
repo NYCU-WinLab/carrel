@@ -149,6 +149,8 @@ fi
 echo "install.sh: $node is installed."
 if [[ -n $join && $node != "$first_exit" ]]; then
 	echo "Next: on $first_exit, run scripts/bootstrap-platform.py --firewall so the infra firewalls admit $node."
+	echo "Then on every other node, with the new site file, run scripts/install.sh --site <site file> again:"
+	echo "its carrel_tenant_host table drops VXLAN and BGP from any node it does not list, $node included."
 fi
 if [[ $node == "$first_exit" ]]; then
 	echo "Next: write CT 100's /etc/carrel/config.json, then run deploy-go.py --host root@$first_exit from a workstation."

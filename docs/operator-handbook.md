@@ -71,6 +71,10 @@ scripts/install.sh --site sites/<site>/cluster.json --join <first node>
   stops: append its lines to the shared file, without cloud-init's `no-port-forwarding,...` lines
   that refuse root, then make the link.
   - Afterwards, run `scripts/bootstrap-platform.py --firewall` on the first exit node.
+  - Then run `install.sh` again on every other node with the new site file. Each node's
+    `carrel_tenant_host` table accepts VXLAN and BGP only from the peers it was written with and
+    drops the rest before `carrel_infra` sees them, so until then the new node's guests reach
+    nothing on the old nodes.
 - `--prepared-dir`, `--image` and `--vmid-base` pass through to `build-templates.py`.
 - Running `install.sh` again repairs; on the first exit node it rewrites the infra firewalls.
 - `CARREL_DRY_RUN=1` prints each change instead of making it.
