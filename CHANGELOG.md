@@ -1,5 +1,102 @@
 # Changelog
 
+## [0.19.0](https://github.com/NYCU-WinLab/carrel/compare/v0.18.0...v0.19.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* function_* tools are service_*, domain_add takes service, quota keys are services and service_gb, agent paths are /services/v1/*, config keys are service_hosts, service_env_key and service_env_old_keys, and the host daemon is carrel-svcd.
+
+### Features
+
+* a plugin object record can stand for a frozen machine ([#727](https://github.com/NYCU-WinLab/carrel/issues/727)) ([4efb4a0](https://github.com/NYCU-WinLab/carrel/commit/4efb4a02c576f0a76c07725166dbc13ca18eac94))
+* add an ordered gateway sender with bounded retry ([#812](https://github.com/NYCU-WinLab/carrel/issues/812)) ([9b83441](https://github.com/NYCU-WinLab/carrel/commit/9b83441e1fa3695368bbb30fbb96dfba638e7225))
+* add machine_import dry_run plan ([#901](https://github.com/NYCU-WinLab/carrel/issues/901)) ([0e0005f](https://github.com/NYCU-WinLab/carrel/commit/0e0005ffedad6092d7d17f1a2a4b5864438ec0a8))
+* add source_add to register a Proxmox host ([#900](https://github.com/NYCU-WinLab/carrel/issues/900)) ([61ddfe6](https://github.com/NYCU-WinLab/carrel/commit/61ddfe6ac4a1958210cd91a64517160cb057dcf7))
+* app_logs reads a running app's journal ([#640](https://github.com/NYCU-WinLab/carrel/issues/640)) ([#750](https://github.com/NYCU-WinLab/carrel/issues/750)) ([4f230fb](https://github.com/NYCU-WinLab/carrel/commit/4f230fb323ceff15a14d7aa4ddd63d7281062557))
+* **auth:** look up a member's Keycloak enabled flag and groups ([#870](https://github.com/NYCU-WinLab/carrel/issues/870)) ([c5b28fa](https://github.com/NYCU-WinLab/carrel/commit/c5b28fa837fbf4eb13199b380e625a28f64e3746))
+* configure the OIDC provider for self-hosting ([#654](https://github.com/NYCU-WinLab/carrel/issues/654)) ([#747](https://github.com/NYCU-WinLab/carrel/issues/747)) ([b51f289](https://github.com/NYCU-WinLab/carrel/commit/b51f289237f63842acfb57e1abe2026e9da75267))
+* deploy each pull request to its own preview function ([#645](https://github.com/NYCU-WinLab/carrel/issues/645)) ([#765](https://github.com/NYCU-WinLab/carrel/issues/765)) ([a5894c8](https://github.com/NYCU-WinLab/carrel/commit/a5894c8e67fd7a4622147c6abe64c15939ca74c4))
+* **evals:** offline bench harness with two arms and masked transcripts, plus rescue cases ([#876](https://github.com/NYCU-WinLab/carrel/issues/876)) ([fa0ccfd](https://github.com/NYCU-WinLab/carrel/commit/fa0ccfd4638f3b1989779aba8901a9303a9031fa))
+* every tool gets an HTTP route ([#756](https://github.com/NYCU-WinLab/carrel/issues/756)) ([923b107](https://github.com/NYCU-WinLab/carrel/commit/923b10730158d3084261b40e115dabc81ce1356a))
+* **freeze:** freeze plugin skeleton with Describe and Probe ([#733](https://github.com/NYCU-WinLab/carrel/issues/733)) ([767db9a](https://github.com/NYCU-WinLab/carrel/commit/767db9a488326ef333021a0250307c4e600b9d85))
+* install a node with one command, install.sh ([#569](https://github.com/NYCU-WinLab/carrel/issues/569)) ([#792](https://github.com/NYCU-WinLab/carrel/issues/792)) ([3cb51ee](https://github.com/NYCU-WinLab/carrel/commit/3cb51ee58065f64c5de58fb7243b8f6f3ee6d2c4))
+* machine_import confirm moves the guest by remote-migrate ([#902](https://github.com/NYCU-WinLab/carrel/issues/902)) ([4e950ef](https://github.com/NYCU-WinLab/carrel/commit/4e950ef1fd5430cf5e4e64e3cf362e12316091a2))
+* machine_reset_access recovers a VM whose keys were deleted ([#822](https://github.com/NYCU-WinLab/carrel/issues/822)) ([8a6bfe5](https://github.com/NYCU-WinLab/carrel/commit/8a6bfe57cb633a467ab9e3414b1a4d525ba37f83))
+* **mcp:** serve skills_list and skill_get and point the server instructions at them ([#871](https://github.com/NYCU-WinLab/carrel/issues/871)) ([83647a2](https://github.com/NYCU-WinLab/carrel/commit/83647a2c4b3fe7ff1b6236873d58c3197c376a5c))
+* **plugins:** ask the plugin to cancel an operation that hit its limit ([#731](https://github.com/NYCU-WinLab/carrel/issues/731)) ([6cf8b8c](https://github.com/NYCU-WinLab/carrel/commit/6cf8b8c9173cc1afc96506fc732bd7468ec0dfa5))
+* **plugins:** fail a plugin operation that runs past its limit ([#729](https://github.com/NYCU-WinLab/carrel/issues/729)) ([17d7644](https://github.com/NYCU-WinLab/carrel/commit/17d764429a3836d29286f32a7469c6dfc756350d))
+* read the installer's site values from the site file ([#569](https://github.com/NYCU-WinLab/carrel/issues/569)) ([#791](https://github.com/NYCU-WinLab/carrel/issues/791)) ([ac18a39](https://github.com/NYCU-WinLab/carrel/commit/ac18a39a603ec44df192fe31fb9cc56e7c2ca731))
+* record and clear the grace start from a Keycloak check in the maintenance pass ([#875](https://github.com/NYCU-WinLab/carrel/issues/875)) ([296cb52](https://github.com/NYCU-WinLab/carrel/commit/296cb52792730f944b1c1df71958030b71bf7f64))
+* roll back the newest control plane upgrade, database included ([#768](https://github.com/NYCU-WinLab/carrel/issues/768)) ([#772](https://github.com/NYCU-WinLab/carrel/issues/772)) ([7030d5b](https://github.com/NYCU-WinLab/carrel/commit/7030d5ba56f0357facc0c2a2efaa5ce280d96bf4))
+* roll back the other nodes and the agents with the control plane ([#774](https://github.com/NYCU-WinLab/carrel/issues/774)) ([111beb8](https://github.com/NYCU-WinLab/carrel/commit/111beb87d7d2cc81207f275850561173d3cf151d))
+* run a function on a cron schedule ([#643](https://github.com/NYCU-WinLab/carrel/issues/643)) ([#755](https://github.com/NYCU-WinLab/carrel/issues/755)) ([cfa6cbe](https://github.com/NYCU-WinLab/carrel/commit/cfa6cbe2bb2618707acc3223d33407cdb728a9a3))
+* seal environment sets to each app's own key ([#639](https://github.com/NYCU-WinLab/carrel/issues/639)) ([#782](https://github.com/NYCU-WinLab/carrel/issues/782)) ([569d29c](https://github.com/NYCU-WinLab/carrel/commit/569d29cb5204f51272e4b33eac7b47269e8798f2))
+* seal function environments to the function host's own key ([#639](https://github.com/NYCU-WinLab/carrel/issues/639)) ([#783](https://github.com/NYCU-WinLab/carrel/issues/783)) ([922bc45](https://github.com/NYCU-WinLab/carrel/commit/922bc45b029ed1c7c43d4dc8ee919bc6b0a75d31))
+* seal function registry credentials to the function host's own key ([#639](https://github.com/NYCU-WinLab/carrel/issues/639)) ([#789](https://github.com/NYCU-WinLab/carrel/issues/789)) ([4f5ea2d](https://github.com/NYCU-WinLab/carrel/commit/4f5ea2d6648ef469398e264b24f3b0b682a7c821))
+* send machine operation and quota warning events ([#642](https://github.com/NYCU-WinLab/carrel/issues/642)) ([#790](https://github.com/NYCU-WinLab/carrel/issues/790)) ([b329dca](https://github.com/NYCU-WinLab/carrel/commit/b329dcabe9b9de1e7bb44a633260787827f56aea))
+* **site:** accept an optional underlay MAC per node in the site file ([#887](https://github.com/NYCU-WinLab/carrel/issues/887)) ([cb6e3fd](https://github.com/NYCU-WinLab/carrel/commit/cb6e3fd0110f3709b84ec0639e2737fc57c9358f))
+* **skills:** add the skills package, frontmatter parser and the rescue skill ([#860](https://github.com/NYCU-WinLab/carrel/issues/860)) ([d59cec1](https://github.com/NYCU-WinLab/carrel/commit/d59cec127f2ac05dd88b5c78838014ba7e13d83d))
+* **store:** add a grace start column to tenants and show it in tenant_list ([#869](https://github.com/NYCU-WinLab/carrel/issues/869)) ([95dc038](https://github.com/NYCU-WinLab/carrel/commit/95dc038743963a77f437a73e474fbcbba8c51577))
+* take the site's DNS zone and public name from config.json ([#569](https://github.com/NYCU-WinLab/carrel/issues/569)) ([#793](https://github.com/NYCU-WinLab/carrel/issues/793)) ([396f9a0](https://github.com/NYCU-WinLab/carrel/commit/396f9a0cbd96fc435c6f720dd09b6066cc3b7f21))
+* **telemetry:** span per skill_get and per skill and version in usage_report ([#877](https://github.com/NYCU-WinLab/carrel/issues/877)) ([b2c1bfc](https://github.com/NYCU-WinLab/carrel/commit/b2c1bfc13c9f3e578a4bb88c3d0612338991e565))
+* tell members about deploys with webhooks and an event stream ([#642](https://github.com/NYCU-WinLab/carrel/issues/642)) ([#761](https://github.com/NYCU-WinLab/carrel/issues/761)) ([7bfce5a](https://github.com/NYCU-WinLab/carrel/commit/7bfce5afbd1dfb01abcabe47dffca01b7cf5dfbf))
+* the database keeps a schema version and applies ordered migrations ([#741](https://github.com/NYCU-WinLab/carrel/issues/741)) ([9ad5dc3](https://github.com/NYCU-WinLab/carrel/commit/9ad5dc30c15b22b7f645f28dcd2ba09453a54098))
+* warn the alerts when machine_reset_access changes a machine's keys ([#835](https://github.com/NYCU-WinLab/carrel/issues/835)) ([3fddfc9](https://github.com/NYCU-WinLab/carrel/commit/3fddfc9fe81b8198277dec4d85bad259f0e7f48a))
+
+
+### Bug fixes
+
+* a snapshot name collision keeps the plugin record ([#734](https://github.com/NYCU-WinLab/carrel/issues/734)) ([257cdce](https://github.com/NYCU-WinLab/carrel/commit/257cdcee0a44a77c2b0d28b33b85fb17f654c761))
+* accept the site public address as a tenant entry in any range ([#814](https://github.com/NYCU-WinLab/carrel/issues/814)) ([3fa9283](https://github.com/NYCU-WinLab/carrel/commit/3fa928313ded3c276299375ab274d2fc25a3be28))
+* bound the wait for the schema lock ([#749](https://github.com/NYCU-WinLab/carrel/issues/749)) ([78bef2d](https://github.com/NYCU-WinLab/carrel/commit/78bef2da1d5f1281beadbc70d9a163f1f182ef55))
+* close a merged pull request preview only when the base branch matches ([#784](https://github.com/NYCU-WinLab/carrel/issues/784)) ([4896bc4](https://github.com/NYCU-WinLab/carrel/commit/4896bc4383185c995447b259efa6c0b2fe88c053))
+* cloud-init reset keeps an allowlist of top-level keys ([#830](https://github.com/NYCU-WinLab/carrel/issues/830)) ([8655572](https://github.com/NYCU-WinLab/carrel/commit/8655572517da52c43d21893cb5ca5e2e7d8e2e35))
+* confirm the gateway still holds a certificate before a record moves ([#808](https://github.com/NYCU-WinLab/carrel/issues/808)) ([d979840](https://github.com/NYCU-WinLab/carrel/commit/d9798404375175512a3fc852599e8b883f7efb13))
+* finish the OIDC sign-in path for non-Keycloak providers ([#752](https://github.com/NYCU-WinLab/carrel/issues/752)) ([0389547](https://github.com/NYCU-WinLab/carrel/commit/038954788298197b45670cec9d04c327a7c85726))
+* flag nodes with pve-cluster, pvestatd, pve-firewall or corosync down in node_list ([#881](https://github.com/NYCU-WinLab/carrel/issues/881)) ([4c631b1](https://github.com/NYCU-WinLab/carrel/commit/4c631b1b351454756801270818fb248b25f9c123))
+* harden webhooks and the event stream after the [#761](https://github.com/NYCU-WinLab/carrel/issues/761) review ([#773](https://github.com/NYCU-WinLab/carrel/issues/773)) ([338b935](https://github.com/NYCU-WinLab/carrel/commit/338b9351fb0d225528cb56299114081d515e4e26)), closes [#762](https://github.com/NYCU-WinLab/carrel/issues/762)
+* hide admin operations from tenant members in operation_get ([#763](https://github.com/NYCU-WinLab/carrel/issues/763)) ([a92de2e](https://github.com/NYCU-WinLab/carrel/commit/a92de2e132edc75aca4a2e1f33f675cf9137b664))
+* install a site on a blank Proxmox host, proven on staging ([#569](https://github.com/NYCU-WinLab/carrel/issues/569)) ([#796](https://github.com/NYCU-WinLab/carrel/issues/796)) ([4fc4a18](https://github.com/NYCU-WinLab/carrel/commit/4fc4a18275a77634906bd97a74d9c3c85a627e0e))
+* keep template preparation scratch off a shared /tmp ([#569](https://github.com/NYCU-WinLab/carrel/issues/569)) ([#797](https://github.com/NYCU-WinLab/carrel/issues/797)) ([1d84fed](https://github.com/NYCU-WinLab/carrel/commit/1d84fed8c1574e8a57952ac90d3953ef2ef9acb8))
+* keep the oldest pre-upgrade schema copy per version ([#751](https://github.com/NYCU-WinLab/carrel/issues/751)) ([3a779cc](https://github.com/NYCU-WinLab/carrel/commit/3a779cc993faa6d05cae6c179994e2525afbb196))
+* keep the WAL until the rollback rename succeeds and name a pruned archive ([#781](https://github.com/NYCU-WinLab/carrel/issues/781)) ([8e9c6a9](https://github.com/NYCU-WinLab/carrel/commit/8e9c6a9c9403c2df6998ee40bf47f612ab35705c))
+* kick only domain maintenance and retry a preview domain when its certificate is late ([#786](https://github.com/NYCU-WinLab/carrel/issues/786)) ([468b4d4](https://github.com/NYCU-WinLab/carrel/commit/468b4d4dfa102e33a1eca55281fc9dbb4dfbfedd))
+* let a move take a machine that is installing from an ISO ([#874](https://github.com/NYCU-WinLab/carrel/issues/874)) ([188205f](https://github.com/NYCU-WinLab/carrel/commit/188205f06cca7fc7dee5a788ae831bdf7b245341))
+* let local storage hold imports on a site with the fetch container ([#840](https://github.com/NYCU-WinLab/carrel/issues/840)) ([e0b4159](https://github.com/NYCU-WinLab/carrel/commit/e0b4159192d1796ff3ef768eae3bdefa051a8434))
+* name the site's origin in generated deploy workflows ([#859](https://github.com/NYCU-WinLab/carrel/issues/859)) ([aed0bfc](https://github.com/NYCU-WinLab/carrel/commit/aed0bfc2dff479de98870d801640d9d3debb6de4)), closes [#569](https://github.com/NYCU-WinLab/carrel/issues/569)
+* **network:** match peer MAC on VXLAN and BGP accept rules when known ([#888](https://github.com/NYCU-WinLab/carrel/issues/888)) ([bbb7b94](https://github.com/NYCU-WinLab/carrel/commit/bbb7b94c29f1e6ad7c840ce8b525dcfb7dc6c099))
+* **node-agent:** check both cloud-init files before rewriting the user file on reset ([#836](https://github.com/NYCU-WinLab/carrel/issues/836)) ([53ca920](https://github.com/NYCU-WinLab/carrel/commit/53ca920f75a890dbd5084d266b21c89fac485215))
+* open the console after login with a same-site page, not a redirect ([#844](https://github.com/NYCU-WinLab/carrel/issues/844)) ([4e11df5](https://github.com/NYCU-WinLab/carrel/commit/4e11df5a46f71a4aa7b2f6cb36988311bc52f77d))
+* **plugins:** let admin-only plugin operations act in any tenant ([#726](https://github.com/NYCU-WinLab/carrel/issues/726)) ([2d8e07b](https://github.com/NYCU-WinLab/carrel/commit/2d8e07bc3c5a30d2c42d737cc96c199c376dffbc))
+* record a migration that failed only in cleanup after cutover ([#880](https://github.com/NYCU-WinLab/carrel/issues/880)) ([89bc09a](https://github.com/NYCU-WinLab/carrel/commit/89bc09ac784c105ede832de68a068e647c9251e8))
+* record the reconcile revision before sending it ([#811](https://github.com/NYCU-WinLab/carrel/issues/811)) ([aca4d96](https://github.com/NYCU-WinLab/carrel/commit/aca4d96524ec511c8dd9dfa9bd8bfc156ecc94d8))
+* refuse a private or tenant-range site public address ([#817](https://github.com/NYCU-WinLab/carrel/issues/817)) ([f28faf5](https://github.com/NYCU-WinLab/carrel/commit/f28faf5f6e09971f9486db60171dc093b6fd2904))
+* refuse a retry of failed legacy snapshot operations clearly ([#728](https://github.com/NYCU-WinLab/carrel/issues/728)) ([0647dc9](https://github.com/NYCU-WinLab/carrel/commit/0647dc9247191ad053369eab3a6198c7b5417db0))
+* refuse an origin outside the site domain in Config.Validate ([#795](https://github.com/NYCU-WinLab/carrel/issues/795)) ([bdad624](https://github.com/NYCU-WinLab/carrel/commit/bdad624803b4384049cd6fd9902a9626ab3e350e))
+* refuse imports on local storage at a site with several nodes ([#873](https://github.com/NYCU-WinLab/carrel/issues/873)) ([03f91da](https://github.com/NYCU-WinLab/carrel/commit/03f91da3cd5fae15403efe153c593a2afbafe45a)), closes [#569](https://github.com/NYCU-WinLab/carrel/issues/569)
+* replace caddy binary by rename so reruns do not hit Text file busy ([#810](https://github.com/NYCU-WinLab/carrel/issues/810)) ([ff16e32](https://github.com/NYCU-WinLab/carrel/commit/ff16e32a7af61bdd6fde86fb9d7e9bbbb4744a45))
+* resume the saved reset record in machine_reset_access before validating keys ([#837](https://github.com/NYCU-WinLab/carrel/issues/837)) ([e90064a](https://github.com/NYCU-WinLab/carrel/commit/e90064afc4cfd461349a7efb44725ebf7376b446))
+* send a new site's gateway its origin pair before any tenant exists ([#798](https://github.com/NYCU-WinLab/carrel/issues/798)) ([1f4b280](https://github.com/NYCU-WinLab/carrel/commit/1f4b280f8a250a9ebb14190b250124c918f7ab4e))
+* send gateway config outside the writer lock in Reconcile ([#818](https://github.com/NYCU-WinLab/carrel/issues/818)) ([fe6220e](https://github.com/NYCU-WinLab/carrel/commit/fe6220e68ee4084a567cff1021f8b8f41e228dda))
+* show imported images and ISOs in quota_get ([#841](https://github.com/NYCU-WinLab/carrel/issues/841)) ([6e59802](https://github.com/NYCU-WinLab/carrel/commit/6e59802a36914fb618f07c30d7de2e940f77b391))
+* **skills:** rescue applies the reset the member asked for ([#890](https://github.com/NYCU-WinLab/carrel/issues/890)) ([355050b](https://github.com/NYCU-WinLab/carrel/commit/355050ba024a596ca7b215180662842a03dbd9d9))
+* skip the guest wait when machine_reset_access does not boot the VM ([#838](https://github.com/NYCU-WinLab/carrel/issues/838)) ([75611c1](https://github.com/NYCU-WinLab/carrel/commit/75611c1ccdb7a565ec95bd13e8073aa7f0e9da47))
+* skip the portal read for a tenant with saved keys ([#282](https://github.com/NYCU-WinLab/carrel/issues/282)) ([#746](https://github.com/NYCU-WinLab/carrel/issues/746)) ([1cd4eed](https://github.com/NYCU-WinLab/carrel/commit/1cd4eed1aea66475293f5281eaa57f511aafd3e1))
+* snapshot migration follow-ups from the [#699](https://github.com/NYCU-WinLab/carrel/issues/699) review ([#732](https://github.com/NYCU-WinLab/carrel/issues/732)) ([a0f50cd](https://github.com/NYCU-WinLab/carrel/commit/a0f50cde1f93efce97a51d626c5e2ac231954e16))
+* **snapshot:** drop records whose PVE snapshot is gone ([#742](https://github.com/NYCU-WinLab/carrel/issues/742)) ([3a63407](https://github.com/NYCU-WinLab/carrel/commit/3a634078e1093113dc515cd224c728a95ccfe947))
+* stop install.sh on a failed join or a node-local root key file ([#867](https://github.com/NYCU-WinLab/carrel/issues/867)) ([7271451](https://github.com/NYCU-WinLab/carrel/commit/7271451ae06357d7593eec9d8c5c75543b8021f7))
+* **store:** log a failed removal of an old schema copy ([#753](https://github.com/NYCU-WinLab/carrel/issues/753)) ([b89ab19](https://github.com/NYCU-WinLab/carrel/commit/b89ab1974fb87d52b4507375e3b3452ba5b08aec))
+* **store:** retry the WAL switch when two openers race ([#757](https://github.com/NYCU-WinLab/carrel/issues/757)) ([684be8c](https://github.com/NYCU-WinLab/carrel/commit/684be8ccdd82ec3f6fad84a085db3676bd4e58b6))
+* **telemetry:** keep caller refusals out of span error status ([#906](https://github.com/NYCU-WinLab/carrel/issues/906)) ([4ea0940](https://github.com/NYCU-WinLab/carrel/commit/4ea0940879258aad079af51b52a745c0d8e023f3))
+* tell the operator to refresh the old nodes after a join ([#872](https://github.com/NYCU-WinLab/carrel/issues/872)) ([b5186c1](https://github.com/NYCU-WinLab/carrel/commit/b5186c16511037edeffa0169a9614f93a219a648)), closes [#569](https://github.com/NYCU-WinLab/carrel/issues/569)
+* write a failed node action's cause to the node journal ([#813](https://github.com/NYCU-WinLab/carrel/issues/813)) ([369a5bf](https://github.com/NYCU-WinLab/carrel/commit/369a5bfec7ae1c4494abe884459e93a8cc6c78df))
+
+
+### Refactoring
+
+* rename function to service ([#909](https://github.com/NYCU-WinLab/carrel/issues/909)) ([973bdde](https://github.com/NYCU-WinLab/carrel/commit/973bddeecbb1a37b73890fc3a09809032abfc132))
+
 ## [0.18.0](https://github.com/NYCU-WinLab/carrel/compare/v0.17.0...v0.18.0) (2026-11-27)
 
 

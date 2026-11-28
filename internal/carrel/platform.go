@@ -585,6 +585,9 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 	if access := e.caAccess(m); access != nil {
 		safe["lab_ca"] = access
 	}
+	if m["imported"] == true {
+		safe["owner_checks"] = importOwnerChecks()
+	}
 	if len(servicePortsOf(m)) > 0 {
 		// No SSH and no guest reports (issue #125): machine_get fills in the
 		// port check instead.
@@ -672,4 +675,16 @@ func (e *Execution) PublicMachine(m D, ports []portGrant) D {
 		}
 	}
 	return safe
+}
+
+// importOwnerChecks lists what carrel cannot fix from outside on an imported
+// guest and the owner has to check (PLAN 10.6).
+func importOwnerChecks() []D {
+	return []D{
+		{"id": "old_keys", "check": "Remove keys the old template left in authorized_keys"},
+		{"id": "guest_exec", "check": "Turn off guest-exec in the guest agent if it is still allowed"},
+		{"id": "host_key_change", "check": "Expect the SSH host keys to change once, because a new ipconfig0 changes the cloud-init instance id"},
+		{"id": "old_addresses", "check": "Rebind applications that still listen on or connect to the old addresses"},
+		{"id": "resolvers", "check": "Set the resolvers by hand if cloud-init does not rewrite them (Alpine)"},
+	}
 }
