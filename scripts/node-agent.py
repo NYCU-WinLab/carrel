@@ -2327,6 +2327,21 @@ def import_finish(req):
     return {"state": "done", "moved": moved}
 
 
+def cloud_init_drive(cfg):
+    """The source's cloud-init disk stays behind (machine_import_move.go), and
+    Proxmox builds the seed only for a `<storage>:cloudinit` volume: without
+    one the guest keeps its old data. Add it in ide2 or the first free ide or
+    sata slot; a retry finds it and adds nothing."""
+    slots = [f"ide{i}" for i in (2, 0, 1, 3)] + [f"sata{i}" for i in range(6)]
+    disks = (k for k in cfg if re.fullmatch(r"(?:ide|sata|scsi|virtio)[0-9]+", k))
+    if any("cloudinit" in str(cfg[k]).split(",", 1)[0] for k in disks):
+        return []
+    free = next((k for k in slots if k not in cfg), None)
+    if free is None:
+        raise ValueError("no free ide or sata slot for the cloud-init drive")
+    return [f"--{free}", f"{storage_id()}:cloudinit"]
+
+
 def import_network(req):
     """On the target, after the move (PLAN 10.6, #918): net0 joins the
     tenant's primary network the way machine_create builds it, with the new
@@ -2351,7 +2366,8 @@ def import_network(req):
         cpu = [] if m.get("nested_virt") else ["--cpu", "x86-64-v3"]
         vendor = ["--cicustom", vendor_data(m)] if cfg.get("cicustom") else []
         run("qm", "set", vmid, "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
-            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2", *cpu, *vendor, *drop)
+            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2", *cpu, *vendor,
+            *cloud_init_drive(cfg), *drop)
     else:
         # The guest keeps its interface name: its own network setup names it.
         found = re.search(r"(?:^|,)name=([a-z][a-z0-9]{0,14})(?:,|$)", str(cfg.get("net0", "")))
@@ -2369,7 +2385,7 @@ def cloud_init_remove(req):
     vmid = machine(m)
     if located(m) == NODE:
         raise ValueError("machine is still on this node")
-    for kind in ("user", "network"):
+    for kind in ("user", "network", "vendor"):
         (SNIPPETS / f"carrel-{vmid}-{kind}.json").unlink(missing_ok=True)
     return {"state": "removed"}
 
@@ -3244,6 +3260,7 @@ def action(req):
         Path(f"/etc/pve/firewall/{vmid}.fw").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-user.json").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-network.json").unlink(missing_ok=True)
+        Path(f"/var/lib/vz/snippets/carrel-{vmid}-vendor.json").unlink(missing_ok=True)
         (STATE / f"create-{vmid}.json").unlink(missing_ok=True)
     elif op == "rename":
         # The VM's name, or the CT's hostname, follows the record. Ownership
