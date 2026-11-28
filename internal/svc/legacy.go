@@ -12,12 +12,12 @@ import (
 // called functions (#908).
 const legacyManifest = "function.json"
 
-// AdoptLegacyManifests renames the manifests a host kept under the old name,
+// AdoptLegacyManifests links the manifests a host kept under the old name,
 // <root>/<name>/function.json and <root>/<name>/v/<version>/function.json,
-// to service.json, so the first pass after an upgrade finds the live and
+// under service.json too, so the first pass after an upgrade finds the live and
 // built versions instead of building them again. It follows no link and
 // leaves a directory alone when service.json is already there. It returns
-// how many it renamed.
+// how many it linked.
 func AdoptLegacyManifests(root string) (int, error) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -42,7 +42,9 @@ func AdoptLegacyManifests(root string) (int, error) {
 		if _, err := os.Lstat(filepath.Join(dir, "service.json")); err == nil {
 			return nil
 		}
-		if err := os.Rename(old, filepath.Join(dir, "service.json")); err != nil {
+		// A second name, not a move: a rollback to carrel-fnd still finds
+		// function.json and keeps the snapshot it would otherwise rebuild.
+		if err := os.Link(old, filepath.Join(dir, "service.json")); err != nil {
 			return err
 		}
 		renamed++

@@ -150,9 +150,9 @@ func serve(args []string) error {
 	// Host state keeps its carrel-fn paths across the rename (#908); only
 	// the manifests changed name, and the router must find them.
 	if n, err := svc.AdoptLegacyManifests(c.root); err != nil {
-		return fmt.Errorf("rename function.json manifests: %w", err)
+		return fmt.Errorf("link function.json manifests: %w", err)
 	} else if n > 0 {
-		slog.Info("renamed function.json manifests", "count", n)
+		slog.Info("linked function.json manifests", "count", n)
 	}
 	runtime, err := svc.NewFirecracker(c.config("cfn", 0, *slots, 0, true))
 	if err != nil {

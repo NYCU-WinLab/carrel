@@ -7,7 +7,7 @@ import (
 )
 
 // A host upgraded from carrel-fnd keeps its live and built versions: their
-// function.json manifests become service.json, links are not followed, and
+// function.json manifests are also service.json, kept for a rollback, links are not followed, and
 // a manifest already under the new name wins.
 func TestAdoptLegacyManifests(t *testing.T) {
 	root := t.TempDir()
@@ -37,13 +37,15 @@ func TestAdoptLegacyManifests(t *testing.T) {
 		t.Fatalf("renamed %d, %v; want 3", n, err)
 	}
 	for path, want := range map[string]string{
-		filepath.Join(root, "t1-demo", "service.json"):            "live",
-		filepath.Join(root, "t1-demo", "v", "v5", "service.json"): "v5",
-		filepath.Join(root, "t1-demo", "v", "v4", "service.json"): "v4",
-		filepath.Join(root, "t1-new", "service.json"):             "new",
-		filepath.Join(root, "t1-new", "function.json"):            "stale",
-		filepath.Join(outside, "function.json"):                   "outside",
-		filepath.Join(root, ".jail", "function.json"):             "jail",
+		filepath.Join(root, "t1-demo", "service.json"):             "live",
+		filepath.Join(root, "t1-demo", "v", "v5", "service.json"):  "v5",
+		filepath.Join(root, "t1-demo", "v", "v4", "service.json"):  "v4",
+		filepath.Join(root, "t1-new", "service.json"):              "new",
+		filepath.Join(root, "t1-new", "function.json"):             "stale",
+		filepath.Join(root, "t1-demo", "function.json"):            "live",
+		filepath.Join(root, "t1-demo", "v", "v5", "function.json"): "v5",
+		filepath.Join(outside, "function.json"):                    "outside",
+		filepath.Join(root, ".jail", "function.json"):              "jail",
 	} {
 		if got, err := os.ReadFile(path); err != nil || string(got) != want {
 			t.Errorf("%s = %q, %v; want %q", path, got, err, want)
