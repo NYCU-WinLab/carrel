@@ -294,3 +294,52 @@ func TestAMoveDropsAStaleDiskVolume(t *testing.T) {
 		t.Fatal("a stale volume survived a move", r, got)
 	}
 }
+
+// An ISO install moves with its ISO attached and keeps installing; a drain
+// lists it among the moves (PLAN 11.3 M10).
+func TestAnISOInstallMovesWithItsISO(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	inner := b.call
+	var steps []string
+	b.call = func(r D, target string) (any, error) {
+		switch r["op"] {
+		case "migrate_prepare", "migrate", "migrate_finish", "cloud_init_remove", "cloud_init_read":
+			steps = append(steps, str(r["op"])+"@"+target)
+			if r["op"] == "migrate_prepare" && len(obj(r["cloud_init"])) > 0 {
+				t.Error("an ISO install has no cloud-init files to carry", r["cloud_init"])
+			}
+			return D{"state": "done"}, nil
+		case "disk_volume":
+			return D{"disk_volume": "local-zfs:vm-10100-disk-0"}, nil
+		}
+		return inner(r, target)
+	}
+	m := seedMachine(p, "inst", 10100)
+	m["state"], m["guest_management"], m["iso"], m["iso_volume"] = "installing", 0, "netinst", "nfs:iso/carrel-t001-netinst-0123456789ab.iso"
+	p.Store.Put("machines", 10100, 1, m)
+	runQueue(p)
+	ctx, admin := context.Background(), person("root", true)
+	plan := p.Execute(ctx, "node_drain", D{"node": "carrel01", "dry_run": true}, admin)
+	if moves := dicts(plan["moves"]); len(moves) != 1 || moves[0]["machine"] != "inst" || len(dicts(plan["staying"])) != 0 {
+		t.Fatal("a drain must take the ISO install", plan)
+	}
+	r := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "inst", "node": "carrel02"}, admin)
+	if obj(r["operation"])["state"] != "succeeded" {
+		t.Fatal(r)
+	}
+	want := []string{"migrate_prepare@node-02", "migrate@node-01", "migrate_finish@node-02", "cloud_init_remove@node-01"}
+	if !equal(steps, want) {
+		t.Fatal(steps)
+	}
+	got := p.Store.Get("machines", "10100")
+	if got["node"] != "carrel02" || got["state"] != "installing" || got["iso_volume"] == nil {
+		t.Fatal("the install must go on, ISO attached, on the new node", got)
+	}
+	// A managed machine that is still coming up stays put.
+	m2 := seedMachine(p, "boot", 10101)
+	m2["state"] = "initializing"
+	p.Store.Put("machines", 10101, 1, m2)
+	if r := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "boot", "node": "carrel02"}, admin); obj(r["operation"])["state"] == "succeeded" {
+		t.Fatal("an initializing machine moved", r)
+	}
+}

@@ -18,6 +18,17 @@ func (e *Execution) nodeNamed(name string) (nodeRef, bool) {
 	return nodeRef{}, false
 }
 
+// movable reports a machine a move can take: ready, running or stopped, or
+// installing from an ISO. The ISO sits on the site's shared storage (PLAN
+// 7.8), so Proxmox moves the machine with it attached and the install goes
+// on; a drain must be able to empty a node that holds one (PLAN 11.3 M10).
+func movable(m D) bool {
+	if contains([]string{"ready", "running", "stopped"}, m["state"]) {
+		return true
+	}
+	return m["state"] == "installing" && unmanaged(m)
+}
+
 func (e *Execution) PlanMigration(a D) D {
 	t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
 	if t == nil {
@@ -56,8 +67,8 @@ func (e *Execution) PlanMigration(a D) D {
 	if from.Name == target.Name {
 		fail("conflict", "The machine is already on that node", D{"recovery": "revise_request"})
 	}
-	if !contains([]string{"ready", "running", "stopped"}, m["state"]) {
-		fail("conflict", "Only a ready or stopped machine can move", D{"recovery": "resolve_prerequisite"})
+	if !movable(m) {
+		fail("conflict", "Only a ready or stopped machine, or one installing from an ISO, can move", D{"recovery": "resolve_prerequisite"})
 	}
 	e.refusePluginHeld(integer(t["n"]), m["vmid"], "migrate", "a machine that moves")
 	if obj(e.Call(D{"op": "inventory"}, target.Target))["tenant_route"] == false {
@@ -201,7 +212,7 @@ func (e *Execution) DrainNode(tool string, a, w D) D {
 		switch {
 		case t["status"] != "active":
 			reason = "tenant_suspended"
-		case !contains([]string{"ready", "running", "stopped"}, m["state"]):
+		case !movable(m):
 			reason = "machine_" + str(m["state"])
 		case len(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate")) > 0:
 			reason = heldReason(e.pluginHeld(integer(t["n"]), m["vmid"], "migrate"))
