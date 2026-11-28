@@ -44,7 +44,7 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 	// A retry resumes the reset it started: the same keys and the same
 	// restart, even after the first attempt left the VM shut down.
 	if e.Op != nil {
-		if saved := obj(e.Op["reset"]); saved != nil {
+		if saved := obj(e.Op["reset"]); e.Op["reset"] != nil {
 			keys, restart = arr(saved["keys"]), boolean(saved["restart"])
 		}
 	}
@@ -67,7 +67,7 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 	}
 	resetID := randomID()
 	if e.Op != nil {
-		if saved := obj(e.Op["reset"]); saved != nil {
+		if saved := obj(e.Op["reset"]); e.Op["reset"] != nil {
 			resetID = str(saved["id"])
 		} else {
 			e.Op["reset"] = D{"id": resetID, "keys": keys, "restart": restart}

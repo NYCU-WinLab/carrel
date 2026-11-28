@@ -188,3 +188,35 @@ func TestResetAccessBoundsAndDeduplicatesTheMachinesKeys(t *testing.T) {
 		t.Fatal("accepted a 51st key")
 	}
 }
+
+func TestResetAccessInAnOperationKeepsItsKeysAndResumesTheRestart(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "running", &actions)
+	next := b.call
+	startFails := true
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "action" && r["action"] == "start" && startFails {
+			actions = append(actions, r)
+			return nil, errors.New("start failed")
+		}
+		return next(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	e.Op = D{"id": "op-reset-1", "tenant_n": 1, "tool": "machine_reset_access"}
+	a := D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAnew"}}
+	if attempt(func() { e.ResetAccess(a, D{}, p.Store.TenantN(1)) }) == nil {
+		t.Fatal("the failed start must fail the attempt")
+	}
+	first := str(actions[0]["reset_id"])
+	if !equal(actions[0]["ssh_keys"], []any{"ssh-ed25519 AAAAnew"}) || first == "" {
+		t.Fatal("the first attempt sends its keys and an ID", actions[0])
+	}
+	// The retry finds the VM shut down and still starts it, with the same ID.
+	startFails, actions = false, nil
+	r := e.ResetAccess(a, D{}, p.Store.TenantN(1))
+	if r["restart"] != true || actions[0]["reset_id"] != first || actions[len(actions)-1]["action"] != "start" {
+		t.Fatal("the retry must resume the reset", r, actions)
+	}
+}
