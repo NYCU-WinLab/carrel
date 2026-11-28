@@ -225,7 +225,7 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | | `iso_import` | `name`, `url`, `sha256` |
 | | `image_delete` | `name` |
 | Rescue | `machine_console_log` | read-only serial output (section 7.6) |
-| | `machine_reset_access` | new `ssh_keys[]` through cloud-init, then reboot |
+| | `machine_reset_access` | adds `ssh_keys[]` to a VM through cloud-init, then shuts it down and starts it |
 | Keys | `ssh_key_add`, `ssh_key_list`, `ssh_key_remove` | account keys applied to new machines |
 | Snapshots | `snapshot_create`, `snapshot_list`, `snapshot_rollback`, `snapshot_delete` | count and size against quota |
 | Ingress | `port_open`, `port_close`, `port_list` | `machine`, `port`, `proto: tcp \| udp`; the public port is assigned |
@@ -1062,7 +1062,7 @@ repeats, and the code changes when the machine list does.
 | Tool | Mechanism | Risk and mitigation |
 |---|---|---|
 | `machine_console_log` | Read-only serial output. The capture mechanism is chosen in M3 (open decision 13.5) | None beyond what the owner can already see |
-| `machine_reset_access` | Write new keys into cloud-init, change the instance id, reboot | A stolen Keycloak session could take over a machine. Every reset emails the owner and is audited. Host keys change, and the README says so |
+| `machine_reset_access` | Write new keys into cloud-init, change the instance id, shut down and start | A stolen Keycloak session could take over a machine. Every reset is audited; the notice to the owner waits for a sender (issue #821). The new cloud-init file drops the creation steps and keeps the host keys, so member commands do not run again and clients see no host key warning |
 
 ### 7.7 Admins do not enter tenant machines
 
