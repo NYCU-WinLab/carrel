@@ -79,7 +79,7 @@ login. Offline NIC configuration is not guest verification. Allocated VM disk sp
 filesystem-size claim. Existing peer/public grants survive an ingress-mode change and must be
 removed explicitly if the user's isolation intent excludes them.
 
-Saved-key edits affect future guests. Console/lost-key recovery is deferred. Control backups
+Saved-key edits affect future guests. Lost-key recovery is done: `machine_reset_access` (issues #820 and #822) recovers a VM whose keys were deleted; console recovery is still deferred. Control backups
 exclude tenant disks; full tenant disaster recovery and clean installation acceptance remain
 separate gates. Custom images and multi-node scheduling remain outside this release.
 
