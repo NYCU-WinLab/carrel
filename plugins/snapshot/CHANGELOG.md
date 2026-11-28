@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/NYCU-WinLab/carrel/compare/snapshot-v0.2.1...snapshot-v0.3.0) (2026-11-28)
+
+
+### Features
+
+* **snapshot:** list returns the guest's snapshot names ([#740](https://github.com/NYCU-WinLab/carrel/issues/740)) ([3ecdabd](https://github.com/NYCU-WinLab/carrel/commit/3ecdabd56769e01ddc171489432ba09094a5f67e))
+
 ## [0.2.1](https://github.com/NYCU-WinLab/carrel/compare/snapshot-v0.2.0...snapshot-v0.2.1) (2026-11-27)
 
 
