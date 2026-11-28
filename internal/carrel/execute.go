@@ -72,7 +72,12 @@ func (p *Platform) Execute(ctx context.Context, tool string, a, w D) (result D) 
 		defer p.writer.Unlock()
 	}
 	r, n := e.Dispatch(tool, a, w)
-	e.S.Log(str(w["sub"]), n, tool, a, "ok")
+	logged := a
+	if tool == "skill_get" {
+		// The version read is kept, so usage_report can tell versions apart.
+		logged = merge(a, D{"skill_version": obj(r["skill"])["version"]})
+	}
+	e.S.Log(str(w["sub"]), n, tool, logged, "ok")
 	result = merge(D{"ok": true}, r)
 	e.addSuggestions(tool, a, integer(n), result)
 	return result

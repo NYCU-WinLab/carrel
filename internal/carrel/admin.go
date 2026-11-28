@@ -23,6 +23,9 @@ func (e *Execution) Admin(tool string, a, w D) D {
 				out = append(out, D{"slug": t["slug"], "quota": e.Quota(t)})
 			}
 		}
+		if tool == "usage_report" {
+			return D{"tenants": out, "skills": e.skillUsage()}
+		}
 		return D{"tenants": out}
 	case "node_list":
 		nodes := []D{}
