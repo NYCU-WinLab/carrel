@@ -3097,3 +3097,50 @@ def test_import_finish_validates_before_tagging(monkeypatch, change):
     with pytest.raises(ValueError):
         module.import_finish(req)
     assert calls == []
+
+
+@pytest.mark.parametrize("kind", ["vm", "ct"])
+def test_import_network_normalizes_net0_and_the_address(monkeypatch, kind):
+    module = load("node-agent.py")
+    m = {**MACHINE, "kind": kind}
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    monkeypatch.setattr(module, "located", lambda m: "pve1")
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {"net0": "name=eth7,bridge=vmbr0,ip=dhcp"})
+    calls, firewall = [], []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    monkeypatch.setattr(module, "first_firewall", lambda m: firewall.append(m["vmid"]))
+    monkeypatch.setattr(module, "guest_mtu", lambda m: 1450)
+    assert module.import_network({"machine": m}) == {"state": "done"}
+    assert firewall == [10100]
+    [call] = calls
+    if kind == "vm":
+        assert call == (
+            "qm",
+            "set",
+            10100,
+            "--net0",
+            "virtio=02:ca:01:00:00:01,bridge=t001,firewall=1,mtu=1",
+            "--ipconfig0",
+            "ip=10.200.1.10/24,gw=10.200.1.1",
+            "--nameserver",
+            "10.200.0.2",
+        )
+    else:
+        assert call == (
+            "pct",
+            "set",
+            10100,
+            "--net0",
+            "name=eth7,bridge=t001,firewall=1,hwaddr=02:ca:01:00:00:01,mtu=1450,ip=10.200.1.10/24,gw=10.200.1.1,type=veth",
+            "--nameserver",
+            "10.200.0.2",
+        )
+
+
+def test_import_network_refuses_a_guest_on_another_node(monkeypatch):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    monkeypatch.setattr(module, "located", lambda m: "pve2")
+    monkeypatch.setattr(module, "run", lambda *a, **k: pytest.fail("must not set anything"))
+    with pytest.raises(ValueError):
+        module.import_network({"machine": MACHINE})

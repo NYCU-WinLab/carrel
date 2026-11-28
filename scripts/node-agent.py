@@ -2314,6 +2314,35 @@ def import_finish(req):
     return {"state": "done", "moved": moved}
 
 
+def import_network(req):
+    """On the target, after the move (PLAN 10.6, #918): net0 joins the
+    tenant's primary network the way machine_create builds it, with the new
+    address. Primary networks have no DHCP server (PLAN 6.9), so a guest that
+    used DHCP gets the static address instead of a reservation. No `rate`:
+    the NIC limits were removed (PLAN 12.4). The guest firewall file carries
+    `ipfilter` and the tenant's rules. The guest stays stopped; every step
+    sets the same values again, so a retry is safe."""
+    m = req["machine"]
+    vmid = machine(m)
+    if located(m) != NODE:
+        raise ValueError("machine is not on this node")
+    n = m["tenant_n"]
+    cfg = owned(m)
+    gateway = f"10.200.{n}.1"
+    if m["kind"] == "vm":
+        run("qm", "set", vmid, "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
+            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2")
+    else:
+        # The guest keeps its interface name: its own network setup names it.
+        found = re.search(r"(?:^|,)name=([a-z][a-z0-9]{0,14})(?:,|$)", str(cfg.get("net0", "")))
+        name = found.group(1) if found else "eth0"
+        run("pct", "set", vmid, "--net0",
+            f"name={name},bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu={guest_mtu(m)},ip={m['ip']}/24,gw={gateway},type=veth",
+            "--nameserver", "10.200.0.2")
+    first_firewall(m)
+    return {"state": "done"}
+
+
 def cloud_init_remove(req):
     # On the node a VM left: its files must not outlive it here.
     m = req["machine"]
@@ -3704,7 +3733,7 @@ def main():
     # ca_backfill is not long: it mounts a stopped disk, so a start (node.lock)
     # must wait for it, and it picks a free nbd device another backfill must not take.
     # It also tries the VM's lock itself, so a migration or freeze excludes it.
-    long = op in ("migrate", "migrate_finish", "import_finish", "freeze", "thaw", "backup_remove")
+    long = op in ("migrate", "migrate_finish", "import_finish", "import_network", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{integer(req['vmid'], 10000, 99999999) if op == 'import_finish' else machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store", "vmids_present"):
@@ -3777,6 +3806,8 @@ def main():
             out = migrate_finish(req)
         elif op == "import_finish":
             out = import_finish(req)
+        elif op == "import_network":
+            out = import_network(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
         elif op in ("freeze", "thaw", "backup_remove"):

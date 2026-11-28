@@ -98,6 +98,18 @@ func TestMachineImportConfirmRunningVM(t *testing.T) {
 			}
 		}
 	}
+	network := 0
+	for _, c := range b.calls {
+		if c["op"] == "import_network" {
+			network++
+			if mm := obj(c["machine"]); mm["ip"] != "10.200.1.10" || integer(mm["vmid"]) != 10100 || mm["kind"] != "vm" {
+				t.Errorf("import_network: %v", c)
+			}
+		}
+	}
+	if network != 1 {
+		t.Errorf("the network is normalized once, got %d", network)
+	}
 	if finished != 1 {
 		t.Errorf("a running VM from LVM moves its volumes off the hop once, got %d", finished)
 	}
