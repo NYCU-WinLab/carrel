@@ -1,0 +1,326 @@
+//go:build linux
+
+// carrel-svcd runs on a service host (PLAN 7.11). `serve` routes requests to
+// services and wakes them from snapshots. `build` turns an image into a
+// sleeping service.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/NYCU-WinLab/carrel/internal/svc"
+)
+
+func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	if len(os.Args) < 2 {
+		usage()
+	}
+	var err error
+	switch os.Args[1] {
+	case "serve":
+		err = serve(os.Args[2:])
+	case "build":
+		err = build(os.Args[2:])
+	default:
+		usage()
+	}
+	if err != nil {
+		slog.Error(os.Args[1], "error", err)
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage: carrel-svcd serve|build [flags]")
+	os.Exit(2)
+}
+
+type common struct {
+	root, firecracker, jailer, kernel string
+	uidBase, gid                      int
+	uplink, block, rate               string
+	initPath, dns                     string
+	mtu                               int
+}
+
+func commonFlags(flags *flag.FlagSet) *common {
+	c := &common{}
+	flags.StringVar(&c.root, "root", "/var/lib/carrel-fn", "directory that holds every service")
+	flags.StringVar(&c.firecracker, "firecracker", "/usr/local/bin/firecracker", "firecracker executable")
+	flags.StringVar(&c.jailer, "jailer", "/usr/local/bin/jailer", "Firecracker jailer executable")
+	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-fn/vmlinux", "guest kernel, on the file system of -root")
+	flags.IntVar(&c.uidBase, "uid-base", 300000, "first of the user IDs instances run as, one per slot")
+	flags.IntVar(&c.gid, "gid", 300000, "group ID that reads service files")
+	flags.StringVar(&c.uplink, "uplink", "", "the one interface services leave through (default: the default route's)")
+	flags.StringVar(&c.block, "block", "", "more addresses services must not reach, comma separated: the site's protected public addresses")
+	flags.StringVar(&c.rate, "rate", "", "what one instance may send, and receive, such as 100mbit (default 100mbit)")
+	flags.StringVar(&c.initPath, "init", "/usr/local/lib/carrel-svc/carrel-svc-init", "carrel-svc-init binary, for builds")
+	flags.IntVar(&c.mtu, "mtu", 1450, "largest packet the host's uplink carries (tenant networks run at 1450, PLAN 6.2)")
+	flags.StringVar(&c.dns, "dns", "1.1.1.1,8.8.8.8", "public resolvers for services, comma separated")
+	return c
+}
+
+func list(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' })
+}
+
+// buildVersion builds one version in a build slot of its own, so a build
+// never takes a slot from the router and two builds never share a jail, a
+// user or a network namespace.
+// The caller holds the service's lock.
+func (c *common) buildVersion(ctx context.Context, f svc.Service, image, imageTar string, activate bool, env []string, auth *svc.RegistryAuth) (svc.Service, error) {
+	index, slot, err := buildSlot(c.root)
+	if err != nil {
+		return f, err
+	}
+	defer slot.Close()
+	runtime, err := svc.NewFirecracker(c.config("cfnb", index, 1, firstBuildLink+index-firstBuildSlot, false))
+	if err != nil {
+		return f, err
+	}
+	defer runtime.Close()
+	return runtime.Build(ctx, svc.BuildOptions{
+		Service: f, Image: image, ImageTar: imageTar, Init: c.initPath, Root: c.root,
+		MTU: c.mtu, DNS: list(c.dns), Blocked: list(c.block), Activate: activate, Env: env, Auth: auth,
+	})
+}
+
+// config places jails under the services' directory: a jail holds hard
+// links to service files, which need one file system.
+func (c *common) config(prefix string, first, slots, egressFirst int, router bool) svc.Config {
+	egress := svc.Egress{Uplink: c.uplink, Rate: c.rate, Blocked: list(c.block)}
+	return svc.Config{
+		Egress: egress, Router: router,
+		Firecracker: c.firecracker, Jailer: c.jailer, Kernel: c.kernel,
+		JailBase: filepath.Join(c.root, ".jail"),
+		Prefix:   prefix, First: first, Slots: slots,
+		UIDBase: c.uidBase, GID: c.gid,
+		EgressFirst: egressFirst,
+	}
+}
+
+func serve(args []string) error {
+	flags := flag.NewFlagSet("serve", flag.ExitOnError)
+	c := commonFlags(flags)
+	listen := flags.String("listen", "127.0.0.1:8090", "address the router listens on")
+	callers := flags.String("callers", "127.0.0.1,::1,10.200.0.2", "the only addresses the router serves, comma separated: loopback and the gateway")
+	slots := flags.Int("slots", 32, "instances that may be awake at once")
+	control := flags.String("control", "", "control plane URL; with it the host builds and removes services as the control plane asks")
+	tokenFile := flags.String("token-file", "/etc/carrel-fn/token", "file that holds the host's token for -control")
+	envKeyFile := flags.String("env-key", "/etc/carrel-fn/env.key", "the host's private key for sealed environments, made on the first start")
+	_ = flags.Parse(args)
+	if *slots < 1 || *slots > maxSlots {
+		return fmt.Errorf("-slots must be 1 to %d", maxSlots)
+	}
+	allowed, err := svc.ParseCallers(list(*callers))
+	if err != nil {
+		return fmt.Errorf("-callers: %w", err)
+	}
+	var token string
+	if *control != "" {
+		content, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			return fmt.Errorf("-control needs the host's token: %w", err)
+		}
+		token = strings.TrimSpace(string(content))
+		if token == "" {
+			return fmt.Errorf("%s is empty", *tokenFile)
+		}
+	}
+
+	// Two routers would hand out the same slots.
+	held, err := lock(c.root, "serve")
+	if err != nil {
+		return fmt.Errorf("another carrel-svcd serve runs on %s: %w", c.root, err)
+	}
+	defer held.Close()
+	// Host state keeps its carrel-fn paths across the rename (#908); only
+	// the manifests changed name, and the router must find them.
+	if n, err := svc.AdoptLegacyManifests(c.root); err != nil {
+		return fmt.Errorf("link function.json manifests: %w", err)
+	} else if n > 0 {
+		slog.Info("linked function.json manifests", "count", n)
+	}
+	runtime, err := svc.NewFirecracker(c.config("cfn", 0, *slots, 0, true))
+	if err != nil {
+		return err
+	}
+	router := svc.NewRouter(c.root, runtime)
+	router.Callers = allowed
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	reaped := make(chan struct{})
+	go func() {
+		router.Run(ctx)
+		close(reaped)
+	}()
+	scheduler := &svc.Scheduler{Router: router, Note: func(id, line string) { runtime.Note(c.root, id, line) }}
+	scheduled := make(chan struct{})
+	go func() {
+		scheduler.Run(ctx)
+		close(scheduled)
+	}()
+	agented := make(chan struct{})
+	go func() {
+		defer close(agented)
+		if *control == "" {
+			return
+		}
+		key, err := svc.LoadEnvKey(*envKeyFile)
+		if err != nil {
+			// Services still run; only sealed environments wait for a key.
+			slog.Error("host key unavailable", "error", err)
+		}
+		agent := &svc.Agent{
+			EnvKey:  key,
+			Control: strings.TrimRight(*control, "/"), Token: token, Root: c.root,
+			Client: &http.Client{Timeout: 2 * time.Minute},
+			Build: func(ctx context.Context, f svc.Service, image string, env []string, auth *svc.RegistryAuth) error {
+				_, err := c.buildVersion(ctx, f, image, "", false, env, auth)
+				return err
+			},
+			Lock:      c.lockService,
+			Forget:    router.Forget,
+			Scheduler: scheduler,
+		}
+		agent.Run(ctx)
+	}()
+	guarded := make(chan struct{})
+	go func() {
+		defer close(guarded)
+		ticker := time.NewTicker(svc.GuardPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				runtime.Guard()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	server := &http.Server{Addr: *listen, Handler: router, ReadHeaderTimeout: 10 * time.Second}
+	drained := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdown)
+		close(drained)
+	}()
+	slog.Info("serving", "listen", *listen, "root", c.root, "slots", *slots)
+	err = server.ListenAndServe()
+	// ListenAndServe returns when the shutdown starts. Wait until requests
+	// drained and instances stopped before the namespaces go away.
+	if errors.Is(err, http.ErrServerClosed) {
+		<-drained
+	}
+	stop()
+	// Scheduled runs go through the router: they end before it is reaped.
+	<-scheduled
+	<-reaped
+	<-guarded
+	<-agented
+	runtime.Close()
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func build(args []string) error {
+	flags := flag.NewFlagSet("build", flag.ExitOnError)
+	c := commonFlags(flags)
+	var f svc.Service
+	flags.StringVar(&f.Name, "name", "", "service name")
+	image := flags.String("image", "", "image reference in a registry, pulled without credentials")
+	imageTar := flags.String("image-tar", "", "a tarball from `docker save`, read in place of -image")
+	flags.IntVar(&f.Port, "port", 8080, "port the image serves HTTP on")
+	flags.IntVar(&f.MemoryMB, "memory", 512, "guest memory in MiB")
+	flags.StringVar(&f.Mode, "mode", svc.ModeReuse, "reuse or fresh")
+	flags.IntVar(&f.IdleSeconds, "idle", 0, "seconds without a request before the instance stops")
+	flags.IntVar(&f.TimeoutSeconds, "timeout", 0, "seconds one request may take")
+	flags.IntVar(&f.MaxInstances, "max-instances", 0, "instances at once in fresh mode")
+	flags.StringVar(&f.WakePath, "wake-path", "", "path called once after every wake")
+	_ = flags.Parse(args)
+	if !svc.ValidName(f.Name) || (*image == "") == (*imageTar == "") {
+		return errors.New("build needs a valid -name and one of -image and -image-tar")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	start := time.Now()
+	unlock, err := c.lockService(f.Name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	built, err := c.buildVersion(ctx, f, *image, *imageTar, true, nil, nil)
+	if err != nil {
+		return err
+	}
+	slog.Info("built", "service", built.Name, "version", built.Version, "seconds", time.Since(start).Seconds())
+	return nil
+}
+
+// buildSlots is how many builds may run on one host at once. Their slot
+// numbers start above any router slot.
+const (
+	buildSlots     = 16
+	firstBuildSlot = 100000
+	// Links to the host are numbered below 16384. Routers use the low
+	// numbers, builds the last 16.
+	firstBuildLink = 16384 - buildSlots
+	maxSlots       = firstBuildLink
+)
+
+// lockService takes a service's lock: one build or change of a service's
+// files at a time, from the agent or the command line.
+func (c *common) lockService(name string) (func(), error) {
+	held, err := lock(c.root, "service-"+name)
+	if err != nil {
+		return nil, fmt.Errorf("service %s is being built: %w", name, err)
+	}
+	return func() { held.Close() }, nil
+}
+
+// lock takes an exclusive lock that lasts until the file is closed or the
+// process ends. It fails at once when another process holds it.
+func lock(root, name string) (*os.File, error) {
+	dir := filepath.Join(root, ".lock")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+// buildSlot locks the first free build slot.
+func buildSlot(root string) (int, *os.File, error) {
+	for i := range buildSlots {
+		if held, err := lock(root, "build-"+strconv.Itoa(i)); err == nil {
+			return firstBuildSlot + i, held, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("%d builds already run on this host", buildSlots)
+}

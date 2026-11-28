@@ -85,14 +85,14 @@ func frozenIndex(state D) map[int]int {
 	return frozen
 }
 
-// functionIndex indexes the functions a domain may point at, with their
+// serviceIndex indexes the services a domain may point at, with their
 // host's router (PLAN 7.11).
-func functionIndex(state D) map[string]D {
-	functions := map[string]D{}
-	for _, f := range dicts(state["function_routes"]) {
-		functions[str(f["id"])] = f
+func serviceIndex(state D) map[string]D {
+	services := map[string]D{}
+	for _, f := range dicts(state["service_routes"]) {
+		services[str(f["id"])] = f
 	}
-	return functions
+	return services
 }
 
 // bundleIndex indexes the certificate bundles by slug.
@@ -106,7 +106,7 @@ func bundleIndex(bundles []D) map[string]D {
 
 // domainRoutes returns the routes of the ready domains: by tenant slug, and by
 // special domain grant id.
-func domainRoutes(state D, slugs map[int]string, machines map[int]D, vips map[string]D, grants map[string]domainGrant, srv map[string]bool, frozen map[int]int, functions map[string]D) (map[string][]route, map[string][]route) {
+func domainRoutes(state D, slugs map[int]string, machines map[int]D, vips map[string]D, grants map[string]domainGrant, srv map[string]bool, frozen map[int]int, services map[string]D) (map[string][]route, map[string][]route) {
 	routes := map[string][]route{}
 	grantRoutes := map[string][]route{}
 	for _, d := range dicts(state["domains"]) {
@@ -115,8 +115,8 @@ func domainRoutes(state D, slugs map[int]string, machines map[int]D, vips map[st
 		}
 		var r route
 		var slug string
-		if str(d["function"]) != "" {
-			r = functionRoute(d, functions)
+		if str(d["service"]) != "" {
+			r = serviceRoute(d, services)
 			slug = slugs[integer(d["tenant_n"])]
 			if id := str(d["grant"]); id != "" {
 				if srv[id] {
@@ -152,19 +152,19 @@ func domainRoutes(state D, slugs map[int]string, machines map[int]D, vips map[st
 	return routes, grantRoutes
 }
 
-// functionRoute is the route of a domain that points at a function. A function
+// serviceRoute is the route of a domain that points at a service. A service
 // removed, or on a host no longer configured, answers 503 like a frozen
 // machine: never a failure for every tenant.
-func functionRoute(d D, functions map[string]D) route {
+func serviceRoute(d D, services map[string]D) route {
 	r := route{domain: d}
-	f := functions[str(d["function"])]
+	f := services[str(d["service"])]
 	if f == nil || integer(f["tenant_n"]) != integer(d["tenant_n"]) {
 		return r
 	}
 	host, port, err := net.SplitHostPort(str(f["router"]))
 	p, _ := strconv.Atoi(port)
-	if err == nil && net.ParseIP(host).To4() != nil && p > 0 && p < 65536 && functionHostPattern.MatchString(str(f["host_id"])) {
-		r.address, r.port, r.function = host, p, str(f["host_id"])
+	if err == nil && net.ParseIP(host).To4() != nil && p > 0 && p < 65536 && serviceHostPattern.MatchString(str(f["host_id"])) {
+		r.address, r.port, r.service = host, p, str(f["host_id"])
 	}
 	return r
 }

@@ -1,0 +1,135 @@
+package carrel
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestServiceLinkDeploysFromGitHub(t *testing.T) {
+	p, a := serviceFixture(t)
+	a.forges = fakeForge{
+		"good":   push("alice/hook", "42", "main"),
+		"other":  push("mallory/hook", "7", "main"),
+		"branch": push("alice/hook", "42", "dev"),
+		"pr":     {Issuer: githubIssuer, Repository: "alice/hook", RepositoryID: "42", Ref: "refs/heads/main", Event: "pull_request"},
+		"reborn": push("alice/hook", "99", "main"),
+		// A GitLab project with the linked repository's path.
+		"gitlab": gitlabPush(gitlabCom, "alice/hook", "42", "main", "push"),
+	}
+	alice := person("alice", false)
+	call := func(tool string, args D) D { return a.Call(context.Background(), tool, args, alice) }
+	digestA := "ghcr.io/alice/hook@sha256:" + strings.Repeat("a", 64)
+	deploy := func(token, image string) (int, D) {
+		return do(t, a, "POST", "/services/v1/deploy/alice/hook", token, strings.NewReader(`{"image":"`+image+`"}`))
+	}
+
+	// Not linked yet: the same answer as an unknown service.
+	assertOK(t, call("service_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "port": 9000, "memory_mb": 256}))
+	if code, _ := deploy("good", digestA); code != 404 {
+		t.Fatalf("unlinked: %d", code)
+	}
+	r := call("service_link", D{"service": "hook", "repo": "Alice/Hook"})
+	assertOK(t, r)
+	wf := str(r["workflow"])
+	for _, want := range []string{"branches: [main]", "id-token: write", "tenant: alice", "service: hook", "ghcr.io/alice/hook@${{ steps.image.outputs.digest }}", "concurrency: carrel-hook", "docker/setup-buildx-action@v3"} {
+		if !strings.Contains(wf, want) {
+			t.Fatalf("workflow lacks %q:\n%s", want, wf)
+		}
+	}
+	// A build in progress refuses another.
+	if code, _ := deploy("good", digestA); code != 409 {
+		t.Fatalf("while building: %d", code)
+	}
+	report(t, a, `{"revision":1,"services":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready","bytes":1073741824}]}]}`)
+
+	for token, want := range map[string]int{"": 403, "forged": 403, "other": 403, "branch": 403, "pr": 403, "gitlab": 403} {
+		if code, _ := deploy(token, digestA); code != want {
+			t.Fatalf("token %q: %d", token, code)
+		}
+	}
+	for _, image := range []string{"ghcr.io/alice/hook:latest", "ghcr.io/alice/hook@sha256:abc", "Ghcr.io/alice/hook@sha256:" + strings.Repeat("a", 64)} {
+		if code, _ := deploy("good", image); code != 400 {
+			t.Fatalf("image %q: %d", image, code)
+		}
+	}
+	code, out := deploy("good", digestA)
+	v := obj(out["version"])
+	if code != 200 || v["version"] != "v2" || v["state"] != "building" {
+		t.Fatalf("deploy: %d %v", code, out)
+	}
+	// The version keeps the service's settings, with the pushed image and its commit.
+	got := p.Store.Get("service_versions", serviceVersionID("1-hook", "v2"))
+	if got["image"] != digestA || integer(got["port"]) != 9000 || integer(got["memory_mb"]) != 256 || got["sha"] != "abc123" {
+		t.Fatalf("version %v", got)
+	}
+	status := func(token, version string) (int, D) {
+		code, out := do(t, a, "GET", "/services/v1/deploy/alice/hook/"+version, token, nil)
+		return code, obj(out["version"])
+	}
+	if code, s := status("good", "v2"); code != 200 || s["state"] != "building" {
+		t.Fatalf("status: %d %v", code, s)
+	}
+	// Another repository, branch or event reads nothing (#263).
+	for _, token := range []string{"other", "branch", "pr"} {
+		if code, _ := status(token, "v2"); code != 403 {
+			t.Fatalf("status by %q: %d", token, code)
+		}
+	}
+	// Ready but not yet served stays building; live once the host serves it.
+	report(t, a, `{"revision":2,"services":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"},{"version":"v2","state":"ready"}]}]}`)
+	report(t, a, `{"revision":3,"services":[{"id":"t1-hook","current":"v2","versions":[{"version":"v1","state":"ready"},{"version":"v2","state":"ready"}]}]}`)
+	if _, s := status("good", "v2"); s["state"] != "live" {
+		t.Fatalf("after serving: %v", s)
+	}
+	// A failed build fails the workflow with the error.
+	_, out = deploy("good", "ghcr.io/alice/hook@sha256:"+strings.Repeat("b", 64))
+	v3 := str(obj(out["version"])["version"])
+	report(t, a, `{"revision":4,"services":[{"id":"t1-hook","current":"v2","versions":[{"version":"v2","state":"ready"},{"version":"`+v3+`","state":"failed","error":"pull failed"}]}]}`)
+	if _, s := status("good", v3); s["state"] != "failed" || s["error"] != "pull failed" {
+		t.Fatalf("failed build: %v", s)
+	}
+	// The first deploy pinned the repository id: a recreated repository cannot deploy.
+	if code, _ := deploy("reborn", digestA); code != 403 {
+		t.Fatalf("recreated repository: %d", code)
+	}
+	if fn := obj(call("service_get", D{"service": "hook"})["service"]); fn["repo"] != "alice/hook" || fn["branch"] != "main" {
+		t.Fatalf("service_get %v", fn)
+	}
+	// Unlinking stops deploys; linking again starts unpinned.
+	assertOK(t, call("service_link", D{"service": "hook", "clear": true}))
+	if code, _ := deploy("good", digestA); code != 404 {
+		t.Fatalf("after unlink: %d", code)
+	}
+	assertOK(t, call("service_link", D{"service": "hook", "repo": "alice/hook"}))
+	if code, _ := deploy("reborn", digestA); code != 200 {
+		t.Fatalf("relinked: %d", code)
+	}
+	// Another tenant's member cannot link it.
+	if r := a.Call(context.Background(), "service_link", D{"service": "hook", "repo": "bob/x"}, person("bob", false)); r["ok"] == true {
+		t.Fatalf("bob linked alice's service: %v", r)
+	}
+}
+
+// The links members and GitHub jobs use reach carrel through the gateway; the
+// host agents' paths do not.
+func TestServicePublicPathsGoThroughTheGateway(t *testing.T) {
+	routed := func(path string) bool {
+		for _, c := range controlPaths {
+			if c == path || (strings.HasSuffix(c, "/*") && strings.HasPrefix(path, strings.TrimSuffix(c, "*"))) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, path := range []string{"/services/v1/env/cfe_x", "/services/v1/registry/cfr_x", "/services/v1/deploy/alice/hook", "/services/v1/deploy/alice/hook/v2"} {
+		if !routed(path) {
+			t.Errorf("%s is not routed to carrel", path)
+		}
+	}
+	for _, path := range []string{"/services/v1/agent/state", "/services/v1/agent/env", "/services/v1/agent/auth", "/services/v1/agent/logs", "/services/v1/agent/report"} {
+		if routed(path) {
+			t.Errorf("%s is public", path)
+		}
+	}
+}

@@ -4,7 +4,7 @@
     "title": "carrel HTTP API",
     "version": "v1",
     "summary": "The HTTP routes of the carrel control plane, apart from MCP.",
-    "description": "Members and their agents use MCP at /mcp; its tools are described by MCP tools/list, not here. This document covers the other routes: health and status, OAuth, app and function delivery from CI, and the routes that agents inside the platform call. Each operation carries x-carrel-audience: public (anyone), ci (a CI job with a forge OIDC token), member (a member's agent holding a link token), agent (a program carrel installed, on the infra network or in a member machine), or internal (the infra network only: the gateway, function hosts, guests). Internal routes are not reachable through the public gateway and may change without a version bump."
+    "description": "Members and their agents use MCP at /mcp; its tools are described by MCP tools/list, not here. This document covers the other routes: health and status, OAuth, app and service delivery from CI, and the routes that agents inside the platform call. Each operation carries x-carrel-audience: public (anyone), ci (a CI job with a forge OIDC token), member (a member's agent holding a link token), agent (a program carrel installed, on the infra network or in a member machine), or internal (the infra network only: the gateway, service hosts, guests). Internal routes are not reachable through the public gateway and may change without a version bump."
   },
   "servers": [
     {
@@ -52,8 +52,8 @@
           "type": "string"
         }
       },
-      "function": {
-        "name": "function",
+      "service": {
+        "name": "service",
         "in": "path",
         "required": true,
         "schema": {
@@ -68,7 +68,7 @@
           "type": "string"
         },
         "description": "A link token from app_link",
-        "function_env or function_registry.": null
+        "service_env or service_registry.": null
       },
       "id": {
         "name": "id",
@@ -908,7 +908,7 @@
         }
       }
     },
-    "/functions/v1/deploy/{tenant}/{function}": {
+    "/services/v1/deploy/{tenant}/{service}": {
       "post": {
         "x-carrel-audience": "ci",
         "security": [
@@ -916,13 +916,13 @@
             "ciOidc": []
           }
         ],
-        "summary": "Deploy an image CI pushed to a linked function",
+        "summary": "Deploy an image CI pushed to a linked service",
         "parameters": [
           {
             "$ref": "#/components/parameters/tenant"
           },
           {
-            "$ref": "#/components/parameters/function"
+            "$ref": "#/components/parameters/service"
           }
         ],
         "requestBody": {
@@ -945,7 +945,7 @@
         }
       }
     },
-    "/functions/v1/deploy/{tenant}/{function}/{version}": {
+    "/services/v1/deploy/{tenant}/{service}/{version}": {
       "get": {
         "x-carrel-audience": "ci",
         "security": [
@@ -953,13 +953,13 @@
             "ciOidc": []
           }
         ],
-        "summary": "State of a deployed function version",
+        "summary": "State of a deployed service version",
         "parameters": [
           {
             "$ref": "#/components/parameters/tenant"
           },
           {
-            "$ref": "#/components/parameters/function"
+            "$ref": "#/components/parameters/service"
           },
           {
             "name": "version",
@@ -980,10 +980,10 @@
         }
       }
     },
-    "/functions/v1/env/{token}": {
+    "/services/v1/env/{token}": {
       "put": {
         "x-carrel-audience": "member",
-        "summary": "Upload a function's environment file through a function_env link",
+        "summary": "Upload a service's environment file through a service_env link",
         "parameters": [
           {
             "$ref": "#/components/parameters/token"
@@ -1010,7 +1010,7 @@
       },
       "post": {
         "x-carrel-audience": "member",
-        "summary": "Upload a function's environment file through a function_env link",
+        "summary": "Upload a service's environment file through a service_env link",
         "parameters": [
           {
             "$ref": "#/components/parameters/token"
@@ -1036,10 +1036,10 @@
         }
       }
     },
-    "/functions/v1/registry/{token}": {
+    "/services/v1/registry/{token}": {
       "put": {
         "x-carrel-audience": "member",
-        "summary": "Upload registry credentials through a function_registry link",
+        "summary": "Upload registry credentials through a service_registry link",
         "parameters": [
           {
             "$ref": "#/components/parameters/token"
@@ -1066,7 +1066,7 @@
       },
       "post": {
         "x-carrel-audience": "member",
-        "summary": "Upload registry credentials through a function_registry link",
+        "summary": "Upload registry credentials through a service_registry link",
         "parameters": [
           {
             "$ref": "#/components/parameters/token"
@@ -1092,7 +1092,7 @@
         }
       }
     },
-    "/functions/v1/agent/state": {
+    "/services/v1/agent/state": {
       "get": {
         "x-carrel-audience": "internal",
         "security": [
@@ -1100,7 +1100,7 @@
             "agentToken": []
           }
         ],
-        "summary": "Desired state for a function host, newer than since",
+        "summary": "Desired state for a service host, newer than since",
         "parameters": [
           {
             "name": "since",
@@ -1120,7 +1120,7 @@
         }
       }
     },
-    "/functions/v1/agent/report": {
+    "/services/v1/agent/report": {
       "post": {
         "x-carrel-audience": "internal",
         "security": [
@@ -1128,7 +1128,7 @@
             "agentToken": []
           }
         ],
-        "summary": "Actual state of a function host",
+        "summary": "Actual state of a service host",
         "requestBody": {
           "required": true,
           "content": {
@@ -1149,7 +1149,7 @@
         }
       }
     },
-    "/functions/v1/agent/key": {
+    "/services/v1/agent/key": {
       "post": {
         "x-carrel-audience": "internal",
         "security": [
@@ -1157,7 +1157,7 @@
             "agentToken": []
           }
         ],
-        "summary": "Register the public key function environments are sealed to",
+        "summary": "Register the public key service environments are sealed to",
         "requestBody": {
           "required": true,
           "content": {
@@ -1178,7 +1178,7 @@
         }
       }
     },
-    "/functions/v1/agent/auth": {
+    "/services/v1/agent/auth": {
       "get": {
         "x-carrel-audience": "internal",
         "security": [
@@ -1186,10 +1186,10 @@
             "agentToken": []
           }
         ],
-        "summary": "Registry credentials for one function version",
+        "summary": "Registry credentials for one service version",
         "parameters": [
           {
-            "name": "function",
+            "name": "service",
             "in": "query",
             "required": true,
             "schema": {
@@ -1215,7 +1215,7 @@
         }
       }
     },
-    "/functions/v1/agent/env": {
+    "/services/v1/agent/env": {
       "get": {
         "x-carrel-audience": "internal",
         "security": [
@@ -1223,10 +1223,10 @@
             "agentToken": []
           }
         ],
-        "summary": "Environment for one function version",
+        "summary": "Environment for one service version",
         "parameters": [
           {
-            "name": "function",
+            "name": "service",
             "in": "query",
             "required": true,
             "schema": {
@@ -1252,7 +1252,7 @@
         }
       }
     },
-    "/functions/v1/agent/logs": {
+    "/services/v1/agent/logs": {
       "get": {
         "x-carrel-audience": "internal",
         "security": [
@@ -1260,7 +1260,7 @@
             "agentToken": []
           }
         ],
-        "summary": "Log requests waiting for a function host",
+        "summary": "Log requests waiting for a service host",
         "responses": {
           "200": {
             "$ref": "#/components/responses/Json"
@@ -1604,7 +1604,7 @@
         }
       }
     },
-    "/functions/v1/deploy/{tenant}/{function}/preview": {
+    "/services/v1/deploy/{tenant}/{service}/preview": {
       "delete": {
         "x-carrel-audience": "ci",
         "security": [
@@ -1618,7 +1618,7 @@
             "$ref": "#/components/parameters/tenant"
           },
           {
-            "$ref": "#/components/parameters/function"
+            "$ref": "#/components/parameters/service"
           }
         ],
         "responses": {

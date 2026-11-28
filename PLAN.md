@@ -26,7 +26,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 
 - Not a manifest or container platform. Members get pet machines they SSH into and change by
   hand. Declarative workloads belong to kitbash (`zyx1121/kitbash`), which carrel does not extend.
-  Functions (section 7.11) are the one planned exception: a single container image that carrel
+  Services (section 7.11) are the one planned exception: a single container image that carrel
   runs while it has work. They add no manifest language and no orchestration.
 - Not a public cloud. One installation serves one organization, and tenants are lab members and
   lab projects. A member may pair a Proxmox host of their own as a private site (section 8.4),
@@ -73,6 +73,7 @@ Ask your agent for a machine, get an SSH line back, and never touch Proxmox.
 | 2026-11-25 | A member may pair their own Proxmox host as a private site. Its owner has root on it, so carrel treats it as untrusted: only the owner's tenants use it, and its quota counts only there (section 8.4) |
 | 2026-11-25 | Features outside the core become plugins that run next to the site agent, and each site reports which it supports. Snapshot and freeze are the first two (section 8.5) |
 | 2026-11-12 | Functions: a container image that sleeps without memory and wakes from a microVM snapshot on a request. The contract is an OCI image that serves HTTP, so the same image runs on AWS Lambda. Pet machines stay the default. Built since: the host agent and the control plane side (section 7.11) |
+| 2026-11-28 | Functions are renamed to services (#908): the contract is an OCI image that serves HTTP, the Cloud Run service contract, and a minimum instance count can keep one awake. Compute has two nouns: a machine has state, a service has none; whether either sleeps is a setting. `app` stays the deployment of a repository. The rename breaks the API with no alias: 1 function existed |
 
 ### 1.6 Current core and deferred work
 
@@ -102,8 +103,8 @@ service. Live tool discovery and the acceptance reports are the authority for im
 | Image | A cloud image or ISO a tenant imported (section 7.8) | tenant, name |
 | App | A repository branch bound to one machine, deployed on every push (section 7.9) | tenant, name |
 | Release | One built artifact of an app, with its commit SHA and state | app, id |
-| Function | A container image owned by one tenant that runs only while it has work (section 7.11, planned) | tenant, name |
-| Version | One image digest of a function, with its root file system and snapshot | function, digest |
+| Service | A container image owned by one tenant that runs only while it has work (section 7.11, planned) | tenant, name |
+| Version | One image digest of a service, with its root file system and snapshot | service, digest |
 | Grant | One allocation: a port, a domain (own or special), a peer rule, a snapshot | id |
 | Request | A quota, domain or port request waiting for an admin (section 5.3) | id |
 | Zone | A DNS zone carrel manages, and the tenants it is open to (section 6.10) | zone name |
@@ -167,7 +168,7 @@ Tool annotations follow one rule, and `TestContractAnnotations` checks it over t
 registers an eligible tenant, and `webhook_test`, which sends a request out but changes nothing in
 Carrel, so it runs without the write lock and stays off the read-only endpoint. `destructiveHint` is true when the call removes something the member
 cannot get back with one call: deleted data (`machine_delete`, `snapshot_delete`, `image_delete`,
-`function_remove`, `app_unlink`, `env_remove`), state that is overwritten (`snapshot_rollback`), a resource
+`service_remove`, `app_unlink`, `env_remove`), state that is overwritten (`snapshot_rollback`), a resource
 returned to a pool (`vip_remove`, `public_ip_release`) and a secret replaced (`app_webhook_rotate`, `webhook_rotate`).
 Removing a grant, key, route or client that one add call restores is not destructive.
 `idempotentHint` is true on a write whose repeat with the same arguments changes nothing more.
@@ -243,15 +244,15 @@ a token exchange, which extends it to 90 days, so unused registrations cannot fi
 | Runners | `runner_add` | `machine`, `provider: github \| gitlab`, `url`, `name`, `labels`, `allow_public`; returns the install line and `token_command` (section 7.9) |
 | | `runner_list` | Runners with machine, provider, URL and labels |
 | | `runner_remove` | `runner`, `confirm: <name>`; returns the commands that stop and unregister it |
-| Functions (planned) | `function_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
-| | `function_env` | `function`, `clear`; a single-use link for the environment file (section 7.11) |
-| | `function_registry` | `function`, `registry`, `clear`; a single-use link for a private registry's credentials (section 7.11) |
-| | `function_link` | `function`, `repo`, `branch`, `previews`, `clear`; deploy on every push with GitHub OIDC, and each pull request to its own preview (section 7.11) |
-| | `function_get`, `function_list` | state, URL, current and previous version, wake times of the last 24 hours |
-| | `function_logs` | `function`, `since`; the output the platform captured |
-| | `function_rollback` | `function`; switches back to the previous version |
-| | `function_schedule` | `function`, `name`, `cron`, `time_zone`, `path`, `body`, `remove`; a cron schedule the function's host fires with `X-Carrel-Schedule` |
-| | `function_remove` | `confirm: <name>`; deletes every version and snapshot |
+| Services (planned) | `service_deploy` | `name`, `image`, `port`, `memory_mb`, `instance: reuse \| fresh`, `idle_seconds`, `timeout_seconds`, `schedule`, `wake_path`; returns the URL (section 7.11) |
+| | `service_env` | `service`, `clear`; a single-use link for the environment file (section 7.11) |
+| | `service_registry` | `service`, `registry`, `clear`; a single-use link for a private registry's credentials (section 7.11) |
+| | `service_link` | `service`, `repo`, `branch`, `previews`, `clear`; deploy on every push with GitHub OIDC, and each pull request to its own preview (section 7.11) |
+| | `service_get`, `service_list` | state, URL, current and previous version, wake times of the last 24 hours |
+| | `service_logs` | `service`, `since`; the output the platform captured |
+| | `service_rollback` | `service`; switches back to the previous version |
+| | `service_schedule` | `service`, `name`, `cron`, `time_zone`, `path`, `body`, `remove`; a cron schedule the service's host fires with `X-Carrel-Schedule` |
+| | `service_remove` | `confirm: <name>`; deletes every version and snapshot |
 | Events | `webhook_add` | `url`, `types`; signed POSTs (Standard Webhooks) of the tenant's events, retried for about 8 hours; returns the secret once |
 | | `webhook_list`, `webhook_remove`, `webhook_test` | the webhooks and their last delivery; `webhook_test` sends one `webhook.test` event |
 | | `webhook_rotate` | `webhook`; a new secret, the old one also signs for 24 hours |
@@ -408,7 +409,7 @@ snapshot counted at the size of its disk). The rule is in section 5.2.
 A frozen machine (section 10.1) holds its configured disk size in `frozen_gb` (default: the `disk_gb`
 default) and its address in `ips`, and nothing else.
 Special domains and ports are not a dimension: each one needs an admin's approval (section 6.10).
-Functions will add `functions` and `function_gb` (section 7.11).
+Services will add `services` and `service_gb` (section 7.11).
 
 ### 5.2 Quota versus admission
 
@@ -1296,7 +1297,7 @@ any `project_path`, so the path alone proves nothing. The verifier reads the ins
 `<issuer>/oauth/discovery/keys` and maps `project_path` to the repository, `project_id` to the
 pinned id, `ref_path` to the ref and `pipeline_source` (`push` or `web`) to the event. The returned
 `workflow` is a `.gitlab-ci.yml` job with an ID token for carrel's audience that runs
-`/apps/v1/deploy.sh`, the counterpart of `carrel-deploy`. `function_link` stays GitHub only.
+`/apps/v1/deploy.sh`, the counterpart of `carrel-deploy`. `service_link` stays GitHub only.
 
 **Why the build runs in GitHub Actions**: the default machine has 1 GiB of memory and cannot run
 `next build`. GitHub runners have 7 GB, cost carrel nothing to operate, and keep build tools and
@@ -1391,20 +1392,20 @@ picks the node with the most free memory that is not drained. Moves run one at a
 site, since they share the nodes' one link with corosync; a move that finds another in progress
 waits for its slot. `node_undrain` reopens placement and leaves moved machines where they are.
 
-### 7.11 Functions: wake on request
+### 7.11 Services: wake on request
 
-A function is a container image that carrel runs only while it has work. A sleeping function has
+A service is a container image that carrel runs only while it has work. A sleeping service has
 no process and uses no memory. A request wakes it from a snapshot in about 100 ms, and it goes
 back to sleep when it is idle. The measurements behind the design are in
-`docs/evaluations/2026-11-12-function-wake.md`.
+`docs/evaluations/2026-11-12-service-wake.md`.
 
-Built so far (2026-11-12): `carrel-fnd` and `carrel-fn-init`, which are the router, the snapshot
+Built so far (2026-11-12): `carrel-svcd` and `carrel-svc-init`, which are the router, the snapshot
 build from a local Docker image, both instance modes, the idle stop, the clock on wake and the
 writable overlay, and the jailer around every Firecracker process. They run by hand on one test
-host. A function has a route to the internet behind the egress filter. Images come from a
+host. A service has a route to the internet behind the egress filter. Images come from a
 registry without credentials, or from a `docker save` tarball, with no Docker daemon. The control
 plane and the MCP tools are connected since (below). The three
-limits required before tenant code runs on a function host are built: disk use (issue #225),
+limits required before tenant code runs on a service host are built: disk use (issue #225),
 traffic (issue #229) and a guard that keeps the rules loaded (issue #230).
 
 **Why carrel offers it**
@@ -1414,14 +1415,14 @@ traffic (issue #229) and a guard that keeps the rules loaded (issue #230).
 - Each instance is a microVM, a small virtual machine with its own kernel. That boundary is
   strong enough for code the tenant does not trust, such as code an agent wrote a minute ago.
 - An agent deploys with one tool call and gets a URL back.
-- A function can run for an hour and can call the lab's own services by their public names. AWS
+- A service can run for an hour and can call the lab's own services by their public names. AWS
   Lambda stops at 15 minutes and cannot reach the lab.
 
 **Contract**
 
 - An OCI image for `linux/amd64` that serves HTTP on `$PORT` (default 8080). carrel honours the
   image's entrypoint, command, environment and working directory, and does not change the image.
-- A function keeps no state. Every instance starts from the snapshot made at deploy time. The root
+- A service keeps no state. Every instance starts from the snapshot made at deploy time. The root
   file system is read-only under a memory-backed overlay, so writes work and are gone when the
   instance stops.
 - This is the contract of Cloud Run and Knative. The same image runs on AWS Lambda with the AWS
@@ -1430,10 +1431,10 @@ traffic (issue #229) and a guard that keeps the rules loaded (issue #230).
 
 **Deploy**
 
-1. The member's agent calls `function_deploy` with a name and an image reference. A repository can
+1. The member's agent calls `service_deploy` with a name and an image reference. A repository can
    also deploy on every push through `NYCU-WinLab/carrel-deploy@v1` with the same OIDC checks as
    apps (section 7.9).
-2. A function host pulls the image without a Docker daemon and flattens it into an ext4 root file
+2. A service host pulls the image without a Docker daemon and flattens it into an ext4 root file
    system. It adds `fn-init`, a small static program that becomes process 1, prepares mounts and
    the network, and starts the image's command as the image's user. The image is the tenant's
    and may be hostile, so its files are never unpacked on the host: the flattened tar stream goes
@@ -1441,20 +1442,20 @@ traffic (issue #229) and a guard that keeps the rules loaded (issue #230).
    the root fail the build, devices are dropped, and the image cannot bring its own `/.fn`.
 3. The host boots the microVM and waits for readiness: any HTTP answer below 500 on the port
    within 60 seconds, the rule apps use.
-4. It pauses the microVM, writes the snapshot and stops it. The function is now `asleep`.
-5. A version is one image digest. carrel keeps the last 3. `function_rollback` switches to the
+4. It pauses the microVM, writes the snapshot and stops it. The service is now `asleep`.
+5. A version is one image digest. carrel keeps the last 3. `service_rollback` switches to the
    previous one without a new build.
 
 Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds for a 945 MB image.
 
 **Wake**
 
-1. The gateway sends a request for the function's name to the router on a function host.
+1. The gateway sends a request for the service's name to the router on a service host.
 2. If no instance is awake, the router restores the snapshot into a new network namespace. The
    tap device there carries the MAC address the snapshot expects.
 3. The router hands the current time to `fn-init`, which sets the guest clock. A restored guest
    otherwise reads the time of the snapshot.
-4. If the function declared a `wake_path`, the router calls it once. This is where a function
+4. If the service declared a `wake_path`, the router calls it once. This is where a service
    reseeds random state it keeps in user space, which is identical in every restore.
 5. The router forwards the request and holds the instance awake while requests arrive.
 6. After `idle_seconds` (default 300) without a request, the router stops the instance.
@@ -1465,14 +1466,14 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
   and APIs.
 - `fresh`: every request gets its own instance, which is destroyed after the answer. For untrusted
   code and job runners, where one request must never see the memory or files of another.
-  At most 10 instances per function run at once in version 1.
+  At most 10 instances per service run at once in version 1.
 
 **Triggers**
 
-- HTTP: `domain_add` accepts `function` in place of `machine` and `target_port`. Webhooks are
+- HTTP: `domain_add` accepts `service` in place of `machine` and `target_port`. Webhooks are
   HTTP.
 - Schedule: `schedule` is a cron expression in the site's time zone. The control plane sends a
-  POST to the function. A missed run is not repeated.
+  POST to the service. A missed run is not repeated.
 - Queues and platform events are not in version 1.
 
 **Isolation**
@@ -1480,87 +1481,87 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
 - Instances are Firecracker microVMs started through its jailer (a private root directory, a
   system call filter, a cgroup and an unprivileged user). Each slot has its own user ID, so one
   Firecracker process cannot signal or read another.
-- They run on function hosts: platform-owned VMs with nested virtualization in the infra range.
-  An escape from a microVM lands in a function host, not on a node. A function host holds one
-  token that reads function versions and nothing else.
+- They run on service hosts: platform-owned VMs with nested virtualization in the infra range.
+  An escape from a microVM lands in a service host, not on a node. A service host holds one
+  token that reads service versions and nothing else.
 - Each instance has its own network namespace. It may reach the internet and public names. Private
-  ranges and platform addresses are dropped, so a function reaches a tenant machine through that
-  machine's public name or port (open decision 18). IPv6 is dropped. A function host needs
+  ranges and platform addresses are dropped, so a service reaches a tenant machine through that
+  machine's public name or port (open decision 18). IPv6 is dropped. A service host needs
   `nftables`, and no other firewall on it may drop forwarded packets by default. It is a
   dedicated machine: the daemon turns on IPv4 forwarding for the whole host.
-- The promise of section 7.7 does not cover functions. carrel runs the code, so the platform
+- The promise of section 7.7 does not cover services. carrel runs the code, so the platform
   holds the image, the environment and the snapshot, and a snapshot contains the memory of the
   process. Admin reads of them are audited and visible to the tenant in `audit_log`.
 
 **Environment and secrets**
 
-`function_env` returns a single-use upload link, valid for 15 minutes. The agent pipes an
-environment file to it (`PUT /functions/v1/env/<link>`), so values never appear in tool
+`service_env` returns a single-use upload link, valid for 15 minutes. The agent pipes an
+environment file to it (`PUT /services/v1/env/<link>`), so values never appear in tool
 arguments, in the audit log or in a transcript. The control plane stores them encrypted with
-AES-256-GCM under `function_env_key` of the configuration, bound to the function. A change of
+AES-256-GCM under `service_env_key` of the configuration, bound to the service. A change of
 environment builds a new version from the current one, because the values are part of its
 snapshot; each version keeps the environment it was built with, so a rollback brings back its
-values, and a deploy keeps the function's environment. `clear` builds a version without one.
+values, and a deploy keeps the service's environment. `clear` builds a version without one.
 The desired state only marks a version that has an environment (`has_env`); the host
-fetches its values from `GET /functions/v1/agent/env` when it builds that version, and writes
-them into the version's root file system, never into `function.json`. `function_get` shows the names only. Snapshots stay on
-function hosts and are deleted with their version. `function_env_old_keys` lists earlier keys that
-still open values; new values are sealed with `function_env_key` only. A value no key opens
+fetches its values from `GET /services/v1/agent/env` when it builds that version, and writes
+them into the version's root file system, never into `service.json`. `service_get` shows the names only. Snapshots stay on
+service hosts and are deleted with their version. `service_env_old_keys` lists earlier keys that
+still open values; new values are sealed with `service_env_key` only. A value no key opens
 answers 409, and the host fails that version instead of asking again.
 
-Sealed to the host (#639): `carrel-fnd` makes an HPKE key pair (the suite of environment sets,
+Sealed to the host (#639): `carrel-svcd` makes an HPKE key pair (the suite of environment sets,
 7.9) in `-env-key` (default `/etc/carrel-fn/env.key`, root, `0600`) and registers only the public
-key at `POST /functions/v1/agent/key`. Once a host has a key, `function_env` seals to it, bound to
-the function's host id, and stores `hpke1:<base64>` in the version's `env`; the agent endpoint
+key at `POST /services/v1/agent/key`. Once a host has a key, `service_env` seals to it, bound to
+the service's host id, and stores `hpke1:<base64>` in the version's `env`; the agent endpoint
 returns it as `env_box` and only the host opens it. When a host registers its first key, carrel
-seals that host's values under `function_env_key` again to the key, in the same transaction, and
+seals that host's values under `service_env_key` again to the key, in the same transaction, and
 drops the old copies. A different key later is refused until an operator runs
-`carrel -trust-function-host-key <host>=<fingerprint>`; values sealed to the old key then fail
-their build, and members upload them again. `function_registry` credentials take the same path:
-sealed to the host's key, bound to the function's host id and the registry, returned as `auth_box`
-with the registry, and moved from `function_env_key` when the host registers. Each start of the
-host's agent also moves values sealed under `function_env_key` since. Webhook secrets stay under
-`function_env_key`: carrel opens them to sign each delivery.
+`carrel -trust-service-host-key <host>=<fingerprint>`; values sealed to the old key then fail
+their build, and members upload them again. `service_registry` credentials take the same path:
+sealed to the host's key, bound to the service's host id and the registry, returned as `auth_box`
+with the registry, and moved from `service_env_key` when the host registers. Each start of the
+host's agent also moves values sealed under `service_env_key` since. Webhook secrets stay under
+`service_env_key`: carrel opens them to sign each delivery.
 
 **Limits and quota**
 
-- Per function: 128 to 2,048 MiB of memory (default 512), 1 vCPU, `timeout_seconds` default 300
+- Per service: 128 to 2,048 MiB of memory (default 512), 1 vCPU, `timeout_seconds` default 300
   and at most 3,600, image at most 2 GB.
-- Per tenant: `functions` (default 20) and `function_gb` (default 20), which counts the root file
+- Per tenant: `services` (default 20) and `service_gb` (default 20), which counts the root file
   systems and snapshots of kept versions.
-- Awake instances are not charged to a tenant. They share the memory of the function hosts. When
+- Awake instances are not charged to a tenant. They share the memory of the service hosts. When
   a host runs short, the router first stops the idle instances used least recently, then answers
   503 with `Retry-After`.
 
 **Observability**
 
-- Each wake is a span in sensorium with function, version, mode, restore time and whether the
+- Each wake is a span in sensorium with service, version, mode, restore time and whether the
   snapshot came from the page cache.
-- The platform captures standard output and standard error, keeps the last 10 MB per function
-  and returns it through `function_logs`. Apps keep their logs in the machine's journal, and
-  `app_logs` asks the app's agent for them; functions have no machine to keep them in.
-- `function_get` reports state, the URL, versions and the p50 and p95 wake time of the last
+- The platform captures standard output and standard error, keeps the last 10 MB per service
+  and returns it through `service_logs`. Apps keep their logs in the machine's journal, and
+  `app_logs` asks the app's agent for them; services have no machine to keep them in.
+- `service_get` reports state, the URL, versions and the p50 and p95 wake time of the last
   24 hours.
 
 **Measured on 2026-11-12** (nested virtualization, 1 vCPU, from process start to the first HTTP 200)
 
 | Workload | Snapshot restore p95 | `docker start` p95 | Cold boot p95 |
 |---|---:|---:|---:|
-| Python function, 512 MiB | 104 ms (223 ms from disk) | 1,611 ms | 3,026 ms |
+| Python service, 512 MiB | 104 ms (223 ms from disk) | 1,611 ms | 3,026 ms |
 | Headless browser, 1,024 MiB | 913 ms (2,178 ms from disk) | 1,811 ms | 6,421 ms |
 
-Thirty restored copies of the Python function added 16 MiB each, because copies share every page
+Thirty restored copies of the Python service added 16 MiB each, because copies share every page
 they have not written.
 
 **Targets**
 
-- Wake p95 under 300 ms for a function that touches less than 50 MiB in its first request.
+- Wake p95 under 300 ms for a service that touches less than 50 MiB in its first request.
 - From image to `asleep` under 15 seconds for a 200 MB image.
-- At least 50 sleeping-but-recently-used functions kept in the page cache of one 8 GiB host.
+- At least 50 sleeping-but-recently-used services kept in the page cache of one 8 GiB host.
 
 **To solve before the build**
 
-- Large first requests. The browser function touches 221 MiB one page at a time. Record the pages
+- Large first requests. The browser service touches 221 MiB one page at a time. Record the pages
   of the first request at deploy time and read them in one pass at restore. The target is the
   300 ms above.
 - Snapshot portability. A snapshot depends on the CPU model and the Firecracker version (open
@@ -1568,25 +1569,25 @@ they have not written.
 - The writable overlay was not part of the measurements.
 
 **Version 1 limits**: HTTP and schedule triggers only. No GPU, no persistent disk, no attachment
-to tenant networks, one instance per `reuse` function.
+to tenant networks, one instance per `reuse` service.
 
 **Build order**
 
-1. A function host image and the router, with `fresh` and `reuse`, on one host. The router is
-   built. Measured through it on the test host: a request that wakes a `reuse` function p95
-   162 ms (15 runs), a `fresh` request p95 168 ms (30 runs), a request to an awake function p95
+1. A service host image and the router, with `fresh` and `reuse`, on one host. The router is
+   built. Measured through it on the test host: a request that wakes a `reuse` service p95
+   162 ms (15 runs), a `fresh` request p95 168 ms (30 runs), a request to an awake service p95
    3 ms (200 runs). The jailer is built: each instance has its own user, root directory, mount,
    PID and network namespace, a seccomp filter, no capabilities, and a cgroup that limits memory
-   to the guest's memory plus 128 MiB and processes to 64. Function files are owned by root and
-   read-only to the jails' group, because every instance of a function maps the same snapshot. A
+   to the guest's memory plus 128 MiB and processes to 64. Service files are owned by root and
+   read-only to the jails' group, because every instance of a service maps the same snapshot. A
    build's snapshot is taken out of the jail only after its Firecracker process ended. With the
    jailer the same requests measure p95 176 ms, 192 ms and 3 ms. The egress filter is built:
    each slot has a link to the host numbered out of `10.251.0.0/16`, and the private, link-local,
    carrier NAT, loopback and multicast ranges are dropped in the instance's namespace and again
    on the host, with the site's protected addresses and TCP port 25, as for tenant machines
    (section 6.6). Only tracked packets from the guest's one address are forwarded, so a forged
-   source or a packet that skips address translation does not leave. Functions leave through one
-   named uplink. The host accepts nothing from a function, and a namespace starts nothing of its
+   source or a packet that skips address translation does not leave. Services leave through one
+   named uplink. The host accepts nothing from a service, and a namespace starts nothing of its
    own. A slot's namespace is made new after every instance, so no connection of the last
    instance leads to the next one. The guest gets the uplink's MTU and public resolvers at
    build time. Making the namespace new costs the `fresh` mode on a 1 vCPU host: p50 went from
@@ -1600,70 +1601,70 @@ to tenant networks, one instance per `reuse` function.
    Ended TCP connections and UDP flows time out in 10 to 30 seconds, and the guard trims a
    slot that still holds more than 3,000 entries. A slot's entries in the host's table are
    deleted before the slot is used again. The host needs `conntrack` (conntrack-tools). The
-   guard checks every slot's rules every 5 seconds, and `carrel-fnd serve` refuses to start
+   guard checks every slot's rules every 5 seconds, and `carrel-svcd serve` refuses to start
    when the host's table differs from the expected one. Still open in this step: the host
    image, issues #234, #236 and #239 to #243. Measured on
-   the test host: 40 requests at once to a sleeping `reuse` function all answer 200 from one
+   the test host: 40 requests at once to a sleeping `reuse` service all answer 200 from one
    instance, and a stop under 30 `fresh` requests leaves no microVM, namespace, link or cgroup.
-2. The deploy pipeline and the member tools. The host agent is built: `carrel-fnd serve
+2. The deploy pipeline and the member tools. The host agent is built: `carrel-svcd serve
    -control <url>` asks the control plane for the host's desired state with the host's one
-   token (`GET /functions/v1/agent/state`, a 30 second long poll), builds the versions it lacks
-   one at a time, puts each function's current version live, removes the functions and versions
+   token (`GET /services/v1/agent/state`, a 30 second long poll), builds the versions it lacks
+   one at a time, puts each service's current version live, removes the services and versions
    the state no longer names, and sends its whole inventory after every pass
-   (`POST /functions/v1/agent/report`): each version is ready, with its disk use and image
+   (`POST /services/v1/agent/report`): each version is ready, with its disk use and image
    digest, or failed, with the error. A build that failed on the network, a registry 5xx or 429,
    or a full disk is tried again after 30 seconds and then 2 minutes; the third failure, or any
    other error, fails the version. Both sides are
    level-triggered, so a lost report or a
-   restart heals on the next pass. A function is named `t<tenant>-<name>` on a host. The
+   restart heals on the next pass. A service is named `t<tenant>-<name>` on a host. The
    control plane decides which version is current; the host never activates a build on its own.
-   The functions' directory must be on a file system without `nodev`, or no tap device opens.
-   The control plane side is built: `function_deploy`, `function_get` (with `wait_seconds`, the
-   way an agent follows a build), `function_list`, `function_rollback` and `function_remove`,
-   the quota `functions` and `function_gb`, and the two agent endpoints, reached only from the
-   infra network with a host token whose SHA-256 is in `function_hosts` of the configuration.
+   The services' directory must be on a file system without `nodev`, or no tap device opens.
+   The control plane side is built: `service_deploy`, `service_get` (with `wait_seconds`, the
+   way an agent follows a build), `service_list`, `service_rollback` and `service_remove`,
+   the quota `services` and `service_gb`, and the two agent endpoints, reached only from the
+   infra network with a host token whose SHA-256 is in `service_hosts` of the configuration.
    A deploy makes version `v<n>` and returns at once; the host's report makes it current, or
-   records its build error and leaves the current version live. `function_logs` reads the
-   tail of a function's output, or of its builds, from its host: the agent collects the request
-   on a second long poll (`GET /functions/v1/agent/logs`) and posts the answer, so carrel still
+   records its build error and leaves the current version live. `service_logs` reads the
+   tail of a service's output, or of its builds, from its host: the agent collects the request
+   on a second long poll (`GET /services/v1/agent/logs`) and posts the answer, so carrel still
    never connects to a host and keeps no log. Each line starts with the time the host read it,
    which `since_seconds` filters on; Firecracker's own log is limited to errors so that the log
-   holds the function's output. `function_env` sets the environment through a single-use
-   upload link (see Environment and secrets). `function_registry` takes credentials for a private
-   registry the same way: a single-use link, sealed on the function and bound to one registry
+   holds the service's output. `service_env` sets the environment through a single-use
+   upload link (see Environment and secrets). `service_registry` takes credentials for a private
+   registry the same way: a single-use link, sealed on the service and bound to one registry
    host. The desired state marks a version whose image is on that registry (`has_auth`), the host
-   fetches the credentials from `GET /functions/v1/agent/auth` to pull it, and an image on any
+   fetches the credentials from `GET /services/v1/agent/auth` to pull it, and an image on any
    other registry is pulled without them. The credentials belong to the tenant: any member can
    deploy any image the stored token can read on that registry.
    The image pull is built: 5.6 seconds for
    `traefik/whoami` from Docker Hub, 6.7 seconds for the 118 MB test image from a tarball, both
    from image to `asleep`.
 3. Gateway routes, domains and the OIDC deploy action. The deploy action is built:
-   `function_link` binds a repository branch to a function and returns a workflow that builds
-   the image, pushes it to ghcr.io and runs `NYCU-WinLab/carrel-deploy@v1` with `function` and
-   `image`. The action sends the image by digest to `POST /functions/v1/deploy/<tenant>/<name>`
+   `service_link` binds a repository branch to a service and returns a workflow that builds
+   the image, pushes it to ghcr.io and runs `NYCU-WinLab/carrel-deploy@v2` with `service` and
+   `image`. The action sends the image by digest to `POST /services/v1/deploy/<tenant>/<name>`
    with the job's OIDC token, checked as for apps (section 7.9), including the pinned
    repository id. carrel builds a version from the current version's settings and environment
    with that image and records the commit; the action polls
-   `GET /functions/v1/deploy/<tenant>/<name>/<version>` until the version is live, failed, or
-   superseded by a newer one. The workflow runs one deploy at a time per function. The gateway
-   sends the public function paths (`env`, `registry`, `deploy`) to carrel, never the host
+   `GET /services/v1/deploy/<tenant>/<name>/<version>` until the version is live, failed, or
+   superseded by a newer one. The workflow runs one deploy at a time per service. The gateway
+   sends the public service paths (`env`, `registry`, `deploy`) to carrel, never the host
    agents' paths.
 
    Pull request previews (#645) are built on this path. With `previews: true`, a
    `pull_request` token from the linked repository (same name and pinned id, event exactly
-   `pull_request`, so `pull_request_target` is refused) deploys to the function
+   `pull_request`, so `pull_request_target` is refused) deploys to the service
    `pr-<number>-<name>`, with `preview_of` naming the parent. Its first version takes only the
    parent's settings: no environment, schedules or registry credentials, since a pull request
    runs code nobody merged. It is served at `pr-<number>-<name>.<tenant>.winlab.tw` under the
    tenant's wildcard certificate: carrel writes a queued domain and wakes the maintenance loop,
-   which publishes it. The closing run calls `DELETE /functions/v1/deploy/<tenant>/<name>/preview`
+   which publishes it. The closing run calls `DELETE /services/v1/deploy/<tenant>/<name>/preview`
    with the number it closes. A merged pull request's close token carries the base branch as
    `ref` and no number, so the preview must match both that number and the token's `head_ref`; a
    late close of an older pull request on a reused branch name never removes a newer preview. A merged close must also name the base branch (`base_ref`) the preview was deployed against, so two pull requests from one head branch to different bases cannot remove each other's preview; a preview stored without a base keeps the head rule alone. A preview with no deploy for 7 days
-   is removed, and so are a function's previews when it is removed, unlinked or linked without
-   previews. A function has at most 5, counted against the `functions` and `domains` quota and also against the
-   tenant's `function_gb`: previews share that budget with production and have none of their own.
+   is removed, and so are a service's previews when it is removed, unlinked or linked without
+   previews. A service has at most 5, counted against the `services` and `domains` quota and also against the
+   tenant's `service_gb`: previews share that budget with production and have none of their own.
    The worst case is 5 previews x 3 versions x 1024 MiB, about 22 GiB, and when the budget is full
    the parent's next push fails with `quota_exceeded`.
    In a private repository with "Send write tokens to workflows from pull requests" turned on, a
@@ -1755,7 +1756,7 @@ plugin contract is in issue #564.
 | Migrate and drain | `machine_migrate`, `node_drain`, `node_undrain` | plugin | 2 or more nodes | low: placement skips drained nodes (`nodes.go`), `admin.go` routes the tools |
 | Public entry | `domain_*`, `port_*`, `public_ip_*`, `vip_*`, `zone_*` and IPv6 | plugin, installed on every lab site | a public address | high: `network.go`, `intent.go` (`deployment_apply`) and `freeze.go` all build entries |
 | Connectivity | `vpn_client_*`, `peer_*`, `machine_ca_backfill` and the jump host | plugin | a gateway; the lab SSH CA | high: `platform.go`, `machine_access.go` and `netbox.go` read it |
-| Deploy | `app_*`, `runner_*`, `function_*` | plugin | apps: none; functions: a function host | medium: apps and functions publish through public entry (`domains.go`, `gateway.go`) and have their own config |
+| Deploy | `app_*`, `runner_*`, `service_*` | plugin | apps: none; services: a service host | medium: apps and services publish through public entry (`domains.go`, `gateway.go`) and have their own config |
 | NetBox sync | none (background) | plugin | a NetBox | low: `public_ips.go` and a few hooks |
 
 Coupling counts how many core files name the feature (grep of `internal/carrel`, 2026-11-25). Low
@@ -1787,7 +1788,7 @@ Constraints the agent has to keep, found in the code (2026-11-25):
    checks stay as they are. The site agent of 8.4 is the set of its nodes' agents; site-wide ops
    still go to the first exit node. One process per site would have to reach the other nodes
    itself, which is the SSH path again.
-2. **Transport.** The agent connects out over HTTPS and long-polls for jobs, as `carrel-fnd` does
+2. **Transport.** The agent connects out over HTTPS and long-polls for jobs, as `carrel-svcd` does
    (`GET /sites/v1/agent/jobs`). A job carries an id, the op and its request; the agent posts the
    result to `POST /sites/v1/agent/jobs/{id}`. A job id is unique per dispatch, and the agent
    keeps each job's result until the control plane acknowledges it, so a job delivered twice
@@ -1805,7 +1806,7 @@ Constraints the agent has to keep, found in the code (2026-11-25):
    the path: it would put CT 101 between root jobs and their source, and the control plane
    would lose the source address check. The agent signs in with a short-lived
    client certificate from the lab step-ca, bound to one node and one site; until that lands, with
-   a hashed bearer token and a fixed source address, as `carrel-fnd` does. A node that uses the
+   a hashed bearer token and a fixed source address, as `carrel-svcd` does. A node that uses the
    agent has no `authorized_keys` line for the control plane.
 4. **Versions.** The first request carries `protocol: "v1"`, the agent's release and its capabilities
    (#561, #562). The control plane serves the current and the previous protocol version.
@@ -2225,16 +2226,16 @@ M3 note: `machine_reset_access` exists (section 7.10) and the M3 sentence about 
     are still needed. The striped pools make backups the only recovery from a disk failure.
 15. App artifact limits (section 7.9): 500 MB per release and 3 kept releases are first guesses.
     Revisit after real apps.
-16. Resolved 2026-11-12: function hosts run in platform VMs with nested virtualization, as
+16. Resolved 2026-11-12: service hosts run in platform VMs with nested virtualization, as
     measured. A guest that leaves Firecracker lands in a VM, not on a node that holds every
     tenant's machines, and the guard owns the whole host table, which a node shares with the
-    Proxmox firewall. The same `carrel-fnd` runs on a node if nested virtualization proves too slow.
-17. Function limits (section 7.11): 2 GiB of memory, a 3,600 second timeout, 20 functions and
+    Proxmox firewall. The same `carrel-svcd` runs on a node if nested virtualization proves too slow.
+17. Service limits (section 7.11): 2 GiB of memory, a 3,600 second timeout, 20 services and
     20 GiB per tenant are first guesses. Long batch work may need a longer timeout.
-18. How a function reaches its tenant's private addresses (section 7.11). Version 1 allows public
+18. How a service reaches its tenant's private addresses (section 7.11). Version 1 allows public
     names only.
 19. Whether all four nodes can restore one snapshot (section 7.11). A snapshot depends on the CPU
-    model and the Firecracker version. The nodes' CPU models must be compared before a function
+    model and the Firecracker version. The nodes' CPU models must be compared before a service
     may wake on any node.
 
 ## 14. Vocabulary

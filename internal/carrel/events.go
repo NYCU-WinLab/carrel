@@ -47,7 +47,7 @@ const (
 var webhookBackoff = []time.Duration{0, 30 * time.Second, 2 * time.Minute, 10 * time.Minute, time.Hour, 6 * time.Hour}
 
 // eventTypes are the events a webhook can ask for.
-var eventTypes = []string{"app.release.live", "app.release.failed", "app.build.failed", "function.version.ready", "function.version.failed", "machine.operation.succeeded", "machine.operation.failed", "quota.warning", "webhook.test"}
+var eventTypes = []string{"app.release.live", "app.release.failed", "app.build.failed", "service.version.ready", "service.version.failed", "machine.operation.succeeded", "machine.operation.failed", "quota.warning", "webhook.test"}
 
 // eventHub wakes the SSE streams and the delivery loop when an event is
 // written.
@@ -265,8 +265,8 @@ func (e *Execution) WebhookTool(tool string, a, t D) D {
 		if len(e.S.Objects("webhooks", n)) >= maxWebhooks {
 			fail("conflict", "A tenant has at most 10 webhooks; remove one first")
 		}
-		if envAEAD(e.P.Config.FunctionEnvKey) == nil {
-			fail("unavailable", "Webhooks need function_env_key on this platform")
+		if envAEAD(e.P.Config.ServiceEnvKey) == nil {
+			fail("unavailable", "Webhooks need service_env_key on this platform")
 		}
 		id := "wh_" + randomID()[:16]
 		h := D{"id": id, "tenant_n": n, "url": a["url"], "types": types, "created_at": now(), "cursor": e.S.lastEvent(n)}

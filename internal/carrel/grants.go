@@ -13,10 +13,10 @@ func (e *Execution) PublicGrant(kind string, grant D, n int) D {
 			g["machine"] = m["name"]
 		}
 	}
-	if f := str(g["function"]); f != "" {
-		// Members name a function; its id stays internal.
+	if f := str(g["service"]); f != "" {
+		// Members name a service; its id stays internal.
 		if n, name, ok := strings.Cut(f, "-"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
-			g["function"] = name
+			g["service"] = name
 		}
 		delete(g, "target_port")
 	}
@@ -85,7 +85,7 @@ func grantSummary(kind string, g D) D {
 	case "ports":
 		return pick(g, "id", "machine", "vip", "public_port", "port", "proto", "endpoint", "state", "verification")
 	case "domains":
-		return pick(g, "name", "machine", "vip", "function", "sub", "target_port", "url", "state", "ready_at", "verification")
+		return pick(g, "name", "machine", "vip", "service", "sub", "target_port", "url", "state", "ready_at", "verification")
 	case "peers":
 		return pick(g, "id", "machine", "from_tenant", "from_machine", "source", "port", "proto", "state")
 	case "networks":

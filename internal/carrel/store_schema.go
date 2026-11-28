@@ -43,6 +43,37 @@ CREATE INDEX events_tenant ON events(tenant,id);`)
 ALTER TABLE tenants ADD COLUMN grace_reason TEXT;`)
 		return err
 	},
+	// 3 to 4: functions are services (#908). The kinds, the field that names
+	// a service in versions, links and domains, the quota keys, the quota
+	// request dimensions and quota warnings, the event types, the types a
+	// webhook subscribes to and the service an unfinished domain operation
+	// names move to the new names. The audit log keeps the tool names it
+	// recorded.
+	func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE objects SET kind='services' WHERE kind='functions';
+UPDATE objects SET kind='service_versions' WHERE kind='function_versions';
+UPDATE objects SET kind='service_env_links' WHERE kind='function_env_links';
+UPDATE objects SET data=json_set(json_remove(data,'$.function'),'$.service',json_extract(data,'$.function'))
+ WHERE kind IN ('service_versions','service_env_links','domains') AND json_type(data,'$.function') IS NOT NULL;
+UPDATE objects SET data=json_set(data,'$.dimension','services') WHERE kind='requests' AND json_extract(data,'$.dimension')='functions';
+UPDATE objects SET data=json_set(data,'$.dimension','service_gb') WHERE kind='requests' AND json_extract(data,'$.dimension')='function_gb';
+UPDATE objects SET data=json_set(data,'$.types',(SELECT json_group_array(CASE WHEN value LIKE 'function.version.%' THEN 'service.version.'||substr(value,18) ELSE value END) FROM json_each(data,'$.types')))
+ WHERE kind='webhooks' AND json_type(data,'$.types')='array';
+UPDATE objects SET data=json_set(json_remove(data,'$.args.function'),'$.args.service',json_extract(data,'$.args.function'))
+ WHERE kind='operations' AND json_type(data,'$.args.function') IS NOT NULL;
+UPDATE site SET data=json_set(json_remove(data,'$.functions'),'$.services',json(data->'$.functions')) WHERE kind='quota_warnings' AND json_type(data,'$.functions') IS NOT NULL;
+UPDATE site SET data=json_set(json_remove(data,'$.function_gb'),'$.service_gb',json(data->'$.function_gb')) WHERE kind='quota_warnings' AND json_type(data,'$.function_gb') IS NOT NULL;
+UPDATE events SET data=json_set(data,'$.dimension',CASE json_extract(data,'$.dimension') WHEN 'functions' THEN 'services' ELSE 'service_gb' END)
+ WHERE type='quota.warning' AND json_extract(data,'$.dimension') IN ('functions','function_gb');
+UPDATE site SET kind='services' WHERE kind='functions';
+UPDATE site SET kind='service_hosts' WHERE kind='function_hosts';
+UPDATE site SET kind='service_host_keys' WHERE kind='function_host_keys';
+UPDATE tenants SET quota=json_set(json_remove(quota,'$.functions'),'$.services',json_extract(quota,'$.functions')) WHERE json_type(quota,'$.functions') IS NOT NULL;
+UPDATE tenants SET quota=json_set(json_remove(quota,'$.function_gb'),'$.service_gb',json_extract(quota,'$.function_gb')) WHERE json_type(quota,'$.function_gb') IS NOT NULL;
+UPDATE events SET type='service.version.'||substr(type,18) WHERE type LIKE 'function.version.%';
+UPDATE events SET data=json_set(json_remove(data,'$.function'),'$.service',json_extract(data,'$.function')) WHERE json_type(data,'$.function') IS NOT NULL;`)
+		return err
+	},
 }
 
 // SchemaVersion is the version this release writes and reads.

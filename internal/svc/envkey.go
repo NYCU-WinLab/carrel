@@ -1,0 +1,159 @@
+package svc
+
+import (
+	"context"
+	"crypto/hpke"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// A service host's own key (#639): the control plane seals each
+// service's environment to its public key, so only this host opens it.
+// The suite is carrel's for environment sets: ML-KEM-768 with X25519,
+// HKDF-SHA256 and AES-256-GCM.
+
+var (
+	envKEM  = hpke.MLKEM768X25519()
+	envKDF  = hpke.HKDFSHA256()
+	envAEAD = hpke.AES256GCM()
+)
+
+// envInfo binds a sealed environment to the service it belongs to.
+func envInfo(id string) []byte { return []byte("carrel-fn-env/v1\x00" + id) }
+
+// LoadEnvKey reads the host's private key from path, or makes one there,
+// readable by root only, on the first start.
+func LoadEnvKey(path string) (hpke.PrivateKey, error) {
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		return envKEM.NewPrivateKey(raw)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	key, err := envKEM.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+	raw, err = key.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	// Synced and renamed into place: a power loss right after the first
+	// start must not leave a torn key, since carrel drops the values it
+	// could open once the key is registered.
+	pending := path + ".next"
+	_ = os.Remove(pending)
+	f, err := os.OpenFile(pending, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(pending, path); err != nil {
+		return nil, err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		dir.Close()
+	}
+	return key, nil
+}
+
+// Fingerprint names a public key the way carrel shows it.
+func Fingerprint(public []byte) string {
+	sum := sha256.Sum256(public)
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
+// registerKey sends the public key until the control plane answers. One
+// that predates host keys refuses it; the agent asks again later.
+func (a *Agent) registerKey(ctx context.Context) {
+	// Sent again every hour, not only once: a control plane upgraded
+	// after this agent started learns what it opens, and moves values
+	// still under service_env_key to its key.
+	if a.EnvKey == nil || time.Now().Before(a.keyRetryAt) {
+		return
+	}
+	public := a.EnvKey.PublicKey().Bytes()
+	var answer struct{ State string }
+	err := a.call(ctx, http.MethodPost, "/services/v1/agent/key", map[string]any{"kem": envKEM.ID(), "public": base64.StdEncoding.EncodeToString(public), "opens": []string{"env", "registry"}}, &answer)
+	if err != nil {
+		slog.Warn("host key not registered", "error", err)
+		a.keyRetryAt = time.Now().Add(10 * time.Minute)
+		return
+	}
+	first := !a.keyRegistered
+	a.keyRegistered = true
+	a.keyRetryAt = time.Now().Add(time.Hour)
+	if !first {
+		return
+	}
+	if answer.State == "pending" {
+		slog.Error("the control plane holds another key for this host; an operator must run carrel -trust-service-host-key", "fingerprint", Fingerprint(public))
+		return
+	}
+	slog.Info("host key registered", "fingerprint", Fingerprint(public))
+}
+
+// openAuth opens registry credentials sealed to this host for service id
+// and registry.
+func (a *Agent) openAuth(id, registry, box string) (*RegistryAuth, error) {
+	var auth RegistryAuth
+	if err := a.openBox(append([]byte("carrel-fn-registry/v1\x00"+id+"\x00"), registry...), box, &auth); err != nil {
+		return nil, err
+	}
+	if auth.Registry != registry {
+		return nil, errors.New("the sealed credentials are for another registry")
+	}
+	return &auth, nil
+}
+
+// openEnv opens an environment sealed to this host for service id.
+func (a *Agent) openEnv(id, box string) ([]string, error) {
+	var env []string
+	if err := a.openBox(envInfo(id), box, &env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+// openBox opens a value sealed to this host's key under info into out.
+func (a *Agent) openBox(info []byte, box string, out any) error {
+	if a.EnvKey == nil {
+		return errors.New("the value is sealed to a host key, and this host has none")
+	}
+	raw, err := base64.StdEncoding.DecodeString(box)
+	if err != nil {
+		return errors.New("the sealed value is damaged")
+	}
+	plain, err := hpke.Open(a.EnvKey, envKDF, envAEAD, info, raw)
+	if err != nil {
+		return fmt.Errorf("the value does not open with this host's key (%s); if the host was rebuilt, an operator trusts its new key first, then the member uploads it again with service_env or service_registry", Fingerprint(a.EnvKey.PublicKey().Bytes()))
+	}
+	if json.Unmarshal(plain, out) != nil {
+		return errors.New("the sealed value is damaged")
+	}
+	return nil
+}

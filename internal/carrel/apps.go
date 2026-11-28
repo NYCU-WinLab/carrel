@@ -300,7 +300,7 @@ func (e *Execution) appGitLabCI(t D, app D) string {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'" }
 
-// authorizeRelease checks a forge's token against the app or function it
+// authorizeRelease checks a forge's token against the app or service it
 // targets. The first accepted deploy pins repository_id, so a deleted and
 // recreated repository with the same name cannot deploy afterwards.
 func (e *Execution) authorizeRelease(app D, c CIClaims) {

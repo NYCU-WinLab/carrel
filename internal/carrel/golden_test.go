@@ -340,7 +340,7 @@ func goldenText(t *testing.T, scenario func(*goldenRun), everyTool bool, wrap fu
 	// Domains: a token for the DNS stub, and the tenant's wildcard pair as
 	// issuance would leave it.
 	p.Config.CloudflareToken = "test"
-	p.Config.FunctionHosts = []FunctionHostConfig{{Name: "fn01", Router: "10.200.0.20:8090", TokenSHA256: digest("cfh_golden")}}
+	p.Config.ServiceHosts = []ServiceHostConfig{{Name: "fn01", Router: "10.200.0.20:8090", TokenSHA256: digest("cfh_golden")}}
 	crt, key := testPair(t, "*.alice.winlab.tw")
 	p.execution(context.Background()).storeCertificate("alice", crt, key)
 	p.Store.Put("certificates", "1", 1, D{"id": "1", "tenant_n": 1, "slug": "alice"})
@@ -513,17 +513,17 @@ func goldenScenario(g *goldenRun) {
 	call("apps", "env_trust", D{"app": "site", "fingerprint": "SHA256:" + strings.Repeat("A", 43)}, alice)
 	call("apps", "env_remove", D{"set": "shared", "confirm": "shared"}, alice)
 	// No agent polls here: the request times out at once.
-	logWait := functionLogWait
-	functionLogWait = time.Millisecond
+	logWait := serviceLogWait
+	serviceLogWait = time.Millisecond
 	call("apps", "app_logs", D{"app": "site"}, alice)
-	functionLogWait = logWait
+	serviceLogWait = logWait
 	call("apps", "app_deploy", D{"app": "site", "release": "0000000000000000"}, alice)
 	call("apps", "app_rollback", D{"app": "site"}, alice)
 	call("apps", "app_unlink", D{"app": "site", "confirm": "site"}, alice)
 	call("apps", "app_link", D{"machine": "web", "name": "gitea", "mode": "pull", "repo": "git@git.example.org:alice/site.git", "build": "make", "start": "./run", "port": 8080}, alice)
 	call("apps", "app_webhook_rotate", D{"app": "gitea"}, alice)
 	call("apps", "app_unlink", D{"app": "gitea", "confirm": "gitea"}, alice)
-	// No function_env_key here: a webhook cannot seal its secret.
+	// No service_env_key here: a webhook cannot seal its secret.
 	call("apps", "webhook_add", D{"url": "https://hooks.example.org/carrel"}, alice)
 	call("apps", "webhook_list", D{}, alice)
 	call("apps", "webhook_rotate", D{"webhook": "wh_missing"}, alice)
@@ -536,28 +536,28 @@ func goldenScenario(g *goldenRun) {
 	call("runners", "runner_list", D{}, alice)
 	call("runners", "runner_remove", D{"runner": "web", "confirm": "web"}, alice)
 
-	call("functions", "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "dry_run": true}, alice)
-	call("functions", "function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "instance": "fresh"}, alice)
-	call("functions", "function_list", D{}, alice)
-	call("functions", "function_get", D{"function": "hook"}, alice)
+	call("services", "service_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "dry_run": true}, alice)
+	call("services", "service_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "instance": "fresh"}, alice)
+	call("services", "service_list", D{}, alice)
+	call("services", "service_get", D{"service": "hook"}, alice)
 	// No host agent runs here: the request times out at once.
-	wait := functionLogWait
-	functionLogWait = time.Millisecond
-	call("functions", "function_logs", D{"function": "hook", "build": true}, alice)
-	functionLogWait = wait
-	// No function_env_key here: environments are unavailable.
-	call("functions", "function_env", D{"function": "hook"}, alice)
-	call("functions", "function_registry", D{"function": "hook"}, alice)
-	call("functions", "function_link", D{"function": "hook", "repo": "alice/hook"}, alice)
-	call("functions", "function_rollback", D{"function": "hook"}, alice)
-	call("functions", "function_schedule", D{"function": "hook", "name": "nightly", "cron": "0 3 * * *", "time_zone": "Asia/Taipei"}, alice)
-	call("functions", "domain_add", D{"function": "hook", "sub": "hook", "dry_run": true}, alice)
-	call("functions", "domain_add", D{"function": "hook", "sub": "hook"}, alice)
-	call("functions", "domain_add", D{"function": "hook", "sub": "hook2", "target_port": 80}, alice)
-	call("functions", "function_get", D{"function": "hook"}, alice)
-	call("functions", "function_remove", D{"function": "hook", "confirm": "hook"}, alice)
-	call("functions", "domain_remove", D{"name": "hook.alice.winlab.tw"}, alice)
-	call("functions", "function_remove", D{"function": "hook", "confirm": "hook"}, alice)
+	wait := serviceLogWait
+	serviceLogWait = time.Millisecond
+	call("services", "service_logs", D{"service": "hook", "build": true}, alice)
+	serviceLogWait = wait
+	// No service_env_key here: environments are unavailable.
+	call("services", "service_env", D{"service": "hook"}, alice)
+	call("services", "service_registry", D{"service": "hook"}, alice)
+	call("services", "service_link", D{"service": "hook", "repo": "alice/hook"}, alice)
+	call("services", "service_rollback", D{"service": "hook"}, alice)
+	call("services", "service_schedule", D{"service": "hook", "name": "nightly", "cron": "0 3 * * *", "time_zone": "Asia/Taipei"}, alice)
+	call("services", "domain_add", D{"service": "hook", "sub": "hook", "dry_run": true}, alice)
+	call("services", "domain_add", D{"service": "hook", "sub": "hook"}, alice)
+	call("services", "domain_add", D{"service": "hook", "sub": "hook2", "target_port": 80}, alice)
+	call("services", "service_get", D{"service": "hook"}, alice)
+	call("services", "service_remove", D{"service": "hook", "confirm": "hook"}, alice)
+	call("services", "domain_remove", D{"name": "hook.alice.winlab.tw"}, alice)
+	call("services", "service_remove", D{"service": "hook", "confirm": "hook"}, alice)
 
 	spec := D{
 		"machines":    []any{D{"name": "api"}, D{"name": "db", "network_access": "restricted"}},

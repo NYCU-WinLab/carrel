@@ -147,93 +147,93 @@ func remoteIP(r *http.Request) string {
 	return host
 }
 
-// functionRoutes serve function hosts' agents, from the infra network only
+// serviceRoutes serve service hosts' agents, from the infra network only
 // (the internal paths in NewApp).
-func (a *App) functionRoutes(mux *http.ServeMux) {
+func (a *App) serviceRoutes(mux *http.ServeMux) {
 	p := a.Platform
-	mux.HandleFunc("GET /functions/v1/agent/state", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /services/v1/agent/state", func(w http.ResponseWriter, r *http.Request) {
 		since, err := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 		if err != nil {
 			since = -1
 		}
 		var result D
-		if err := attempt(func() { result = p.FunctionState(r.Context(), bearer(r), remoteIP(r), since) }); err != nil {
+		if err := attempt(func() { result = p.ServiceState(r.Context(), bearer(r), remoteIP(r), since) }); err != nil {
 			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
 			return
 		}
 		// The agent reads the state as is: no ok wrapper.
 		jsonResponse(w, 200, result)
 	})
-	// A function host registers the public key its environments are sealed to (#639).
-	mux.Handle("POST /functions/v1/agent/key", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+	// A service host registers the public key its environments are sealed to (#639).
+	mux.Handle("POST /services/v1/agent/key", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		return p.AgentHostKey(r.Context(), bearer(r), remoteIP(r), readJSON(r))
 	}))
-	mux.Handle("POST /functions/v1/agent/report", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+	mux.Handle("POST /services/v1/agent/report", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		var body D
 		if json.NewDecoder(r.Body).Decode(&body) != nil {
 			fail("invalid", "Invalid JSON body")
 		}
-		return p.FunctionReport(r.Context(), bearer(r), remoteIP(r), body)
+		return p.ServiceReport(r.Context(), bearer(r), remoteIP(r), body)
 	}))
-	// A GitHub job deploys the image it pushed to a linked function.
-	mux.Handle("POST /functions/v1/deploy/{tenant}/{function}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+	// A GitHub job deploys the image it pushed to a linked service.
+	mux.Handle("POST /services/v1/deploy/{tenant}/{service}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.ciClaims(r)
-		return p.ReceiveFunctionImage(r.Context(), r.PathValue("tenant"), r.PathValue("function"), c, r.Body)
+		return p.ReceiveServiceImage(r.Context(), r.PathValue("tenant"), r.PathValue("service"), c, r.Body)
 	}))
 	// A closed pull request's job removes its preview (#645).
-	mux.Handle("DELETE /functions/v1/deploy/{tenant}/{function}/preview", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+	mux.Handle("DELETE /services/v1/deploy/{tenant}/{service}/preview", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.ciClaims(r)
-		return p.ClosePreview(r.Context(), r.PathValue("tenant"), r.PathValue("function"), c, r.Body)
+		return p.ClosePreview(r.Context(), r.PathValue("tenant"), r.PathValue("service"), c, r.Body)
 	}))
-	mux.Handle("GET /functions/v1/deploy/{tenant}/{function}/{version}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+	mux.Handle("GET /services/v1/deploy/{tenant}/{service}/{version}", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		c := a.ciClaims(r)
-		return D{"version": p.FunctionImageStatus(r.Context(), r.PathValue("tenant"), r.PathValue("function"), r.PathValue("version"), c)}
+		return D{"version": p.ServiceImageStatus(r.Context(), r.PathValue("tenant"), r.PathValue("service"), r.PathValue("version"), c)}
 	}))
-	// A member's agent uploads an environment file to a function_env link.
+	// A member's agent uploads an environment file to a service_env link.
 	env := appHandler(func(w http.ResponseWriter, r *http.Request) D {
-		return p.ReceiveFunctionEnv(r.Context(), r.PathValue("token"), r.Body)
+		return p.ReceiveServiceEnv(r.Context(), r.PathValue("token"), r.Body)
 	})
-	mux.Handle("PUT /functions/v1/env/{token}", env)
-	mux.Handle("POST /functions/v1/env/{token}", env)
+	mux.Handle("PUT /services/v1/env/{token}", env)
+	mux.Handle("POST /services/v1/env/{token}", env)
 	registry := appHandler(func(w http.ResponseWriter, r *http.Request) D {
-		return p.ReceiveFunctionRegistry(r.Context(), r.PathValue("token"), r.Body)
+		return p.ReceiveServiceRegistry(r.Context(), r.PathValue("token"), r.Body)
 	})
-	mux.Handle("PUT /functions/v1/registry/{token}", registry)
-	mux.Handle("POST /functions/v1/registry/{token}", registry)
-	mux.HandleFunc("GET /functions/v1/agent/auth", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PUT /services/v1/registry/{token}", registry)
+	mux.Handle("POST /services/v1/registry/{token}", registry)
+	mux.HandleFunc("GET /services/v1/agent/auth", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		var result D
-		if err := attempt(func() { result = p.FunctionAuthFor(bearer(r), remoteIP(r), q.Get("function"), q.Get("version")) }); err != nil {
+		if err := attempt(func() { result = p.ServiceAuthFor(bearer(r), remoteIP(r), q.Get("service"), q.Get("version")) }); err != nil {
 			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		jsonResponse(w, 200, result)
 	})
-	mux.HandleFunc("GET /functions/v1/agent/env", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /services/v1/agent/env", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		var result D
-		if err := attempt(func() { result = p.FunctionEnvFor(bearer(r), remoteIP(r), q.Get("function"), q.Get("version")) }); err != nil {
+		if err := attempt(func() { result = p.ServiceEnvFor(bearer(r), remoteIP(r), q.Get("service"), q.Get("version")) }); err != nil {
 			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		jsonResponse(w, 200, result)
 	})
-	mux.HandleFunc("GET /functions/v1/agent/logs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /services/v1/agent/logs", func(w http.ResponseWriter, r *http.Request) {
 		var result D
-		if err := attempt(func() { result = p.FunctionLogRequests(r.Context(), bearer(r), remoteIP(r)) }); err != nil {
+		if err := attempt(func() { result = p.ServiceLogRequests(r.Context(), bearer(r), remoteIP(r)) }); err != nil {
 			appHandler(func(http.ResponseWriter, *http.Request) D { panic(err) })(w, r)
 			return
 		}
 		jsonResponse(w, 200, result)
 	})
-	mux.Handle("POST /functions/v1/agent/logs", appHandler(func(w http.ResponseWriter, r *http.Request) D {
+	mux.Handle("POST /services/v1/agent/logs", appHandler(func(w http.ResponseWriter, r *http.Request) D {
 		var body D
 		if json.NewDecoder(r.Body).Decode(&body) != nil {
 			fail("invalid", "Invalid JSON body")
 		}
-		return p.FunctionLogAnswer(bearer(r), remoteIP(r), body)
+		return p.ServiceLogAnswer(bearer(r), remoteIP(r), body)
 	}))
 }
 

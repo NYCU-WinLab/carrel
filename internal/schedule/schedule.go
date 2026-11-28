@@ -1,5 +1,5 @@
-// Package schedule is a function's cron schedule (#643): the control plane
-// checks it, and the function host fires it.
+// Package schedule is a service's cron schedule (#643): the control plane
+// checks it, and the service host fires it.
 package schedule
 
 import (
@@ -15,13 +15,13 @@ import (
 
 const (
 	MaxBody = 64 << 10
-	// MaxPerFunction bounds a function's schedules.
-	MaxPerFunction = 10
+	// MaxPerService bounds a service's schedules.
+	MaxPerService = 10
 )
 
 var nameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
-// Schedule runs a request to a function: at every minute its cron
+// Schedule runs a request to a service: at every minute its cron
 // expression matches in its time zone, the host sends GET Path (POST with
 // Body when there is one) through its router.
 type Schedule struct {

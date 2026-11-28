@@ -1,0 +1,552 @@
+//go:build linux
+
+package svc
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+)
+
+// fakeBuild writes what a real build leaves: a version directory with its
+// service.json and a file standing for the snapshot.
+func fakeBuild(root string, builds *[]string, fail map[string]bool) func(context.Context, Service, string, []string, *RegistryAuth) error {
+	return func(_ context.Context, f Service, image string, _ []string, _ *RegistryAuth) error {
+		*builds = append(*builds, f.Name+"/"+f.Version)
+		if fail[f.Name+"/"+f.Version] {
+			return errors.New("pull failed")
+		}
+		dir := filepath.Join(root, f.Name, "v", f.Version)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if err := f.normalize(); err != nil {
+			return err
+		}
+		f.Image, f.Digest = image, "sha256:"+f.Version
+		content, _ := json.Marshal(f)
+		if err := os.WriteFile(filepath.Join(dir, "snap.mem"), make([]byte, 8192), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "service.json"), content, 0o600)
+	}
+}
+
+func noLock(string) (func(), error) { return func() {}, nil }
+
+func version(v string) DesiredVersion {
+	return DesiredVersion{Version: v, Image: "example/" + v, Port: 8080, MemoryMB: 256, Mode: ModeReuse}
+}
+
+// retryPauses sets buildRetryPauses for one test.
+func retryPauses(t *testing.T, pauses ...time.Duration) {
+	saved := buildRetryPauses
+	buildRetryPauses = pauses
+	t.Cleanup(func() { buildRetryPauses = saved })
+}
+
+func TestAgentAppliesTheDesiredState(t *testing.T) {
+	retryPauses(t)
+	root := t.TempDir()
+	var builds, forgotten []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
+		Build:  fakeBuild(root, &builds, map[string]bool{"t1-api/v3": true}),
+		Forget: func(name string) { forgotten = append(forgotten, name) }}
+
+	// A service the state does not name, left from earlier, goes away.
+	if err := os.MkdirAll(filepath.Join(root, "t9-old", "v", "v1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Directories that are not services stay.
+	if err := os.MkdirAll(filepath.Join(root, ".jail"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	desired := Desired{Revision: 1, Services: []DesiredService{
+		{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1"), version("v3")}},
+		{ID: "t2-job", Versions: []DesiredVersion{version("v1")}},
+		{ID: "../evil", Versions: []DesiredVersion{version("v1")}},
+		{ID: "t2-bad", Versions: []DesiredVersion{version("../x")}},
+	}}
+	a.apply(context.Background(), desired)
+
+	if want := []string{"t1-api/v1", "t1-api/v3", "t2-job/v1"}; !slices.Equal(builds, want) {
+		t.Fatalf("builds %v, want %v", builds, want)
+	}
+	if got := liveVersion(root, "t1-api"); got != "v1" {
+		t.Fatalf("t1-api live %q, want v1", got)
+	}
+	if got := liveVersion(root, "t2-job"); got != "" {
+		t.Fatalf("t2-job live %q before the control plane named a current version", got)
+	}
+	for _, gone := range []string{"t9-old", "../evil"} {
+		if _, err := os.Stat(filepath.Join(root, gone)); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists: %v", gone, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".jail")); err != nil {
+		t.Fatal(".jail was removed")
+	}
+	if !slices.Contains(forgotten, "t1-api") || !slices.Contains(forgotten, "t9-old") {
+		t.Fatalf("router not told: %v", forgotten)
+	}
+
+	inv := a.inventory(desired)
+	byID := map[string]HeldService{}
+	for _, f := range inv.Services {
+		byID[f.ID] = f
+	}
+	api := byID["t1-api"]
+	if api.Current != "v1" || len(api.Versions) != 2 {
+		t.Fatalf("t1-api inventory %+v", api)
+	}
+	if v := api.Versions[0]; v.State != "ready" || v.Digest != "sha256:v1" || v.Bytes < 8192 {
+		t.Fatalf("v1 %+v", v)
+	}
+	if v := api.Versions[1]; v.State != "failed" || v.Error != "pull failed" {
+		t.Fatalf("v3 %+v", v)
+	}
+	if _, ok := byID["../evil"]; ok {
+		t.Fatal("an invalid id reached the inventory")
+	}
+
+	// A second pass builds nothing again: built versions stay, a failed one
+	// waits until the control plane stops naming it.
+	builds = nil
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 {
+		t.Fatalf("second pass built %v", builds)
+	}
+
+	// Rollback and removal: v3 is dropped, v1 stays live, t2-job goes.
+	desired = Desired{Revision: 2, Services: []DesiredService{
+		{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}},
+	}}
+	a.apply(context.Background(), desired)
+	if _, err := os.Stat(filepath.Join(root, "t2-job")); !os.IsNotExist(err) {
+		t.Fatal("t2-job not removed")
+	}
+	if len(a.failed) != 0 {
+		t.Fatalf("failures kept for versions no longer named: %v", a.failed)
+	}
+	// A version named again after its failure is built again.
+	desired.Services[0].Versions = append(desired.Services[0].Versions, version("v3"))
+	a.apply(context.Background(), desired)
+	if !slices.Equal(builds, []string{"t1-api/v3"}) {
+		t.Fatalf("builds %v", builds)
+	}
+}
+
+func TestAgentSwitchesTheLiveVersion(t *testing.T) {
+	root := t.TempDir()
+	var builds, forgotten []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
+		Build:  fakeBuild(root, &builds, nil),
+		Forget: func(name string) { forgotten = append(forgotten, name) }}
+	desired := Desired{Services: []DesiredService{
+		{ID: "t1-api", Current: "v2", Versions: []DesiredVersion{version("v1"), version("v2")}},
+	}}
+	a.apply(context.Background(), desired)
+	if liveVersion(root, "t1-api") != "v2" {
+		t.Fatal("v2 not live")
+	}
+	desired.Services[0].Current = "v1"
+	a.apply(context.Background(), desired)
+	if liveVersion(root, "t1-api") != "v1" {
+		t.Fatal("rollback to v1 not live")
+	}
+	if len(forgotten) != 2 {
+		t.Fatalf("router told %d times, want 2", len(forgotten))
+	}
+	// The router loads the live version.
+	f, err := LoadService(filepath.Join(root, "t1-api"))
+	if err != nil || f.Version != "v1" || f.Image != "example/v1" {
+		t.Fatalf("router reads %+v, %v", f, err)
+	}
+	// A current version the state does not list never goes live.
+	desired.Services[0].Current = "v9"
+	a.apply(context.Background(), desired)
+	if liveVersion(root, "t1-api") != "v1" {
+		t.Fatal("an unlisted version went live")
+	}
+}
+
+func TestAgentTalksToTheControlPlane(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	var reports []Inventory
+	var auth []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/services/v1/agent/state":
+			if r.URL.Query().Get("since") != "-1" {
+				// The second request waits: the test ends here.
+				mu.Unlock()
+				<-r.Context().Done()
+				mu.Lock()
+				return
+			}
+			_ = json.NewEncoder(w).Encode(Desired{Revision: 7, Services: []DesiredService{
+				{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}},
+			}})
+		case "/services/v1/agent/report":
+			var inv Inventory
+			if err := json.NewDecoder(r.Body).Decode(&inv); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			reports = append(reports, inv)
+			_, _ = w.Write([]byte("{}"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	var builds []string
+	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock,
+		Build: fakeBuild(root, &builds, nil), Forget: func(string) {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		a.Run(ctx)
+		close(done)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(reports)
+		mu.Unlock()
+		if n > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 1 || reports[0].Revision != 7 || len(reports[0].Services) != 1 ||
+		reports[0].Services[0].Current != "v1" || reports[0].Services[0].Versions[0].State != "ready" {
+		t.Fatalf("reports %+v", reports)
+	}
+	for _, h := range auth {
+		if h != "Bearer cfh_test" {
+			t.Fatalf("request sent %q", h)
+		}
+	}
+}
+
+func TestAgentRefusesAnIncompleteState(t *testing.T) {
+	answers := map[string]bool{
+		`{}`: false, `null`: false, `{"revision":3}`: false, `{"services":[]}`: false,
+		`{"revision":3,"services":null}`: false, `{"revision":3,"services":[]}`: true,
+		`{"revision":3,"services":[{}]}`:                                                         false,
+		`{"revision":3,"services":[{"id":"t1-a"}]}`:                                              false,
+		`{"revision":3,"services":[{"id":"t1-a","versions":null}]}`:                              false,
+		`{"revision":3,"services":[{"id":"../a","versions":[]}]}`:                                false,
+		`{"revision":3,"services":[{"id":"t1-a","versions":[{}]}]}`:                              false,
+		`{"revision":3,"services":[{"id":"t1-a","current":"v2","versions":[{"version":"v1"}]}]}`: false,
+		`{"revision":3,"services":[{"id":"t1-a","versions":[]},{"id":"t1-a","versions":[]}]}`:    false,
+	}
+	for answer, valid := range answers {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(answer))
+		}))
+		a := &Agent{Control: server.URL, Token: "cfh_test"}
+		desired, err := a.fetch(context.Background(), -1)
+		server.Close()
+		if valid != (err == nil) {
+			t.Fatalf("%s: err %v, want valid %v", answer, err, valid)
+		}
+		if valid && (desired.Revision != 3 || desired.Services == nil) {
+			t.Fatalf("%s: %+v", answer, desired)
+		}
+	}
+}
+
+func TestAgentLeavesABusyService(t *testing.T) {
+	root := t.TempDir()
+	var builds []string
+	busy := map[string]bool{"t1-api": true, "t9-old": true}
+	a := &Agent{Root: root, failed: map[string]string{}, Forget: func(string) {},
+		Build: fakeBuild(root, &builds, nil),
+		Lock: func(name string) (func(), error) {
+			if busy[name] {
+				return nil, errors.New("held")
+			}
+			return func() {}, nil
+		}}
+	if err := os.MkdirAll(filepath.Join(root, "t9-old", "v", "v1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	desired := Desired{Services: []DesiredService{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}}
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 || len(a.failed) != 0 {
+		t.Fatalf("a busy service was built %v or failed %v", builds, a.failed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "t9-old")); err != nil {
+		t.Fatal("a busy service was removed")
+	}
+	// Once free, the next pass does the work.
+	busy = map[string]bool{}
+	a.apply(context.Background(), desired)
+	if !slices.Equal(builds, []string{"t1-api/v1"}) || liveVersion(root, "t1-api") != "v1" {
+		t.Fatalf("builds %v, live %q", builds, liveVersion(root, "t1-api"))
+	}
+	if _, err := os.Stat(filepath.Join(root, "t9-old")); !os.IsNotExist(err) {
+		t.Fatal("t9-old not removed once free")
+	}
+}
+
+func TestAgentNeverFollowsALink(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	keepFile := filepath.Join(outside, "v1", "data")
+	if err := os.MkdirAll(filepath.Dir(keepFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keepFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A service that is a link, and a named service whose v is a link.
+	if err := os.Symlink(outside, filepath.Join(root, "t1-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "t2-api"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "t2-api", "v")); err != nil {
+		t.Fatal(err)
+	}
+	var builds []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock, Forget: func(string) {},
+		Build: fakeBuild(root, &builds, nil)}
+	a.apply(context.Background(), Desired{Services: []DesiredService{{ID: "t2-api", Versions: []DesiredVersion{version("v2")}}}})
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("a file behind a link was removed: %v", err)
+	}
+	if len(builds) != 0 {
+		t.Fatalf("built through a link: %v", builds)
+	}
+}
+
+func TestAgentKeepsTheLiveVersionWithoutItsOwnFile(t *testing.T) {
+	root := t.TempDir()
+	// A version built before versions kept their own service.json.
+	deployDir := filepath.Join(root, "t1-api", "v", "v1")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, "snap.mem"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "t1-api", "service.json"), []byte(`{"name":"t1-api","version":"v1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var builds []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock, Forget: func(string) {},
+		Build: fakeBuild(root, &builds, nil)}
+	a.apply(context.Background(), Desired{Services: []DesiredService{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}})
+	if len(builds) != 0 {
+		t.Fatalf("the live version was built again: %v", builds)
+	}
+	if _, err := os.Stat(filepath.Join(deployDir, "snap.mem")); err != nil {
+		t.Fatal("the live version was removed")
+	}
+}
+
+func TestAgentStopsServingAServiceWithoutCurrent(t *testing.T) {
+	root := t.TempDir()
+	var builds, forgotten []string
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock,
+		Build:  fakeBuild(root, &builds, nil),
+		Forget: func(name string) { forgotten = append(forgotten, name) }}
+	a.apply(context.Background(), Desired{Services: []DesiredService{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}})
+	// Removed and deployed again under the same name: v7 builds, v1 must
+	// not answer meanwhile.
+	a.apply(context.Background(), Desired{Services: []DesiredService{{ID: "t1-api", Versions: []DesiredVersion{version("v7")}}}})
+	if live := liveVersion(root, "t1-api"); live != "" {
+		t.Fatalf("live %q, want none", live)
+	}
+	if _, err := os.Stat(filepath.Join(root, "t1-api", "v", "v1")); !os.IsNotExist(err) {
+		t.Fatal("old version kept")
+	}
+	if !Built(root, "t1-api", "v7") {
+		t.Fatal("v7 not built")
+	}
+}
+
+// A version with an environment builds only once the agent has fetched it;
+// a failed fetch is no failed build.
+func TestAgentFetchesTheEnvironmentToBuild(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	asks := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path != "/services/v1/agent/env" || r.URL.Query().Get("service") != "t1-api" || r.URL.Query().Get("version") != "v1" {
+			http.NotFound(w, r)
+			return
+		}
+		asks++
+		if asks == 1 {
+			http.Error(w, "busy", 503)
+			return
+		}
+		_, _ = w.Write([]byte(`{"env":["A=1","B=two words"]}`))
+	}))
+	defer server.Close()
+	var builds []string
+	var got []string
+	build := fakeBuild(root, &builds, nil)
+	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock, Forget: func(string) {}, failed: map[string]string{},
+		Build: func(ctx context.Context, f Service, image string, env []string, auth *RegistryAuth) error {
+			got = env
+			return build(ctx, f, image, env, auth)
+		}}
+	v := version("v1")
+	v.HasEnv = true
+	desired := Desired{Revision: 1, Services: []DesiredService{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{v}}}}
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 || len(a.failed) != 0 {
+		t.Fatalf("built without the environment: %v %v", builds, a.failed)
+	}
+	a.apply(context.Background(), desired)
+	if len(builds) != 1 || strings.Join(got, "|") != "A=1|B=two words" {
+		t.Fatalf("builds %v env %q", builds, got)
+	}
+}
+
+func TestAgentFailsAVersionWhoseEnvironmentCannotBeOpened(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	asks := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		v := r.URL.Query().Get("version")
+		asks[r.URL.Path+" "+v]++
+		switch {
+		case r.URL.Path == "/services/v1/agent/env" && v == "v1":
+			http.Error(w, `{"error":{"code":"conflict"}}`, 409)
+		case r.URL.Path == "/services/v1/agent/auth" && v == "v2":
+			http.Error(w, `{"error":{"code":"conflict"}}`, 409)
+		case r.URL.Path == "/services/v1/agent/env" && v == "v3":
+			http.Error(w, `{"error":{"code":"forbidden"}}`, 403)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	var builds []string
+	a := &Agent{Control: server.URL, Token: "cfh_test", Root: root, Lock: noLock, Forget: func(string) {}, failed: map[string]string{},
+		Build: fakeBuild(root, &builds, nil)}
+	v1, v2, v3 := version("v1"), version("v2"), version("v3")
+	v1.HasEnv, v2.HasAuth, v3.HasEnv = true, true, true
+	desired := Desired{Revision: 1, Services: []DesiredService{{ID: "t1-api", Current: "v3", Versions: []DesiredVersion{v1, v2, v3}}}}
+	a.apply(context.Background(), desired)
+	a.apply(context.Background(), desired)
+	if len(builds) != 0 {
+		t.Fatalf("built %v", builds)
+	}
+	if !strings.HasPrefix(a.failed["t1-api/v1"], "environment: ") || !strings.HasPrefix(a.failed["t1-api/v2"], "registry credentials: ") {
+		t.Fatalf("a refused value did not fail its version: %v", a.failed)
+	}
+	// A refusal is not asked again; a host the control plane does not know
+	// (403) is, since a fixed token heals it.
+	if asks["/services/v1/agent/env v1"] != 1 || asks["/services/v1/agent/auth v2"] != 1 {
+		t.Fatalf("asked again after a refusal: %v", asks)
+	}
+	if a.failed["t1-api/v3"] != "" || asks["/services/v1/agent/env v3"] != 2 {
+		t.Fatalf("a 403 failed the version: %v %v", a.failed, asks)
+	}
+}
+
+func TestAgentTriesAFailedBuildAgainAfterAPause(t *testing.T) {
+	root := t.TempDir()
+	tries := 0
+	failFirst := 2
+	var builds []string
+	ok := fakeBuild(root, &builds, nil)
+	a := &Agent{Root: root, failed: map[string]string{}, Lock: noLock, Forget: func(string) {},
+		Build: func(ctx context.Context, f Service, image string, env []string, auth *RegistryAuth) error {
+			tries++
+			if tries <= failFirst {
+				return &transport.Error{StatusCode: 503}
+			}
+			return ok(ctx, f, image, env, auth)
+		}}
+	desired := Desired{Revision: 1, Services: []DesiredService{{ID: "t1-api", Current: "v1", Versions: []DesiredVersion{version("v1")}}}}
+
+	// The pause holds the next build back.
+	retryPauses(t, time.Hour)
+	a.apply(context.Background(), desired)
+	a.apply(context.Background(), desired)
+	if tries != 1 || a.failed["t1-api/v1"] != "" {
+		t.Fatalf("during the pause: tries %d failed %v", tries, a.failed)
+	}
+
+	// Two failures and a success: the version is built, never reported failed.
+	tries, a.retries, a.retryAt = 0, nil, nil
+	retryPauses(t, 0, 0)
+	for range 3 {
+		a.apply(context.Background(), desired)
+		if a.failed["t1-api/v1"] != "" {
+			t.Fatalf("failed after %d tries: %v", tries, a.failed)
+		}
+	}
+	if tries != 3 || !Built(root, "t1-api", "v1") || len(a.retries) != 0 {
+		t.Fatalf("tries %d built %v retries %v", tries, Built(root, "t1-api", "v1"), a.retries)
+	}
+
+	// Every try fails: the third failure fails the version.
+	root2 := t.TempDir()
+	tries, failFirst, a.Root, a.retries, a.retryAt = 0, 99, root2, nil, nil
+	for range 4 {
+		a.apply(context.Background(), desired)
+	}
+	if tries != 3 || !strings.Contains(a.failed["t1-api/v1"], "503") {
+		t.Fatalf("tries %d failed %v", tries, a.failed)
+	}
+}
+
+func TestOnlyATransientBuildErrorIsTriedAgain(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{&transport.Error{StatusCode: 503}, true},
+		{&transport.Error{StatusCode: 429}, true},
+		{&transport.Error{StatusCode: 404}, false},
+		{&transport.Error{StatusCode: 401}, false},
+		{pullError(&transport.Error{StatusCode: 502}, &RegistryAuth{Registry: "ghcr.io"}), true},
+		{pullError(&transport.Error{StatusCode: 403}, &RegistryAuth{Registry: "ghcr.io"}), false},
+		{fmt.Errorf("read the image: %w", io.ErrUnexpectedEOF), true},
+		{&net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}, true},
+		{fmt.Errorf("write: %w", syscall.ENOSPC), true},
+		{errImageTooLarge, false},
+		{errors.New("the image has no entrypoint or command"), false},
+	} {
+		if got := transient(c.err); got != c.want {
+			t.Errorf("transient(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}

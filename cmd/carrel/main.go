@@ -24,10 +24,10 @@ func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address")
 	version := flag.Bool("version", false, "Print version")
 	backup := flag.Bool("backup", false, "Create a consistent backup and send it to the backup target")
-	reseal := flag.Bool("reseal-function-values", false, "Seal stored function values again with function_env_key and print how many each key opened")
+	reseal := flag.Bool("reseal-service-values", false, "Seal stored service values again with service_env_key and print how many each key opened")
 	moveBack := flag.Bool("move-snapshots-back", false, "Move the snapshot plugin's records back to core rows, for a rollback to a release before #663; run with carrel stopped")
-	trustHost := flag.String("trust-function-host-key", "", "Accept the new key a function host registered, as host=SHA256:fingerprint (#639)")
-	dryRun := flag.Bool("dry-run", false, "With -reseal-function-values: only count, change nothing")
+	trustHost := flag.String("trust-service-host-key", "", "Accept the new key a service host registered, as host=SHA256:fingerprint (#639)")
+	dryRun := flag.Bool("dry-run", false, "With -reseal-service-values: only count, change nothing")
 	flag.Parse()
 	stderr := slog.NewJSONHandler(os.Stderr, nil)
 	slog.SetDefault(slog.New(stderr))
@@ -105,9 +105,9 @@ func main() {
 	}
 	if *trustHost != "" {
 		host, fingerprint, _ := strings.Cut(*trustHost, "=")
-		result, err := platform.TrustFunctionHostKey(host, fingerprint)
+		result, err := platform.TrustServiceHostKey(host, fingerprint)
 		if err != nil {
-			slog.Error("trust_function_host_key_failed", "error", err)
+			slog.Error("trust_service_host_key_failed", "error", err)
 			fatal()
 		}
 		_ = json.NewEncoder(os.Stdout).Encode(result)
@@ -115,7 +115,7 @@ func main() {
 		return
 	}
 	if *reseal {
-		result, err := platform.ResealFunctionValues(*dryRun)
+		result, err := platform.ResealServiceValues(*dryRun)
 		if err != nil {
 			slog.Error("reseal_failed", "error", err)
 			fatal()

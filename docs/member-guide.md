@@ -79,7 +79,7 @@ Oversized arguments are rejected before queueing or reserving resources, includi
 Use the known machine name directly. Normal member work does not need operator memories,
 infrastructure runbooks, hypervisor access, or a preliminary list/quota/catalog call.
 Choose the tenant only for project resources or an explicitly selected account.
-For feature questions, use `catalog_get`. Its `sites` list each site's features (snapshot, machine_freeze, machine_migrate, image_import, functions) with `available` and, where missing, the `reason`; a tool of a missing feature fails with `unsupported` and names the sites that have it. If tool discovery is necessary, list names first and
+For feature questions, use `catalog_get`. Its `sites` list each site's features (snapshot, machine_freeze, machine_migrate, image_import, services) with `available` and, where missing, the `reason`; a tool of a missing feature fails with `unsupported` and names the sites that have it. If tool discovery is necessary, list names first and
 inspect only the relevant tool definitions instead of dumping every description and repeated instructions.
 
 | Request | Direct tool call |
@@ -522,7 +522,7 @@ curl -s -X POST https://carrel.winlab.tw/v1/tools/machine_get \
 
 ## Events
 
-Carrel tells you when a deploy finishes, so you do not need to poll `app_get` or `function_get`.
+Carrel tells you when a deploy finishes, so you do not need to poll `app_get` or `service_get`.
 The events are:
 
 | Event | When |
@@ -530,8 +530,8 @@ The events are:
 | `app.release.live` | A release is serving. |
 | `app.release.failed` | A release failed its start or health check; `rolled_back` says whether the previous one is back. |
 | `app.build.failed` | A pull-mode app's build failed on its machine. |
-| `function.version.ready` | A function version is built; `live` says whether it now serves. |
-| `function.version.failed` | A function version failed to build or pull. |
+| `service.version.ready` | A service version is built; `live` says whether it now serves. |
+| `service.version.failed` | A service version failed to build or pull. |
 | `machine.operation.succeeded` | A machine or snapshot operation finished; `tool` and `machine` say which. |
 | `machine.operation.failed` | A machine or snapshot operation failed; `error` says why. |
 | `quota.warning` | A quota dimension reached 90% of its limit; it warns again only after falling below 80%. |

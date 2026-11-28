@@ -159,7 +159,7 @@ var deployEvents = map[string][]string{
 	forgeGitLab: {"push", "web"},
 }
 
-// linkIssuer is the issuer an app or function was linked to. Records from
+// linkIssuer is the issuer an app or service was linked to. Records from
 // before GitLab support have none and are GitHub's.
 func linkIssuer(link D) string {
 	if i := str(link["issuer"]); i != "" {

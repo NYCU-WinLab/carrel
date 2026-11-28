@@ -7,7 +7,7 @@ import (
 )
 
 // app_logs asks an app's agent (carrel-deployd) for the end of its unit's
-// journal, the way function_logs asks a function host (#640). The agent
+// journal, the way service_logs asks a service host (#640). The agent
 // collects the request with its next long poll (AgentNext) and posts the
 // answer to /apps/v1/agent/logs. Nothing is stored here.
 

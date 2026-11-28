@@ -378,6 +378,36 @@ def test_activation_writes_the_units_and_records_the_templates(tmp_path, monkeyp
     assert not (etc / "templates.next.json").exists() and (binary / "carrel").read_text() == "new"
 
 
+def test_activation_renames_the_function_keys_to_service_keys(tmp_path, monkeypatch):
+    module = load("install-control.py")
+    etc, units, binary = tmp_path / "etc", tmp_path / "units", tmp_path / "bin"
+    for d in (etc, units, binary):
+        d.mkdir()
+    hosts = [{"name": "fn-lab", "router": "10.200.3.11:8090", "token_sha256": "0" * 64}]
+    (etc / "config.json").write_text(
+        json.dumps(
+            {
+                "origin": "https://carrel.test",
+                "function_hosts": hosts,
+                "function_env_key": "new-key",
+                "function_env_old_keys": ["old-key"],
+                "service_env_old_keys": ["kept"],
+            }
+        )
+    )
+    (etc / "templates.next.json").write_text(json.dumps({}))
+    (binary / "carrel.next").write_text("new")
+    monkeypatch.setattr(module, "ETC", etc)
+    monkeypatch.setattr(module, "UNIT_DIR", units)
+    monkeypatch.setattr(module, "BINARY", binary / "carrel")
+    module.ct_activate()
+    config = json.loads((etc / "config.json").read_text())
+    assert config["service_hosts"] == hosts and config["service_env_key"] == "new-key"
+    # A key already under the new name wins, and no old key is left behind.
+    assert config["service_env_old_keys"] == ["kept"]
+    assert not [k for k in config if k.startswith("function")]
+
+
 def test_preflight_refuses_active_operations_and_allows_a_first_install(tmp_path, monkeypatch, capsys):
     module = load("install-control.py")
     monkeypatch.setattr(module, "DATABASE", tmp_path / "carrel.db")
