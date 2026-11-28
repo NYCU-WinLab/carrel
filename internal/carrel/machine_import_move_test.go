@@ -29,7 +29,7 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 	p.sshProbe = func(context.Context, D) bool { return true }
 	p.wg.Add(1)
 	go p.Operations.Loop()
-	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse, importTruncate = "none", nil, 0, nil, "", false
+	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse, importTruncate, importLateConfig = "none", nil, 0, nil, "", false, ""
 	srv, fp, _ := importFake(t)
 	admin := person("root", true)
 	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
@@ -763,5 +763,64 @@ func TestMachineImportFailedVerifyShowsNeedsOwnerFix(t *testing.T) {
 	got = dicts(member(p, "machine_get", D{"machine": str(listed[0]["name"])})["machines"])
 	if len(got) != 1 || got[0]["state"] != "ready" || got[0]["reason"] != nil {
 		t.Fatalf("machine_get once SSH answers: %v", got)
+	}
+}
+
+// A NIC the owner adds on the source after confirm, while the guest shuts
+// down, is refused before the migration, like a late unusedN (#931 review
+// round 4).
+func TestMachineImportRefusesNICAddedAfterConfirm(t *testing.T) {
+	p, _, run := importSite(t)
+	importLateConfig = `,"net1":"virtio=AA:BB:CC:DD:EE:11,bridge=vmbr1,firewall=0"`
+	op := run(104)
+	if op["state"] != "failed" || obj(op["error"])["backend_code"] != "source_changed" || !strings.Contains(str(obj(op["error"])["message"]), "net1") {
+		t.Fatalf("operation: %v", op)
+	}
+	if strings.Contains(joined(), "remote_migrate") {
+		t.Errorf("the guest moved with net1:\n%s", joined())
+	}
+	if m := p.Store.Get("machines", "10100"); m != nil && m["state"] == "ready" {
+		t.Errorf("machine: %v", m)
+	}
+}
+
+// A guest that still moved with an extra NIC (a job from before the source
+// re-check) is not started by the node and keeps the start gate.
+func TestMachineImportExtraNICKeepsStartGate(t *testing.T) {
+	p, b, run := importSite(t)
+	b.call = func(r D, _ string) (any, error) {
+		if r["op"] == "import_verify" {
+			return D{"state": "done", "addresses": []any{}, "guest_info": nil, "extra_nics": []any{"net1"}}, nil
+		}
+		return verifyFallback(r), nil
+	}
+	op := run(104)
+	if op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m["state"] != "imported_unverified" || m["power_state"] != "stopped" || !strings.Contains(str(m["reason"]), "net1") {
+		t.Fatalf("machine: %v", m)
+	}
+	if res := obj(op["result"]); res["state"] != "imported_unverified" || !strings.Contains(str(res["reason"]), "net1") {
+		t.Errorf("result: %v", res)
+	}
+	// The fake node reports it running, as if started outside carrel: the
+	// gate still shows.
+	got := dicts(member(p, "machine_get", D{"machine": str(m["name"])})["machines"])
+	if len(got) != 1 || got[0]["state"] != "imported_unverified" {
+		t.Errorf("machine_get: %v", got)
+	}
+	r := p.Execute(context.Background(), "machine_power", D{"machine": str(m["name"]), "action": "start"}, person("alice", false))
+	started := obj(r["operation"])
+	for i := 0; i < 400 && r["ok"] == true && !boolean(started["done"]); i++ {
+		time.Sleep(10 * time.Millisecond)
+		started = publicOperation(p.Store.Get("operations", str(started["id"])))
+	}
+	if started["state"] != "failed" || obj(started["error"])["code"] != "conflict" {
+		t.Errorf("machine_power start: %v", r)
+	}
+	if b.count("action") != 0 {
+		t.Errorf("the guest was started: %d action calls", b.count("action"))
 	}
 }

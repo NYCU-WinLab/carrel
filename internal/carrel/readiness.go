@@ -45,6 +45,10 @@ func readinessState(m D) {
 	if contains([]string{"stopped", "paused", "deleting", "error", "provisioning", "initializing"}, m["state"]) {
 		return
 	}
+	// An import gate is lifted by the import alone, not by an observation.
+	if contains(importNotNormalized, m["state"]) {
+		return
+	}
 	if unmanaged(m) {
 		// No guest reports: SSH is only a hint for these machines. One with
 		// service ports keeps the state its port probe gave it.

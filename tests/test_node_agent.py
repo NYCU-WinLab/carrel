@@ -3256,7 +3256,7 @@ def test_import_verify_with_no_address_reports_none(monkeypatch):
     assert out == {"state": "done", "addresses": [], "guest_info": None}
 
 
-def test_import_verify_refuses_a_guest_with_a_second_nic(monkeypatch):
+def test_import_verify_does_not_start_a_guest_with_a_second_nic(monkeypatch):
     module = load("node-agent.py")
     monkeypatch.setattr(module, "NODE", "pve1", raising=False)
     monkeypatch.setattr(module, "located", lambda m: "pve1")
@@ -3268,8 +3268,8 @@ def test_import_verify_refuses_a_guest_with_a_second_nic(monkeypatch):
     monkeypatch.setattr(module, "pve_get", lambda *a, **k: {"status": "stopped"})
     calls = []
     monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
-    with pytest.raises(ValueError, match="net1"):
-        module.import_verify({"machine": {**MACHINE, "kind": "vm"}})
+    out = module.import_verify({"machine": {**MACHINE, "kind": "vm"}})
+    assert out["extra_nics"] == ["net1"]
     assert calls == []
 
 

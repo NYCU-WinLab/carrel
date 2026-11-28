@@ -27,6 +27,9 @@ var (
 	// importTruncate makes remote_migrate answer 200 with a body cut short,
 	// as when the connection drops after the headers.
 	importTruncate bool
+	// importLateConfig is added to VM 104's config once a shutdown of it was
+	// sent, as an owner change made on the source after confirm.
+	importLateConfig string
 )
 
 // importFake is a source with one running VM on LVM-thin and one CT.
@@ -98,7 +101,11 @@ func importFake(t *testing.T) (*httptest.Server, string, *[]string) {
 		case "/api2/json/cluster/resources":
 			fmt.Fprint(w, `{"data":[{"vmid":104,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":105,"type":"lxc","node":"anvil","status":"stopped"},{"vmid":106,"type":"lxc","node":"anvil","status":"running","template":0},{"vmid":107,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":108,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":109,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":110,"type":"qemu","node":"anvil","status":"stopped","template":0,"hastate":"stopped"},{"vmid":111,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":112,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":113,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":114,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":115,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":9000,"type":"qemu","node":"anvil","status":"stopped","template":1}]}`)
 		case "/api2/json/nodes/anvil/qemu/104/config":
-			fmt.Fprint(w, `{"data":{"name":"sandbox","cores":4,"sockets":1,"memory":8192,"cpu":"host","scsi0":"local-lvm:vm-104-disk-0,size=32G","ide2":"local-lvm:vm-104-cloudinit,media=cdrom,size=4M","ide0":"none,media=cdrom","net0":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig0":"ip=dhcp","cicustom":"user=local:snippets/u.yaml"}}`)
+			late := ""
+			if strings.Contains(strings.Join(seenForms, "\n"), "/qemu/104/status/shutdown") {
+				late = importLateConfig
+			}
+			fmt.Fprint(w, `{"data":{"name":"sandbox","cores":4,"sockets":1,"memory":8192,"cpu":"host","scsi0":"local-lvm:vm-104-disk-0,size=32G","ide2":"local-lvm:vm-104-cloudinit,media=cdrom,size=4M","ide0":"none,media=cdrom","net0":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig0":"ip=dhcp","cicustom":"user=local:snippets/u.yaml"`+late+`}}`)
 		case "/api2/json/nodes/anvil/lxc/106/config":
 			fmt.Fprint(w, `{"data":{"hostname":"Web_CT","cores":1,"memory":512,"rootfs":"local-lvm:vm-106-disk-0,size=4G","net0":"name=eth0,bridge=vmbr0,ip=10.0.0.6/24"}}`)
 		case "/api2/json/nodes/anvil/qemu/107/config":

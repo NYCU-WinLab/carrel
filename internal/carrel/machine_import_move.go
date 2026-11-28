@@ -374,6 +374,16 @@ func (e *Execution) verifyImported(m D, target string) D {
 		}
 		return D{"ok": false, "reason": "The guest could not be started or read after the move"}
 	}
+	// The node does not start a guest with a NIC other than net0: it moved
+	// with one only from a job that passed the source checks before they
+	// covered it. The start gate stays on such a machine.
+	if extra := arr(out["extra_nics"]); len(extra) > 0 {
+		keys := []string{}
+		for _, k := range extra {
+			keys = append(keys, str(k))
+		}
+		return D{"ok": false, "gated": true, "reason": "The guest has a network device other than net0 (" + strings.Join(keys, ", ") + ") that carrel does not filter, so it was not started; an administrator must remove it"}
+	}
 	reasons := []string{}
 	ip := str(m["ip"])
 	found := false
@@ -488,9 +498,13 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 		fail("conflict", "The guest runs on the source; shut it down there or import again", D{"component": "source", "backend_code": "source_running", "recovery": "resolve_prerequisite"})
 	}
 	// A shutdown applies pending changes, so a disk detached then would
-	// travel as unusedN, never counted or moved off the hop.
+	// travel as unusedN, never counted or moved off the hop, and a NIC added
+	// then would land on the tenant bridge without normalization or firewall.
 	config := obj(sourceGet(e.Ctx, client, base, tokenID, secret, path+"/config")["data"])
 	for key := range config {
+		if matches(`^net[0-9]+$`, key) && key != "net0" {
+			fail("conflict", "The guest has more than one network device ("+key+"); remove it on the source, then import again", D{"component": "source", "backend_code": "source_changed", "recovery": "contact_administrator"})
+		}
 		if matches(`^unused[0-9]+$`, key) {
 			fail("conflict", "The guest has a detached disk ("+key+"); delete or reattach it on the source, then import again", D{"component": "source", "backend_code": "source_changed", "recovery": "contact_administrator"})
 		}
@@ -582,6 +596,11 @@ func (e *Execution) FinishMachineImport(t D) D {
 		state = bootState(m)
 		m["power_state"], m["network_verification"] = "running", "verified"
 		m["ssh_ready"], m["ssh_checked_at"] = true, now()
+	} else if verify["gated"] == true {
+		// Not started: imported_unverified keeps machine_power start refused.
+		state = "imported_unverified"
+		m["power_state"] = "stopped"
+		m["reason"] = verify["reason"]
 	} else {
 		m["power_state"] = "running"
 		m["reason"] = textAt(verify, "reason", "The guest was not verified after the move")
@@ -593,7 +612,7 @@ func (e *Execution) FinishMachineImport(t D) D {
 	if used := str(job["stopped_with"]); used != "" {
 		r["stopped_with"] = used
 	}
-	if state == "needs_owner_fix" {
+	if m["reason"] != nil {
 		r["reason"] = m["reason"]
 	}
 	return r
