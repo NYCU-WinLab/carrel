@@ -5,6 +5,7 @@ package carrel
 // a skill for its control arm.
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 
@@ -49,4 +50,52 @@ func (e *Execution) skillGet(name string) D {
 	sort.Strings(names)
 	fail("not_found", "Unknown skill "+name+". Valid names: "+strings.Join(names, ", "))
 	return nil
+}
+
+// skillErrorWindow is how many of a session's next calls count against a
+// skill read: the same 20 calls PLAN 4.6 attaches to an issue.
+const skillErrorWindow = 20
+
+// skillUsage is the skills section of usage_report: per skill and version,
+// how often it was read, and how many error results followed in the same
+// session within the next skillErrorWindow calls. The audit log has no session
+// id, so a caller (the actor) stands for its session.
+func (e *Execution) skillUsage() []D {
+	type key struct{ name, version string }
+	type count struct{ reads, errors int }
+	counts := map[key]*count{}
+	byActor := map[string][]D{}
+	for _, r := range e.S.Rows("SELECT actor,tool,args,outcome FROM audit ORDER BY id") {
+		byActor[str(r["actor"])] = append(byActor[str(r["actor"])], r)
+	}
+	for _, calls := range byActor {
+		for i, c := range calls {
+			if c["tool"] != "skill_get" || c["outcome"] != "ok" {
+				continue
+			}
+			var args D
+			_ = json.Unmarshal([]byte(str(c["args"])), &args)
+			k := key{str(args["name"]), str(args["skill_version"])}
+			if counts[k] == nil {
+				counts[k] = &count{}
+			}
+			counts[k].reads++
+			for _, next := range calls[i+1 : min(i+1+skillErrorWindow, len(calls))] {
+				if o := str(next["outcome"]); o != "ok" && o != "queued" {
+					counts[k].errors++
+				}
+			}
+		}
+	}
+	out := []D{}
+	for k, c := range counts {
+		out = append(out, D{"name": k.name, "version": k.version, "reads": c.reads, "errors_after": c.errors})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i]["name"] != out[j]["name"] {
+			return str(out[i]["name"]) < str(out[j]["name"])
+		}
+		return str(out[i]["version"]) < str(out[j]["version"])
+	})
+	return out
 }

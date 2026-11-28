@@ -314,7 +314,12 @@ func (a *App) span(tool string, args, who D, start time.Time, result D) {
 	}
 	tenant := 0
 	_ = attempt(func() { tenant = integer(a.Platform.execution(a.Platform.ctx).Tenant(who, str(args["tenant"]))["n"]) })
-	t.Span(tool, tenant, start, outcome)
+	var extra []string
+	if tool == "skill_get" && outcome == "ok" {
+		sk := obj(result["skill"])
+		extra = []string{"skill", str(sk["name"]), "skill_version", str(sk["version"])}
+	}
+	t.Span(tool, tenant, start, outcome, extra...)
 }
 func (p *Platform) Start() {
 	p.wg.Add(1)

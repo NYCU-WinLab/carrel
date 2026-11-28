@@ -502,3 +502,49 @@ func TestStartTelemetryReportsCapacityAtOnce(t *testing.T) {
 		t.Fatal("no capacity gauges reached the collector")
 	}
 }
+
+// A skill_get span names the skill and its version, and usage_report counts
+// reads per version and the errors that follow in the next 20 calls.
+func TestSkillGetSpanAndUsageReport(t *testing.T) {
+	p, _ := fixture(t)
+	c := newCollector(t)
+	tel, _ := telemetryFixture(t, c, slog.NewJSONHandler(io.Discard, nil))
+	p.Telemetry = tel
+	app := NewApp(p, nil)
+	ctx := context.Background()
+	alice, root := person("alice", false), person("root", true)
+	assertOK(t, app.Call(ctx, "skill_get", D{"name": "rescue"}, alice))
+	assertCode(t, app.Call(ctx, "machine_get", D{"machine": "missing"}, alice), "not_found")
+	assertOK(t, app.Call(ctx, "skill_get", D{"name": "rescue"}, alice))
+	assertCode(t, app.Call(ctx, "skill_get", D{"name": "missing"}, alice), "not_found")
+	report := app.Call(ctx, "usage_report", D{}, root)
+	assertOK(t, report)
+	tel.Close()
+
+	rows := arr(report["skills"])
+	if len(rows) != 1 {
+		t.Fatal(rows)
+	}
+	row := obj(rows[0])
+	// Two reads; the one error follows the first read, and the later failed
+	// skill_get follows both.
+	if row["name"] != "rescue" || row["version"] == "" || integer(row["reads"]) != 2 || integer(row["errors_after"]) != 3 {
+		t.Fatal(row)
+	}
+
+	spans := arr(walk(c.seen("/v1/traces")[0].body, "resourceSpans", 0, "scopeSpans", 0, "spans"))
+	attr := func(s any, key string) string {
+		for _, a := range arr(obj(s)["attributes"]) {
+			if obj(a)["key"] == key {
+				return str(walk(a, "value", "stringValue"))
+			}
+		}
+		return ""
+	}
+	if attr(spans[0], "skill") != "rescue" || attr(spans[0], "skill_version") != row["version"] {
+		t.Fatal(spans[0])
+	}
+	if attr(spans[1], "skill") != "" || attr(spans[3], "skill") != "" {
+		t.Fatal("only a successful skill_get names a skill")
+	}
+}

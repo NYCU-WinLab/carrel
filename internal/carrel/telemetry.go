@@ -170,7 +170,9 @@ func (t *Telemetry) Gauge(name, unit string, value float64, attrs ...string) {
 // Span queues one finished tool call. tenant is the tenant number, or 0 when
 // the call named none; outcome is "ok" or the error code. Nothing else about
 // the call leaves: arguments and results stay out of the trace.
-func (t *Telemetry) Span(tool string, tenant int, start time.Time, outcome string) {
+//
+// extra are more key, value pairs; skill_get passes the skill and its version.
+func (t *Telemetry) Span(tool string, tenant int, start time.Time, outcome string, extra ...string) {
 	if t == nil {
 		return
 	}
@@ -183,6 +185,9 @@ func (t *Telemetry) Span(tool string, tenant int, start time.Time, outcome strin
 	attrs := []D{otlpString("carrel.tool", tool), otlpString("carrel.outcome", outcome)}
 	if tenant > 0 {
 		attrs = append(attrs, otlpString("carrel.tenant", strconv.Itoa(tenant)))
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		attrs = append(attrs, otlpString(extra[i], extra[i+1]))
 	}
 	t.enqueue(telemetryItem{span: true, body: D{
 		"traceId":           hex.EncodeToString(ids[:16]),
