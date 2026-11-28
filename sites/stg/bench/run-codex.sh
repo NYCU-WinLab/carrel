@@ -4,7 +4,7 @@
 # so each run starts from the same config with no history, a clean work dir and only the key pair.
 set -e
 export CODEX_HOME="$HOME/.codex"
-find "$CODEX_HOME" -mindepth 1 ! -name auth.json -exec rm -rf {} +
+find "$CODEX_HOME" -mindepth 1 -maxdepth 1 ! -name auth.json -exec rm -rf {} +
 CARREL_TOKEN=$(cat "$HOME/carrel-token")
 export CARREL_TOKEN
 cat > "$CODEX_HOME/config.toml" <<TOML
