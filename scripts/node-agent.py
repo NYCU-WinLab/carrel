@@ -2067,11 +2067,12 @@ def tenant_route():
 
 SNIPPETS = Path("/var/lib/vz/snippets")
 
-# Steps a reset must not run again: on a new instance id cloud-init reruns
-# every per-instance module, and these would rerun member commands, reinstall
-# packages, rewrite files the owner may have changed, or add a second swap
-# line to /etc/fstab.
-RESET_DROPPED = ("bootcmd", "runcmd", "packages", "package_update", "package_upgrade", "package_reboot_if_required", "apt", "write_files", "swap", "mounts")
+# The only top-level keys a reset keeps. On a new instance id cloud-init
+# reruns every per-instance module, so anything else (member commands,
+# packages, files the owner may have changed, a second swap line in
+# /etc/fstab) must not come back. An allowlist, so a creation step added
+# later is dropped by default (issue #823).
+RESET_KEPT = ("hostname", "manage_etc_hosts", "users", "disable_root", "ssh_pwauth", "timezone")
 
 
 def reset_user_data(raw, new_keys, reset_id):
@@ -2095,8 +2096,7 @@ def reset_user_data(raw, new_keys, reset_id):
     users = data.get("users") if isinstance(data, dict) else None
     if not isinstance(users, list) or len(users) != 1 or not isinstance(users[0], dict) or users[0].get("name") != "user":
         raise ValueError("not a cloud-init file that carrel wrote")
-    for key in RESET_DROPPED:
-        data.pop(key, None)
+    data = {key: data[key] for key in RESET_KEPT if key in data}
     users[0]["ssh_authorized_keys"] = list(new_keys)
     data["ssh_deletekeys"] = False
     # Without an apt section cloud-init renders the distro's default sources

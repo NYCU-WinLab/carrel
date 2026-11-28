@@ -2847,6 +2847,21 @@ def test_a_reset_keeps_the_login_and_drops_every_creation_step(monkeypatch):
     assert reset.split("\n")[1] == "# carrel reset op-00000001"
 
 
+def test_a_reset_drops_an_unknown_top_level_key(monkeypatch):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    prefix, body = created.split("\n", 1)
+    data = json.loads(body)
+    data["future_step"] = ["echo again"]
+    reset = module.reset_user_data(
+        prefix + "\n" + json.dumps(data), ["ssh-ed25519 AAAAnew owner@laptop"], "op-00000001"
+    )
+    config = json.loads(reset.split("\n", 2)[2])
+    assert "future_step" not in config
+    assert set(config) <= set(module.RESET_KEPT) | {"ssh_deletekeys", "apt"}
+
+
 def created_user_file_text():
     return '#cloud-config\n{"users": [{"name": "user"}]}'
 
