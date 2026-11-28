@@ -3108,7 +3108,9 @@ def action(req):
         if req.get("cloud_init"):
             restore_cloud_init(m, req["cloud_init"])
         path = SNIPPETS / f"carrel-{vmid}-user.json"
-        if not path.exists():
+        # Both files must be here before the user file is rewritten, so a
+        # missing network file leaves the user file untouched.
+        if not path.exists() or not (SNIPPETS / f"carrel-{vmid}-network.json").exists():
             raise ValueError("the VM has no cloud-init files on this node")
         write(path, reset_user_data(path.read_text(), new_keys, req.get("reset_id")), 0o600)
         files = cloud_init_files(m)
