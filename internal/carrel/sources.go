@@ -185,6 +185,12 @@ func (e *Execution) SourceAction(a, w D) D {
 	}
 	secret, fromFile := e.sourceSecretOf(a, name)
 	old := e.S.SiteGet("source", name)
+	// A saved secret only goes back to the host it was registered for: a call
+	// without secret may not re-point the source to another address, token or
+	// certificate.
+	if fromFile && old != nil && (str(old["api_url"]) != apiURL || str(old["token_id"]) != tokenID || str(old["fingerprint"]) != fingerprint) {
+		fail("invalid", "Give secret to change the address, token or fingerprint of a source", D{"recovery": "revise_request"})
+	}
 	s := sourceRecord{Name: name, APIURL: apiURL, TokenID: tokenID, Fingerprint: fingerprint, AddedBy: str(w["sub"]), AddedAt: time.Now().Unix()}
 	e.sourceProbe(&s, secret)
 	if old != nil {

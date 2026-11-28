@@ -129,4 +129,37 @@ func TestSourceAdd(t *testing.T) {
 	if r := run(fromFile, admin); r["ok"] != true {
 		t.Fatalf("secret from file: %v", r)
 	}
+
+	// Without secret, a registered source cannot be re-pointed: the saved
+	// secret never goes to another server, also not with dry_run.
+	var hits int
+	evil := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		fmt.Fprint(w, `{"data":{"version":"8.4.1"}}`)
+	}))
+	t.Cleanup(evil.Close)
+	sum := sha256.Sum256(evil.Certificate().Raw)
+	evilFP := strings.ToUpper(fmt.Sprintf("% x", sum[:]))
+	evilFP = strings.ReplaceAll(evilFP, " ", ":")
+	for _, change := range []D{
+		{"api_url": evil.URL, "fingerprint": evilFP},
+		{"api_url": evil.URL, "fingerprint": evilFP, "dry_run": true},
+		{"token_id": "other@pve!import"},
+		{"fingerprint": other},
+	} {
+		a := sourceArgs(srv, fp)
+		delete(a, "secret")
+		for k, v := range change {
+			a[k] = v
+		}
+		if r := run(a, admin); r["ok"] == true || obj(r["error"])["code"] != "invalid" || obj(r["error"])["recovery"] != "revise_request" {
+			t.Fatalf("re-point %v: %v", change, r)
+		}
+	}
+	if hits != 0 {
+		t.Fatalf("the other server got %d requests", hits)
+	}
+	if rec := p.Store.SiteGet("source", "old-lab"); rec["api_url"] != srv.URL {
+		t.Fatalf("record changed: %v", rec)
+	}
 }
