@@ -42,6 +42,7 @@ The agents never run on an operator's machine. They run with `bypassPermissions`
 CT 1113 is in the `spoke` firewall group: it reaches the internet and the public address, not the nodes. Inside it:
 
 - User `agent` (unprivileged) with Claude Code, Codex and `codex-code-mode-host` (Codex 0.172 needs it) in `~/.local/bin`, `~/run-claude.sh` and `~/run-codex.sh` (from `bench/`), and its own key pair in `~/.ssh`.
+- The key comment is `member@laptop` and the hostname `laptop`: an agent that reads `bench-agent` there takes the key for the bench's, not the member's, and asks for another one (Codex did, twice).
 - Both agents use a subscription, not an API key:
   - `~/.claude.env` (mode 600) holds `CLAUDE_CODE_OAUTH_TOKEN`.
   - `~/.codex/auth.json` is a ChatGPT sign-in made in the CT with `codex login --device-auth`. Do not copy it from another machine: the two copies would refresh the same token.
