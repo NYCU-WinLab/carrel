@@ -150,3 +150,13 @@ def test_refusal_is_counted_apart(tmp_path, monkeypatch):
     assert {r["outcome"] for r in doc["runs"]} == {"refused"}
     assert doc["summary"]["codex/visible"]["refused"] == 1
     assert doc["summary"]["codex/visible"]["pass_rate"] is None
+
+
+def test_a_retry_handle_or_a_public_key_is_not_a_secret():
+    kind = "OPENSSH PRIVATE " + "KEY"
+    assert not bench.has_secret(
+        {"machine": "dev1", "idempotency_key": "reset-dev1-1", "ssh_key": "ssh-ed25519 AAAA m"}
+    )
+    assert not bench.has_secret({"ssh_keys": ["ssh-ed25519 AAAA m"]})
+    assert bench.has_secret({"api_key": "sk-1"})
+    assert bench.has_secret({"ssh_keys": [f"-----BEGIN {kind}-----\nx\n-----END {kind}-----"]})
