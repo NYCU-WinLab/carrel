@@ -2067,11 +2067,12 @@ def tenant_route():
 
 SNIPPETS = Path("/var/lib/vz/snippets")
 
-# Steps a reset must not run again: on a new instance id cloud-init reruns
-# every per-instance module, and these would rerun member commands, reinstall
-# packages, rewrite files the owner may have changed, or add a second swap
-# line to /etc/fstab.
-RESET_DROPPED = ("bootcmd", "runcmd", "packages", "package_update", "package_upgrade", "package_reboot_if_required", "apt", "write_files", "swap", "mounts")
+# The only top-level keys a reset keeps. On a new instance id cloud-init
+# reruns every per-instance module, so anything else (member commands,
+# packages, files the owner may have changed, a second swap line in
+# /etc/fstab) must not come back. An allowlist, so a creation step added
+# later is dropped by default (issue #823).
+RESET_KEPT = ("hostname", "manage_etc_hosts", "users", "disable_root", "ssh_pwauth", "timezone")
 
 
 def reset_user_data(raw, new_keys, reset_id):
@@ -2095,8 +2096,7 @@ def reset_user_data(raw, new_keys, reset_id):
     users = data.get("users") if isinstance(data, dict) else None
     if not isinstance(users, list) or len(users) != 1 or not isinstance(users[0], dict) or users[0].get("name") != "user":
         raise ValueError("not a cloud-init file that carrel wrote")
-    for key in RESET_DROPPED:
-        data.pop(key, None)
+    data = {key: data[key] for key in RESET_KEPT if key in data}
     users[0]["ssh_authorized_keys"] = list(new_keys)
     data["ssh_deletekeys"] = False
     # Without an apt section cloud-init renders the distro's default sources
@@ -2116,35 +2116,6 @@ def cloud_init_files(m):
     if m.get("kind") != "vm" or not all(p.exists() for p in paths.values()):
         return {}
     return {"cloud_init": {kind: p.read_text() for kind, p in paths.items()}}
-
-
-def cloud_init_reset(m, ssh_keys, user_text):
-    """Rewrite a VM's stored cloud-init user file for an access reset.
-
-    Keeps an allowlist of top-level keys, so a creation step added later does
-    not rerun by default. Dropping swap matters: a kept one adds a second swap
-    line to /etc/fstab. Returns the new user text and the unchanged network text.
-    """
-    vmid = machine(m)
-    if m.get("kind") != "vm" or m.get("service_ports"):
-        raise ValueError("only a VM with SSH has a cloud-init user file to reset")
-    new_keys = keys(ssh_keys).splitlines()
-    user_path = SNIPPETS / f"carrel-{vmid}-user.json"
-    network_path = SNIPPETS / f"carrel-{vmid}-network.json"
-    if not isinstance(user_text, str) or not user_text.strip() or not user_path.exists() or not network_path.exists():
-        raise ValueError("no stored cloud-init user file")
-    try:
-        stored = json.loads(user_text.removeprefix("#cloud-config\n"))
-    except ValueError:
-        raise ValueError("stored cloud-init user file is not JSON") from None
-    if not isinstance(stored, dict) or not isinstance(stored.get("users"), list) or not stored["users"] or not isinstance(stored["users"][0], dict):
-        raise ValueError("stored cloud-init user file has no users")
-    data = {k: stored[k] for k in ("hostname", "manage_etc_hosts", "users", "disable_root", "ssh_pwauth") if k in stored}
-    data["users"] = [dict(stored["users"][0], ssh_authorized_keys=new_keys), *stored["users"][1:]]
-    data["ssh_deletekeys"] = False
-    text = "#cloud-config\n" + json.dumps(data)
-    write(user_path, text, 0o600)
-    return {"cloud_init": {"user": text, "network": network_path.read_text()}}
 
 
 def restore_cloud_init(m, files):
@@ -3706,10 +3677,6 @@ def main():
             m = req["machine"]
             owned(m)
             out = cloud_init_files(m)
-        elif op == "cloud_init_reset":
-            m = req["machine"]
-            owned(m)
-            out = cloud_init_reset(m, req["ssh_keys"], req["user"])
         elif op == "ca_backfill":
             out = ca_backfill(req["machine"])
         elif op == "disk_volume":

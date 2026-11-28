@@ -2847,6 +2847,21 @@ def test_a_reset_keeps_the_login_and_drops_every_creation_step(monkeypatch):
     assert reset.split("\n")[1] == "# carrel reset op-00000001"
 
 
+def test_a_reset_drops_an_unknown_top_level_key(monkeypatch):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    prefix, body = created.split("\n", 1)
+    data = json.loads(body)
+    data["future_step"] = ["echo again"]
+    reset = module.reset_user_data(
+        prefix + "\n" + json.dumps(data), ["ssh-ed25519 AAAAnew owner@laptop"], "op-00000001"
+    )
+    config = json.loads(reset.split("\n", 2)[2])
+    assert "future_step" not in config
+    assert set(config) <= set(module.RESET_KEPT) | {"ssh_deletekeys", "apt"}
+
+
 def created_user_file_text():
     return '#cloud-config\n{"users": [{"name": "user"}]}'
 
@@ -2913,62 +2928,3 @@ def test_a_reset_after_a_thaw_writes_the_stored_files_back_first(monkeypatch, tm
     got = module.action({**request, "cloud_init": {"user": created, "network": '{"version": 2}'}})
     assert got["cloud_init"]["user"] == module.reset_user_data(created, [KEY], "op-00000001")
     assert got["cloud_init"]["network"] == '{"version": 2}'
-
-
-def reset_fixture(monkeypatch, tmp_path):
-    module = load("node-agent.py")
-    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
-    stored = {
-        "hostname": "web",
-        "manage_etc_hosts": True,
-        "users": [{"name": "user", "shell": "/bin/bash", "ssh_authorized_keys": ["ssh-ed25519 AAAAold old"]}],
-        "disable_root": True,
-        "ssh_pwauth": False,
-        "timezone": "Asia/Taipei",
-        "packages": ["x"],
-        "write_files": [{"path": "/a", "content": "b"}],
-        "swap": {"size": "1G"},
-        "runcmd": [["true"]],
-    }
-    text = "#cloud-config\n" + json.dumps(stored)
-    (tmp_path / "carrel-10100-user.json").write_text(text)
-    (tmp_path / "carrel-10100-network.json").write_text('{"version": 2}')
-    return module, dict(MACHINE, vmid=10100, kind="vm"), text
-
-
-NEW_KEY = "ssh-ed25519 AAAAnew new"
-
-
-def test_cloud_init_reset_swaps_keys_and_drops_creation_steps(monkeypatch, tmp_path):
-    module, vm, text = reset_fixture(monkeypatch, tmp_path)
-    out = module.cloud_init_reset(vm, [NEW_KEY], text)["cloud_init"]
-    assert out["network"] == '{"version": 2}'
-    assert out["user"] == (tmp_path / "carrel-10100-user.json").read_text()
-    data = json.loads(out["user"].removeprefix("#cloud-config\n"))
-    assert data["users"][0]["ssh_authorized_keys"] == [NEW_KEY]
-    assert data["users"][0]["shell"] == "/bin/bash"
-    assert data["ssh_deletekeys"] is False
-    assert set(data) == {
-        "hostname",
-        "manage_etc_hosts",
-        "users",
-        "disable_root",
-        "ssh_pwauth",
-        "ssh_deletekeys",
-    }
-    assert oct((tmp_path / "carrel-10100-user.json").stat().st_mode & 0o777) == "0o600"
-
-
-def test_cloud_init_reset_refuses_bad_input(monkeypatch, tmp_path):
-    module, vm, text = reset_fixture(monkeypatch, tmp_path)
-    with pytest.raises(ValueError):
-        module.cloud_init_reset(vm, ["not a key"], text)
-    with pytest.raises(ValueError):
-        module.cloud_init_reset(dict(vm, kind="ct"), [NEW_KEY], text)
-    with pytest.raises(ValueError):
-        module.cloud_init_reset(dict(vm, service_ports=[6443]), [NEW_KEY], text)
-    with pytest.raises(ValueError):
-        module.cloud_init_reset(vm, [NEW_KEY], "")
-    (tmp_path / "carrel-10100-user.json").unlink()
-    with pytest.raises(ValueError):
-        module.cloud_init_reset(vm, [NEW_KEY], text)
