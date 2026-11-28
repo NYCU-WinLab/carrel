@@ -487,6 +487,9 @@ func (e *Execution) FinishMachineImport(t D) D {
 	if m == nil {
 		fail("not_found", "The imported machine record is gone")
 	}
+	// The network is normalized on the node that holds the guest, after the
+	// tags (#917). The call sets the same values again on a retry.
+	e.Call(D{"op": "import_network", "machine": m}, e.importTargetNode(str(job["target_node"])))
 	m["state"] = "imported_unverified"
 	e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	e.P.invalidateInventory()
