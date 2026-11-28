@@ -610,6 +610,25 @@ row and a plugin record that differ` and change nothing. Compare the 2 rows with
 wrong one (`snapshots/<vmid>-<name>` or `plugin_objects/snapshot/snapshot/<vmid>/<name>` in
 `objects`) and run the move again. Do not touch PVE, or the tenant loses that snapshot.
 
+## Import sources
+
+`machine_import` needs two Proxmox API tokens, both with privilege separation. Staging (#902)
+ran with exactly these privileges:
+
+- **Source** (the old host, registered with `source_add`): `VM.Audit`, `VM.Migrate`,
+  `VM.Config.Disk`, `VM.Config.CDROM`, `VM.Config.Cloudinit`, `VM.PowerMgmt` and `Pool.Audit` on a
+  pool that holds only the guests to import, and `PVEAuditor` on `/storage`. The token then sees
+  no other guest.
+- **Target** (the node named by `import_target_node`): `Sys.Audit`, `Sys.Incoming`,
+  `VM.Allocate`, `VM.Audit`, `VM.PowerMgmt`, `VM.Config.*` (`Disk`, `CDROM`, `Cloudinit`, `CPU`,
+  `Memory`, `Network`, `Options`, `HWType`), `Datastore.AllocateSpace`, `Datastore.Audit` and
+  `SDN.Use` on `/`. Without `Sys.Audit` the source's `remote_migrate` fails at once, because it
+  reads `/cluster/status` on the target.
+
+Put the source secret in `source_dir/<name>.secret` and the target secret in
+`source_dir/_target.secret` (owner `carrel`, mode 0600), then call `source_add` without `secret`.
+The control plane must reach the source's API port. Revoke both tokens after the imports.
+
 ## Roll back an imported machine
 
 `machine_import` moves a guest with `qm remote-migrate` or `pct remote-migrate` (PLAN 10.6). The

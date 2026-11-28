@@ -27,7 +27,7 @@ var (
 	importPoll = 5 * time.Second
 	// importTaskLimit bounds one task: a disk copy at the migration limit.
 	importTaskLimit = 4 * time.Hour
-	// importShutdownSeconds is how long pct shutdown gets before pct stop.
+	// importShutdownSeconds is how long a shutdown gets before a stop.
 	importShutdownSeconds = 60
 
 	importLabel      = regexp.MustCompile(`[^a-z0-9-]+`)
@@ -154,9 +154,9 @@ func (e *Execution) importStart(a D, c importContext, plan D) D {
 			}
 		}
 	}
-	// The hop storage holds an offline volume on its way to the guest storage:
-	// a CT, a stopped VM, or a source that is not ZFS and does not move online.
-	hop := c.Hop && (c.Kind == "ct" || !c.Running)
+	// Every guest moves offline, so every volume from a source that is not
+	// ZFS lands on the hop storage on its way to the guest storage.
+	hop := c.Hop
 	job := D{"source": c.Source, "guest": c.VMID, "node": c.SourceNode, "api": c.API, "kind": c.Kind, "running": c.Running,
 		"cloud_init_key": cloudInitKey, "hop": hop, "target_node": c.Target.Name, "target_vmid": integer(obj(obj(plan["plan"])["target"])["vmid"])}
 	spec := D{"name": name, "kind": c.Kind, "image": "imported", "cpu": c.CPU, "memory_mb": c.Memory, "disk_gb": c.DiskGiB, "node": c.Target.Name,
@@ -269,24 +269,31 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	}
 	note("step", "prepare")
 
-	// A guest that moved offline cannot carry the cloud-init disk: carrel
-	// writes its own after the move.
-	if key := str(job["cloud_init_key"]); key != "" && job["cloud_init_dropped"] != true {
-		sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", url.Values{"delete": {key}})
-		note("cloud_init_dropped", true)
-	}
-	// A CT moves stopped. pct shutdown first; when it does not finish, pct
-	// stop, and the result says which one was used.
-	if job["kind"] == "ct" && job["running"] == true && str(job["stopped_with"]) == "" {
+	// Every guest moves stopped. A running VM cannot move online: the tenant
+	// bridge has a smaller MTU than the old network, and Proxmox refuses to
+	// start the VM there (staging, #902). Shutdown first; when it does not
+	// finish, stop, and the result says which one was used.
+	if job["running"] == true && str(job["stopped_with"]) == "" {
 		note("step", "stop")
-		used := "pct shutdown"
+		cmd := "qm"
+		if job["kind"] == "ct" {
+			cmd = "pct"
+		}
+		used := cmd + " shutdown"
 		if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(importShutdownSeconds)}})) {
-			used = "pct stop"
+			used = cmd + " stop"
 			if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/stop", url.Values{})) {
-				fail("backend_unavailable", "The source could not stop the container", D{"component": "source", "backend_code": "source_stop_failed", "recovery": "contact_administrator"})
+				fail("backend_unavailable", "The source could not stop the guest", D{"component": "source", "backend_code": "source_stop_failed", "recovery": "contact_administrator"})
 			}
 		}
 		note("stopped_with", used)
+	}
+	// The cloud-init disk does not move: carrel writes its own after the
+	// move. The guest is stopped, so the delete applies at once instead of
+	// staying pending.
+	if key := str(job["cloud_init_key"]); key != "" && job["cloud_init_dropped"] != true {
+		sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", url.Values{"delete": {key}})
+		note("cloud_init_dropped", true)
 	}
 
 	storage := importTargetStorage
@@ -303,9 +310,6 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	// its address.
 	bridge := fmt.Sprintf("t%03d", integer(e.Op["tenant_n"]))
 	form := url.Values{"target-endpoint": {endpoint}, "target-vmid": {strconv.Itoa(integer(job["target_vmid"]))}, "target-bridge": {bridge}, "target-storage": {storage}}
-	if job["kind"] == "vm" && job["running"] == true {
-		form.Set("online", "1")
-	}
 	note("step", "remote_migrate")
 	// From here the guest may exist on the target: a failure keeps the record.
 	note("migrate_sent", true)

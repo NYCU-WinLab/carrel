@@ -57,11 +57,21 @@ func TestMachineImportConfirmRunningVM(t *testing.T) {
 		t.Fatalf("operation: %v", op)
 	}
 	log := joined()
-	// The cloud-init disk goes, the VM moves online straight to tank.
-	for _, want := range []string{"PUT /api2/json/nodes/anvil/qemu/104/config delete=ide2", "POST /api2/json/nodes/anvil/qemu/104/remote_migrate", "online=1", "target-storage=tank", "target-vmid=10100", "target-bridge=t001"} {
+	// The VM shuts down, then the cloud-init disk goes, then it moves offline:
+	// its disks are on LVM, so they land on the hop storage, then move to tank.
+	for _, want := range []string{"POST /api2/json/nodes/anvil/qemu/104/status/shutdown", "PUT /api2/json/nodes/anvil/qemu/104/config delete=ide2", "POST /api2/json/nodes/anvil/qemu/104/remote_migrate", "target-storage=local", "target-vmid=10100", "target-bridge=t001"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("missing %q in\n%s", want, log)
 		}
+	}
+	if strings.Index(log, "status/shutdown") > strings.Index(log, "delete=ide2") {
+		t.Errorf("the cloud-init disk must go after the shutdown, or the delete stays pending:\n%s", log)
+	}
+	if strings.Contains(log, "online=1") {
+		t.Errorf("a VM must not move online onto the tenant bridge:\n%s", log)
+	}
+	if obj(op["result"])["stopped_with"] != "qm shutdown" {
+		t.Errorf("result: %v", op["result"])
 	}
 	if strings.Contains(log, "vmbr0") {
 		t.Errorf("the guest must not join the node underlay:\n%s", log)
@@ -79,10 +89,17 @@ func TestMachineImportConfirmRunningVM(t *testing.T) {
 	if num((&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))["vcpu"]) != 4 {
 		t.Errorf("quota not charged")
 	}
+	finished := 0
 	for _, c := range b.calls {
 		if c["op"] == "import_finish" {
-			t.Errorf("an online VM needs no volume move: %v", c)
+			finished++
+			if c["hop_storage"] != "local" || c["kind"] != "vm" {
+				t.Errorf("import_finish: %v", c)
+			}
 		}
+	}
+	if finished != 1 {
+		t.Errorf("a running VM from LVM moves its volumes off the hop once, got %d", finished)
 	}
 	if strings.Contains(string(encoded(op)), "99999999-2222") || strings.Contains(string(encoded(p.Store.Get("operations", str(op["id"])))), "99999999-2222") {
 		t.Errorf("a secret reached the operation")

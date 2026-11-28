@@ -2069,12 +2069,14 @@ one exists, changes are checked on disposable tenant machines.
   - Any other source: drop the cloud-init disk before migrating (carrel writes its own, see
     Normalization); land every offline volume on a directory storage on the target; then
     `move-volume` (`qm move-disk` or `pct move-volume`) each one to `tank` on the target.
-  - A running VM without a cloud-init disk (or with it dropped) migrates online to `tank` in one
-    step; staging saw 38 ms of downtime.
+  - A running VM does not migrate online. On a tenant bridge (MTU 1450) Proxmox refuses to start
+    a VM whose NIC ran at 1500, and the guest would keep the larger MTU anyway (staging, #902).
+    Every guest is stopped first and moves offline; its first boot on carrel takes the bridge MTU.
 - **Rollback state**: the source ends stopped with `lock: migrate`. This is the rollback state
   of section 10.7. Starting it again on the old host needs `qm unlock` (`pct unlock` for a CT).
-- **Stopping a CT**: `pct shutdown` timed out on a Debian 13 CT without `nesting=1`, and
-  `pct stop` worked. The import reports whether it used `pct shutdown` or `pct stop`.
+- **Stopping a guest**: `pct shutdown` timed out on a Debian 13 CT without `nesting=1`, and
+  `pct stop` worked. The import shuts a running guest down and stops it when the shutdown does
+  not finish, and reports which one it used (`qm shutdown`, `qm stop`, `pct shutdown` or `pct stop`).
 - **Plan first**: `dry_run` returns the target VMID and address, disk sizes, the quota it takes,
   every configuration change, and warnings. The call with `confirm` runs it.
 - **Normalization**: the NIC moves to the tenant's primary network with `firewall=1`, `mtu=1`, the

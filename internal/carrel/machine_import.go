@@ -208,7 +208,7 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 		if d.Type != "zfspool" {
 			allZFS = false
 		}
-		if !running || kind == "ct" || d.CloudInit {
+		if !d.CloudInit {
 			offline = append(offline, d.Key)
 		}
 	}
@@ -229,11 +229,8 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 	if len(offline) > 0 && path == "directory_hop" {
 		warnings = append(warnings, "Offline volumes ("+strings.Join(offline, ", ")+") need a directory storage on the target")
 	}
-	if running && kind == "ct" {
-		warnings = append(warnings, "The container is stopped first; the import reports whether pct shutdown or pct stop was used")
-	}
-	if running && kind == "vm" {
-		warnings = append(warnings, "The source is stopped by the migration and stays stopped with lock: migrate as the rollback state")
+	if running {
+		warnings = append(warnings, "The guest is stopped first and moves offline; the import reports whether shutdown or stop was used")
 	}
 	change("storage", "per disk", importTargetStorage+" ("+importTargetType+")")
 	net := "net0"
