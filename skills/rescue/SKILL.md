@@ -1,7 +1,7 @@
 ---
 name: rescue
 description: Use when a member cannot get into a machine over SSH. Read the console log first, then reset access with new keys.
-version: 1.0.1
+version: 1.0.2
 requires_tools: [machine_get, machine_reset_access]
 verified:
 ---
@@ -13,10 +13,15 @@ verified:
    will not be fixed by new keys. (A read-only console log tool, `machine_console_log`, is planned in
    PLAN 7.6; use it here once the contract has it.) If the machine did not boot, fix that first.
 3. If the machine booted but accepts none of the member's keys, call `machine_reset_access` with
-   `confirm` set to the machine name. Use `dry_run` first when the member is unsure.
+   `confirm` set to the machine name. A request to get back in is the member's authorization: apply
+   the reset, do not stop at a `dry_run` to ask again. Use `dry_run` only when the member asks for a
+   preview, or when it is unclear which machine they mean.
    - Only a VM that carrel configures through cloud-init takes new keys. A CT, a machine installed
      from an ISO and a machine that serves its own ports do not.
-   - The reset shuts the VM down and starts it again. Warn the member before a running VM restarts.
+   - The reset shuts the VM down and starts it again. Say so in your reply, and in your first
+     message when you will be waiting on it.
+   - With no key saved in the tenant, pass the member's public key (for example
+     `~/.ssh/id_ed25519.pub`) as `ssh_keys`. Never read or send a private key.
    - Keys already on the machine stay. A key with `command=` or `from=` options comes back without
      them.
 4. Wait for the operation to succeed, then check the connection with `ssh` using the alias from
