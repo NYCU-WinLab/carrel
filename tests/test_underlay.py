@@ -265,3 +265,54 @@ def test_a_site_without_macs_is_unchanged():
     layout = load("install-network.py").site_layout("carrel02", SITE)
     assert layout["peer_macs"] == {}
     assert layout["peers"] == ["192.168.19.101", "192.168.19.103", "192.168.19.104"]
+
+
+def _all_macs_site():
+    site = json.loads(json.dumps(SITE))
+    for i, n in enumerate(site["nodes"]):
+        n["mac"] = f"aa:bb:cc:dd:ee:0{i}"
+    return site
+
+
+def test_every_peer_mac_gives_one_accept_rule_per_peer_and_drops_stay_last():
+    rules = load("install-network.py").underlay_rules(
+        "vmbr0",
+        "192.168.19.102",
+        ["192.168.19.101", "192.168.19.103"],
+        {"192.168.19.101": "aa:bb:cc:dd:ee:01", "192.168.19.103": "aa:bb:cc:dd:ee:03"},
+    )
+    assert rules[:4] == [
+        'iifname "vmbr0" ether saddr aa:bb:cc:dd:ee:01 ip saddr 192.168.19.101 ip daddr 192.168.19.102 udp dport 4789 accept',
+        'iifname "vmbr0" ether saddr aa:bb:cc:dd:ee:03 ip saddr 192.168.19.103 ip daddr 192.168.19.102 udp dport 4789 accept',
+        'iifname "vmbr0" ether saddr aa:bb:cc:dd:ee:01 ip saddr 192.168.19.101 ip daddr 192.168.19.102 tcp dport 179 accept',
+        'iifname "vmbr0" ether saddr aa:bb:cc:dd:ee:03 ip saddr 192.168.19.103 ip daddr 192.168.19.102 tcp dport 179 accept',
+    ]
+    assert rules[4:] == ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
+    assert not any("saddr {" in r for r in rules)
+
+
+def test_a_missing_peer_mac_keeps_todays_rule_and_warns(capsys):
+    n = load("install-network.py")
+    peers = ["192.168.19.101", "192.168.19.103"]
+    rules = n.underlay_rules("vmbr0", "192.168.19.102", peers, {"192.168.19.101": "aa:bb:cc:dd:ee:01"})
+    assert rules == n.underlay_rules("vmbr0", "192.168.19.102", peers)
+    assert "warning" in capsys.readouterr().err
+
+
+def test_no_macs_is_silent_and_identical_to_today(capsys):
+    n = load("install-network.py")
+    layout = n.site_layout("carrel02", SITE)
+    assert n.underlay_rules(
+        "vmbr0", layout["address"], layout["peers"], layout["peer_macs"]
+    ) == n.underlay_rules("vmbr0", layout["address"], layout["peers"])
+    assert capsys.readouterr().err == ""
+
+
+def test_bootstrap_underlay_matches_install_network_with_macs():
+    site = _all_macs_site()
+    layout = load("install-network.py").site_layout("carrel02", site)
+    expected = load("install-network.py").underlay_rules(
+        site["underlay_interface"], layout["address"], layout["peers"], layout["peer_macs"]
+    )
+    assert any("ether saddr" in r for r in expected)
+    assert load("bootstrap-platform.py").underlay(site, "carrel02") == expected

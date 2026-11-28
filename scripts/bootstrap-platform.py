@@ -150,11 +150,20 @@ def underlay(config, node):
     # Same rule as install-network.py (PLAN 6.3): VXLAN and BGP from the other
     # site nodes on the underlay interface only; dropped everywhere else.
     check_node_macs(config)
-    rules = []
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"]}
     peers = [a for n, a in addresses.items() if n != node]
-    if peers and node in addresses:
-        for match in ("udp dport 4789", "tcp dport 179"):
+    macs = {addresses[n["name"]]: n["mac"] for n in config["nodes"] if "mac" in n and n["name"] != node}
+    if node not in addresses:
+        peers = []
+    if peers and macs and any(p not in macs for p in peers):
+        print("warning: not every peer has a mac in the site file; "
+              "underlay accept rules match the address only", file=sys.stderr)
+    rules = []
+    for match in ("udp dport 4789", "tcp dport 179") if peers else ():
+        if all(p in macs for p in peers):
+            rules += [f'iifname "{config["underlay_interface"]}" ether saddr {macs[p]} ip saddr {p} '
+                      f"ip daddr {addresses[node]} {match} accept" for p in peers]
+        else:
             rules.append(f'iifname "{config["underlay_interface"]}" ip saddr {{ {", ".join(peers)} }} '
                          f"ip daddr {addresses[node]} {match} accept")
     return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]

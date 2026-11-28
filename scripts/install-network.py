@@ -11,6 +11,7 @@ import json
 import re
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 # Tenant vnets are t001, t002, ... (node-agent's f"t{n:03d}") and guest taps are tap*.
@@ -58,14 +59,26 @@ def site_ipv6(site):
         raise SystemExit("ipv6.mtu must be 1280 to 1420")
     return {"prefix": str(prefix), "tenants": str(tenants), "endpoint": f"{host}:{port}", "public_key": block["peer"]["public_key"], "mtu": mtu}
 
-def underlay_rules(interface, address, peers):
+def underlay_rules(interface, address, peers, peer_macs=None):
     # PLAN 6.3: VXLAN and BGP only on the underlay interface, to this node's own
     # address, from another node. With no peers both stay dropped everywhere.
+    # When every peer has a known MAC, accept one rule per peer on MAC and
+    # address together (needs the peers on this interface's L2 segment). If any
+    # peer lacks one, keep the address-only rule so a working cluster stays up.
+    peer_macs = peer_macs or {}
     rules = []
     if peers:
-        sources = ", ".join(peers)
+        if peer_macs and any(p not in peer_macs for p in peers):
+            print("warning: not every peer has a mac in the site file; "
+                  "underlay accept rules match the address only", file=sys.stderr)
         for match in ("udp dport 4789", "tcp dport 179"):
-            rules.append(f'iifname "{interface}" ip saddr {{ {sources} }} ip daddr {address} {match} accept')
+            if all(p in peer_macs for p in peers):
+                for peer in peers:
+                    rules.append(f'iifname "{interface}" ether saddr {peer_macs[peer]} ip saddr {peer} '
+                                 f"ip daddr {address} {match} accept")
+            else:
+                sources = ", ".join(peers)
+                rules.append(f'iifname "{interface}" ip saddr {{ {sources} }} ip daddr {address} {match} accept')
     return rules + ["udp dport 4789 counter drop", "tcp dport 179 counter drop"]
 
 
@@ -389,7 +402,7 @@ def main():
     node_config.write_text(json.dumps(config))
     # A separate owned table, never a flush of Proxmox/staging/edge rules.
     Path("/etc/carrel/tenant-host.nft").write_text(
-        tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"]), ipv6=bool(layout["ipv6"]),
+        tenant_host_nft(underlay_rules(layout["interface"], address, layout["peers"], layout["peer_macs"]), ipv6=bool(layout["ipv6"]),
                         mtu6=layout["ipv6"]["mtu"] if layout["ipv6"] else 1420)
     )
     public = layout.get("public")
