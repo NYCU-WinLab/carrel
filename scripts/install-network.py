@@ -213,6 +213,24 @@ def local_content(site, content):
     return wanted
 
 
+def fetch_storages(site):
+    """The storages a site with imports keeps ISOs and imported images on.
+
+    PLAN 7.8: carrel never copies an image between nodes, so a site with
+    more than one node must keep both kinds on a storage every node mounts.
+    """
+    if not site.get("fetch"):
+        return []
+    kinds = site.get("content_storage", {})
+    names = sorted({kinds.get(kind, "local") for kind in ("iso", "import")})
+    if len(site["nodes"]) > 1 and "local" in names:
+        raise SystemExit(
+            "A site with imports (fetch) and more than one node keeps ISOs and imported images on shared "
+            "storage: set content_storage iso and import to a storage every node mounts (PLAN 7.8)"
+        )
+    return [name for name in names if name != "local"]
+
+
 def site_layout(node, site):
     """Return this node's address, the other nodes' addresses and the exit nodes."""
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in site["nodes"]}
@@ -275,6 +293,12 @@ def main():
     site = json.loads(args.site.read_text())
     layout = site_layout(node, site)
     address = layout["address"]
+    # Checked before anything changes: a file every node needs that only one
+    # node holds fails each machine placed elsewhere (#569 M10).
+    for name in fetch_storages(site):
+        storage = json.loads(run("pvesh", "get", f"/storage/{name}", "--output-format", "json"))
+        if len(site["nodes"]) > 1 and not storage.get("shared"):
+            raise SystemExit(f"storage {name} holds ISOs or imports but is not shared")
     # The hostname alone could match another machine, such as an older host
     # with the same name (issue #48): the site's address must be here.
     check_underlay(layout["interface"], address, node)

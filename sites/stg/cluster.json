@@ -11,6 +11,7 @@
   "agent_nodes": ["carrel-stg01", "carrel-stg02"],
   "ssh_jump": true,
   "fetch": true,
+  "content_storage": {"iso": "stg-shared", "import": "stg-shared", "images": "stg-shared"},
   "public": {
     "address": "198.18.61.10/24",
     "gateway": "198.18.61.1",
