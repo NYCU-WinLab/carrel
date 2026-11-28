@@ -282,6 +282,13 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	stopped := func() bool {
 		return str(obj(sourceGet(e.Ctx, client, base, tokenID, secret, path+"/status/current")["data"])["status"]) == "stopped"
 	}
+	// HA may have taken the guest since the plan: Proxmox would then
+	// force-stop it on shutdown and refuse to migrate it.
+	for _, g := range dicts(sourceGet(e.Ctx, client, base, tokenID, secret, "/cluster/resources?type=vm")["data"]) {
+		if integer(g["vmid"]) == integer(job["guest"]) && str(g["hastate"]) != "" {
+			fail("conflict", "The guest is managed by Proxmox HA on the source; remove it from HA there first", D{"component": "source", "backend_code": "source_ha", "recovery": "resolve_prerequisite"})
+		}
+	}
 	if job["running"] == true && str(job["stopped_with"]) == "" {
 		note("step", "stop")
 		cmd, seconds := "qm", importVMShutdownSeconds
@@ -289,13 +296,25 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 			cmd, seconds = "pct", importShutdownSeconds
 		}
 		used := cmd + " shutdown"
-		if stopped() {
-			// A resumed job, or the owner shut it down meanwhile.
+		// A job resumed while its shutdown ran waits for that task instead of
+		// sending a second one that would queue behind the guest's lock.
+		var shutdown D
+		if upid := str(job["shutdown_upid"]); upid != "" {
+			shutdown = D{"data": upid}
+		}
+		if shutdown == nil && stopped() {
+			// The owner shut it down meanwhile, or a resumed job.
 			used = "already stopped"
 		} else {
 			// From here the source may change: a failure keeps the record.
 			note("source_changed", true)
-			if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(seconds)}})) && !stopped() {
+			if shutdown == nil {
+				shutdown = sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(seconds)}})
+				if upid := str(shutdown["data"]); matches(`^UPID:[A-Za-z0-9.:@!_-]{1,300}$`, upid) {
+					note("shutdown_upid", upid)
+				}
+			}
+			if !wait(shutdown) && !stopped() {
 				if job["kind"] != "ct" {
 					fail("conflict", "The VM did not shut down in time and was not stopped by force. It may still power off by itself; check it on the source", D{"component": "source", "backend_code": "source_shutdown_timeout", "recovery": "contact_administrator"})
 				}
@@ -312,17 +331,32 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	if !stopped() {
 		fail("conflict", "The guest runs on the source; shut it down there or import again", D{"component": "source", "backend_code": "source_running", "recovery": "resolve_prerequisite"})
 	}
+	// A shutdown applies pending changes, so a disk detached then would
+	// travel as unusedN, never counted or moved off the hop.
+	config := obj(sourceGet(e.Ctx, client, base, tokenID, secret, path+"/config")["data"])
+	for key := range config {
+		if matches(`^unused[0-9]+$`, key) {
+			fail("conflict", "The guest has a detached disk ("+key+"); delete or reattach it on the source, then import again", D{"component": "source", "backend_code": "source_changed", "recovery": "contact_administrator"})
+		}
+	}
 	// The cloud-init disk does not move: carrel writes its own after the
 	// move. The guest is stopped, so the delete applies at once instead of
-	// staying pending. The slot is read again, so a disk put there since the
-	// plan is never detached.
+	// staying pending. The slot is read again and the delete carries the
+	// config digest, so a disk put there since is never detached.
 	if key := str(job["cloud_init_key"]); key != "" && job["cloud_init_dropped"] != true {
-		current := str(obj(sourceGet(e.Ctx, client, base, tokenID, secret, path+"/config")["data"])[key])
-		if !strings.Contains(strings.SplitN(current, ",", 2)[0], "cloudinit") {
+		current := str(config[key])
+		// An empty slot means a resumed job already deleted it.
+		if current != "" && !strings.Contains(strings.SplitN(current, ",", 2)[0], "cloudinit") {
 			fail("conflict", "The guest's "+key+" is no longer its cloud-init disk; plan the import again", D{"component": "source", "backend_code": "source_changed", "recovery": "revise_request"})
 		}
 		note("source_changed", true)
-		sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", url.Values{"delete": {key}})
+		if current != "" {
+			form := url.Values{"delete": {key}}
+			if d := str(config["digest"]); d != "" {
+				form.Set("digest", d)
+			}
+			sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", form)
+		}
 		note("cloud_init_dropped", true)
 	}
 

@@ -401,3 +401,27 @@ func TestMachineImportGuestStartedAgainIsNotChanged(t *testing.T) {
 		t.Errorf("quota still reserved: %v", u)
 	}
 }
+
+func TestMachineImportResumeWaitsForSavedShutdown(t *testing.T) {
+	p, _, run := importSite(t)
+	importFailTask = "status-shutdown"
+	op := run(104)
+	raw := p.Store.Get("operations", str(op["id"]))
+	job := obj(raw["import"])
+	if !strings.HasPrefix(str(job["shutdown_upid"]), "UPID:") || str(job["stopped_with"]) != "" {
+		t.Fatalf("shutdown task not saved: %v", job)
+	}
+	// A restarted job polls the saved shutdown and sends no second one.
+	importFailTask, seenForms, importGuestStatus = "none", nil, []string{"stopped"}
+	e := p.execution(context.Background())
+	e.Op = raw
+	if f := attempt(e.PerformMachineImport); f != nil {
+		t.Fatalf("resume: %v", f)
+	}
+	if strings.Contains(joined(), "status/shutdown") {
+		t.Errorf("a second shutdown was sent:\n%s", joined())
+	}
+	if obj(raw["import"])["stopped_with"] != "qm shutdown" {
+		t.Errorf("job: %v", raw["import"])
+	}
+}
