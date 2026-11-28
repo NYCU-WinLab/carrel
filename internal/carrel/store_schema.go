@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -73,6 +74,69 @@ UPDATE tenants SET quota=json_set(json_remove(quota,'$.function_gb'),'$.service_
 UPDATE events SET type='service.version.'||substr(type,18) WHERE type LIKE 'function.version.%';
 UPDATE events SET data=json_set(json_remove(data,'$.function'),'$.service',json_extract(data,'$.function')) WHERE json_type(data,'$.function') IS NOT NULL;`)
 		return err
+	},
+	// 4 to 5: the idempotency fingerprints of rows migration 4 renamed (#922).
+	// A quota request keeps the fingerprint of its old dimension name and a
+	// queued domain_add keeps the one of args.function, so a retry with the
+	// same key and the new names would answer conflict. Each fingerprint is
+	// computed again from the stored fields, the way FileRequest and the
+	// operation queue compute it.
+	func(tx *sql.Tx) error {
+		type row struct {
+			id   string
+			data string
+		}
+		load := func(q string) ([]row, error) {
+			rs, err := tx.Query(q)
+			if err != nil {
+				return nil, err
+			}
+			defer rs.Close()
+			var out []row
+			for rs.Next() {
+				var r row
+				if err := rs.Scan(&r.id, &r.data); err != nil {
+					return nil, err
+				}
+				out = append(out, r)
+			}
+			return out, rs.Err()
+		}
+		refresh := func(kind, q string, fingerprint func(D) string) error {
+			rows, err := load(q)
+			if err != nil {
+				return err
+			}
+			for _, r := range rows {
+				var d D
+				if err := json.Unmarshal([]byte(r.data), &d); err != nil {
+					return err
+				}
+				f := fingerprint(d)
+				if d["fingerprint"] == f {
+					continue
+				}
+				d["fingerprint"] = f
+				if _, err := tx.Exec(`UPDATE objects SET data=? WHERE kind=? AND id=? AND data=?`, string(encoded(d)), kind, r.id, r.data); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := refresh("requests", `SELECT id,data FROM objects WHERE kind='requests' AND json_extract(data,'$.kind')='quota' AND json_extract(data,'$.dimension') IN ('services','service_gb') AND json_type(data,'$.fingerprint')='text'`, func(d D) string {
+			a := D{}
+			for _, k := range []string{"dimension", "amount", "reason", "until"} {
+				if v := d[k]; v != nil {
+					a[k] = v
+				}
+			}
+			return digest(string(encoded(quotaRequestKind.fingerprint(a))))
+		}); err != nil {
+			return err
+		}
+		return refresh("operations", `SELECT id,data FROM objects WHERE kind='operations' AND json_extract(data,'$.tool')='domain_add' AND json_type(data,'$.args.service') IS NOT NULL AND json_type(data,'$.fingerprint')='text'`, func(d D) string {
+			return digest(string(encoded([]any{d["tool"], withoutPortalKeys(obj(d["args"]))})))
+		})
 	},
 }
 

@@ -1474,6 +1474,9 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
   HTTP.
 - Schedule: `schedule` is a cron expression in the site's time zone. The control plane sends a
   POST to the service. A missed run is not repeated.
+  The request carries `Host: <id>.service` (it was `<id>.function` before the rename, #909), the
+  `X-Carrel-Service` header and `X-Carrel-Schedule`. A guest that routes on the old Host value
+  must accept the new one; the Host header holds one value, so there is no both-names release.
 - Queues and platform events are not in version 1.
 
 **Isolation**
