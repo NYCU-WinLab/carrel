@@ -144,6 +144,11 @@ After a deploy, `node_list` shows the control plane's build (`control_plane`), e
 programs came from another release. A failed upgrade restores the programs on the first exit node
 only, so the other nodes show up there until the next successful deploy.
 
+`node_list` also shows each node's `inventory.services`: the state of `pve-cluster`, `pvestatd`,
+`pve-firewall`, `corosync` (on a clustered node) and `proxmox-firewall` (when enabled). A node
+with any of them not `active` has `services_ok: false` and is named in `degraded_nodes`. Start the
+unit by hand and restart its dependents: a unit that failed on a dependency at boot stays failed.
+
 The `carrel-backup.timer` makes a consistent SQLite backup with config, SSH keys and certificates
 each day and sends it off the cluster to the SSH target `carrel-backup`: `scripts/backup-target.py`,
 a forced command on spawner (the old PVE), keeps 14 daily archives under `/var/lib/carrel-backups`,

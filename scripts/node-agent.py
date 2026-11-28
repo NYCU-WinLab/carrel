@@ -165,6 +165,29 @@ def programs_info():
             "intact": recorded.get("node-agent.py") == digest}
 
 
+def service_states():
+    """The state of the Proxmox services a node needs to report guests and enforce rules (#879).
+
+    A unit that failed on a dependency at boot stays failed after the dependency
+    is started by hand, and pvesh then answers "unknown" for every guest."""
+    units = ["pve-cluster", "pvestatd", "pve-firewall"]
+    if Path("/etc/pve/corosync.conf").exists():
+        units.append("corosync")
+    states = {}
+    for unit in units + ["proxmox-firewall"]:
+        try:
+            if unit == "proxmox-firewall":
+                # Only the nftables backend runs it; a node without it is not wrong.
+                enabled = subprocess.run(["systemctl", "is-enabled", unit], capture_output=True, text=True, timeout=10, check=False)
+                if enabled.stdout.strip() != "enabled":
+                    continue
+            p = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=10, check=False)
+            states[unit] = p.stdout.strip() or "unknown"
+        except (OSError, subprocess.SubprocessError):
+            states[unit] = "unknown"
+    return states
+
+
 def inventory_read(storage):
     # The token sees every volume only with Datastore.Allocate on the storage;
     # PVEAuditor alone silently omits volumes. Refuse incomplete authority.
@@ -181,6 +204,7 @@ def inventory_read(storage):
         "resources": pve_get("/cluster/resources"),
         "storage": pve_get(f"/nodes/{NODE}{path}/status"),
         "status": pve_get(f"/nodes/{NODE}/status"),
+        "services": service_states(),
     }
 
 
