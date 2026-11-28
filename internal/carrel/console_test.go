@@ -91,7 +91,9 @@ func TestTheConsoleOpensOnlyForTheMemberWhoAskedOnce(t *testing.T) {
 	}
 	link = str(e.ConsoleURL(D{"machine": "web"}, D{"sub": "alice"}, p.Store.TenantN(1))["url"])
 	login = "alice"
-	if r := open(link); r.StatusCode != 302 || r.Header.Get("Location") != "/console/view" {
+	// A page, not a redirect: a redirect that ends a chain from the login
+	// site does not carry the SameSite=Strict session cookie.
+	if r := open(link); r.StatusCode != 200 || !strings.Contains(readAll(r), `content="0;url=/console/view"`) {
 		t.Fatal("the member could not log in", r.StatusCode)
 	}
 	if r := open(link); r.StatusCode != 404 {
@@ -222,4 +224,10 @@ func (j *jar) Cookies(u *url.URL) []*http.Cookie {
 		}
 	}
 	return out
+}
+
+func readAll(r *http.Response) string {
+	defer r.Body.Close()
+	b, _ := io.ReadAll(r.Body)
+	return string(b)
 }

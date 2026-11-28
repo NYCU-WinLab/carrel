@@ -185,7 +185,14 @@ func (h consoleHandler) finish(w http.ResponseWriter, r *http.Request, txn D, co
 	h.p.Store.OAuthPut("console", digest(session), D{"tenant_n": rec["tenant_n"], "vmid": rec["vmid"], "sub": rec["sub"], "ticket": vncTicket()}, consoleSessionTTL)
 	h.p.Store.Log(str(who["sub"]), rec["tenant_n"], "console_open", D{"vmid": rec["vmid"]}, "ok")
 	http.SetCookie(w, &http.Cookie{Name: consoleCookie, Value: session, MaxAge: consoleSessionTTL, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, Path: "/"})
-	http.Redirect(w, r, "/console/view", 302)
+	// Not a redirect: this response ends a chain that began on the login
+	// site, and browsers send no SameSite=Strict cookie to a redirect at the
+	// end of a cross-site chain. A navigation this page starts is same-site.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintf(w, `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/console/view"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Carrel 主控台</title><style>%s</style></head><body><header><span>WinLab</span><span aria-hidden="true">/</span><span>Carrel</span></header><main><p><a href="/console/view">開啟主控台</a></p></main></body></html>`, consentStyle)
 }
 
 func (h consoleHandler) session(r *http.Request) D {
