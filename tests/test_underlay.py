@@ -238,3 +238,30 @@ def test_a_site_with_several_nodes_keeps_imports_on_shared_storage():
     shared = {"fetch": True, "nodes": two, "content_storage": {"iso": "nfs", "import": "nfs"}}
     assert fetch_storages(shared) == ["nfs"]
     assert fetch_storages(SITE) == ["rs822rp1"]
+
+
+def _site_with_mac(mac):
+    site = json.loads(json.dumps(SITE))
+    site["nodes"][0]["mac"] = mac
+    return site
+
+
+def test_a_node_mac_reaches_the_layout_as_a_peer_map():
+    layout = load("install-network.py").site_layout("carrel02", _site_with_mac("aa:bb:cc:dd:ee:ff"))
+    assert layout["peer_macs"] == {"192.168.19.101": "aa:bb:cc:dd:ee:ff"}
+    own = load("install-network.py").site_layout("carrel01", _site_with_mac("aa:bb:cc:dd:ee:ff"))
+    assert own["peer_macs"] == {}
+
+
+@pytest.mark.parametrize("mac", ["AA:BB:CC:DD:EE:FF", "aa:bb:cc:dd:ee", "aa-bb-cc-dd-ee-ff", "", 5])
+def test_an_invalid_node_mac_is_refused(mac):
+    with pytest.raises(SystemExit, match="invalid mac"):
+        load("install-network.py").site_layout("carrel02", _site_with_mac(mac))
+    with pytest.raises(SystemExit, match="invalid mac"):
+        load("bootstrap-platform.py").underlay(_site_with_mac(mac), "carrel02")
+
+
+def test_a_site_without_macs_is_unchanged():
+    layout = load("install-network.py").site_layout("carrel02", SITE)
+    assert layout["peer_macs"] == {}
+    assert layout["peers"] == ["192.168.19.101", "192.168.19.103", "192.168.19.104"]
