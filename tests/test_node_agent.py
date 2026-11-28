@@ -3078,9 +3078,22 @@ def test_import_finish_tags_the_guest_once(monkeypatch, kind, tool, existing, ex
     monkeypatch.setattr(module, "storage_id", lambda: "tank")
     calls = []
     monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
-    req = {"tenant_n": 1, "vmid": 10100, "kind": kind, "hop_storage": "", "bwlimit": 0}
+    req = {"tenant_n": 1, "vmid": 10100, "kind": kind, "hop_storage": "", "bwlimit": 51200}
     assert module.import_finish(req) == {"state": "done", "moved": []}
     if expected is None:
         assert calls == []
     else:
         assert calls == [(tool, "set", 10100, "--tags", expected)]
+
+
+@pytest.mark.parametrize("change", [{"bwlimit": 0}, {"hop_storage": "Bad Hop"}, {"kind": "pod"}])
+def test_import_finish_validates_before_tagging(monkeypatch, change):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "pve_get", lambda *a: {})
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    req = {"tenant_n": 1, "vmid": 10100, "kind": "vm", "hop_storage": "local", "bwlimit": 51200, **change}
+    with pytest.raises(ValueError):
+        module.import_finish(req)
+    assert calls == []

@@ -23,6 +23,7 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 	if a["confirm"] != m["name"] {
 		fail("invalid", "confirm must equal the machine name", D{"recovery": "revise_request"})
 	}
+	refuseUnnormalizedImport(m)
 	if m["kind"] != "vm" || unmanaged(m) || len(servicePortsOf(m)) > 0 {
 		fail("invalid", "Only a VM that Carrel configures through cloud-init takes new keys; a CT, a machine installed from an ISO and one that serves its own ports do not", D{"recovery": "revise_request"})
 	}

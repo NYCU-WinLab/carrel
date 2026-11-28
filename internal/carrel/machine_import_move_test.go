@@ -444,3 +444,81 @@ func TestMachineImportedGuestCanBeReadAndDeleted(t *testing.T) {
 		t.Errorf("machine_delete: %v", r)
 	}
 }
+
+// A direct ZFS import has no hop, but import_finish still runs to tag the
+// guest. Until #918 normalizes its network, the owner may read, stop and
+// delete it, never boot or change it (PLAN 10.6).
+func TestMachineImportedGuestIsGatedUntilNormalized(t *testing.T) {
+	p, b, run := importSite(t)
+	if op := run(109); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	tagged := false
+	for _, c := range b.calls {
+		tagged = tagged || c["op"] == "import_finish" && c["hop_storage"] == "" && integer(c["vmid"]) == 10100 && c["kind"] == "vm"
+	}
+	if !tagged {
+		t.Errorf("a direct ZFS import must still call import_finish: %v", b.calls)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m == nil || m["state"] != "imported_unverified" {
+		t.Fatalf("machine: %v", m)
+	}
+	// The imported guest arrives stopped; the node only ever confirms a stop.
+	var actions []D
+	b.call = func(r D, _ string) (any, error) {
+		switch r["op"] {
+		case "status":
+			return D{"status": "stopped"}, nil
+		case "action":
+			actions = append(actions, r)
+			return D{"power_state": "stopped"}, nil
+		}
+		return D{}, nil
+	}
+	name := str(m["name"])
+	alice := person("alice", false)
+	app := NewApp(p, nil)
+	call := func(tool string, a D) D { return app.Call(context.Background(), tool, a, alice) }
+	// A dry run fails at once; a real call fails its operation.
+	failure := func(r D) D {
+		if r["operation"] != nil {
+			return obj(obj(r["operation"])["error"])
+		}
+		return obj(r["error"])
+	}
+	refused := func(tool string, a D) {
+		t.Helper()
+		r := call(tool, a)
+		if e := failure(r); e["code"] != "conflict" || !strings.Contains(str(e["message"]), "not normalized") {
+			t.Errorf("%s %v: %v", tool, a, r)
+		}
+	}
+	allowed := func(tool string, a D) {
+		t.Helper()
+		if r := call(tool, a); r["ok"] != true || len(failure(r)) > 0 {
+			t.Errorf("%s %v: %v", tool, a, r)
+		}
+	}
+	for _, action := range []string{"start", "reboot", "resume"} {
+		refused("machine_power", D{"machine": name, "action": action})
+		refused("machine_power", D{"machine": name, "action": action, "dry_run": true})
+	}
+	refused("machine_resize", D{"machine": name, "cpu": 2})
+	refused("machine_reset_access", D{"machine": name, "confirm": name})
+	if len(actions) != 0 {
+		t.Errorf("a refused call reached the node: %v", actions)
+	}
+	if r := call("machine_get", D{"machine": name}); r["ok"] != true || obj(arr(r["machines"])[0])["state"] != "imported_unverified" {
+		t.Errorf("machine_get: %v", r)
+	}
+	allowed("machine_power", D{"machine": name, "action": "stop"})
+	if s := p.Store.Get("machines", "10100")["state"]; s != "imported_unverified" {
+		t.Errorf("a stop must keep the import state, got %v", s)
+	}
+	refused("machine_power", D{"machine": name, "action": "start"})
+	allowed("machine_delete", D{"machine": name, "confirm": name})
+	if p.Store.Get("machines", "10100") != nil {
+		t.Errorf("machine_delete left the record")
+	}
+}

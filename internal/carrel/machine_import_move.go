@@ -420,3 +420,16 @@ func (e *Execution) FinishMachineImport(t D) D {
 	}
 	return r
 }
+
+// importNotNormalized lists the states of an imported machine whose network
+// is not normalized yet (PLAN 10.6). Its tags let the node agent act on it,
+// so the control plane must refuse anything that boots or changes it.
+var importNotNormalized = []string{"importing", "import_failed", "imported_unverified"}
+
+// refuseUnnormalizedImport fails with a conflict for an imported machine that
+// is not normalized yet. Reading, stopping and deleting it stay allowed.
+func refuseUnnormalizedImport(m D) {
+	if contains(importNotNormalized, m["state"]) {
+		fail("conflict", "The imported machine is not normalized yet", D{"state": m["state"], "recovery": "resolve_prerequisite"})
+	}
+}

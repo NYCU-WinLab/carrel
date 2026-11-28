@@ -2291,6 +2291,7 @@ def import_finish(req):
     hop = req["hop_storage"]
     if not isinstance(hop, str) or (hop and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", hop)):
         raise ValueError("invalid hop storage")
+    bwlimit = migration_bwlimit(req)  # validated before the tags are written
     kind = "qemu" if req["kind"] == "vm" else "lxc"
     cfg = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config")
     have = [t for t in str(cfg.get("tags", "")).split(";") if t]
@@ -2306,9 +2307,9 @@ def import_finish(req):
         if not hop or value.split(",")[0].partition(":")[0] != hop or "media=cdrom" in value.split(","):
             continue
         if kind == "qemu":
-            run("qm", "disk", "move", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+            run("qm", "disk", "move", vmid, key, target, "--delete", "1", "--bwlimit", bwlimit, timeout=4 * 3600)
         else:
-            run("pct", "move-volume", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+            run("pct", "move-volume", vmid, key, target, "--delete", "1", "--bwlimit", bwlimit, timeout=4 * 3600)
         moved.append(key)
     return {"state": "done", "moved": moved}
 

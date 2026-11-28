@@ -389,6 +389,7 @@ func (e *Execution) MachineAction(tool string, a, t D) D {
 	case "machine_power":
 		return e.PowerMachine(m, a, t)
 	case "machine_resize":
+		refuseUnnormalizedImport(m)
 		spec = merge(pick(m, "cpu", "memory_mb", "disk_gb"), pick(a, "cpu", "memory_mb", "disk_gb"))
 		if num(spec["disk_gb"]) < num(m["disk_gb"]) {
 			fail("invalid", "Virtual disks cannot shrink")
