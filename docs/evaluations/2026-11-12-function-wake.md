@@ -1,5 +1,9 @@
 # Function wake time: microVM snapshots against containers
 
+> [!NOTE]
+> Functions were renamed services on 2026-11-28 (#908). This report keeps the word it was written
+> with; the scripts in the fixtures use the current names.
+
 These experiments ran on 2026-11-12 to decide if carrel should offer functions (PLAN 7.11): code
 that uses no memory while it has no work and wakes when a request arrives. They answer four
 questions. How fast is a wake? How many sleeping functions fit on one host? How long does a

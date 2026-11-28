@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""End-to-end check of carrel-fnd on a function host: reuse, idle sleep, fresh, clock, overlay, jail.
+"""End-to-end check of carrel-svcd on a service host: reuse, idle sleep, fresh, clock, overlay, jail.
 
-Run as root on the function host while `carrel-fnd serve` listens on 127.0.0.1:8090.
-Functions `py` (reuse, idle 3 s, 512 MiB) and `job` (fresh) must be built from the test image.
+Run as root on the service host while `carrel-svcd serve` listens on 127.0.0.1:8090.
+Services `py` (reuse, idle 3 s, 512 MiB) and `job` (fresh) must be built from the test image.
 """
 import glob, json, os, subprocess, time, urllib.request
 
 ROOT = "/var/lib/carrel-fn"
 
 def call(name, path="/"):
-    req = urllib.request.Request("http://127.0.0.1:8090" + path, headers={"X-Carrel-Function": name})
+    req = urllib.request.Request("http://127.0.0.1:8090" + path, headers={"X-Carrel-Service": name})
     t = time.monotonic()
     with urllib.request.urlopen(req, timeout=30) as r:
         body = json.load(r)
@@ -56,7 +56,7 @@ check("jail: process limit", open(f"/sys/fs/cgroup{cgroup}/pids.max").read().str
 netns = os.readlink(f"/proc/{pid}/ns/net")
 check("jail: own network namespace", netns != os.readlink("/proc/self/ns/net"), netns)
 seen = sorted(os.listdir(root + "/fn"))
-check("jail: sees only its own function files", seen == ["rootfs.ext4", "snap.mem", "snap.state"], str(seen))
+check("jail: sees only its own service files", seen == ["rootfs.ext4", "snap.mem", "snap.state"], str(seen))
 # disk: the instance can create no file in its jail, and no file may grow
 dirs = [d for d, _, _ in os.walk(root)]
 mine = [d for d in dirs if os.stat(d).st_uid != 0 or os.stat(d).st_mode & 0o022]
@@ -72,7 +72,7 @@ check("disk: Firecracker holds no writable host file, its log included", files =
 check("disk: the serial output goes to a pipe", any(h.startswith("pipe:") for h in held))
 modes = {oct(os.stat(f).st_mode & 0o777) for f in glob.glob(ROOT + "/py/v/*/*")}
 owners = {os.stat(f).st_uid for f in glob.glob(ROOT + "/py/v/*/*")}
-check("jail: function files are read-only and owned by root", modes == {"0o440"} and owners == {0}, f"{modes} {owners}")
+check("jail: service files are read-only and owned by root", modes == {"0o440"} and owners == {0}, f"{modes} {owners}")
 
 # idle: the instance stops after idle_seconds (3 here), then wakes again
 time.sleep(5)
@@ -82,7 +82,7 @@ check("jail: directory and cgroup are removed after sleep", left == [], str(left
 wakes = []
 for _ in range(15):
     wakes.append(call("py")[0]); time.sleep(4.5)
-stats("reuse: request that wakes the function", wakes)
+stats("reuse: request that wakes the service", wakes)
 
 # fresh: a new microVM per request, gone after the answer
 fresh = [call("job")[0] for _ in range(30)]
@@ -93,11 +93,11 @@ a, b = call("job", "/rand")[1], call("job", "/rand")[1]
 check("fresh: kernel randomness differs between instances", a["urandom"] != b["urandom"])
 check("fresh: guest clock is current", abs(b["time"] - time.time()) < 1.0)
 
-# overlay: the function can write, and the write is gone in the next instance
+# overlay: the service can write, and the write is gone in the next instance
 w1 = call("job", "/write")[1]; w2 = call("job", "/write")[1]
 check("overlay: root file system is writable", w1.get("wrote") is True, str(w1))
 check("overlay: writes do not survive the instance", w1.get("seen_before") is False and w2.get("seen_before") is False, str(w2))
-# egress: a function reaches the internet and public names, and no private address.
+# egress: a service reaches the internet and public names, and no private address.
 # Each blocked target accepts connections from the host itself, so a refusal is the filter's work.
 import socket
 probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect(("1.1.1.1", 53))
@@ -114,7 +114,7 @@ resolved = call("job", "/resolve?name=example.com")[1]
 check("egress: resolves a public name", resolved["ok"], str(resolved))
 link = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True).stdout
 link_addr = next(line.split()[3].split("/")[0] for line in link.splitlines() if line.split()[1].startswith("cfnv"))
-for label, host, port in [("the function host's own address", host_addr, 22),
+for label, host, port in [("the service host's own address", host_addr, 22),
                           ("the host's end of an egress link", link_addr, 22)]:
     check(f"egress control: the host itself reaches {label}", from_host(host, port), f"{host}:{port}")
     check(f"egress: cannot reach {label}", connect(host, port)["ok"] is False, f"{host}:{port}")
@@ -171,7 +171,7 @@ ms, body = call("py", "/udp?host=198.51.100.1&port=9&n=2000")
 left = tx("eth0") - before
 check("limits: one UDP flow is not cut by the new-connection limit", left >= 1900, f"{left} of 2000 left in {body.get('seconds', 0):.2f} s")
 start = time.monotonic()
-req = urllib.request.Request("http://127.0.0.1:8090/big?mib=40", headers={"X-Carrel-Function": "py"})
+req = urllib.request.Request("http://127.0.0.1:8090/big?mib=40", headers={"X-Carrel-Service": "py"})
 size = len(urllib.request.urlopen(req, timeout=60).read())
 mbit = size * 8 / (time.monotonic() - start) / 1e6
 check("limits: an answer to the router is limited too", size == 40 << 20 and mbit < 110, f"{mbit:.0f} Mbit/s")
@@ -188,17 +188,17 @@ left = [l for l in subprocess.run(["conntrack", "-L"], capture_output=True, text
 check("limits: no slot leaves connections in the host's table", body.get("held", 0) > 0 and left == [], f"held {body.get('held')}, left {len(left)}")
 
 # images: pulled from a registry with no Docker daemon, and an image whose USER is not root.
-# Functions `whoami` (traefik/whoami) and `nginx` (nginxinc/nginx-unprivileged, port 8080) must be built, with -idle 3.
-if os.path.exists(ROOT + "/whoami/function.json") and os.path.exists(ROOT + "/nginx/function.json"):
+# Services `whoami` (traefik/whoami) and `nginx` (nginxinc/nginx-unprivileged, port 8080) must be built, with -idle 3.
+if os.path.exists(ROOT + "/whoami/service.json") and os.path.exists(ROOT + "/nginx/service.json"):
     def raw(name):
-        req = urllib.request.Request("http://127.0.0.1:8090/", headers={"X-Carrel-Function": name})
+        req = urllib.request.Request("http://127.0.0.1:8090/", headers={"X-Carrel-Service": name})
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, r.read().decode(errors="replace")
     status, body = raw("whoami")
-    check("image: a function pulled from a registry answers", status == 200 and "Hostname" in body, body[:40].replace("\n", " "))
+    check("image: a service pulled from a registry answers", status == 200 and "Hostname" in body, body[:40].replace("\n", " "))
     status, body = raw("nginx")
-    check("image: a function whose image user is not root answers", status == 200 and "nginx" in body.lower())
+    check("image: a service whose image user is not root answers", status == 200 and "nginx" in body.lower())
     log = "".join(open(f, errors="replace").read() for f in glob.glob(ROOT + "/nginx/*log"))  # build.log and log
-    check("image: its output reaches the function's log", "start worker process" in log and "GET / HTTP" in log)
+    check("image: its output reaches the service's log", "start worker process" in log and "GET / HTTP" in log)
     time.sleep(5)  # both are built with -idle 3, so they are asleep again for the next run
 print("RESULT", "all pass" if all(results) else "FAILED")
