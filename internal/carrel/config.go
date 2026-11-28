@@ -25,6 +25,10 @@ type Config struct {
 	OIDC          OIDCConfig `json:"oidc,omitempty"`
 	Database      string     `json:"database"`
 	PublicAddress string     `json:"public_address"`
+	// SkillsHidden lists skills that skills_list and skill_get do not show,
+	// so a bench can hide one for its control arm. It is server config, not a
+	// tool argument, so the agent under test cannot see or change its arm.
+	SkillsHidden []string `json:"skills_hidden,omitempty"`
 	// Site names this control plane's site in catalog_get, such as b09.
 	Site string `json:"site,omitempty"`
 	// Domain is the site's own DNS zone: tenants get *.<slug>.<domain>.

@@ -90,6 +90,10 @@ func (e *Execution) Dispatch(tool string, a, w D) (D, any) {
 		return D{"service": merge(D{"name": "carrel"}, Build()), "images": Contract["images"], "vm_environment": e.P.Config.VMEnvironment, "sizes": Contract["sizes"], "units": Units, "capabilities": e.capabilities(), "sites": e.P.sites(), "machine_kinds": D{"vm": "Supports packages, runcmd, health_checks and nested virtualization; use for Docker, Mininet and databases.", "ct": "Lightweight container; packages, runcmd, health_checks and nested virtualization are unsupported. Configure applications over SSH after creation."}}, nil
 	case "capacity_get":
 		return D{"capacity": e.Capacity(nil, true)}, nil
+	case "skills_list":
+		return e.skillsList(), nil
+	case "skill_get":
+		return e.skillGet(str(a["name"])), nil
 	}
 	if named("admin_tools", tool) {
 		if !boolean(w["admin"]) {
