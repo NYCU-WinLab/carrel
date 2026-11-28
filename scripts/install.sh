@@ -85,7 +85,13 @@ if [[ -n $join ]]; then
 		if [[ -n $(qm list 2>/dev/null | tail -n +2) || -n $(pct list 2>/dev/null | tail -n +2) ]]; then
 			die "a joining host must hold no guests"
 		fi
+		# pvecm add exits 0 even when it stops early, for example when
+		# ssh-copy-id cannot reach root on the existing node, so check the
+		# result instead of the exit status.
 		run pvecm add "$join" --use_ssh 1
+		if [[ ${CARREL_DRY_RUN:-} != 1 && ! -f /etc/pve/corosync.conf ]]; then
+			die "pvecm add $join did not join the cluster; root on this host must reach root@$join over SSH without a prompt, host key included"
+		fi
 	fi
 fi
 
