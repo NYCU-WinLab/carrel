@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -55,10 +56,53 @@ func sourceWrite(ctx context.Context, client *http.Client, method, base, tokenID
 		fail("invalid", "The source refused the token for this change; it needs permission to modify and migrate the guest", D{"recovery": "revise_request"})
 	}
 	var d D
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&d) != nil {
+	body := io.LimitReader(resp.Body, 1<<20)
+	if resp.StatusCode != http.StatusOK {
+		fail("backend_unavailable", "The source refused the request"+sourceReason(body), D{"component": "source", "backend_code": "source_refused", "recovery": "retry_infrastructure"})
+	}
+	if json.NewDecoder(body).Decode(&d) != nil {
 		fail("backend_unavailable", "The source refused the request", D{"component": "source", "backend_code": "source_request_failed", "recovery": "retry_infrastructure"})
 	}
 	return d
+}
+
+var (
+	// sourceEndpointSecret matches the target-endpoint string carrel sends to
+	// remote_migrate, which holds the target's API token.
+	sourceEndpointSecret = regexp.MustCompile(`apitoken=\S*|PVEAPIToken=\S*`)
+	sourceWhitespace     = regexp.MustCompile(`\s+`)
+)
+
+// sourceReason reads the message Proxmox put in a refusal, so the operation
+// names the real cause (a privilege the token lacks) and not only that the
+// source refused. The target endpoint string, which carries the target's
+// token, is removed, and the text is cut short.
+func sourceReason(body io.Reader) string {
+	var d D
+	if json.NewDecoder(body).Decode(&d) != nil {
+		return ""
+	}
+	parts := []string{}
+	if m := str(d["message"]); m != "" {
+		parts = append(parts, m)
+	}
+	keys := []string{}
+	for k := range obj(d["errors"]) {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+": "+str(obj(d["errors"])[k]))
+	}
+	text := sourceWhitespace.ReplaceAllString(strings.TrimSpace(strings.Join(parts, "; ")), " ")
+	text = sourceEndpointSecret.ReplaceAllString(text, "[target endpoint removed]")
+	if text == "" {
+		return ""
+	}
+	if r := []rune(text); len(r) > 300 {
+		text = string(r[:300]) + "..."
+	}
+	return ": " + text
 }
 
 // sourceTask waits for a task of the source to stop and returns whether it
@@ -174,6 +218,29 @@ func (e *Execution) importStart(a D, c importContext, plan D) D {
 	e.Op["import"] = job
 	e.P.Operations.Save(e.Op)
 	return D{"machine": D{"name": name}, "state": "importing", "plan": plan["plan"]}
+}
+
+// importResume turns a retried import back into its saved job: the record
+// this operation holds as import_failed keeps its VMID and quota, so the job
+// continues from Op["import"] instead of planning and reserving again, which
+// its own record would refuse as a duplicate. It reports false when there is
+// nothing to resume (the record was removed, or the job never started).
+func (e *Execution) importResume() (D, bool) {
+	job := obj(e.Op["import"])
+	if job == nil || e.Op["id"] == nil {
+		return nil, false
+	}
+	m := e.S.Get("machines", str(integer(job["target_vmid"])))
+	if m == nil || m["state"] != "import_failed" || m["operation_id"] != e.Op["id"] {
+		return nil, false
+	}
+	m["state"] = "importing"
+	if rec := obj(m["import"]); rec != nil {
+		delete(rec, "failed_at")
+		m["import"] = rec
+	}
+	e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
+	return D{"machine": D{"name": m["name"]}, "state": "importing"}, true
 }
 
 func pickImport(job D) D { return pick(job, "source", "guest", "kind") }
@@ -377,7 +444,16 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	note("step", "remote_migrate")
 	// From here the guest may exist on the target: a failure keeps the record.
 	note("migrate_sent", true)
-	r := sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/remote_migrate", form)
+	var r D
+	if f := attempt(func() { r = sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/remote_migrate", form) }); f != nil {
+		// A non-200 refusal means the source started nothing, so a retry may
+		// send the request again. Any other failure, including a 200 whose
+		// body does not decode, leaves the outcome unknown.
+		if failure, ok := f.(Failure); ok && obj(failure.Result["error"])["backend_code"] == "source_refused" {
+			note("migrate_sent", false)
+		}
+		panic(f)
+	}
 	upid := str(r["data"])
 	if matches(`^UPID:[A-Za-z0-9.:@!_-]{1,300}$`, upid) {
 		note("upid", upid)
