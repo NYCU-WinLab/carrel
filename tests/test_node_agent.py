@@ -3059,3 +3059,41 @@ def test_a_retried_create_keeps_the_user_file_a_reset_wrote(monkeypatch, tmp_pat
     assert got["state"] == "exists"
     assert (snippets / "carrel-10100-user.json").read_text() == reset
     assert got["cloud_init"]["user"] == reset
+
+
+@pytest.mark.parametrize(
+    "kind,tool,existing,expected",
+    [
+        ("vm", "qm", None, "carrel;tenant-1"),
+        ("ct", "pct", None, "carrel;tenant-1"),
+        ("vm", "qm", "keep;carrel", "keep;carrel;tenant-1"),
+        ("ct", "pct", "keep;carrel;tenant-1", None),
+    ],
+)
+def test_import_finish_tags_the_guest_once(monkeypatch, kind, tool, existing, expected):
+    module = load("node-agent.py")
+    config = {} if existing is None else {"tags": existing}
+    monkeypatch.setattr(module, "pve_get", lambda *a: config)
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    monkeypatch.setattr(module, "storage_id", lambda: "tank")
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    req = {"tenant_n": 1, "vmid": 10100, "kind": kind, "hop_storage": "", "bwlimit": 51200}
+    assert module.import_finish(req) == {"state": "done", "moved": []}
+    if expected is None:
+        assert calls == []
+    else:
+        assert calls == [(tool, "set", 10100, "--tags", expected)]
+
+
+@pytest.mark.parametrize("change", [{"bwlimit": 0}, {"hop_storage": "Bad Hop"}, {"kind": "pod"}])
+def test_import_finish_validates_before_tagging(monkeypatch, change):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "pve_get", lambda *a: {})
+    monkeypatch.setattr(module, "NODE", "pve1", raising=False)
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *a, **k: calls.append(a) or "")
+    req = {"tenant_n": 1, "vmid": 10100, "kind": "vm", "hop_storage": "local", "bwlimit": 51200, **change}
+    with pytest.raises(ValueError):
+        module.import_finish(req)
+    assert calls == []

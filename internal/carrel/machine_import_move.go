@@ -321,10 +321,16 @@ func (e *Execution) moveGuest(job D) {
 		note("migrated", true)
 	}
 
+	// Tags the guest too, so the node agent accepts it (#917); without a hop
+	// there is no volume to move and no hop storage to name.
+	hopStorage := ""
 	if job["hop"] == true {
 		note("step", "move_volumes")
-		e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": cfg.ImportHopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
+		hopStorage = cfg.ImportHopStorage
+	} else {
+		note("step", "tag_guest")
 	}
+	e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": hopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
 }
 
 // startMigration prepares the guest on the source, sends remote_migrate and
@@ -489,4 +495,17 @@ func (e *Execution) FinishMachineImport(t D) D {
 		r["stopped_with"] = used
 	}
 	return r
+}
+
+// importNotNormalized lists the states of an imported machine whose network
+// is not normalized yet (PLAN 10.6). Its tags let the node agent act on it,
+// so the control plane must refuse anything that boots or changes it.
+var importNotNormalized = []string{"importing", "import_failed", "imported_unverified"}
+
+// refuseUnnormalizedImport fails with a conflict for an imported machine that
+// is not normalized yet. Reading, stopping and deleting it stay allowed.
+func refuseUnnormalizedImport(m D) {
+	if contains(importNotNormalized, m["state"]) {
+		fail("conflict", "The imported machine is not normalized yet", D{"state": m["state"], "recovery": "resolve_prerequisite"})
+	}
 }

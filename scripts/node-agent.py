@@ -2281,29 +2281,35 @@ def migrate_finish(req):
 def import_finish(req):
     """On the target, after a remote migration (PLAN 10.6): every volume that
     landed on the hop directory storage moves to the guest storage. The guest
-    is not tagged yet (normalization does that), so the VMID range of its
-    tenant is the proof that carrel allocated it."""
+    is not tagged yet, so the VMID range of its tenant is the proof that carrel
+    allocated it. Tagging it `carrel` and `tenant-N` comes first, keeping the
+    tags it has, so that owned() accepts it from then on (#917)."""
     n = integer(req["tenant_n"], 1, 254)
     vmid = integer(req["vmid"], 10000 + n * 100, 10099 + n * 100)
     if req["kind"] not in ("vm", "ct"):
         raise ValueError("invalid machine kind")
     hop = req["hop_storage"]
-    if not isinstance(hop, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", hop):
+    if not isinstance(hop, str) or (hop and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", hop)):
         raise ValueError("invalid hop storage")
+    bwlimit = migration_bwlimit(req)  # validated before the tags are written
     kind = "qemu" if req["kind"] == "vm" else "lxc"
     cfg = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config")
+    have = [t for t in str(cfg.get("tags", "")).split(";") if t]
+    want = [t for t in ("carrel", f"tenant-{n}") if t not in have]
+    if want:
+        run("qm" if kind == "qemu" else "pct", "set", vmid, "--tags", ";".join(have + want))
     keys = r"(virtio|scsi|sata|ide)[0-9]+|efidisk0|tpmstate0" if kind == "qemu" else r"rootfs|mp[0-9]+"
     target = storage_id()
     moved = []
     for key, value in sorted(cfg.items()):
         if not re.fullmatch(keys, key) or not isinstance(value, str):
             continue
-        if value.split(",")[0].partition(":")[0] != hop or "media=cdrom" in value.split(","):
+        if not hop or value.split(",")[0].partition(":")[0] != hop or "media=cdrom" in value.split(","):
             continue
         if kind == "qemu":
-            run("qm", "disk", "move", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+            run("qm", "disk", "move", vmid, key, target, "--delete", "1", "--bwlimit", bwlimit, timeout=4 * 3600)
         else:
-            run("pct", "move-volume", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+            run("pct", "move-volume", vmid, key, target, "--delete", "1", "--bwlimit", bwlimit, timeout=4 * 3600)
         moved.append(key)
     return {"state": "done", "moved": moved}
 

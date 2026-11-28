@@ -22,7 +22,8 @@ func observePower(machine, status D) {
 	if state != "running" || old != "running" {
 		machine["ssh_ready"] = false
 		obj(machine["readiness"])["ssh_ready"] = false
-		if state != "running" || !contains([]string{"initializing", "provisioning"}, machine["state"]) {
+		// An import state stays until the network is normalized.
+		if !contains(importNotNormalized, machine["state"]) && (state != "running" || !contains([]string{"initializing", "provisioning"}, machine["state"])) {
 			machine["state"] = state
 		}
 	}
@@ -35,6 +36,9 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	}
 	if (action == "pause" || action == "resume") && m["kind"] != "vm" {
 		fail("invalid", "Pause and resume require a VM. CT checkpoint/hibernation is unsupported; shutdown is a different operation that loses running processes.")
+	}
+	if action == "start" || action == "reboot" || action == "resume" {
+		refuseUnnormalizedImport(m)
 	}
 	if boolean(a["dry_run"]) {
 		return D{"dry_run": true, "quota_after": e.Quota(t)}
@@ -78,7 +82,12 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	}
 	// Mirrors the onboot flag the node agent sets: only a running result keeps it.
 	m["onboot"] = state == "running"
+	importState := m["state"]
 	m["state"], m["power_state"], m["ssh_ready"] = state, state, false
+	if contains(importNotNormalized, importState) {
+		// Stopping an imported machine must not lift the normalization gate.
+		m["state"] = importState
+	}
 	if state == "running" {
 		m["state"] = bootState(m)
 		if action == "start" || action == "reboot" {
