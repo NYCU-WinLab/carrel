@@ -14,7 +14,7 @@ import (
 // machine_import (PLAN 10.6). This file holds the plan: dry_run reads the
 // guest's configuration from a registered source (sources.go) and says what
 // an import would do. It reserves, allocates and changes nothing on either
-// side. The call with confirm is not built yet.
+// side. The confirmed import is in machine_import_move.go.
 
 // importTargetStorage is the storage the guest lands on (PLAN 10.6).
 const (
@@ -79,14 +79,61 @@ func importDisks(config D, storageTypes map[string]string) []importDisk {
 	return disks
 }
 
-// MachineImport runs machine_import.
+// importContext is what a plan learned about the guest and the target; the
+// confirmed import acts on the same facts.
+type importContext struct {
+	Tenant, Config, Plan                   D
+	Source, SourceNode, API, Kind, TokenID string
+	URL, Fingerprint                       string
+	VMID, N, Slot                          int
+	Running, CloudInit, Hop                bool
+	Disks                                  []importDisk
+	Delta                                  D
+	DiskGiB, CPU, Memory                   float64
+	Target                                 nodeRef
+}
+
+// MachineImport runs machine_import: dry_run plans, confirm moves the guest.
 func (e *Execution) MachineImport(a, w D) D {
-	if !boolean(a["dry_run"]) {
-		if boolean(a["confirm"]) {
-			fail("not_implemented", "machine_import with confirm is not built yet; run it with dry_run to see the plan")
-		}
-		fail("invalid", "Give dry_run: true. machine_import only plans for now", D{"recovery": "revise_request"})
+	if !boolean(a["dry_run"]) && !boolean(a["confirm"]) {
+		fail("invalid", "Give dry_run: true to plan, or confirm: true to run the import", D{"recovery": "revise_request"})
 	}
+	r, c := e.importPlan(a)
+	if boolean(a["dry_run"]) {
+		return r
+	}
+	return e.importStart(a, c, r)
+}
+
+// importPlace picks the node the guest lands on. Proxmox remote migration
+// puts it on the node behind import_target_endpoint, whose certificate the
+// pinned fingerprint names, so with import_target_node set that node is the
+// only choice; without it the plan shows where Place would put the machine.
+func (e *Execution) importPlace(cpu, memory, disk float64) (nodeRef, D) {
+	name := e.P.Config.ImportTargetNode
+	if name == "" {
+		return e.Place(cpu, memory, disk)
+	}
+	node, ok := e.nodeNamed(name)
+	if !ok {
+		fail("invalid", "import_target_node is not a configured node", D{"recovery": "contact_administrator"})
+	}
+	if e.drained(name) {
+		fail("conflict", "The import target node is drained", D{"recovery": "resolve_prerequisite", "node": name})
+	}
+	var admission D
+	if f := attempt(func() { admission, _ = e.admitOn(node, cpu, memory, disk, nil, false) }); f != nil {
+		if failure, ok := f.(Failure); ok && obj(failure.Result["error"])["code"] == "capacity_exhausted" {
+			fail("conflict", "The import target node has no room for this guest", merge(pick(obj(failure.Result["error"]), "dimension", "requested", "remaining"), D{"recovery": "resolve_prerequisite", "node": name}))
+		}
+		panic(f)
+	}
+	return node, admission
+}
+
+// importPlan reads the guest from its source and works out the import. It
+// reserves, allocates and changes nothing.
+func (e *Execution) importPlan(a D) (D, importContext) {
 	t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
 	if t == nil {
 		fail("not_found", "Tenant not found", D{"recovery": "revise_request"})
@@ -129,6 +176,42 @@ func (e *Execution) MachineImport(a, w D) D {
 	running := guest["status"] == "running"
 	disks := importDisks(config, storageTypes)
 
+	// Guests the import cannot move safely are refused here, before confirm
+	// touches the source: HA would force-stop the guest on shutdown and
+	// Proxmox refuses to migrate it, protection blocks the cloud-init delete,
+	// detached volumes would be copied but never counted or moved, and one
+	// migration takes one target storage.
+	if str(guest["hastate"]) != "" {
+		fail("conflict", "The guest is managed by Proxmox HA on the source; remove it from HA there first", D{"recovery": "resolve_prerequisite"})
+	}
+	if num(config["protection"]) != 0 {
+		fail("conflict", "The guest has protection set on the source; clear it there first", D{"recovery": "resolve_prerequisite"})
+	}
+	for key, value := range config {
+		if matches(`^unused[0-9]+$`, key) {
+			fail("conflict", "The guest has a detached disk ("+key+"); delete or reattach it on the source first", D{"recovery": "resolve_prerequisite"})
+		}
+		// An attached ISO would travel with the guest and stop the move.
+		v := str(value)
+		if importDiskKey.MatchString(key) && strings.Contains(v, "media=cdrom") && !strings.HasPrefix(v, "none") && !strings.Contains(strings.SplitN(v, ",", 2)[0], "cloudinit") {
+			fail("conflict", "The guest has an ISO in "+key+"; eject it on the source first", D{"recovery": "resolve_prerequisite"})
+		}
+	}
+	zfs, other := false, false
+	for _, d := range disks {
+		if d.CloudInit {
+			continue
+		}
+		if d.Type == "zfspool" {
+			zfs = true
+		} else {
+			other = true
+		}
+	}
+	if zfs && other {
+		fail("conflict", "The guest has disks on ZFS and on other storage; move them to one kind on the source first", D{"recovery": "resolve_prerequisite"})
+	}
+
 	// What it would take: sizes, quota, the target slot. Nothing is written.
 	var diskGiB float64
 	volumes := []D{}
@@ -152,16 +235,17 @@ func (e *Execution) MachineImport(a, w D) D {
 	delta := D{"vcpu": cpu, "memory_mb": memory, "disk_gb": math.Ceil(diskGiB), "machines": 1, "ips": 1, "public_ports": 0}
 	n := integer(t["n"])
 	slot := e.freeSlot(t)
-	target, admission := e.Place(cpu, memory, math.Ceil(diskGiB))
+	target, admission := e.importPlace(cpu, memory, math.Ceil(diskGiB))
 
 	// Which way the disks move (PLAN 10.6, storage rules).
 	allZFS, hasCloudInit, offline := true, false, []string{}
 	for _, d := range disks {
 		hasCloudInit = hasCloudInit || d.CloudInit
-		if d.Type != "zfspool" {
+		// The cloud-init disk is dropped, so it does not decide the path.
+		if d.Type != "zfspool" && !d.CloudInit {
 			allZFS = false
 		}
-		if !running || kind == "ct" || d.CloudInit {
+		if !d.CloudInit {
 			offline = append(offline, d.Key)
 		}
 	}
@@ -182,11 +266,8 @@ func (e *Execution) MachineImport(a, w D) D {
 	if len(offline) > 0 && path == "directory_hop" {
 		warnings = append(warnings, "Offline volumes ("+strings.Join(offline, ", ")+") need a directory storage on the target")
 	}
-	if running && kind == "ct" {
-		warnings = append(warnings, "The container is stopped first; the import reports whether pct shutdown or pct stop was used")
-	}
-	if running && kind == "vm" {
-		warnings = append(warnings, "The source is stopped by the migration and stays stopped with lock: migrate as the rollback state")
+	if running {
+		warnings = append(warnings, "The guest is shut down first and moves offline; a container that does not shut down is stopped, a VM is not")
 	}
 	change("storage", "per disk", importTargetStorage+" ("+importTargetType+")")
 	net := "net0"
@@ -213,7 +294,7 @@ func (e *Execution) MachineImport(a, w D) D {
 		}
 	}
 
-	return D{
+	r := D{
 		"dry_run": true,
 		"plan": D{
 			"source": name, "guest": D{"vmid": vmid, "name": config["name"], "hostname": config["hostname"], "kind": kind, "node": node, "state": str(guest["status"])},
@@ -223,4 +304,7 @@ func (e *Execution) MachineImport(a, w D) D {
 		"quota_after":  e.Quota(t, delta),
 		"requirements": []any{},
 	}
+	return r, importContext{Tenant: t, Config: config, Plan: obj(r["plan"]), Source: name, SourceNode: node, API: api, Kind: kind, TokenID: tokenID,
+		URL: base, Fingerprint: str(rec["fingerprint"]), VMID: vmid, N: n, Slot: slot, Running: running, CloudInit: hasCloudInit, Hop: !allZFS,
+		Disks: disks, Delta: delta, DiskGiB: math.Ceil(diskGiB), CPU: cpu, Memory: memory, Target: target}
 }

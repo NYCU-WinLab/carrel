@@ -10,14 +10,67 @@ import (
 	"testing"
 )
 
+// seenForms are the writes the fake source received; importFailTask names a
+// task (a path fragment of its ID) that ends in failure.
+var (
+	seenForms      []string
+	importFailTask = "none"
+	// importPollErrors is how many task reads fail before one answers.
+	importPollErrors int
+	// importGuestStatus, when set, is what status/current reports, one entry
+	// per read with the last one repeating. Unset, a guest runs as the
+	// inventory says until a shutdown or stop task for it succeeds.
+	importGuestStatus []string
+)
+
 // importFake is a source with one running VM on LVM-thin and one CT.
 func importFake(t *testing.T) (*httptest.Server, string, *[]string) {
 	t.Helper()
 	var seen []string
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Method+" "+r.URL.Path)
-		if r.Method != "GET" || r.Header.Get("Authorization") != "PVEAPIToken=carrel@pve!import="+testSourceSecret {
+		if r.Header.Get("Authorization") != "PVEAPIToken=carrel@pve!import="+testSourceSecret {
 			http.Error(w, `{"data":null}`, http.StatusUnauthorized)
+			return
+		}
+		if r.Method != "GET" {
+			r.ParseForm()
+			seenForms = append(seenForms, r.Method+" "+r.URL.Path+" "+r.PostForm.Encode())
+			fmt.Fprint(w, `{"data":"UPID:anvil:0001:0002:0003:`+strings.ReplaceAll(strings.Trim(r.URL.Path[len("/api2/json/nodes/anvil/"):], "/"), "/", "-")+`:root@pam:"}`)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/tasks/") {
+			if importPollErrors > 0 {
+				importPollErrors--
+				http.Error(w, `{"data":null}`, http.StatusInternalServerError)
+				return
+			}
+			status := "OK"
+			if strings.Contains(r.URL.Path, importFailTask) {
+				status = "command failed"
+			}
+			fmt.Fprintf(w, `{"data":{"status":"stopped","exitstatus":%q}}`, status)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/status/current") {
+			status := "stopped"
+			if len(importGuestStatus) > 0 {
+				status = importGuestStatus[0]
+				if len(importGuestStatus) > 1 {
+					importGuestStatus = importGuestStatus[1:]
+				}
+			} else if strings.Contains(r.URL.Path, "/104/") || strings.Contains(r.URL.Path, "/106/") || strings.Contains(r.URL.Path, "/109/") {
+				status = "running"
+				guest := strings.TrimSuffix(r.URL.Path[len("/api2/json/nodes/anvil/"):], "status/current")
+				for _, f := range seenForms {
+					for _, op := range []string{"shutdown", "stop"} {
+						if strings.Contains(f, guest+"status/"+op) && !strings.Contains("status-"+op, importFailTask) {
+							status = "stopped"
+						}
+					}
+				}
+			}
+			fmt.Fprintf(w, `{"data":{"status":%q}}`, status)
 			return
 		}
 		switch r.URL.Path {
@@ -26,9 +79,20 @@ func importFake(t *testing.T) (*httptest.Server, string, *[]string) {
 		case "/api2/json/storage":
 			fmt.Fprint(w, `{"data":[{"storage":"local","type":"dir"},{"storage":"local-lvm","type":"lvmthin"},{"storage":"tank","type":"zfspool"}]}`)
 		case "/api2/json/cluster/resources":
-			fmt.Fprint(w, `{"data":[{"vmid":104,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":105,"type":"lxc","node":"anvil","status":"stopped"},{"vmid":9000,"type":"qemu","node":"anvil","status":"stopped","template":1}]}`)
+			fmt.Fprint(w, `{"data":[{"vmid":104,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":105,"type":"lxc","node":"anvil","status":"stopped"},{"vmid":106,"type":"lxc","node":"anvil","status":"running","template":0},{"vmid":107,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":108,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":109,"type":"qemu","node":"anvil","status":"running","template":0},{"vmid":110,"type":"qemu","node":"anvil","status":"stopped","template":0,"hastate":"stopped"},{"vmid":111,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":112,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":113,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":114,"type":"qemu","node":"anvil","status":"stopped","template":0},{"vmid":9000,"type":"qemu","node":"anvil","status":"stopped","template":1}]}`)
 		case "/api2/json/nodes/anvil/qemu/104/config":
-			fmt.Fprint(w, `{"data":{"name":"sandbox","cores":4,"sockets":1,"memory":8192,"cpu":"host","scsi0":"local-lvm:vm-104-disk-0,size=32G","ide2":"local-lvm:vm-104-cloudinit,media=cdrom,size=4M","ide0":"local:iso/x.iso,media=cdrom","net0":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig0":"ip=dhcp","cicustom":"user=local:snippets/u.yaml"}}`)
+			fmt.Fprint(w, `{"data":{"name":"sandbox","cores":4,"sockets":1,"memory":8192,"cpu":"host","scsi0":"local-lvm:vm-104-disk-0,size=32G","ide2":"local-lvm:vm-104-cloudinit,media=cdrom,size=4M","ide0":"none,media=cdrom","net0":"virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0","ipconfig0":"ip=dhcp","cicustom":"user=local:snippets/u.yaml"}}`)
+		case "/api2/json/nodes/anvil/lxc/106/config":
+			fmt.Fprint(w, `{"data":{"hostname":"Web_CT","cores":1,"memory":512,"rootfs":"local-lvm:vm-106-disk-0,size=4G","net0":"name=eth0,bridge=vmbr0,ip=10.0.0.6/24"}}`)
+		case "/api2/json/nodes/anvil/qemu/107/config":
+			fmt.Fprint(w, `{"data":{"name":"cold","cores":2,"sockets":1,"memory":2048,"scsi0":"local-lvm:vm-107-disk-0,size=10G","net0":"virtio=AA:BB:CC:DD:EE:00,bridge=vmbr0"}}`)
+		case "/api2/json/nodes/anvil/qemu/108/config":
+			fmt.Fprint(w, `{"data":{"name":"huge","cores":2,"sockets":1,"memory":2097152,"scsi0":"tank:vm-108-disk-0,size=10G","net0":"virtio=AA:BB:CC:DD:EE:08,bridge=vmbr0"}}`)
+		case "/api2/json/nodes/anvil/qemu/109/config":
+			fmt.Fprint(w, `{"data":{"name":"zfsvm","cores":1,"sockets":1,"memory":1024,"scsi0":"tank:vm-109-disk-0,size=8G","ide2":"local-lvm:vm-109-cloudinit,media=cdrom,size=4M","net0":"virtio=AA:BB:CC:DD:EE:09,bridge=vmbr0"}}`)
+		case "/api2/json/nodes/anvil/qemu/110/config", "/api2/json/nodes/anvil/qemu/111/config", "/api2/json/nodes/anvil/qemu/112/config", "/api2/json/nodes/anvil/qemu/113/config", "/api2/json/nodes/anvil/qemu/114/config":
+			extra := map[string]string{"110": ``, "111": `,"protection":1`, "112": `,"scsi1":"tank:vm-112-disk-1,size=4G"`, "113": `,"unused0":"local-lvm:vm-113-disk-1"`, "114": `,"ide0":"local:iso/x.iso,media=cdrom"`}[r.URL.Path[len("/api2/json/nodes/anvil/qemu/"):][:3]]
+			fmt.Fprint(w, `{"data":{"name":"odd","cores":1,"memory":1024,"scsi0":"local-lvm:vm-1xx-disk-0,size=4G","net0":"virtio=AA:BB:CC:DD:EE:10,bridge=vmbr0"`+extra+`}}`)
 		case "/api2/json/nodes/anvil/lxc/105/config":
 			fmt.Fprint(w, `{"data":{"hostname":"ct","cores":2,"memory":1024,"rootfs":"tank:subvol-105-disk-0,size=8G","net0":"name=eth0,bridge=vmbr0,ip=10.0.0.5/24"}}`)
 		default:
@@ -112,18 +176,6 @@ func TestMachineImportDryRun(t *testing.T) {
 		if r := run(a, admin); r["ok"] == true || obj(r["error"])["code"] != "not_found" {
 			t.Errorf("%v: %v", bad, r)
 		}
-	}
-
-	// confirm is not built; neither is a call without dry_run.
-	conf := args(104)
-	delete(conf, "dry_run")
-	conf["confirm"] = true
-	if r := run(conf, admin); r["ok"] == true || obj(r["error"])["code"] != "not_implemented" {
-		t.Errorf("confirm: %v", r)
-	}
-	delete(conf, "confirm")
-	if r := run(conf, admin); r["ok"] == true || obj(r["error"])["code"] != "invalid" {
-		t.Errorf("neither: %v", r)
 	}
 
 	// Nothing was allocated or changed.

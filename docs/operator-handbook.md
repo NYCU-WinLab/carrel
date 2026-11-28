@@ -610,13 +610,43 @@ row and a plugin record that differ` and change nothing. Compare the 2 rows with
 wrong one (`snapshots/<vmid>-<name>` or `plugin_objects/snapshot/snapshot/<vmid>/<name>` in
 `objects`) and run the move again. Do not touch PVE, or the tenant loses that snapshot.
 
+## Import sources
+
+`machine_import` needs two Proxmox API tokens, both with privilege separation. Staging (#902)
+ran with exactly these privileges:
+
+- **Source** (the old host, registered with `source_add`): `VM.Audit`, `VM.Migrate`,
+  `VM.Config.Disk`, `VM.Config.CDROM`, `VM.Config.Cloudinit`, `VM.PowerMgmt` and `Pool.Audit` on a
+  pool that holds only the guests to import, and `PVEAuditor` on `/storage`. The token then sees
+  no other guest.
+- **Target** (the node named by `import_target_node`): `Sys.Audit`, `Sys.Incoming`,
+  `VM.Allocate`, `VM.Audit`, `VM.PowerMgmt`, `VM.Config.*` (`Disk`, `CDROM`, `Cloudinit`, `CPU`,
+  `Memory`, `Network`, `Options`, `HWType`), `Datastore.AllocateSpace`, `Datastore.Audit` and
+  `SDN.Use` on `/`. Without `Sys.Audit` the source's `remote_migrate` fails at once, because it
+  reads `/cluster/status` on the target.
+
+Put the source secret in `source_dir/<name>.secret` and the target secret in
+`source_dir/_target.secret` (owner `carrel`, mode 0600), then call `source_add` without `secret`.
+The control plane must reach the source's API port. On `import_target_node`, the storage named by
+`import_hop_storage` (default `local`) must accept `images` and `rootdir`; a stock `local` does
+not, and the migration then fails after the guest was shut down. Revoke both tokens after the
+imports.
+
+`dry_run` and `confirm` refuse a guest under Proxmox HA, with `protection` set, with a detached
+(`unusedN`) disk, with an ISO attached, or with disks on both ZFS and other storage. Fix those on
+the source first. Once carrel asked the source to shut a guest down or change it, a failure keeps the
+machine as `import_failed`, like a failure after the migration started.
+
 ## Roll back an imported machine
 
 `machine_import` moves a guest with `qm remote-migrate` or `pct remote-migrate` (PLAN 10.6). The
 source on the old host ends stopped with `lock: migrate` and stays that way for 14 days as the
 rollback (PLAN 10.7). To go back:
 
-1. Stop the carrel machine and delete it, so the address and names are free.
+1. Stop the carrel machine and delete it, so the address and names are free. Until normalization
+   (#897) tags the guest, the node refuses to act on an `imported_unverified` machine: destroy the
+   guest on `import_target_node` with `qm destroy <vmid>` or `pct destroy <vmid>` first, then
+   `machine_delete` releases the record.
 2. On the old host, clear the lock: `qm unlock <vmid>` for a VM, `pct unlock <vmid>` for a CT.
 3. Start the source: `qm start <vmid>` or `pct start <vmid>`.
 4. Point the Cloudflare records back at the old gateway and check from outside the campus.
@@ -624,6 +654,11 @@ rollback (PLAN 10.7). To go back:
 Disks that were dropped before the move (the cloud-init disk) are not restored; recreate one if
 the old guest needs it. If the import report says `pct stop` was used instead of `pct shutdown`,
 check the guest's filesystem after the first start.
+
+A machine in state `import_failed` failed after the source was asked to migrate it: the guest may
+exist on `import_target_node` under that VMID, so carrel keeps the record, the VMID and the quota.
+Check the target with `qm config <vmid>` or `pct config <vmid>` and the source's task log, then
+either finish the move by hand or remove the partial guest on the target and delete the machine.
 
 ## Identity provider
 
