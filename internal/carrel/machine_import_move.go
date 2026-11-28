@@ -330,7 +330,87 @@ func (e *Execution) moveGuest(job D) {
 	} else {
 		note("step", "tag_guest")
 	}
-	e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": hopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
+	target := e.importTargetNode(str(job["target_node"]))
+	e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": hopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, target)
+	m := e.S.Get("machines", str(job["target_vmid"]))
+	if m == nil {
+		fail("not_found", "The imported machine record is gone")
+	}
+	// The network is normalized on the node that holds the guest, after the
+	// tags (#917). The call sets the same values again on a retry.
+	note("step", "normalize_network")
+	e.Call(D{"op": "import_network", "machine": m}, target)
+	// Then the guest boots and is checked (#920). A failed check is not a
+	// failed import: the guest is moved and normalized, so the result sets
+	// needs_owner_fix with the reason, and the owner fixes it.
+	note("step", "verify")
+	note("verify", e.verifyImported(m, target))
+}
+
+var (
+	// importVerifySeconds is how long a booted guest gets to report its
+	// address and open its SSH port. A variable so tests can shorten it.
+	importVerifySeconds = 120
+	// importVerifyPoll is how often the SSH port is tried again.
+	importVerifyPoll = 3 * time.Second
+)
+
+// verifyImported boots the guest and checks it from outside (PLAN 10.6): the
+// guest agent reports the new address, the SSH port answers and `guest-info`
+// answers. A CT has no guest agent: its address comes from the node and there
+// is no guest-info to read. It returns {"ok": true} or {"ok": false, "reason"}.
+// Every check that fails is named, so the owner sees all of them at once.
+func (e *Execution) verifyImported(m D, target string) D {
+	var out D
+	call := attempt(func() {
+		out = obj(e.Call(D{"op": "import_verify", "machine": m, "seconds": importVerifySeconds}, target))
+	})
+	if call != nil {
+		if e.P.ctx.Err() != nil || e.Ctx.Err() != nil {
+			panic(call)
+		}
+		return D{"ok": false, "reason": "The guest could not be started or read after the move"}
+	}
+	reasons := []string{}
+	ip := str(m["ip"])
+	found := false
+	for _, a := range arr(out["addresses"]) {
+		found = found || str(a) == ip
+	}
+	if !found {
+		reasons = append(reasons, "The guest does not report the address "+ip+"; check its network setup on the console")
+	}
+	probe := probeSSH
+	if e.P.sshProbe != nil {
+		probe = e.P.sshProbe
+	}
+	open := false
+	for deadline := time.Now().Add(time.Duration(importVerifySeconds) * time.Second); ; {
+		if open = probe(e.Ctx, m); open || !time.Now().Before(deadline) || !sleep(e.Ctx, importVerifyPoll) {
+			break
+		}
+	}
+	if !open {
+		reasons = append(reasons, "The SSH port 22 does not answer on "+ip)
+	}
+	if m["kind"] == "vm" {
+		if out["guest_info"] == nil {
+			reasons = append(reasons, "The guest agent does not answer guest-info")
+		}
+	}
+	if len(reasons) > 0 {
+		return D{"ok": false, "reason": strings.Join(reasons, "; ")}
+	}
+	r := D{"ok": true}
+	if info := obj(out["guest_info"]); out["guest_info"] != nil {
+		// Which commands stay enabled is what the owner checks (guest-exec).
+		enabled := false
+		for _, c := range arr(info["enabled"]) {
+			enabled = enabled || str(c) == "guest-exec"
+		}
+		r["guest_exec"] = enabled
+	}
+	return r
 }
 
 // startMigration prepares the guest on the source, sends remote_migrate and
@@ -477,7 +557,7 @@ func (e *Execution) importTargetNode(name string) string {
 	return n.Target
 }
 
-// FinishMachineImport records the machine as imported but not yet verified.
+// FinishMachineImport records the outcome of the verification.
 func (e *Execution) FinishMachineImport(t D) D {
 	job := obj(e.Op["import"])
 	if job == nil || e.Op["tool"] != "machine_import" {
@@ -487,15 +567,29 @@ func (e *Execution) FinishMachineImport(t D) D {
 	if m == nil {
 		fail("not_found", "The imported machine record is gone")
 	}
-	// The network is normalized on the node that holds the guest, after the
-	// tags (#917). The call sets the same values again on a retry.
-	e.Call(D{"op": "import_network", "machine": m}, e.importTargetNode(str(job["target_node"])))
-	m["state"] = "imported_unverified"
+	// The checks ran in the job (verifyImported). A pass leaves
+	// imported_unverified and keeps the machine usable; a failure sets
+	// needs_owner_fix with the reason, as a failed readiness does.
+	state := "needs_owner_fix"
+	verify := obj(job["verify"])
+	delete(m, "reason")
+	if verify["ok"] == true {
+		state = "running"
+		m["power_state"], m["network_verification"] = "running", "verified"
+		m["ssh_ready"], m["ssh_checked_at"] = true, now()
+	} else {
+		m["power_state"] = "running"
+		m["reason"] = textAt(verify, "reason", "The guest was not verified after the move")
+	}
+	m["state"] = state
 	e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
 	e.P.invalidateInventory()
-	r := D{"machine": D{"name": m["name"]}, "state": "imported_unverified", "source": D{"name": job["source"], "guest": job["guest"], "state": "stopped", "lock": "migrate"}}
+	r := D{"machine": D{"name": m["name"]}, "state": state, "source": D{"name": job["source"], "guest": job["guest"], "state": "stopped", "lock": "migrate"}}
 	if used := str(job["stopped_with"]); used != "" {
 		r["stopped_with"] = used
+	}
+	if state == "needs_owner_fix" {
+		r["reason"] = m["reason"]
 	}
 	return r
 }

@@ -41,6 +41,10 @@ func (b *fakeBackend) Call(ctx context.Context, r D, target string) (any, error)
 	if r["op"] == "storage_usage" {
 		return []D{}, nil
 	}
+	if r["op"] == "import_verify" {
+		// A guest that passes: the agent reports its address and guest-info.
+		return D{"state": "done", "addresses": []any{obj(r["machine"])["ip"]}, "guest_info": D{"version": "9.0", "enabled": []any{"guest-ping"}}}, nil
+	}
 	return D{"status": "running"}, nil
 }
 func (b *fakeBackend) count(op string) int {

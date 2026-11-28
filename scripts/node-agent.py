@@ -2343,6 +2343,48 @@ def import_network(req):
     return {"state": "done"}
 
 
+def import_verify(req):
+    """On the target, after normalization (PLAN 10.6, #920): boot the guest and
+    read what carrel checks from outside. A VM reports its addresses through
+    the guest agent's read-only network report and answers `guest-info` with
+    the commands it still allows; a CT has no agent, so lxc-info gives the
+    addresses. The control plane judges the result and probes the SSH port.
+    Nothing in the guest changes; a start of a running guest is skipped."""
+    m = req["machine"]
+    vmid = machine(m)
+    if located(m) != NODE:
+        raise ValueError("machine is not on this node")
+    owned(m)
+    seconds = integer(req.get("seconds", 120), 1, 240)
+    vm = m["kind"] == "vm"
+    kind = "qemu" if vm else "lxc"
+    status = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/status/current").get("status")
+    if status != "running":
+        run("qm" if vm else "pct", "start", vmid)
+    addresses, info = [], None
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            if vm:
+                report = json.loads(run("qm", "guest", "cmd", vmid, "network-get-interfaces", timeout=30) or "[]")
+                addresses = sorted({a["ip-address"] for i in report if isinstance(i, dict) for a in i.get("ip-addresses", []) if isinstance(a, dict) and a.get("ip-address-type") == "ipv4"})
+            else:
+                addresses = run("lxc-info", "-n", vmid, "-iH", timeout=30).split()
+        except (CommandFailure, subprocess.TimeoutExpired, ValueError):
+            addresses = []
+        if addresses or time.monotonic() >= deadline:
+            break
+        time.sleep(3)
+    if vm and addresses:
+        try:
+            raw = json.loads(run("qm", "guest", "cmd", vmid, "guest-info", timeout=30))
+            commands = raw.get("supported_commands", []) if isinstance(raw, dict) else []
+            info = {"version": str(raw.get("version", "")), "enabled": sorted(c["name"] for c in commands if isinstance(c, dict) and c.get("enabled") and isinstance(c.get("name"), str))}
+        except (CommandFailure, subprocess.TimeoutExpired, ValueError):
+            info = None
+    return {"state": "done", "addresses": addresses, "guest_info": info}
+
+
 def cloud_init_remove(req):
     # On the node a VM left: its files must not outlive it here.
     m = req["machine"]
@@ -3733,7 +3775,7 @@ def main():
     # ca_backfill is not long: it mounts a stopped disk, so a start (node.lock)
     # must wait for it, and it picks a free nbd device another backfill must not take.
     # It also tries the VM's lock itself, so a migration or freeze excludes it.
-    long = op in ("migrate", "migrate_finish", "import_finish", "import_network", "freeze", "thaw", "backup_remove")
+    long = op in ("migrate", "migrate_finish", "import_finish", "import_network", "import_verify", "freeze", "thaw", "backup_remove")
     lock_path = STATE / (f"vm-{integer(req['vmid'], 10000, 99999999) if op == 'import_finish' else machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store", "vmids_present"):
@@ -3808,6 +3850,8 @@ def main():
             out = import_finish(req)
         elif op == "import_network":
             out = import_network(req)
+        elif op == "import_verify":
+            out = import_verify(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
         elif op in ("freeze", "thaw", "backup_remove"):
