@@ -1473,7 +1473,8 @@ Measured from image to `asleep`: 10.4 seconds for a 118 MB image, 33.5 seconds f
 - HTTP: `domain_add` accepts `service` in place of `machine` and `target_port`. Webhooks are
   HTTP.
 - Schedule: `schedule` is a cron expression in the site's time zone. The control plane sends a
-  POST to the service. A missed run is not repeated.
+  GET to the service, or a POST with the schedule's JSON body when it has one. A missed run is
+  not repeated.
   The request carries `Host: <id>.service` (it was `<id>.function` before the rename, #909), the
   `X-Carrel-Service` header and `X-Carrel-Schedule`. A guest that routes on the old Host value
   must accept the new one; the Host header holds one value, so there is no both-names release.
