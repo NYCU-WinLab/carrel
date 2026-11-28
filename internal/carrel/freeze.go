@@ -217,6 +217,8 @@ func (e *Execution) FreezeMachine(a, t D) D {
 // freezeChecks is what a machine must satisfy to be backed up and removed;
 // it runs again before the machine goes, since the backup takes a while.
 func (e *Execution) freezeChecks(n int, m D) {
+	// A thaw writes state stopped, which would lift the import gate.
+	refuseUnnormalizedImport(m)
 	if state := str(m["state"]); contains([]string{"provisioning", "deleting", "migrating", "needs_owner_fix"}, state) || m["resize_from"] != nil {
 		fail("conflict", "The machine is "+state+"; freeze it once that has finished", D{"recovery": "resolve_prerequisite"})
 	}

@@ -98,6 +98,12 @@ func TestFreezeRefusals(t *testing.T) {
 		{"frozen quota", func(p *Platform, b *fakeBackend) {
 			p.Store.Exec(`UPDATE tenants SET quota='{"frozen_gb":10}' WHERE n=1`)
 		}, "quota_exceeded", "quota"},
+		// A thaw would write state stopped and lift the import gate (#917).
+		{"imported unverified", func(p *Platform, b *fakeBackend) {
+			m := p.Store.Get("machines", "10100")
+			m["state"] = "imported_unverified"
+			p.Store.Put("machines", 10100, 1, m)
+		}, "conflict", "not normalized"},
 		{"no backup storage", func(p *Platform, b *fakeBackend) { p.Config.BackupStorage = "" }, "unsupported", "no backup storage"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
