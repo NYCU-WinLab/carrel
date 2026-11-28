@@ -116,7 +116,9 @@ func (s *Store) Transaction(f func(*Store)) {
 }
 func decode(s string) D { var d D; must(json.Unmarshal([]byte(s), &d)); return d }
 func (s *Store) Tenants() []D {
-	rows := s.Rows("SELECT * FROM tenants ORDER BY n")
+	// Not SELECT *: the grace columns (#861) are for tenant_list only; the
+	// rows also go to the nodes in the desired state.
+	rows := s.Rows("SELECT n,subject,slug,quota,status FROM tenants ORDER BY n")
 	for _, r := range rows {
 		r["quota"] = merge(DefaultQuota, decode(str(r["quota"])))
 	}

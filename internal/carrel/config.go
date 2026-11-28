@@ -92,7 +92,10 @@ type Config struct {
 	MigrationSlotRetrySeconds float64 `json:"migration_slot_retry_seconds,omitempty"`
 	MigrationBwlimitKiB       int     `json:"migration_bwlimit_kib,omitempty"`
 
-	MaxPendingOperations       int `json:"max_pending_operations,omitempty"`
+	MaxPendingOperations int `json:"max_pending_operations,omitempty"`
+	// AlumniGraceDays is how long machines of an alumni tenant keep
+	// running after the grace starts, before they are stopped. 0: 30.
+	AlumniGraceDays            int `json:"alumni_grace_days,omitempty"`
 	MaxTenantPendingOperations int `json:"max_tenant_pending_operations,omitempty"`
 
 	AppsDir               string `json:"apps_dir,omitempty"`
@@ -165,6 +168,7 @@ const (
 	defaultBwlimitKiB     = 51200
 	defaultMaxPending     = 256
 	defaultTenantPending  = 16
+	defaultAlumniGrace    = 30
 )
 
 // LoadConfig decodes and validates a configuration file.
@@ -206,6 +210,7 @@ func (c Config) WithDefaults() Config {
 	defInt(&c.MigrationBwlimitKiB, defaultBwlimitKiB)
 	defInt(&c.MaxPendingOperations, defaultMaxPending)
 	defInt(&c.MaxTenantPendingOperations, defaultTenantPending)
+	defInt(&c.AlumniGraceDays, defaultAlumniGrace)
 	if c.MigrationSlotRetrySeconds == 0 {
 		c.MigrationSlotRetrySeconds = defaultSlotRetry
 	}

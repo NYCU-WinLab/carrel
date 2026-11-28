@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS site(kind TEXT NOT NULL,id TEXT NOT NULL,data TEXT NO
 CREATE INDEX events_tenant ON events(tenant,id);`)
 		return err
 	},
+	// 2 to 3: when a tenant's alumni grace started and why (#861). NULL:
+	// no grace.
+	func(tx *sql.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE tenants ADD COLUMN grace_started_at INTEGER;
+ALTER TABLE tenants ADD COLUMN grace_reason TEXT;`)
+		return err
+	},
 }
 
 // SchemaVersion is the version this release writes and reads.

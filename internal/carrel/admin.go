@@ -10,9 +10,15 @@ func (e *Execution) Admin(tool string, a, w D) D {
 	switch tool {
 	case "tenant_list", "usage_report":
 		out := []D{}
+		grace := map[int]D{}
+		if tool == "tenant_list" {
+			for _, r := range e.S.Rows("SELECT n,grace_started_at,grace_reason FROM tenants") {
+				grace[integer(r["n"])] = r
+			}
+		}
 		for _, t := range e.S.Tenants() {
 			if tool == "tenant_list" {
-				out = append(out, merge(t, D{"quota": e.Quota(t)}))
+				out = append(out, merge(t, D{"quota": e.Quota(t)}, e.graceFields(grace[integer(t["n"])])))
 			} else {
 				out = append(out, D{"slug": t["slug"], "quota": e.Quota(t)})
 			}
@@ -251,4 +257,24 @@ func (e *Execution) ExpireGrants() {
 		})
 		e.S.Log("system", t["n"], "quota_expired", D{"request": r["id"]}, "ok")
 	}
+}
+
+// graceFields shows a tenant's alumni grace: when it started (RFC 3339 or
+// null), why, and the date the machines stop (start plus alumni_grace_days).
+func (e *Execution) graceFields(t D) D {
+	out := D{"grace_started_at": nil, "grace_reason": nil, "stop_after": nil}
+	if t["grace_started_at"] == nil {
+		return out
+	}
+	start := time.Unix(int64(integer(t["grace_started_at"])), 0).UTC()
+	days := e.P.Config.AlumniGraceDays
+	if days <= 0 {
+		days = defaultAlumniGrace
+	}
+	out["grace_started_at"] = start.Format(time.RFC3339)
+	out["stop_after"] = start.AddDate(0, 0, days).Format(time.RFC3339)
+	if t["grace_reason"] != nil {
+		out["grace_reason"] = str(t["grace_reason"])
+	}
+	return out
 }
