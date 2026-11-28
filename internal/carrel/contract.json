@@ -17,7 +17,7 @@
     },
     {
       "name": "quota_get",
-      "description": "Refresh one tenant's used/limit/remaining quota; whoami already includes all visible tenants.",
+      "description": "Refresh one tenant's used/limit/remaining quota, and images_gb with the imported images and ISOs that use it; whoami already includes all visible tenants.",
       "inputSchema": {
         "type": "object",
         "properties": {

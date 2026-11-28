@@ -71,6 +71,15 @@ func (e *Execution) imageUsage(t D) D {
 	return D{"used_gib": used / GiB, "limit_gib": obj(t["quota"])["images_gb"]}
 }
 
+// imageQuota is images_gb with the files that use it, for quota_get.
+func (e *Execution) imageQuota(t D) D {
+	files := []any{}
+	for _, r := range e.images(integer(t["n"])) {
+		files = append(files, D{"name": r.Name, "kind": r.Kind, "size_bytes": r.Size, "state": r.State})
+	}
+	return merge(e.imageUsage(t), D{"files": files})
+}
+
 func (e *Execution) ImageAction(tool string, a, t D) D {
 	n := integer(t["n"])
 	switch tool {
