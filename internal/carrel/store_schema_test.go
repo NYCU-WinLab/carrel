@@ -371,3 +371,40 @@ func TestSchemaFourRenamesFunctionsToServices(t *testing.T) {
 		t.Fatalf("the audit log changed: %v", a)
 	}
 }
+
+// Migration 4 renamed the fields a stored idempotency fingerprint hashes. Schema 5
+// hashes them again, so a retry with the same key and the new names is a reuse,
+// not a conflict (#922).
+func TestSchemaFiveRecomputesRenamedFingerprints(t *testing.T) {
+	path := atVersion(t, 3)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldQuota := digest(string(encoded(D{"dimension": "function_gb", "amount": 9, "reason": "demo"})))
+	oldOp := digest(string(encoded([]any{"domain_add", D{"sub": "api", "function": "demo"}})))
+	otherOp := digest(string(encoded([]any{"domain_add", D{"sub": "web"}})))
+	for _, q := range []string{
+		`INSERT INTO objects VALUES('requests','r1',1,'{"id":"r1","kind":"quota","dimension":"function_gb","amount":9,"reason":"demo","until":null,"idempotency_key":"k1","fingerprint":"` + oldQuota + `"}')`,
+		`INSERT INTO objects VALUES('operations','o1',1,'{"id":"o1","tool":"domain_add","args":{"sub":"api","function":"demo"},"idempotency_key":"k2","fingerprint":"` + oldOp + `"}')`,
+		`INSERT INTO objects VALUES('operations','o2',1,'{"id":"o2","tool":"domain_add","args":{"sub":"web"},"idempotency_key":"k3","fingerprint":"` + otherOp + `"}')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := digest(string(encoded(D{"dimension": "service_gb", "amount": 9, "reason": "demo"}))); s.Get("requests", "r1")["fingerprint"] != want {
+		t.Fatalf("quota request = %v", s.Get("requests", "r1"))
+	}
+	if want := digest(string(encoded([]any{"domain_add", D{"sub": "api", "service": "demo"}}))); s.Get("operations", "o1")["fingerprint"] != want {
+		t.Fatalf("operation = %v", s.Get("operations", "o1"))
+	}
+	if s.Get("operations", "o2")["fingerprint"] != otherOp {
+		t.Fatal("an operation without a service changed")
+	}
+}
