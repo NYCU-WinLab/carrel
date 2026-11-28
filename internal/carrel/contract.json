@@ -66,6 +66,42 @@
       }
     },
     {
+      "name": "skills_list",
+      "description": "List the skills carrel serves: name, description and version of each. A skill is a short written procedure for a task.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "skill_get",
+      "description": "Read one skill by name, with its full procedure. An unknown name returns an error that lists the valid names.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "machine_create",
       "description": "Create one VM/CT directly when the user asks for a machine. Defaults: Debian 13 minimal VM, 1 vCPU, 1 GiB RAM, 10 GiB disk, 1 GiB swap. Supply an SSH public key inline or use saved keys. No discovery or preview call is required; admission checks run during creation. Waits up to 55 seconds and returns verified readiness and SSH details in operation.result; only call operation_get if still pending. dry_run=true is optional for preview requests. Use VMs for Docker, OVS, Mininet or databases. CTs do not support packages, runcmd, health_checks or nested_virt. Use deployment_apply for multiple machines, connections or publications. Use the known default public key only if saved keys are unavailable; do not scan unrelated SSH configuration. Successful summary omits quota tables; detail=full retrieves them. For local CLI clients, creation includes merging returned ssh_config while preserving existing entries, verifying its tenant-qualified alias with ssh -G, and presenting ssh_short. Use direct ssh only if client setup is unavailable, excluded or fails. Minimal has no Node, Docker or compilers. Choose image=debian-13 or ubuntu-24.04 for prepared development tools and default size=small (2 vCPU/2 GiB/20 GiB). Explicit size/resource fields override image defaults. CTs default to tiny with no swap. Choose larger resources for builds and Docker stacks.",
       "inputSchema": {
@@ -352,7 +388,7 @@
     },
     {
       "name": "machine_get",
-      "description": "Show status or connect to a known machine by name in one call. Returns live normalized power state, readiness and SSH configuration. No machine_list or metrics call is needed first. detail=full includes network rules and internal identifiers. A running hypervisor alone does not mean SSH or applications are ready. For connection requests from a local CLI client, merge returned ssh_config while preserving existing entries, verify its tenant-qualified alias with ssh -G, then present ssh_short. Status-only requests need no local edits. Observes power and SSH now; guest report freshness is separate. Stale or previous-boot reports do not prove application health.",
+      "description": "Show status or connect to a known machine by name in one call. Returns live normalized power state, readiness and SSH configuration. No machine_list or metrics call is needed first. detail=full includes network rules and internal identifiers. A running hypervisor alone does not mean SSH or applications are ready. For connection requests from a local CLI client, merge returned ssh_config while preserving existing entries, verify its tenant-qualified alias with ssh -G, then present ssh_short. Observes power and SSH now; guest report freshness is separate. Stale or previous-boot reports do not prove application health.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5846,7 +5882,7 @@
     "existing_machine_access": true,
     "machine_freeze": false
   },
-  "instructions": "WinLab machines through MCP. Call the tool for the task directly with the known machine name; whoami, catalog_get, quota_get and capacity_get are not prerequisites, and no discovery or preview is needed for an authorized action. Use machine_list only to list or for an ambiguous target. Omit tenant for personal resources. Do not use operator memories, runbooks, hypervisor access or unrelated SSH inspection. dry_run previews; wait_seconds 0 returns the job at once. Toolsets: core, machines (snapshot_*, machine_freeze/thaw), network (domain_*, port_*, peer_*), apps (app_*, runner_*), functions; all are listed by default, ?toolsets=<names> lists fewer.\nRouting: create -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; no key logs in any more -> machine_reset_access; delete -> machine_delete; park a stopped machine -> machine_freeze, back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push, or any website or service built from a GitHub repository -> app_link (then run its install line over SSH and commit its workflow), not manual SSH copies; status -> app_get. CI jobs on your own machine -> runner_add. A container image that runs only while it has requests -> function_deploy, then function_get with wait_seconds until deployed. Features, images, size presets and quota defaults -> catalog_get.\nIsolation: to let one machine reach another in the same tenant, or to limit what reaches a machine, use deployment_apply with access=[{machine, network_access, confirm: machine_name}] together with connections; restricted permits declared connections and public services, tenant allows same-tenant traffic. peer_allow is only for another tenant. Preview only when asked to plan or compare: deployment_plan is the complete preview. Authorized groups go straight to deployment_apply.\nSSH: after creating a machine or connection for a local CLI client, merge the returned ssh_config into the client config, keep existing entries, verify the tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short. If local file access is unavailable, the user opts out or setup fails, present ssh and say the alias is not installed. Status-only requests need no local edits. Never disable host-key checking or replace unrelated aliases. A creation with no ssh_keys uses the tenant's saved keys, then the creator's key; pass a key inline only when the plan lists ssh_public_key as a requirement, reading only the known default public key. Never read or send private keys or tokens.\nResults: member mutations wait up to 55 seconds. Read operation.state/result/error; succeeded needs no follow-up poll, list or quota call. If pending, follow next_action and poll_after_seconds with operation_get. Queued is not reserved or completed, and disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission; operation_retry resumes, revise_request needs corrected arguments. detail=full gives full accounting. A result may carry suggestions: a Carrel feature that fits the task. Follow one that matches the user's goal, or mention it in one sentence.\nSafety: shutdown is graceful, stop is forced and needs explicit intent. Deletion is never a substitute for shutdown. Do not shut down running work just to resize without authorization. Required confirmation fields express the user's existing authorization; ask only when intent or target is unclear. VM pause retains RAM, disks and quota; CT pause is unsupported. machine_list state is recorded, machine_get power and SSH are live. not_checked and routing_configured do not verify an application response. Units: MiB for memory_mb and swap_mb, GiB for disk_gb.",
+  "instructions": "WinLab machines through MCP. Call the tool for the task directly with the known machine name; whoami, catalog_get, quota_get and capacity_get are not prerequisites. Use machine_list only to list or for an ambiguous target. Omit tenant for personal resources. Do not use operator memories, runbooks, hypervisor access or unrelated SSH inspection. dry_run previews; wait_seconds 0 returns the job at once. Toolsets: core, machines (snapshot_*, machine_freeze/thaw), network (domain_*, port_*, peer_*), apps (app_*, runner_*), functions; all are listed by default, ?toolsets=<names> lists fewer.\nRouting: create -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; no key logs in any more -> machine_reset_access; delete -> machine_delete; park a stopped machine -> machine_freeze, back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push, or any website or service built from a GitHub repository -> app_link (then run its install line over SSH and commit its workflow), not manual SSH copies; status -> app_get. CI jobs on your own machine -> runner_add. A container image that runs only while it has requests -> function_deploy, then function_get with wait_seconds until deployed. Features, images, size presets and quota defaults -> catalog_get. Read the matching skill with skill_get before the first state change.\nIsolation: to let one machine reach another in the same tenant, or to limit what reaches a machine, use deployment_apply with access=[{machine, network_access, confirm: machine_name}] together with connections; restricted permits declared connections and public services, tenant allows same-tenant traffic. peer_allow is only for another tenant. Preview only when asked to plan or compare: deployment_plan is the complete preview. Authorized groups go straight to deployment_apply.\nSSH: after creating a machine or connection for a local CLI client, merge the returned ssh_config into the client config, keep existing entries, verify the tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short. If local file access is unavailable, the user opts out or setup fails, present ssh and say the alias is not installed. Status-only requests need no local edits. Never disable host-key checking or replace unrelated aliases. A creation with no ssh_keys uses the tenant's saved keys, then the creator's key; pass a key inline only when the plan lists ssh_public_key as a requirement, reading only the known default public key. Never read or send private keys or tokens.\nResults: member mutations wait up to 55 seconds. Read operation.state/result/error; succeeded needs no follow-up poll, list or quota call. If pending, follow next_action and poll_after_seconds with operation_get. Queued is not reserved or completed, and disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission; operation_retry resumes, revise_request needs corrected arguments. detail=full gives full accounting. A result may carry suggestions: a Carrel feature that fits the task. Follow one that matches the user's goal.\nSafety: shutdown is graceful, stop is forced and needs explicit intent. Deletion is never a substitute for shutdown. Do not shut down running work just to resize without authorization. Required confirmation fields express the user's existing authorization; ask only when intent or target is unclear. VM pause retains RAM, disks and quota; CT pause is unsupported. machine_list state is recorded, machine_get power and SSH are live. not_checked and routing_configured do not verify an application response. Units: MiB for memory_mb and swap_mb, GiB for disk_gb.",
   "toolsets": {
     "plugins": [],
     "core": [
@@ -5854,6 +5890,8 @@
       "quota_get",
       "catalog_get",
       "capacity_get",
+      "skills_list",
+      "skill_get",
       "machine_create",
       "machine_list",
       "machine_get",
