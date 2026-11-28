@@ -2298,7 +2298,7 @@ def import_finish(req):
     for key, value in sorted(cfg.items()):
         if not re.fullmatch(keys, key) or not isinstance(value, str):
             continue
-        if value.split(",")[0].partition(":")[0] != hop:
+        if value.split(",")[0].partition(":")[0] != hop or "media=cdrom" in value.split(","):
             continue
         if kind == "qemu":
             run("qm", "disk", "move", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)

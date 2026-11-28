@@ -183,11 +183,11 @@ func init() {
 }
 
 // PerformMachineImport moves the guest without the writer lock. A failure
-// before the remote_migrate request is sent removes the machine record, which
-// gives the quota back. Once it is sent the guest may exist on the target, so
-// a failure keeps the record (its VMID and quota) as import_failed for an
-// admin to finish or delete. The source is left as it was or stopped, never
-// deleted.
+// before carrel sent anything to the source removes the machine record, which
+// gives the quota back. Once the source was asked to shut down or change, or
+// to migrate (the guest may then exist on the target), a failure keeps the
+// record (its VMID and quota) as import_failed for an admin to finish or
+// delete. The source is left as it was or stopped, never deleted.
 func (e *Execution) PerformMachineImport() {
 	if e.Op["tool"] != "machine_import" || e.Op["import"] == nil {
 		return
@@ -204,7 +204,7 @@ func (e *Execution) PerformMachineImport() {
 		panic(problem)
 	}
 	if m := e.S.Get("machines", str(vmid)); m != nil && m["operation_id"] == e.Op["id"] {
-		if obj(e.Op["import"])["migrate_sent"] == true {
+		if job := obj(e.Op["import"]); job["migrate_sent"] == true || job["source_changed"] == true {
 			m["state"] = "import_failed"
 			m["import"] = merge(obj(m["import"]), D{"failed_at": str(obj(e.Op["import"])["step"])})
 			e.Put("machines", m["vmid"], integer(m["tenant_n"]), m)
@@ -275,8 +275,8 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	// bridge has a smaller MTU than the old network, and Proxmox refuses to
 	// start the VM there (staging, #902). Shutdown first. A CT that does not
 	// finish is stopped (PLAN 10.6). A VM is never stopped by force: the
-	// source is the rollback copy, so a VM that does not shut down stays
-	// running and the import ends before anything moved.
+	// source is the rollback copy, so the import ends and the VM is left to
+	// finish its own shutdown or keep running.
 	// A shutdown that times out is not cancelled: the guest may still power
 	// off later, so its state is read again instead of trusted.
 	stopped := func() bool {
@@ -292,13 +292,17 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 		if stopped() {
 			// A resumed job, or the owner shut it down meanwhile.
 			used = "already stopped"
-		} else if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(seconds)}})) && !stopped() {
-			if job["kind"] != "ct" {
-				fail("conflict", "The VM did not shut down in time and was not stopped by force. It may still power off by itself; check it on the source, then import again", D{"component": "source", "backend_code": "source_shutdown_timeout", "recovery": "resolve_prerequisite"})
-			}
-			used = "pct stop"
-			if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/stop", url.Values{})) {
-				fail("backend_unavailable", "The source could not stop the container", D{"component": "source", "backend_code": "source_stop_failed", "recovery": "contact_administrator"})
+		} else {
+			// From here the source may change: a failure keeps the record.
+			note("source_changed", true)
+			if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(seconds)}})) && !stopped() {
+				if job["kind"] != "ct" {
+					fail("conflict", "The VM did not shut down in time and was not stopped by force. It may still power off by itself; check it on the source", D{"component": "source", "backend_code": "source_shutdown_timeout", "recovery": "contact_administrator"})
+				}
+				used = "pct stop"
+				if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/stop", url.Values{})) {
+					fail("backend_unavailable", "The source could not stop the container", D{"component": "source", "backend_code": "source_stop_failed", "recovery": "contact_administrator"})
+				}
 			}
 		}
 		note("stopped_with", used)
@@ -317,6 +321,7 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 		if !strings.Contains(strings.SplitN(current, ",", 2)[0], "cloudinit") {
 			fail("conflict", "The guest's "+key+" is no longer its cloud-init disk; plan the import again", D{"component": "source", "backend_code": "source_changed", "recovery": "revise_request"})
 		}
+		note("source_changed", true)
 		sourceWrite(e.Ctx, client, "PUT", base, tokenID, secret, path+"/config", url.Values{"delete": {key}})
 		note("cloud_init_dropped", true)
 	}

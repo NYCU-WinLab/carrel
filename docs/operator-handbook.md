@@ -633,7 +633,9 @@ not, and the migration then fails after the guest was shut down. Revoke both tok
 imports.
 
 `dry_run` and `confirm` refuse a guest under Proxmox HA, with `protection` set, with a detached
-(`unusedN`) disk, or with disks on both ZFS and other storage. Fix those on the source first.
+(`unusedN`) disk, with an ISO attached, or with disks on both ZFS and other storage. Fix those on
+the source first. Once carrel asked the source to shut a guest down or change it, a failure keeps the
+machine as `import_failed`, like a failure after the migration started.
 
 ## Roll back an imported machine
 

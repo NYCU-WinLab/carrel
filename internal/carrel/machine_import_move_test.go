@@ -171,11 +171,9 @@ func TestMachineImportConfirmVMShutdownTimeoutNeverForcesStop(t *testing.T) {
 	if strings.Contains(log, "remote_migrate") || strings.Contains(log, "delete=ide2") {
 		t.Errorf("nothing may change after a failed shutdown:\n%s", log)
 	}
-	if m := p.Store.Get("machines", "10100"); m != nil {
-		t.Errorf("record kept: %v", m)
-	}
-	if u := importUsage(p); num(u["vcpu"]) != 0 || num(u["machines"]) != 0 {
-		t.Errorf("quota still reserved: %v", u)
+	// The shutdown request may still power the VM off: an admin checks it.
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "import_failed" {
+		t.Errorf("record: %v", m)
 	}
 }
 
@@ -219,9 +217,10 @@ func TestMachineImportZFSVMWithLVMCloudInitMovesDirect(t *testing.T) {
 	}
 }
 
-func TestMachineImportConfirmFailureBeforeMigrateRollsBack(t *testing.T) {
+func TestMachineImportConfirmFailedStopKeepsRecord(t *testing.T) {
 	p, _, run := importSite(t)
-	// Neither pct shutdown nor pct stop finishes: nothing was sent to migrate.
+	// Neither pct shutdown nor pct stop finishes. Nothing was sent to
+	// migrate, but the source was asked to change, so an admin checks it.
 	importFailTask = "status-"
 	op := run(106)
 	if op["state"] != "failed" {
@@ -230,11 +229,11 @@ func TestMachineImportConfirmFailureBeforeMigrateRollsBack(t *testing.T) {
 	if strings.Contains(joined(), "remote_migrate") {
 		t.Fatalf("migrated after a failed stop:\n%s", joined())
 	}
-	if m := p.Store.Get("machines", "10100"); m != nil {
-		t.Errorf("record kept: %v", m)
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "import_failed" {
+		t.Errorf("record: %v", m)
 	}
-	if u := importUsage(p); num(u["vcpu"]) != 0 || num(u["machines"]) != 0 {
-		t.Errorf("quota still reserved: %v", u)
+	if u := importUsage(p); num(u["machines"]) != 1 {
+		t.Errorf("quota released: %v", u)
 	}
 	if strings.Contains(joined(), "DELETE") {
 		t.Errorf("the source was touched destructively")
@@ -371,7 +370,7 @@ func TestMachineImportConfirmRefusals(t *testing.T) {
 
 func TestMachineImportRefusesGuestsItCannotMoveSafely(t *testing.T) {
 	_, _, run := importSite(t)
-	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk"} {
+	for vmid, why := range map[int]string{110: "HA", 111: "protection", 112: "ZFS and on other", 113: "detached disk", 114: "ISO"} {
 		seenForms = nil
 		op := run(vmid)
 		if op["state"] != "failed" || !strings.Contains(str(obj(op["error"])["message"]), why) {
@@ -384,7 +383,7 @@ func TestMachineImportRefusesGuestsItCannotMoveSafely(t *testing.T) {
 }
 
 func TestMachineImportGuestStartedAgainIsNotChanged(t *testing.T) {
-	_, _, run := importSite(t)
+	p, _, run := importSite(t)
 	// The stopped VM was started on the source after the plan.
 	importGuestStatus = []string{"running"}
 	op := run(107)
@@ -393,5 +392,12 @@ func TestMachineImportGuestStartedAgainIsNotChanged(t *testing.T) {
 	}
 	if len(seenForms) != 0 {
 		t.Errorf("a running guest was changed:\n%s", joined())
+	}
+	// Nothing was sent to the source: the record and quota are freed.
+	if m := p.Store.Get("machines", "10100"); m != nil {
+		t.Errorf("record kept: %v", m)
+	}
+	if u := importUsage(p); num(u["machines"]) != 0 {
+		t.Errorf("quota still reserved: %v", u)
 	}
 }

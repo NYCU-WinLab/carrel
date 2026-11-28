@@ -187,9 +187,14 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 	if num(config["protection"]) != 0 {
 		fail("conflict", "The guest has protection set on the source; clear it there first", D{"recovery": "resolve_prerequisite"})
 	}
-	for key := range config {
+	for key, value := range config {
 		if matches(`^unused[0-9]+$`, key) {
 			fail("conflict", "The guest has a detached disk ("+key+"); delete or reattach it on the source first", D{"recovery": "resolve_prerequisite"})
+		}
+		// An attached ISO would travel with the guest and stop the move.
+		v := str(value)
+		if importDiskKey.MatchString(key) && strings.Contains(v, "media=cdrom") && !strings.HasPrefix(v, "none") && !strings.Contains(strings.SplitN(v, ",", 2)[0], "cloudinit") {
+			fail("conflict", "The guest has an ISO in "+key+"; eject it on the source first", D{"recovery": "resolve_prerequisite"})
 		}
 	}
 	zfs, other := false, false
