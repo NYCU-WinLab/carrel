@@ -1834,6 +1834,19 @@ def ca_files(m, user):
     ]
 
 
+GUEST_BLOCKED_RPCS = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
+
+
+def vendor_data(m):
+    """Carrel's vendor data for an imported VM (PLAN 10.6, #919): it replaces
+    the old `cicustom`, so the guest agent keeps the same blocked commands as
+    every carrel VM. It carries no user, key or network of the old cluster."""
+    name = f"carrel-{m['vmid']}-vendor.json"
+    data = {"write_files": [{"path": "/etc/qemu/qemu-ga.conf", "content": "[general]\nblock-rpcs=" + GUEST_BLOCKED_RPCS + "\n"}]}
+    write("/var/lib/vz/snippets/" + name, "#cloud-config\n" + json.dumps(data), 0o600)
+    return "vendor=local:snippets/" + name
+
+
 def cloud_init(m, *, prepared=False, environment="development"):
     name = f"carrel-{m['vmid']}-user.json"
     if m.get("service_ports"):
@@ -1846,7 +1859,7 @@ def cloud_init(m, *, prepared=False, environment="development"):
         write("/var/lib/vz/snippets/" + name, user, 0o600)
         return "user=local:snippets/" + name + ",network=local:snippets/" + network_file(m)
     keys(m["ssh_keys"])
-    blocked = "guest-exec,guest-exec-status,guest-file-open,guest-file-close,guest-file-read,guest-file-write,guest-file-seek,guest-file-flush,guest-set-user-password"
+    blocked = GUEST_BLOCKED_RPCS
     data = {
         "hostname": m["name"],
         "manage_etc_hosts": True,
@@ -2314,6 +2327,21 @@ def import_finish(req):
     return {"state": "done", "moved": moved}
 
 
+def cloud_init_drive(cfg):
+    """The source's cloud-init disk stays behind (machine_import_move.go), and
+    Proxmox builds the seed only for a `<storage>:cloudinit` volume: without
+    one the guest keeps its old data. Add it in ide2 or the first free ide or
+    sata slot; a retry finds it and adds nothing."""
+    slots = [f"ide{i}" for i in (2, 0, 1, 3)] + [f"sata{i}" for i in range(6)]
+    disks = (k for k in cfg if re.fullmatch(r"(?:ide|sata|scsi|virtio)[0-9]+", k))
+    if any("cloudinit" in str(cfg[k]).split(",", 1)[0] for k in disks):
+        return []
+    free = next((k for k in slots if k not in cfg), None)
+    if free is None:
+        raise ValueError("no free ide or sata slot for the cloud-init drive")
+    return [f"--{free}", f"{storage_id()}:cloudinit"]
+
+
 def import_network(req):
     """On the target, after the move (PLAN 10.6, #918): net0 joins the
     tenant's primary network the way machine_create builds it, with the new
@@ -2321,7 +2349,11 @@ def import_network(req):
     used DHCP gets the static address instead of a reservation. No `rate`:
     the NIC limits were removed (PLAN 12.4). The guest firewall file carries
     `ipfilter` and the tenant's rules. The guest stays stopped; every step
-    sets the same values again, so a retry is safe."""
+    sets the same values again, so a retry is safe. The same call (#919)
+    removes the foreign keys of the old cluster (hookscript, host PCI and USB
+    mappings, the cloud-init `sshkeys` and `cipassword`), replaces an old
+    `cicustom` with carrel's vendor data and sets the CPU type to
+    `x86-64-v3`, unless the owner asked for `nested_virt`."""
     m = req["machine"]
     vmid = machine(m)
     if located(m) != NODE:
@@ -2329,16 +2361,30 @@ def import_network(req):
     n = m["tenant_n"]
     cfg = owned(m)
     gateway = f"10.200.{n}.1"
+    # The new cloud-init drive would apply the old config's sshkeys and
+    # cipassword on first boot: keys that are not the owner's leave the
+    # cloud-init configuration (PLAN 10.6). ciuser stays, so cloud-init does
+    # not create the distro default user.
+    vm_keys = r"hostpci[0-9]+|usb[0-9]+|sshkeys|cipassword"
+    foreign = sorted(k for k in cfg if k == "hookscript" or (m["kind"] == "vm" and re.fullmatch(vm_keys, k)))
+    drop = ["--delete", ",".join(foreign)] if foreign else []
     if m["kind"] == "vm":
+        # Proxmox writes `package_upgrade: true` into the generated user data
+        # unless ciupgrade is 0, and the new ipconfig0 makes cloud-init run it:
+        # an import must not upgrade the guest's software.
+        cpu = [] if m.get("nested_virt") else ["--cpu", "x86-64-v3"]
+        vendor = ["--cicustom", vendor_data(m)] if cfg.get("cicustom") else []
         run("qm", "set", vmid, "--net0", f"virtio={m['mac']},bridge=t{n:03d},firewall=1,mtu=1",
-            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2")
+            "--ipconfig0", f"ip={m['ip']}/24,gw={gateway}", "--nameserver", "10.200.0.2",
+            "--ciupgrade", "0", *cpu, *vendor,
+            *cloud_init_drive(cfg), *drop)
     else:
         # The guest keeps its interface name: its own network setup names it.
         found = re.search(r"(?:^|,)name=([a-z][a-z0-9]{0,14})(?:,|$)", str(cfg.get("net0", "")))
         name = found.group(1) if found else "eth0"
         run("pct", "set", vmid, "--net0",
             f"name={name},bridge=t{n:03d},firewall=1,hwaddr={m['mac']},mtu={guest_mtu(m)},ip={m['ip']}/24,gw={gateway},type=veth",
-            "--nameserver", "10.200.0.2")
+            "--nameserver", "10.200.0.2", *drop)
     first_firewall(m)
     return {"state": "done"}
 
@@ -2349,7 +2395,7 @@ def cloud_init_remove(req):
     vmid = machine(m)
     if located(m) == NODE:
         raise ValueError("machine is still on this node")
-    for kind in ("user", "network"):
+    for kind in ("user", "network", "vendor"):
         (SNIPPETS / f"carrel-{vmid}-{kind}.json").unlink(missing_ok=True)
     return {"state": "removed"}
 
@@ -3224,6 +3270,7 @@ def action(req):
         Path(f"/etc/pve/firewall/{vmid}.fw").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-user.json").unlink(missing_ok=True)
         Path(f"/var/lib/vz/snippets/carrel-{vmid}-network.json").unlink(missing_ok=True)
+        Path(f"/var/lib/vz/snippets/carrel-{vmid}-vendor.json").unlink(missing_ok=True)
         (STATE / f"create-{vmid}.json").unlink(missing_ok=True)
     elif op == "rename":
         # The VM's name, or the CT's hostname, follows the record. Ownership
