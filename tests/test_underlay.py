@@ -212,3 +212,13 @@ def test_a_site_public_entry_port_must_be_an_integer_port(port):
     site = {**SITE, "public_entries": [{"address": "140.113.194.229/32", "port": port}]}
     with pytest.raises(SystemExit):
         load("install-network.py").site_layout("carrel02", site)
+
+
+def test_local_storage_takes_iso_and_import_only_for_a_site_with_fetch():
+    local_content = load("install-network.py").local_content
+    base = {"images", "rootdir", "vztmpl"}
+    assert local_content({}, base) == base | {"snippets"}
+    assert local_content({"fetch": True}, base) == base | {"snippets", "iso", "import"}
+    # A kind the site keeps on its own storage stays off "local".
+    nfs = {"fetch": True, "content_storage": {"import": "nfs"}}
+    assert local_content(nfs, base) == base | {"snippets", "iso"}
