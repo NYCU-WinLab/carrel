@@ -13,7 +13,9 @@ import (
 )
 
 func machineIdentity(m D) []any { return []any{m["allocation_id"], m["created_at"], m["operation_id"]} }
-func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
+
+// freeSlot is the first free machine slot of a tenant. It reserves nothing.
+func (e *Execution) freeSlot(t D) int {
 	n := integer(t["n"])
 	used := map[int]bool{}
 	for _, m := range append(e.S.Objects("machines", n), e.S.Objects("frozen", n)...) {
@@ -31,6 +33,11 @@ func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
 	if slot == 100 {
 		fail("quota_exceeded", "No machine address slots remain")
 	}
+	return slot
+}
+func (e *Execution) AllocateMachine(t, spec D) (D, portGrant) {
+	n := integer(t["n"])
+	slot := e.freeSlot(t)
 	vmid := 10000 + n*100 + slot
 	var op any
 	if e.Op != nil {
