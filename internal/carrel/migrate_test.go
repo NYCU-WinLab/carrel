@@ -347,6 +347,13 @@ func TestAnISOInstallMovesWithItsISO(t *testing.T) {
 	if r := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "old", "node": "carrel02"}, admin); obj(r["operation"])["state"] == "succeeded" {
 		t.Fatal("a local ISO install moved", r)
 	}
+	// So does a finished install that still holds it.
+	m3["state"] = "stopped"
+	p.Store.Put("machines", 10102, 1, m3)
+	plan = p.Execute(ctx, "node_drain", D{"node": "carrel01", "dry_run": true}, admin)
+	if st := dicts(plan["staying"]); len(st) != 1 || st[0]["reason"] != "iso_on_local_storage" {
+		t.Fatal("a stopped machine with a local ISO must stay with its reason", plan)
+	}
 	// A managed machine that is still coming up stays put.
 	m2 := seedMachine(p, "boot", 10101)
 	m2["state"] = "initializing"

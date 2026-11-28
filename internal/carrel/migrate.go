@@ -26,10 +26,10 @@ func (e *Execution) nodeNamed(name string) (nodeRef, bool) {
 // as one imported while the site had a single node: Proxmox refuses that
 // CD-ROM, so the machine stays until the member ejects it.
 func movable(m D) bool {
-	if contains([]string{"ready", "running", "stopped"}, m["state"]) {
-		return true
+	if isoOnLocal(m) {
+		return false
 	}
-	return m["state"] == "installing" && unmanaged(m) && !isoOnLocal(m)
+	return contains([]string{"ready", "running", "stopped"}, m["state"]) || m["state"] == "installing" && unmanaged(m)
 }
 
 func isoOnLocal(m D) bool {
@@ -38,7 +38,7 @@ func isoOnLocal(m D) bool {
 
 // unmovableReason names why a drain leaves a machine.
 func unmovableReason(m D) string {
-	if m["state"] == "installing" && unmanaged(m) && isoOnLocal(m) {
+	if isoOnLocal(m) && (contains([]string{"ready", "running", "stopped"}, m["state"]) || m["state"] == "installing" && unmanaged(m)) {
 		return "iso_on_local_storage"
 	}
 	return "machine_" + str(m["state"])
