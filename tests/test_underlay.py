@@ -222,3 +222,19 @@ def test_local_storage_takes_iso_and_import_only_for_a_site_with_fetch():
     # A kind the site keeps on its own storage stays off "local".
     nfs = {"fetch": True, "content_storage": {"import": "nfs"}}
     assert local_content(nfs, base) == base | {"snippets", "iso"}
+
+
+def test_a_site_with_several_nodes_keeps_imports_on_shared_storage():
+    fetch_storages = load("install-network.py").fetch_storages
+    two = [{"name": "a", "address": "10.0.0.1"}, {"name": "b", "address": "10.0.0.2"}]
+    # One node: local is fine, nothing to check.
+    assert fetch_storages({"fetch": True, "nodes": two[:1]}) == []
+    # No fetcher: no files to place.
+    assert fetch_storages({"nodes": two}) == []
+    with pytest.raises(SystemExit, match="shared"):
+        fetch_storages({"fetch": True, "nodes": two})
+    with pytest.raises(SystemExit, match="shared"):
+        fetch_storages({"fetch": True, "nodes": two, "content_storage": {"iso": "nfs"}})
+    shared = {"fetch": True, "nodes": two, "content_storage": {"iso": "nfs", "import": "nfs"}}
+    assert fetch_storages(shared) == ["nfs"]
+    assert fetch_storages(SITE) == ["rs822rp1"]
