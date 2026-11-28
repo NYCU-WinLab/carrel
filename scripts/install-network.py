@@ -231,11 +231,26 @@ def fetch_storages(site):
     return [name for name in names if name != "local"]
 
 
+MAC = re.compile(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}")
+
+
+def node_macs(site):
+    """Map node name to its optional underlay MAC (lowercase aa:bb:cc:dd:ee:ff)."""
+    macs = {}
+    for n in site["nodes"]:
+        if "mac" in n:
+            if not isinstance(n["mac"], str) or not MAC.fullmatch(n["mac"]):
+                raise SystemExit(f"node {n['name']} has an invalid mac {n['mac']!r}: use lowercase aa:bb:cc:dd:ee:ff")
+            macs[n["name"]] = n["mac"]
+    return macs
+
+
 def site_layout(node, site):
     """Return this node's address, the other nodes' addresses and the exit nodes."""
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in site["nodes"]}
     if node not in addresses:
         raise SystemExit(f"{node} is not in the site file")
+    macs = node_macs(site)
     exits = site["exit_nodes"]
     if not exits or any(e not in addresses for e in exits):
         raise SystemExit("exit nodes must be site nodes")
@@ -258,6 +273,7 @@ def site_layout(node, site):
             raise SystemExit(f"public entry {entry['address']} has an invalid port")
         entries.append({"address": address, "port": port})
     return {"address": addresses[node], "peers": [a for n, a in addresses.items() if n != node],
+            "peer_macs": {addresses[n]: m for n, m in macs.items() if n != node},
             "all": list(addresses.values()), "exit_nodes": exits, "interface": site["underlay_interface"],
             "protected": protected, "entries": entries,
             # The first exit node holds the public address and terminates ingress.

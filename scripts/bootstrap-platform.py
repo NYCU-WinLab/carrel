@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -137,9 +138,18 @@ def ct(vmid, name, ip, bridge, gateway, memory, key, storage, template, disk=12,
 SITE = Path("/etc/carrel/site.json")
 
 
+def check_node_macs(config):
+    """A node's optional underlay MAC must be lowercase aa:bb:cc:dd:ee:ff."""
+    for n in config["nodes"]:
+        mac = n.get("mac")
+        if "mac" in n and not (isinstance(mac, str) and re.fullmatch(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}", mac)):
+            raise SystemExit(f"node {n['name']} has an invalid mac {mac!r}: use lowercase aa:bb:cc:dd:ee:ff")
+
+
 def underlay(config, node):
     # Same rule as install-network.py (PLAN 6.3): VXLAN and BGP from the other
     # site nodes on the underlay interface only; dropped everywhere else.
+    check_node_macs(config)
     rules = []
     addresses = {n["name"]: str(ipaddress.IPv4Address(n["address"])) for n in config["nodes"]}
     peers = [a for n, a in addresses.items() if n != node]
