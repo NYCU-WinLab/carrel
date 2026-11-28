@@ -41,9 +41,11 @@ The agents never run on an operator's machine. They run with `bypassPermissions`
 
 CT 1113 is in the `spoke` firewall group: it reaches the internet and the public address, not the nodes. Inside it:
 
-- User `agent` (unprivileged) with Claude Code in `~/.local/bin`, `~/run-claude.sh` (from `bench/run-claude.sh`), and its own key pair in `~/.ssh`.
-- `~/.claude.env` (mode 600) holds `CLAUDE_CODE_OAUTH_TOKEN`, so runs use a subscription, not an API key.
-- Each run starts from an empty Claude config directory, an empty work directory and only the key pair in `~/.ssh`.
+- User `agent` (unprivileged) with Claude Code and Codex in `~/.local/bin`, `~/run-claude.sh` and `~/run-codex.sh` (from `bench/`), and its own key pair in `~/.ssh`.
+- Both agents use a subscription, not an API key:
+  - `~/.claude.env` (mode 600) holds `CLAUDE_CODE_OAUTH_TOKEN`.
+  - `~/.codex/auth.json` is a ChatGPT sign-in made in the CT with `codex login --device-auth`. Do not copy it from another machine: the two copies would refresh the same token.
+- Each run starts from an empty agent config, an empty work directory and only the key pair in `~/.ssh`.
 
 Run, from a clone on the operator's machine, with a member token from `login.py` (it lasts about 30 minutes) and a copy of the agent's private key:
 
@@ -53,3 +55,5 @@ python3 sites/stg/bench/bench.py oracle &
 python3 scripts/skill-bench.py rescue --runs 1 --agents claude --admin-url http://127.0.0.1:8790 \
   --arm-command "python3 sites/stg/bench/bench.py arm" --agent-cmd claude=sites/stg/bench/agent.sh
 ```
+
+For Codex, pass `--agents codex --agent-cmd "codex=sites/stg/bench/agent.sh codex"`.
