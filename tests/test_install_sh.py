@@ -77,6 +77,12 @@ def test_a_join_that_leaves_no_cluster_stops_the_install(tmp_path):
     assert "install-network.py" not in r.stdout + r.stderr
 
 
+def test_install_sh_checks_root_keys_are_the_cluster_file():
+    # Run for real it would need /root; the check itself is pinned here.
+    s = (ROOT / "scripts/install.sh").read_text()
+    assert "readlink -f /root/.ssh/authorized_keys) != /etc/pve/priv/authorized_keys" in s
+
+
 def test_another_node_outside_a_cluster_needs_join(tmp_path):
     r = install(tmp_path, "n2")
     assert r.returncode != 0 and "--join" in r.stderr

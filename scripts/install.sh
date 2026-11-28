@@ -95,6 +95,15 @@ if [[ -n $join ]]; then
 	fi
 fi
 
+# configure-nodes.py writes the control plane's key line once, into root's
+# authorized_keys, which Proxmox shares across the cluster as a link to
+# /etc/pve/priv/authorized_keys. A host made from a cloud image before
+# Proxmox was installed keeps its own file, and the other nodes never get
+# the line.
+if [[ ${CARREL_DRY_RUN:-} != 1 && -e /root/.ssh/authorized_keys && $(readlink -f /root/.ssh/authorized_keys) != /etc/pve/priv/authorized_keys ]]; then
+	die "/root/.ssh/authorized_keys is not the cluster's shared file: append its lines to /etc/pve/priv/authorized_keys, then link it there (ln -sf /etc/pve/priv/authorized_keys /root/.ssh/authorized_keys)"
+fi
+
 # A host without a subscription cannot read the enterprise repositories that
 # installing proxmox-ve adds, and every apt-get update after fails. Turn them
 # off and read pve-no-subscription instead (from the site's mirror if one is
