@@ -335,6 +335,18 @@ func TestAnISOInstallMovesWithItsISO(t *testing.T) {
 	if got["node"] != "carrel02" || got["state"] != "installing" || got["iso_volume"] == nil {
 		t.Fatal("the install must go on, ISO attached, on the new node", got)
 	}
+	// An ISO on one node's local storage cannot follow: the drain leaves the
+	// machine and says why, and a direct move is refused.
+	m3 := seedMachine(p, "old", 10102)
+	m3["state"], m3["guest_management"], m3["iso"], m3["iso_volume"] = "installing", 0, "netinst", "local:iso/carrel-t001-netinst-0123456789ab.iso"
+	p.Store.Put("machines", 10102, 1, m3)
+	plan = p.Execute(ctx, "node_drain", D{"node": "carrel01", "dry_run": true}, admin)
+	if st := dicts(plan["staying"]); len(st) != 1 || st[0]["machine"] != "old" || st[0]["reason"] != "iso_on_local_storage" {
+		t.Fatal("a local ISO install must stay with its reason", plan)
+	}
+	if r := p.Execute(ctx, "machine_migrate", D{"tenant": "alice", "machine": "old", "node": "carrel02"}, admin); obj(r["operation"])["state"] == "succeeded" {
+		t.Fatal("a local ISO install moved", r)
+	}
 	// A managed machine that is still coming up stays put.
 	m2 := seedMachine(p, "boot", 10101)
 	m2["state"] = "initializing"

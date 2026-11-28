@@ -2152,6 +2152,10 @@ def migrate_prepare(req):
     if where is None:
         raise ValueError("machine not found in the cluster")
     owned(m, node=where)
+    # An installer ISO must be readable here before the machine moves, or it
+    # arrives with a CD-ROM the node cannot open (issue #874).
+    if where != NODE and m["kind"] == "vm" and m.get("iso_volume"):
+        iso_volume(m, m["iso_volume"])
     # Every VM with cloud-init: managed, or without SSH (issue #94).
     if m["kind"] == "vm" and (m.get("guest_management", 1) or m.get("service_ports")):
         if not req.get("cloud_init"):

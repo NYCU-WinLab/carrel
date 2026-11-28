@@ -635,6 +635,27 @@ def test_a_talos_vm_moves_with_its_cloud_init_and_takes_no_media(monkeypatch, tm
         module.set_media(talos, {}, {"iso_volume": None})
 
 
+def test_an_iso_install_moves_only_where_its_iso_is_readable(monkeypatch):
+    module = load("node-agent.py")
+    monkeypatch.setattr(module, "located", lambda m: "carrel02")
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    monkeypatch.setattr(module, "owned", lambda m, **k: {})
+    seen = []
+    monkeypatch.setattr(module, "iso_volume", lambda m, v: seen.append(v) or v)
+    iso = dict(MACHINE, kind="vm", guest_management=0, iso_volume="shared:iso/t1-abc.iso")
+    assert module.migrate_prepare({"machine": iso}) == {"state": "ready"}
+    assert seen == ["shared:iso/t1-abc.iso"]
+
+    def unreadable(m, v):
+        raise module.StorageUnavailable("t1-abc.iso missing or its storage unreachable")
+
+    monkeypatch.setattr(module, "iso_volume", unreadable)
+    with pytest.raises(module.StorageUnavailable):
+        module.migrate_prepare({"machine": iso})
+    # Ejected: nothing to read.
+    assert module.migrate_prepare({"machine": dict(iso, iso_volume=None)}) == {"state": "ready"}
+
+
 def test_jump_sync_reads_ascii_lines_split_on_newlines_only():
     module = load("jump-sync.py")
     line = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.200.1.10:22" ssh-ed25519 AAAA'
