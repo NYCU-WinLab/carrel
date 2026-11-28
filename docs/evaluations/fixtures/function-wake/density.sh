@@ -1,5 +1,5 @@
 #!/bin/bash
-# Restore K copies of the same Python function, each in its own network namespace, and measure memory.
+# Restore K copies of the same Python service, each in its own network namespace, and measure memory.
 set -uo pipefail
 K=${K:-30}
 avail() { awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo; }
@@ -22,7 +22,7 @@ done
 sleep 2
 A=$(avail); N=$(pgrep -c firecracker)
 echo "running microVMs: $N"
-echo "MemAvailable after:  $A MiB -> $(( (B - A) / (N > 0 ? N : 1) )) MiB per sleeping-but-loaded function"
+echo "MemAvailable after:  $A MiB -> $(( (B - A) / (N > 0 ? N : 1) )) MiB per sleeping-but-loaded service"
 echo "restore ms per VM (in launch order):"; cut -d' ' -f1 /tmp/hold-*.out | tr '\n' ' '; echo
 cut -d' ' -f1 /tmp/hold-*.out | sort -n | awk '{a[NR]=$1} END {print "restore p50=" a[int((NR+1)/2)] " p95=" a[int(NR*0.95+0.5)] " max=" a[NR] " ms (n=" NR ")"}'
 for p in $(pgrep firecracker); do awk '/^Pss:/ {print $2}' /proc/$p/smaps_rollup; done | awk '{s+=$1} END {printf "firecracker Pss: total %.0f MiB, %.1f MiB each\n", s/1024, s/1024/NR}'

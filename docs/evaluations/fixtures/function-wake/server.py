@@ -1,4 +1,4 @@
-"""Test function: a Python server with about 50 MB of loaded data and endpoints the checks use."""
+"""Test service: a Python server with about 50 MB of loaded data and endpoints the checks use."""
 import asyncio, decimal, email, hashlib, json, os, random, socket, sqlite3, ssl, time, urllib.parse, urllib.request, uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -40,7 +40,7 @@ class H(BaseHTTPRequestHandler):
         elif url.path == "/work":    # a request that touches fresh memory
             tmp = [hashlib.md5(str(i).encode()).hexdigest() for i in range(50_000)]
             out = {"ok": True, "n": len(tmp)}
-        elif url.path == "/connect":  # can the function open a TCP connection to this address?
+        elif url.path == "/connect":  # can the service open a TCP connection to this address?
             try:
                 socket.create_connection((query["host"], int(query["port"])), timeout=2).close()
                 out = {"ok": True}
@@ -58,27 +58,27 @@ class H(BaseHTTPRequestHandler):
                 out = {"ok": True}
             except (OSError, KeyError) as e:
                 out = {"ok": False, "error": str(e)}
-        elif url.path == "/print":    # write MiB to stdout: does the function's log stay small?
+        elif url.path == "/print":    # write MiB to stdout: does the service's log stay small?
             import sys
             for _ in range(int(query.get("mib", "1"))):
                 sys.stdout.write(("p" * 1023 + "\n") * 1024)
             sys.stdout.flush()
             out = {"ok": True}
-        elif url.path == "/download":  # how fast does the function receive from the internet?
+        elif url.path == "/download":  # how fast does the service receive from the internet?
             start, size = time.time(), 0
             req = urllib.request.Request(query["url"], headers={"User-Agent": "carrel-fn-check"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 while chunk := r.read(1 << 16):
                     size += len(chunk)
             out = {"bytes": size, "seconds": time.time() - start}
-        elif url.path == "/upload":    # how fast does the function send to the internet?
+        elif url.path == "/upload":    # how fast does the service send to the internet?
             body = b"u" * int(query["bytes"])
             start = time.time()
             req = urllib.request.Request(query["url"], data=body, method="POST", headers={"User-Agent": "carrel-fn-check"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 r.read()
             out = {"bytes": len(body), "seconds": time.time() - start}
-        elif url.path == "/conns":     # how many TCP connections can the function hold at once?
+        elif url.path == "/conns":     # how many TCP connections can the service hold at once?
             import concurrent.futures
             def one(_):
                 try:
@@ -106,7 +106,7 @@ class H(BaseHTTPRequestHandler):
                 sock.sendto(b"x" * 64, (query["host"], int(query["port"])))
             sock.close()
             out = {"sent": int(query["n"]), "seconds": time.time() - start}
-        elif url.path == "/resolve":  # does the function's resolver work?
+        elif url.path == "/resolve":  # does the service's resolver work?
             try:
                 out = {"ok": True, "addr": socket.getaddrinfo(query["name"], 443, socket.AF_INET)[0][4][0]}
             except OSError as e:

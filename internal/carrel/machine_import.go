@@ -98,6 +98,11 @@ func (e *Execution) MachineImport(a, w D) D {
 	if !boolean(a["dry_run"]) && !boolean(a["confirm"]) {
 		fail("invalid", "Give dry_run: true to plan, or confirm: true to run the import", D{"recovery": "revise_request"})
 	}
+	if !boolean(a["dry_run"]) {
+		if r, ok := e.importResume(); ok {
+			return r
+		}
+	}
 	r, c := e.importPlan(a)
 	if boolean(a["dry_run"]) {
 		return r

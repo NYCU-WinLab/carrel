@@ -26,7 +26,7 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 	importPoll = time.Millisecond
 	p.wg.Add(1)
 	go p.Operations.Loop()
-	importFailTask, seenForms, importPollErrors, importGuestStatus = "none", nil, 0, nil
+	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse, importTruncate = "none", nil, 0, nil, "", false
 	srv, fp, _ := importFake(t)
 	admin := person("root", true)
 	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
@@ -520,5 +520,80 @@ func TestMachineImportedGuestIsGatedUntilNormalized(t *testing.T) {
 	allowed("machine_delete", D{"machine": name, "confirm": name})
 	if p.Store.Get("machines", "10100") != nil {
 		t.Errorf("machine_delete left the record")
+	}
+}
+
+func TestMachineImportRefusalCarriesProxmoxMessageWithoutTargetEndpoint(t *testing.T) {
+	_, _, run := importSite(t)
+	importRefuse = "403 Permission check failed (/, Sys.Audit)"
+	op := run(107)
+	if op["state"] != "failed" {
+		t.Fatalf("operation: %v", op)
+	}
+	msg := str(obj(op["error"])["message"])
+	if !strings.Contains(msg, "Sys.Audit") {
+		t.Errorf("the Proxmox message is missing: %q", msg)
+	}
+	for _, leak := range []string{"99999999-2222", "apitoken", "PVEAPIToken", "target.test", "carrel@pve!import"} {
+		if strings.Contains(msg, leak) {
+			t.Errorf("the message leaks %q: %q", leak, msg)
+		}
+	}
+}
+
+func TestMachineImportRetryResumesFailedImport(t *testing.T) {
+	p, _, run := importSite(t)
+	// The VM is shut down, then the migration is refused: the record stays as
+	// import_failed because the source changed.
+	importRefuse = "403 Permission check failed (/, Sys.Audit)"
+	op := run(104)
+	if op["state"] != "failed" {
+		t.Fatalf("operation: %v", op)
+	}
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "import_failed" {
+		t.Fatalf("record: %v", m)
+	}
+	// The admin fixes the token and retries the same operation.
+	importRefuse = ""
+	t1 := p.Store.TenantN(1)
+	id := str(op["id"])
+	p.Operations.Retry(t1, id, person("root", true))
+	op = p.Operations.Wait(context.Background(), t1, id, 20)
+	for i := 0; i < 400 && !boolean(op["done"]); i++ {
+		time.Sleep(10 * time.Millisecond)
+		op = publicOperation(p.Store.Get("operations", id))
+	}
+	if op["state"] != "succeeded" {
+		t.Fatalf("retried operation: %v", op)
+	}
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "imported_unverified" {
+		t.Errorf("machine: %v", m)
+	}
+	// One refused request and one that went through; the shutdown happened once.
+	if got := strings.Count(joined(), "POST /api2/json/nodes/anvil/qemu/104/remote_migrate"); got != 2 {
+		t.Errorf("remote_migrate sent %d times:\n%s", got, joined())
+	}
+	if strings.Count(joined(), "status/shutdown") != 1 {
+		t.Errorf("the retry shut the guest down again:\n%s", joined())
+	}
+}
+
+func TestMachineImportTruncatedMigrateAnswerKeepsRecord(t *testing.T) {
+	p, _, run := importSite(t)
+	// A 200 means the source started the task; a body cut short after the
+	// headers leaves the outcome unknown, so the VMID and quota stay held.
+	importTruncate = true
+	op := run(107)
+	if op["state"] != "failed" {
+		t.Fatalf("operation: %v", op)
+	}
+	if job := obj(p.Store.Get("operations", str(op["id"]))["import"]); job["migrate_sent"] != true {
+		t.Errorf("migrate_sent cleared: %v", job)
+	}
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "import_failed" {
+		t.Errorf("record: %v", m)
+	}
+	if u := importUsage(p); num(u["machines"]) != 1 {
+		t.Errorf("quota released: %v", u)
 	}
 }

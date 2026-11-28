@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exp 5: memory growth of a restored function under load. Exp 6: what two copies of one snapshot share."""
+"""Exp 5: memory growth of a restored service under load. Exp 6: what two copies of one snapshot share."""
 import json, time, urllib.request
 import bench
 
