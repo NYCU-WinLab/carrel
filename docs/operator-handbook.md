@@ -610,6 +610,21 @@ row and a plugin record that differ` and change nothing. Compare the 2 rows with
 wrong one (`snapshots/<vmid>-<name>` or `plugin_objects/snapshot/snapshot/<vmid>/<name>` in
 `objects`) and run the move again. Do not touch PVE, or the tenant loses that snapshot.
 
+## Roll back an imported machine
+
+`machine_import` moves a guest with `qm remote-migrate` or `pct remote-migrate` (PLAN 10.6). The
+source on the old host ends stopped with `lock: migrate` and stays that way for 14 days as the
+rollback (PLAN 10.7). To go back:
+
+1. Stop the carrel machine and delete it, so the address and names are free.
+2. On the old host, clear the lock: `qm unlock <vmid>` for a VM, `pct unlock <vmid>` for a CT.
+3. Start the source: `qm start <vmid>` or `pct start <vmid>`.
+4. Point the Cloudflare records back at the old gateway and check from outside the campus.
+
+Disks that were dropped before the move (the cloud-init disk) are not restored; recreate one if
+the old guest needs it. If the import report says `pct stop` was used instead of `pct shutdown`,
+check the guest's filesystem after the first start.
+
 ## Identity provider
 
 `issuer` in `config.json` names the OIDC provider members sign in with. Carrel reads its
