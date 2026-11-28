@@ -55,6 +55,11 @@ func TestAnISOImportFetchesStoresAndCounts(t *testing.T) {
 	if len(dicts(list["images"])) != 1 || num(obj(list["images_gb"])["used_gib"]) <= 0 {
 		t.Fatal(list)
 	}
+	// quota_get shows the file and what it uses of images_gb.
+	quota := obj(p.Execute(ctx, "quota_get", D{}, alice)["images_gb"])
+	if files := dicts(quota["files"]); len(files) != 1 || files[0]["name"] != "netinst" || files[0]["kind"] != "iso" || num(quota["used_gib"]) <= 0 || num(quota["limit_gib"]) != 20 {
+		t.Fatal(quota)
+	}
 	// The same name again is refused; a failed download leaves nothing.
 	if r := p.Execute(ctx, "iso_import", D{"name": "netinst", "url": "https://example.com/x.iso", "sha256": sum}, alice); obj(obj(r["operation"])["error"])["code"] != "conflict" {
 		t.Fatal(r)
