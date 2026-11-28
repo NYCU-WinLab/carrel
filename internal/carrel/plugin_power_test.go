@@ -36,6 +36,8 @@ func withRewindPlugin(t *testing.T, power string) (*Platform, *fakePlugins, *gue
 	p, b := fixture(t)
 	f := withPlugin(t, p, b)
 	pluginPatience = 100 * time.Millisecond
+	// A loaded runner can delay the fake guest report past the fixture's 3s readiness wait.
+	p.Config.GuestReadyTimeout = 30
 	t.Cleanup(func() { pluginPatience = 10 * time.Minute })
 	g := &guest{power: power}
 	b.call = func(r D, target string) (any, error) {
