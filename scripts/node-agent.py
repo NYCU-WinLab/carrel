@@ -2067,6 +2067,31 @@ def tenant_route():
 
 SNIPPETS = Path("/var/lib/vz/snippets")
 
+# Steps a reset must not run again: on a new instance id cloud-init reruns
+# every per-instance module, and these would rerun member commands, reinstall
+# packages, rewrite files the owner may have changed, or add a second swap
+# line to /etc/fstab.
+RESET_DROPPED = ("bootcmd", "runcmd", "packages", "package_update", "package_upgrade", "package_reboot_if_required", "apt", "write_files", "swap", "mounts")
+
+
+def reset_user_data(raw, new_keys):
+    """A carrel user file for machine_reset_access: the login user's keys
+    replaced, the creation steps dropped, the SSH host keys kept. Applying it
+    to its own output gives the same bytes, so a retry changes nothing."""
+    prefix = "#cloud-config\n"
+    try:
+        data = json.loads(raw[len(prefix):]) if raw.startswith(prefix) else None
+    except ValueError:
+        data = None
+    users = data.get("users") if isinstance(data, dict) else None
+    if not isinstance(users, list) or len(users) != 1 or not isinstance(users[0], dict) or users[0].get("name") != "user":
+        raise ValueError("not a cloud-init file that carrel wrote")
+    for key in RESET_DROPPED:
+        data.pop(key, None)
+    users[0]["ssh_authorized_keys"] = list(new_keys)
+    data["ssh_deletekeys"] = False
+    return prefix + json.dumps(data)
+
 
 def cloud_init_files(m):
     """The exact cloud-init files of a VM, for the control plane to keep (issue #93).
@@ -3056,6 +3081,22 @@ def action(req):
             run("qm", "set", vmid, "--name", name)
         else:
             run("pct", "set", vmid, "--hostname", name)
+    elif op == "reset_access":
+        # machine_reset_access (issue #820): the user file this VM booted
+        # with, with the new keys and none of the creation steps. New bytes
+        # are a new instance id, so the next boot adds the keys.
+        if cmd != "qm" or m.get("service_ports"):
+            raise ValueError("only a VM that carrel configures takes new keys")
+        new_keys = req.get("ssh_keys")
+        if not isinstance(new_keys, list) or not all(isinstance(k, str) for k in new_keys):
+            raise ValueError("invalid SSH public key")
+        keys(new_keys)
+        path = SNIPPETS / f"carrel-{vmid}-user.json"
+        write(path, reset_user_data(path.read_text(), new_keys), 0o600)
+        files = cloud_init_files(m)
+        if not files:
+            raise ValueError("the VM has no cloud-init files on this node")
+        return files
     elif op == "principals":
         # machine_access on a CT: the whole principals file for root. A VM
         # pulls its file through the guest reporter instead.

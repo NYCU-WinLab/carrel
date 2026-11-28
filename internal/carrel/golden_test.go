@@ -141,6 +141,8 @@ func (r *recorder) Call(ctx context.Context, req D, target string) (any, error) 
 			return D{"power_state": "paused", "changed": true}, nil
 		case "delete":
 			return D{"state": "absent"}, nil
+		case "reset_access":
+			return D{"cloud_init": D{"user": "#cloud-config\n{}", "network": "{}"}}, nil
 		}
 		return D{"state": "ok"}, nil
 	case "freeze":
@@ -642,6 +644,9 @@ func goldenScenario(g *goldenRun) {
 	call("public", "public_ip_release", D{"address": "203.0.113.11"}, alice)
 	call("public", "public_ip_release", D{}, alice)
 	call("public", "public_ip_list", D{}, alice)
+
+	call("reset", "machine_reset_access", D{"machine": "web", "confirm": "wrong", "ssh_keys": []any{"ssh-ed25519 AAAAreset"}}, alice)
+	call("reset", "machine_reset_access", D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAreset"}, "dry_run": true}, alice)
 
 	// Last: a started VM stays initializing until its guest reports, and a
 	// later job waiting for a guest would take that report.

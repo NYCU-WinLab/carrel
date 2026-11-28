@@ -2790,3 +2790,88 @@ def test_a_failed_action_writes_its_cause_to_the_journal(monkeypatch):
     assert len(logged) == 1
     assert logged[0].startswith("invalid_request: Traceback")
     assert "ValueError: network t005 has no subnet" in logged[0]
+
+
+def created_user_file(monkeypatch, module, root):
+    files = {}
+    monkeypatch.setattr(module, "write", lambda path, data, mode: files.update({str(path): data}))
+    monkeypatch.setattr(
+        module,
+        "Path",
+        lambda path: (
+            root / "scripts/guest-report.py"
+            if path == "/usr/local/lib/carrel/guest-report.py"
+            else Path(path)
+        ),
+    )
+    module.cloud_init(
+        {
+            "name": "web",
+            "vmid": 10100,
+            "tenant_n": 1,
+            "host": 10,
+            "mac": "02:ca:01:00:00:01",
+            "ip": "10.200.1.10",
+            "image": "debian-13",
+            "ssh_keys": [KEY],
+            "packages": ["mininet"],
+            "runcmd": [["touch", "/srv/ran-once"]],
+            "readiness_token": "test-only",
+            "swap_mb": 1024,
+        }
+    )
+    monkeypatch.setattr(module, "Path", Path)
+    return files["/var/lib/vz/snippets/carrel-10100-user.json"]
+
+
+def test_a_reset_keeps_the_login_and_drops_every_creation_step(monkeypatch):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    new = "ssh-ed25519 AAAAnew owner@laptop"
+    reset = module.reset_user_data(created, [new])
+    config = json.loads(reset.split("\n", 1)[1])
+    assert config["users"][0]["name"] == "user"
+    assert config["users"][0]["ssh_authorized_keys"] == [new]
+    assert config["users"][0]["sudo"] == "ALL=(ALL) NOPASSWD:ALL"
+    assert config["ssh_deletekeys"] is False
+    assert config["hostname"] == "web" and config["disable_root"] is True and config["ssh_pwauth"] is False
+    for step in ("runcmd", "packages", "package_update", "write_files", "swap", "apt"):
+        assert step not in config
+    # A retry after a lost answer writes the same bytes.
+    assert module.reset_user_data(reset, [new]) == reset
+
+
+def test_a_reset_refuses_a_file_carrel_did_not_write():
+    module = load("node-agent.py")
+    for raw in (
+        "",
+        "#cloud-config\n{}",
+        "#cloud-config\nnot json",
+        '#cloud-config\n{"users": []}',
+        '#cloud-config\n{"users": [{"name": "root"}]}',
+        "machine:\n  type: controlplane\n",
+    ):
+        with pytest.raises(ValueError):
+            module.reset_user_data(raw, [KEY])
+
+
+def test_the_reset_action_writes_the_file_and_returns_both(monkeypatch, tmp_path):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    (tmp_path / "carrel-10100-user.json").write_text(created)
+    (tmp_path / "carrel-10100-network.json").write_text('{"version": 2}')
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {})
+    monkeypatch.setattr(module, "write", lambda path, data, mode: Path(path).write_text(data))
+    new = "ssh-ed25519 AAAAnew"
+    got = module.action({"machine": MACHINE, "action": "reset_access", "ssh_keys": [new]})
+    assert got["cloud_init"]["user"] == (tmp_path / "carrel-10100-user.json").read_text()
+    assert got["cloud_init"]["user"] == module.reset_user_data(created, [new])
+    assert got["cloud_init"]["network"] == '{"version": 2}'
+    for bad in ([], ["command=x ssh-ed25519 AAAA"], "ssh-ed25519 AAAA", [7]):
+        with pytest.raises((ValueError, TypeError)):
+            module.action({"machine": MACHINE, "action": "reset_access", "ssh_keys": bad})
+    with pytest.raises(ValueError):
+        module.action({"machine": {**MACHINE, "kind": "ct"}, "action": "reset_access", "ssh_keys": [new]})

@@ -200,7 +200,7 @@ func (e *Execution) WaitReady(original D, previousBoot string) {
 			reportedAt = *r.ReportedAt
 		}
 		current := r.ReportedAt != nil && fresh(reportedAt) && (previousBoot == "" || r.BootID != previousBoot)
-		if e.Op != nil && e.Op["tool"] == "machine_power" {
+		if e.Op != nil && (e.Op["tool"] == "machine_power" || e.Op["tool"] == "machine_reset_access") {
 			current = current && reportedAt >= num(obj(e.Op["power_restore"])["reported_after"])
 		}
 		if e.Op != nil && e.Op["plugin"] != nil {

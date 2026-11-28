@@ -455,6 +455,20 @@ execution or file-reading API. Verification uses disposable guests and their own
 Saved SSH keys apply to future creations, and to existing machines only where carrel-keys is
 installed; elsewhere removing one does not rotate existing guest keys.
 
+## No key logs in
+
+When none of your keys opens a VM any more (you deleted `~/.ssh/authorized_keys`, or lost the private
+key), `machine_reset_access` adds keys again. Pass `ssh_keys`, or leave them out to use the tenant's saved
+keys, and `confirm` with the machine's name. Carrel writes the keys into the VM's cloud-init file and
+shuts down and starts a running VM; a stopped VM takes them at its next start.
+
+- Keys already on the machine stay. Remove the ones you no longer trust from `~/.ssh/authorized_keys`.
+- The SSH host key does not change, so your client shows no warning.
+- Commands, packages and files from creation do not run again.
+- It works on a VM that Carrel configures. A CT, a machine installed from an ISO and one that serves its
+  own ports are refused.
+- Every reset is recorded in the audit log.
+
 ## Environment sets
 
 Store an app's secrets once and give them to several apps, instead of copying them by hand into
