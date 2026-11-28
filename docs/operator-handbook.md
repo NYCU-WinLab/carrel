@@ -63,6 +63,13 @@ scripts/install.sh --site sites/<site>/cluster.json --join <first node>
 - The host must be listed under `nodes` in the site file.
 - Guest storage (`storage`, or `--storage`) must be a ZFS pool.
 - `--join` runs `pvecm add <node> --use_ssh 1` once, on a host with no guests.
+  - Root on the joining host must reach `root@<node>` by that name without a prompt: its key in the
+    node's `authorized_keys`, and the node's host key in its `known_hosts` under that name.
+  - `pvecm add` exits 0 when it stops early, so `install.sh` checks for `/etc/pve/corosync.conf`.
+- Root's `authorized_keys` must be the cluster's shared file, a link to `/etc/pve/priv/authorized_keys`.
+  A host made from a cloud image before Proxmox was installed keeps its own file, and `install.sh`
+  stops: append its lines to the shared file, without cloud-init's `no-port-forwarding,...` lines
+  that refuse root, then make the link.
   - Afterwards, run `scripts/bootstrap-platform.py --firewall` on the first exit node.
 - `--prepared-dir`, `--image` and `--vmid-base` pass through to `build-templates.py`.
 - Running `install.sh` again repairs; on the first exit node it rewrites the infra firewalls.

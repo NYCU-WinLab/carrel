@@ -85,8 +85,23 @@ if [[ -n $join ]]; then
 		if [[ -n $(qm list 2>/dev/null | tail -n +2) || -n $(pct list 2>/dev/null | tail -n +2) ]]; then
 			die "a joining host must hold no guests"
 		fi
+		# pvecm add exits 0 even when it stops early, for example when
+		# ssh-copy-id cannot reach root on the existing node, so check the
+		# result instead of the exit status.
 		run pvecm add "$join" --use_ssh 1
+		if [[ ${CARREL_DRY_RUN:-} != 1 && ! -f /etc/pve/corosync.conf ]]; then
+			die "pvecm add $join did not join the cluster; root on this host must reach root@$join over SSH without a prompt, host key included"
+		fi
 	fi
+fi
+
+# configure-nodes.py writes the control plane's key line once, into root's
+# authorized_keys, which Proxmox shares across the cluster as a link to
+# /etc/pve/priv/authorized_keys. A host made from a cloud image before
+# Proxmox was installed keeps its own file, and the other nodes never get
+# the line.
+if [[ ${CARREL_DRY_RUN:-} != 1 && -e /root/.ssh/authorized_keys && $(readlink -f /root/.ssh/authorized_keys) != /etc/pve/priv/authorized_keys ]]; then
+	die "/root/.ssh/authorized_keys is not the cluster's shared file: append its lines to /etc/pve/priv/authorized_keys, then link it there (ln -sf /etc/pve/priv/authorized_keys /root/.ssh/authorized_keys)"
 fi
 
 # A host without a subscription cannot read the enterprise repositories that
