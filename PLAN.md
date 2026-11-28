@@ -1062,7 +1062,7 @@ repeats, and the code changes when the machine list does.
 | Tool | Mechanism | Risk and mitigation |
 |---|---|---|
 | `machine_console_log` | Read-only serial output. The capture mechanism is chosen in M3 (open decision 13.5) | None beyond what the owner can already see |
-| `machine_reset_access` | Write new keys into cloud-init, change the instance id, shut down and start | A stolen Keycloak session could take over a machine. Every reset is audited; the notice to the owner waits for a sender (issue #821). The new cloud-init file drops the creation steps and keeps the host keys, so member commands do not run again and clients see no host key warning |
+| `machine_reset_access` | Write new keys into cloud-init, change the instance id, shut down and start | A stolen Keycloak session could take over a machine. Every reset is audited; each one also writes the WARN record `machine_access_reset`, which the alerting service sends on (section 9.3), because carrel has no mail sender. The new cloud-init file drops the creation steps and keeps the host keys, so member commands do not run again and clients see no host key warning |
 
 ### 7.7 Admins do not enter tenant machines
 
@@ -1865,6 +1865,7 @@ B09 uses golem, which sends to Telegram (2026-11-17; no email sender was built).
 | Node memory saturated | `carrel.node.memory.utilization` above 0.9 |
 | A node the control plane cannot read | `carrel.node.reachable` below 1 |
 | Reconciler drift it could not repair, backup failure, certificate failure | the ERROR log records, such as `reconcile_failed`, `gateway_config_rejected`, `backup_failed` and `certificate_issuance_failed` |
+| A machine's keys were reset | the WARN record `machine_access_reset`, with the tenant, machine, actor and key count |
 | Admission out of room, a guest that did not come up | the WARN record `operation_failed` with `code` `capacity_exhausted` or `guest_not_ready` |
 | Freshness | no new data for 10 minutes. Healthy services with stale data are the failure mode seen before |
 

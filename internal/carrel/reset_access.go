@@ -1,6 +1,9 @@
 package carrel
 
-import "strings"
+import (
+	"log/slog"
+	"strings"
+)
 
 // machine_reset_access (issue #820, PLAN 7.9) lets a tenant back into a VM
 // that accepts none of its keys any more. The node rewrites the VM's
@@ -106,6 +109,9 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 		fail("unavailable", "The node did not return the machine's cloud-init files", D{"recovery": "retry"})
 	}
 	e.S.Log(str(w["sub"]), n, "machine_reset_access", D{"vmid": m["vmid"], "keys_added": len(keys), "restart": restart}, "ok")
+	// The notice (issue #821): a WARN record the alerting service sends on
+	// (PLAN 9.3), so a reset made with a stolen session does not pass unseen.
+	slog.Warn("machine_access_reset", "event", "machine_access_reset", "tenant", n, "vmid", m["vmid"], "machine", m["name"], "actor", w["username"], "keys_added", len(keys), "restart", restart)
 	// The jump host admits a machine's keys.
 	e.syncJumpNow()
 	if restart {

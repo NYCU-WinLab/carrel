@@ -1,8 +1,11 @@
 package carrel
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -218,5 +221,24 @@ func TestResetAccessInAnOperationKeepsItsKeysAndResumesTheRestart(t *testing.T) 
 	r := e.ResetAccess(a, D{}, p.Store.TenantN(1))
 	if r["restart"] != true || actions[0]["reset_id"] != first || actions[len(actions)-1]["action"] != "start" {
 		t.Fatal("the retry must resume the reset", r, actions)
+	}
+}
+
+func TestResetAccessLogsANoticeForTheAlerts(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "stopped", &actions)
+	seedMachine(p, "web", 10100)
+	p.execution(context.Background()).ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAnew"}}, D{"username": "alice"}, p.Store.TenantN(1))
+	out := buf.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "machine_access_reset") || !strings.Contains(out, "machine=web") || !strings.Contains(out, "actor=alice") {
+		t.Fatal("a reset must leave the WARN notice", out)
+	}
+	if strings.Contains(out, "AAAAnew") {
+		t.Fatal("the notice must not carry key material", out)
 	}
 }
