@@ -45,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.28"
@@ -55,3 +57,7 @@ jobs:
       - run: uv run pytest -q
       - run: uv run ruff check scripts
       - run: python -m compileall -q scripts
+      - run: python3 scripts/check-skills.py
+        if: github.event_name != 'pull_request'
+      - run: python3 scripts/check-skills.py --base origin/${{ github.base_ref }}
+        if: github.event_name == 'pull_request'
