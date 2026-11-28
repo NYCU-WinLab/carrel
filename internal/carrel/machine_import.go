@@ -230,7 +230,7 @@ func (e *Execution) importPlan(a D) (D, importContext) {
 		warnings = append(warnings, "Offline volumes ("+strings.Join(offline, ", ")+") need a directory storage on the target")
 	}
 	if running {
-		warnings = append(warnings, "The guest is stopped first and moves offline; the import reports whether shutdown or stop was used")
+		warnings = append(warnings, "The guest is shut down first and moves offline; a container that does not shut down is stopped, a VM is not")
 	}
 	change("storage", "per disk", importTargetStorage+" ("+importTargetType+")")
 	net := "net0"

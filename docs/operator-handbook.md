@@ -635,7 +635,10 @@ The control plane must reach the source's API port. Revoke both tokens after the
 source on the old host ends stopped with `lock: migrate` and stays that way for 14 days as the
 rollback (PLAN 10.7). To go back:
 
-1. Stop the carrel machine and delete it, so the address and names are free.
+1. Stop the carrel machine and delete it, so the address and names are free. Until normalization
+   (#897) tags the guest, the node refuses to act on an `imported_unverified` machine: destroy the
+   guest on `import_target_node` with `qm destroy <vmid>` or `pct destroy <vmid>` first, then
+   `machine_delete` releases the record.
 2. On the old host, clear the lock: `qm unlock <vmid>` for a VM, `pct unlock <vmid>` for a CT.
 3. Start the source: `qm start <vmid>` or `pct start <vmid>`.
 4. Point the Cloudflare records back at the old gateway and check from outside the campus.

@@ -156,6 +156,29 @@ func importUsage(p *Platform) D {
 	return (&Execution{P: p, S: p.Store, Ctx: context.Background()}).Usage(p.Store.TenantN(1))
 }
 
+func TestMachineImportConfirmVMShutdownTimeoutNeverForcesStop(t *testing.T) {
+	p, _, run := importSite(t)
+	// The VM does not shut down in time: it keeps running on the source.
+	importFailTask = "status-shutdown"
+	op := run(104)
+	if op["state"] != "failed" || obj(op["error"])["backend_code"] != "source_shutdown_timeout" {
+		t.Fatalf("operation: %v", op)
+	}
+	log := joined()
+	if strings.Contains(log, "status/stop") {
+		t.Errorf("a VM must never be stopped by force:\n%s", log)
+	}
+	if strings.Contains(log, "remote_migrate") || strings.Contains(log, "delete=ide2") {
+		t.Errorf("nothing may change after a failed shutdown:\n%s", log)
+	}
+	if m := p.Store.Get("machines", "10100"); m != nil {
+		t.Errorf("record kept: %v", m)
+	}
+	if u := importUsage(p); num(u["vcpu"]) != 0 || num(u["machines"]) != 0 {
+		t.Errorf("quota still reserved: %v", u)
+	}
+}
+
 func TestMachineImportConfirmFailureBeforeMigrateRollsBack(t *testing.T) {
 	p, _, run := importSite(t)
 	// Neither pct shutdown nor pct stop finishes: nothing was sent to migrate.

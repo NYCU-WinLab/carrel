@@ -240,7 +240,7 @@ func (e *Execution) moveGuest(job D) {
 		if upid := str(job["upid"]); upid != "" {
 			note("step", "remote_migrate")
 			if !sourceTask(e.Ctx, client, base, tokenID, secret, node, upid) {
-				fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped if it was a container", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
+				fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
 			}
 		} else {
 			if job["migrate_sent"] == true {
@@ -271,19 +271,24 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 
 	// Every guest moves stopped. A running VM cannot move online: the tenant
 	// bridge has a smaller MTU than the old network, and Proxmox refuses to
-	// start the VM there (staging, #902). Shutdown first; when it does not
-	// finish, stop, and the result says which one was used.
+	// start the VM there (staging, #902). Shutdown first. A CT that does not
+	// finish is stopped (PLAN 10.6). A VM is never stopped by force: the
+	// source is the rollback copy, so a VM that does not shut down stays
+	// running and the import ends before anything moved.
 	if job["running"] == true && str(job["stopped_with"]) == "" {
 		note("step", "stop")
-		cmd := "qm"
+		shutdown := sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(importShutdownSeconds)}})
+		used := "qm shutdown"
 		if job["kind"] == "ct" {
-			cmd = "pct"
+			used = "pct shutdown"
 		}
-		used := cmd + " shutdown"
-		if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/shutdown", url.Values{"timeout": {strconv.Itoa(importShutdownSeconds)}})) {
-			used = cmd + " stop"
+		if !wait(shutdown) {
+			if job["kind"] != "ct" {
+				fail("conflict", "The VM did not shut down; it still runs on the source. Shut it down there, then import again", D{"component": "source", "backend_code": "source_shutdown_timeout", "recovery": "resolve_prerequisite"})
+			}
+			used = "pct stop"
 			if !wait(sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/status/stop", url.Values{})) {
-				fail("backend_unavailable", "The source could not stop the guest", D{"component": "source", "backend_code": "source_stop_failed", "recovery": "contact_administrator"})
+				fail("backend_unavailable", "The source could not stop the container", D{"component": "source", "backend_code": "source_stop_failed", "recovery": "contact_administrator"})
 			}
 		}
 		note("stopped_with", used)
@@ -319,7 +324,7 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 		note("upid", upid)
 	}
 	if !wait(r) {
-		fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped if it was a container", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
+		fail("backend_unavailable", "The source could not migrate the guest; it stays on the source, stopped", D{"component": "source", "backend_code": "remote_migrate_failed", "recovery": "contact_administrator"})
 	}
 }
 

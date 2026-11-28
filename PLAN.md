@@ -2075,8 +2075,9 @@ one exists, changes are checked on disposable tenant machines.
 - **Rollback state**: the source ends stopped with `lock: migrate`. This is the rollback state
   of section 10.7. Starting it again on the old host needs `qm unlock` (`pct unlock` for a CT).
 - **Stopping a guest**: `pct shutdown` timed out on a Debian 13 CT without `nesting=1`, and
-  `pct stop` worked. The import shuts a running guest down and stops it when the shutdown does
-  not finish, and reports which one it used (`qm shutdown`, `qm stop`, `pct shutdown` or `pct stop`).
+  `pct stop` worked. The import shuts a running guest down. A CT that does not finish is stopped,
+  and the import reports whether it used `pct shutdown` or `pct stop`. A VM is never stopped by
+  force: the source is the rollback copy, so the import ends and the VM keeps running.
 - **Plan first**: `dry_run` returns the target VMID and address, disk sizes, the quota it takes,
   every configuration change, and warnings. The call with `confirm` runs it.
 - **Normalization**: the NIC moves to the tenant's primary network with `firewall=1`, `mtu=1`, the
