@@ -26,7 +26,7 @@ func importSite(t *testing.T) (*Platform, *fakeBackend, func(guest int) D) {
 	importPoll = time.Millisecond
 	p.wg.Add(1)
 	go p.Operations.Loop()
-	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse = "none", nil, 0, nil, ""
+	importFailTask, seenForms, importPollErrors, importGuestStatus, importRefuse, importTruncate = "none", nil, 0, nil, "", false
 	srv, fp, _ := importFake(t)
 	admin := person("root", true)
 	if r := p.Execute(context.Background(), "source_add", sourceArgs(srv, fp), admin); r["ok"] != true {
@@ -478,5 +478,25 @@ func TestMachineImportRetryResumesFailedImport(t *testing.T) {
 	}
 	if strings.Count(joined(), "status/shutdown") != 1 {
 		t.Errorf("the retry shut the guest down again:\n%s", joined())
+	}
+}
+
+func TestMachineImportTruncatedMigrateAnswerKeepsRecord(t *testing.T) {
+	p, _, run := importSite(t)
+	// A 200 means the source started the task; a body cut short after the
+	// headers leaves the outcome unknown, so the VMID and quota stay held.
+	importTruncate = true
+	op := run(107)
+	if op["state"] != "failed" {
+		t.Fatalf("operation: %v", op)
+	}
+	if job := obj(p.Store.Get("operations", str(op["id"]))["import"]); job["migrate_sent"] != true {
+		t.Errorf("migrate_sent cleared: %v", job)
+	}
+	if m := p.Store.Get("machines", "10100"); m == nil || m["state"] != "import_failed" {
+		t.Errorf("record: %v", m)
+	}
+	if u := importUsage(p); num(u["machines"]) != 1 {
+		t.Errorf("quota released: %v", u)
 	}
 }

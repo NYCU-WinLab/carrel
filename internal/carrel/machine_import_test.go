@@ -24,6 +24,9 @@ var (
 	// importRefuse, when set, makes remote_migrate answer 500 with this
 	// Proxmox message.
 	importRefuse string
+	// importTruncate makes remote_migrate answer 200 with a body cut short,
+	// as when the connection drops after the headers.
+	importTruncate bool
 )
 
 // importFake is a source with one running VM on LVM-thin and one CT.
@@ -42,6 +45,11 @@ func importFake(t *testing.T) (*httptest.Server, string, *[]string) {
 				seenForms = append(seenForms, r.Method+" "+r.URL.Path+" "+r.PostForm.Encode())
 				w.WriteHeader(http.StatusInternalServerError)
 				fmt.Fprintf(w, `{"data":null,"message":%q}`, importRefuse+" target-endpoint: "+r.PostForm.Get("target-endpoint"))
+				return
+			}
+			if importTruncate && strings.HasSuffix(r.URL.Path, "/remote_migrate") {
+				seenForms = append(seenForms, r.Method+" "+r.URL.Path+" "+r.PostForm.Encode())
+				fmt.Fprint(w, `{"data":"UPID:anvil:00`)
 				return
 			}
 			seenForms = append(seenForms, r.Method+" "+r.URL.Path+" "+r.PostForm.Encode())

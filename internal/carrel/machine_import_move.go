@@ -58,7 +58,7 @@ func sourceWrite(ctx context.Context, client *http.Client, method, base, tokenID
 	var d D
 	body := io.LimitReader(resp.Body, 1<<20)
 	if resp.StatusCode != http.StatusOK {
-		fail("backend_unavailable", "The source refused the request"+sourceReason(body), D{"component": "source", "backend_code": "source_request_failed", "recovery": "retry_infrastructure"})
+		fail("backend_unavailable", "The source refused the request"+sourceReason(body), D{"component": "source", "backend_code": "source_refused", "recovery": "retry_infrastructure"})
 	}
 	if json.NewDecoder(body).Decode(&d) != nil {
 		fail("backend_unavailable", "The source refused the request", D{"component": "source", "backend_code": "source_request_failed", "recovery": "retry_infrastructure"})
@@ -446,9 +446,10 @@ func (e *Execution) startMigration(job D, client *http.Client, base, tokenID, se
 	note("migrate_sent", true)
 	var r D
 	if f := attempt(func() { r = sourceWrite(e.Ctx, client, "POST", base, tokenID, secret, path+"/remote_migrate", form) }); f != nil {
-		// A refusal means the source started nothing, so a retry may send the
-		// request again. Any other failure leaves the outcome unknown.
-		if failure, ok := f.(Failure); ok && obj(failure.Result["error"])["backend_code"] == "source_request_failed" {
+		// A non-200 refusal means the source started nothing, so a retry may
+		// send the request again. Any other failure, including a 200 whose
+		// body does not decode, leaves the outcome unknown.
+		if failure, ok := f.(Failure); ok && obj(failure.Result["error"])["backend_code"] == "source_refused" {
 			note("migrate_sent", false)
 		}
 		panic(f)
