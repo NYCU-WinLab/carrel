@@ -106,10 +106,11 @@ jobs:
           tags: ghcr.io/%s:${{ github.sha }}
       - uses: NYCU-WinLab/carrel-deploy@v1
         with:
+          url: %s
           tenant: %s
           function: %s
           image: ghcr.io/%s@${{ steps.image.outputs.digest }}
-`, branch, f["name"], repo, t["slug"], f["name"], repo)
+`, branch, f["name"], repo, e.P.appOrigin(), t["slug"], f["name"], repo)
 }
 
 // functionBySlug finds a function by its tenant's slug for a deploy from

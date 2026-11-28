@@ -269,6 +269,7 @@ jobs:
       # On a pull request this deploys the preview and comments its URL.
       - uses: NYCU-WinLab/carrel-deploy@v1
         with:
+          url: %s
           tenant: %s
           function: %s
           image: ghcr.io/%s@${{ steps.image.outputs.digest }}
@@ -278,8 +279,9 @@ jobs:
     steps:
       - uses: NYCU-WinLab/carrel-deploy@v1
         with:
+          url: %s
           tenant: %s
           function: %s
           close-preview: true
-`, branch, f["name"], repo, t["slug"], f["name"], repo, t["slug"], f["name"])
+`, branch, f["name"], repo, e.P.appOrigin(), t["slug"], f["name"], repo, e.P.appOrigin(), t["slug"], f["name"])
 }

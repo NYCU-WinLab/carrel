@@ -269,10 +269,11 @@ jobs:
       - run: tar czf "$RUNNER_TEMP/app.tar.gz" --exclude=.git .
       - uses: NYCU-WinLab/carrel-deploy@v1
         with:
+          url: %s
           tenant: %s
           app: %s
           artifact: ${{ runner.temp }}/app.tar.gz
-`, app["branch"], t["slug"], app["name"])
+`, app["branch"], e.P.appOrigin(), t["slug"], app["name"])
 }
 
 // appGitLabCI is the GitLab counterpart of appWorkflow: a job with an ID
