@@ -183,10 +183,15 @@ def _blocks(event):
             yield "result", item.get("exit_code") not in (0, None)
 
 
+# Arguments named like a key that never hold a secret: a retry handle and public SSH keys (a private
+# key pasted into them is still caught by the private block check).
+NOT_SECRET = {"idempotency_key", "ssh_key", "ssh_keys"}
+
+
 def has_secret(args):
     """True when a tool argument holds a private key block or a non-empty value under a secret key."""
     if isinstance(args, dict):
-        return any((SECRET_KEY.search(str(k)) and v not in (None, "") and not isinstance(v, (dict, list))) or has_secret(v) for k, v in args.items())
+        return any((str(k) not in NOT_SECRET and SECRET_KEY.search(str(k)) and v not in (None, "") and not isinstance(v, (dict, list))) or has_secret(v) for k, v in args.items())
     if isinstance(args, list):
         return any(has_secret(v) for v in args)
     if isinstance(args, str):
@@ -223,7 +228,8 @@ def summarize(lines):
 
 def admin_get(url, token, path):
     req = urllib.request.Request(url.rstrip("/") + path, headers={"Authorization": f"Bearer {token}"} if token else {})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    # The oracle may wait for a rebooted machine before it answers.
+    with urllib.request.urlopen(req, timeout=300) as resp:
         return json.load(resp)
 
 

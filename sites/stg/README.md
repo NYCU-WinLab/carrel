@@ -28,3 +28,28 @@ cp sites/stg/stg-edge*.service sites/stg/stg-edge.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now stg-edge.service stg-edge.timer
 ```
+
+## Skill bench
+
+`scripts/skill-bench.py` (PLAN 4.5.3) runs here. The pieces in `bench/`:
+
+- `bench.py arm` is the `--arm-command`: it sets `skills_hidden` in CT 100's `config.json`, restarts the control plane, and recreates the case's machines.
+- `bench.py oracle` serves the admin paths the cases check (`/admin/machines/<name>/ssh-check` and `/ports`) on `127.0.0.1:8790`.
+- `agent.sh` is the `--agent-cmd`: it runs each agent in the bench container, CT 1113 `carrel-bench` on anvil (10.10.11.113).
+
+The agents never run on an operator's machine. They run with `bypassPermissions`, and on macOS `ssh` reads the account's real home, not `$HOME`: an early run added the operator's public keys to a test machine and wrote to the operator's `~/.ssh/config`.
+
+CT 1113 is in the `spoke` firewall group: it reaches the internet and the public address, not the nodes. Inside it:
+
+- User `agent` (unprivileged) with Claude Code in `~/.local/bin`, `~/run-claude.sh` (from `bench/run-claude.sh`), and its own key pair in `~/.ssh`.
+- `~/.claude.env` (mode 600) holds `CLAUDE_CODE_OAUTH_TOKEN`, so runs use a subscription, not an API key.
+- Each run starts from an empty Claude config directory, an empty work directory and only the key pair in `~/.ssh`.
+
+Run, from a clone on the operator's machine, with a member token from `login.py` (it lasts about 30 minutes) and a copy of the agent's private key:
+
+```sh
+export CARREL_TOKEN_FILE=/path/to/token BENCH_KEY=/path/to/bench-key
+python3 sites/stg/bench/bench.py oracle &
+python3 scripts/skill-bench.py rescue --runs 1 --agents claude --admin-url http://127.0.0.1:8790 \
+  --arm-command "python3 sites/stg/bench/bench.py arm" --agent-cmd claude=sites/stg/bench/agent.sh
+```
