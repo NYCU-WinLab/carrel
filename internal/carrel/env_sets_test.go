@@ -47,7 +47,7 @@ func openSets(t *testing.T, key hpke.PrivateKey, app string, env D) map[string][
 
 func TestEnvironmentSetsAreSealedToEachAppAndOnlyThere(t *testing.T) {
 	p, a, site := appFixture(t)
-	p.Config.FunctionEnvKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	p.Config.ServiceEnvKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
 	ctx, alice := context.Background(), person("alice", false)
 	call := func(tool string, args D) D { return a.Call(ctx, tool, args, alice) }
 	seedMachine(p, "api", 10101)

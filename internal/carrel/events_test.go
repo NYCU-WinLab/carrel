@@ -46,7 +46,7 @@ func allowLoopback(t *testing.T, srv *httptest.Server) {
 
 func TestWebhookURLMustBePublicHTTPS(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config.FunctionEnvKey = testEnvKey
+	p.Config.ServiceEnvKey = testEnvKey
 	a, alice := NewApp(p, nil), person("alice", false)
 	for _, url := range []string{"http://example.com/hook", "https://10.0.0.5/hook", "https://127.0.0.1/hook", "https://[::1]/hook", "https://100.64.1.1/x", "https://u:p@example.com/", "ftp://example.com/"} {
 		if r := a.Call(context.Background(), "webhook_add", D{"url": url}, alice); r["ok"] != false {
@@ -96,7 +96,7 @@ func TestWebhookClientRefusesPrivateAddresses(t *testing.T) {
 
 func TestReleaseEventsAreSignedAndDelivered(t *testing.T) {
 	p, a, agent := appFixture(t)
-	p.Config.FunctionEnvKey = testEnvKey
+	p.Config.ServiceEnvKey = testEnvKey
 	rcv := &receiver{status: 500}
 	srv := httptest.NewTLSServer(rcv)
 	defer srv.Close()
@@ -172,7 +172,7 @@ func TestReleaseEventsAreSignedAndDelivered(t *testing.T) {
 	}
 }
 
-func TestBuildAndFunctionEvents(t *testing.T) {
+func TestBuildAndServiceEvents(t *testing.T) {
 	p, a, _ := appFixture(t)
 	seedMachine(p, "pull", 10102)
 	ctx, alice := context.Background(), person("alice", false)
@@ -192,15 +192,15 @@ func TestBuildAndFunctionEvents(t *testing.T) {
 		t.Fatalf("events: %v", got)
 	}
 
-	fp, fa := functionFixture(t)
+	fp, fa := serviceFixture(t)
 	call := func(tool string, args D) D { return fa.Call(ctx, tool, args, alice) }
-	assertOK(t, call("function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "port": 9000}))
-	report(t, fa, `{"revision":1,"functions":[{"id":"t1-hook","versions":[{"version":"v1","state":"ready"}]}]}`)
-	assertOK(t, call("function_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:2"}))
-	report(t, fa, `{"revision":2,"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"},{"version":"v2","state":"failed","error":"pull failed"}]}]}`)
+	assertOK(t, call("service_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:1", "port": 9000}))
+	report(t, fa, `{"revision":1,"services":[{"id":"t1-hook","versions":[{"version":"v1","state":"ready"}]}]}`)
+	assertOK(t, call("service_deploy", D{"name": "hook", "image": "ghcr.io/alice/hook:2"}))
+	report(t, fa, `{"revision":2,"services":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"},{"version":"v2","state":"failed","error":"pull failed"}]}]}`)
 	// The same report again changes nothing and is no event.
-	report(t, fa, `{"revision":3,"functions":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"}]}]}`)
-	if got := types(fp); len(got) != 2 || got[0] != "function.version.ready" || got[1] != "function.version.failed" {
+	report(t, fa, `{"revision":3,"services":[{"id":"t1-hook","current":"v1","versions":[{"version":"v1","state":"ready"}]}]}`)
+	if got := types(fp); len(got) != 2 || got[0] != "service.version.ready" || got[1] != "service.version.failed" {
 		t.Fatalf("events: %v", got)
 	}
 }
@@ -295,7 +295,7 @@ func TestEventLogKeepsItsCap(t *testing.T) {
 // waits on its endpoint without the platform's write lock.
 func TestWebhookRemovalStopsDeliveryAndTestTakesNoLock(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config.FunctionEnvKey = testEnvKey
+	p.Config.ServiceEnvKey = testEnvKey
 	a, alice := NewApp(p, nil), person("alice", false)
 	ctx := context.Background()
 	var id any
@@ -338,7 +338,7 @@ func TestWebhookRemovalStopsDeliveryAndTestTakesNoLock(t *testing.T) {
 // A webhook whose secret no key opens does not stop the others.
 func TestBrokenWebhookDoesNotStopTheOthers(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config.FunctionEnvKey = testEnvKey
+	p.Config.ServiceEnvKey = testEnvKey
 	a, ctx := NewApp(p, nil), context.Background()
 	rcv := &receiver{status: 204}
 	srv := httptest.NewTLSServer(rcv)
@@ -368,7 +368,7 @@ func itoa(v int64) string { return string(encoded(v)) }
 
 func TestWebhookURLRefusesQueryAndBlockedRanges(t *testing.T) {
 	p, _ := fixture(t)
-	p.Config.FunctionEnvKey = testEnvKey
+	p.Config.ServiceEnvKey = testEnvKey
 	a, alice := NewApp(p, nil), person("alice", false)
 	if r := a.Call(context.Background(), "webhook_add", D{"url": "https://example.com/hook?token=abc"}, alice); r["ok"] != false {
 		t.Errorf("query accepted: %s", encoded(r))

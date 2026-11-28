@@ -97,8 +97,8 @@ type Platform struct {
 	wg            sync.WaitGroup
 	platformMu    sync.Mutex
 	platformCodes map[string]D
-	fnLogs        functionLogs
-	appLogs       functionLogs
+	fnLogs        serviceLogs
+	appLogs       serviceLogs
 	reportMu      sync.Mutex
 	// jumpMu makes a jump sync read the store and send under one lock.
 	jumpMu sync.Mutex
@@ -373,8 +373,8 @@ func (e *Execution) Usage(t D) D {
 	}
 	// A gone machine keeps its address; its record charges the rest.
 	used["ips"] = num(used["ips"]) + float64(len(e.goneRecords(n)))
-	used["functions"] = len(e.S.Objects("functions", n))
-	used["function_gb"] = math.Round(e.functionBytes(n)/GiB*100) / 100
+	used["services"] = len(e.S.Objects("services", n))
+	used["service_gb"] = math.Round(e.serviceBytes(n)/GiB*100) / 100
 	e.pluginUsage(n, used)
 	return used
 }

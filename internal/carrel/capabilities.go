@@ -34,9 +34,9 @@ var features = []feature{
 		}
 		return ""
 	}},
-	{"functions", []string{"function_deploy"}, func(p *Platform) string {
-		if len(p.Config.FunctionHosts) == 0 {
-			return "The site has no function host (function_hosts)"
+	{"services", []string{"service_deploy"}, func(p *Platform) string {
+		if len(p.Config.ServiceHosts) == 0 {
+			return "The site has no service host (service_hosts)"
 		}
 		return ""
 	}},

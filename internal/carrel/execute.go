@@ -338,14 +338,14 @@ func (e *Execution) Member(tool string, a, w, t D) D {
 		return e.PublicIPAction(tool, a, t)
 	case "app_link", "app_list", "app_get", "app_logs", "app_deploy", "app_rollback", "app_unlink", "app_webhook_rotate":
 		return e.AppTool(tool, a, t)
-	case "function_deploy", "function_list", "function_get", "function_rollback", "function_schedule", "function_remove", "function_logs":
-		return e.FunctionTool(tool, a, t)
-	case "function_env":
-		return e.functionEnv(a, w, t)
-	case "function_registry":
-		return e.functionRegistry(a, w, t)
-	case "function_link":
-		return e.functionLink(a, t)
+	case "service_deploy", "service_list", "service_get", "service_rollback", "service_schedule", "service_remove", "service_logs":
+		return e.ServiceTool(tool, a, t)
+	case "service_env":
+		return e.serviceEnv(a, w, t)
+	case "service_registry":
+		return e.serviceRegistry(a, w, t)
+	case "service_link":
+		return e.serviceLink(a, t)
 	case "runner_add", "runner_list", "runner_remove":
 		return e.RunnerTool(tool, a, t)
 	case "env_list", "env_upload", "env_access", "env_trust", "env_remove":

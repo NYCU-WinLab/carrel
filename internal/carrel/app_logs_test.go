@@ -51,9 +51,9 @@ func TestAppLogsReadTheAgentsJournal(t *testing.T) {
 
 func TestAppLogsStayInTheirTenant(t *testing.T) {
 	p, a, token := appFixture(t)
-	logWait := functionLogWait
-	functionLogWait = 1500 * time.Millisecond
-	t.Cleanup(func() { functionLogWait = logWait })
+	logWait := serviceLogWait
+	serviceLogWait = 1500 * time.Millisecond
+	t.Cleanup(func() { serviceLogWait = logWait })
 	// Another tenant cannot name the app.
 	r := a.Call(context.Background(), "app_logs", D{"app": "site"}, person("bob", false))
 	if boolean(r["ok"]) {

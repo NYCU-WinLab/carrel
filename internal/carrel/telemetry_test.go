@@ -405,7 +405,7 @@ func TestOperationFailureLevels(t *testing.T) {
 		{refusal("capacity_exhausted"), "WARN"},
 		{refusal("guest_not_ready"), "WARN"},
 		{refusal("backend_unavailable"), "ERROR"},
-		// A damaged sealed value, a function host that is not set up.
+		// A damaged sealed value, a service host that is not set up.
 		{refusal("internal"), "ERROR"},
 		{refusal("unavailable"), "ERROR"},
 		// A code nobody listed is the operators' until someone lists it.

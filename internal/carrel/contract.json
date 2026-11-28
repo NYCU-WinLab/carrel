@@ -1561,7 +1561,7 @@
     },
     {
       "name": "domain_add",
-      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under a delegated grant, publish its catch-all *.<base>; the target serves /.well-known/carrel/ask. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address. A function (function_deploy) can be the target in place of a machine and port.",
+      "description": "Publish HTTPS at <sub>.<tenant>.winlab.tw, or with name at a special domain the tenant was granted (domain_request): the granted name, or for a wildcard grant the catch-all *.<base> or one label under it. Give exactly one of sub and name. Under a delegated grant, publish its catch-all *.<base>; the target serves /.well-known/carrel/ask. Under an srv grant, domain_add writes an SRV record that names carrel.winlab.tw and the public port that forwards to the machine's target_port with the grant's protocol; open that port with port_open first. DNS and TLS are automatic; the operation waits until routing is configured. Application responses require an external check. sub \"*\" is a catch-all: every single-label name under the tenant without its own domain goes to that target, for an ingress controller that routes by Host. The gateway ends TLS and forwards plain HTTP with the original Host header, X-Forwarded-For and X-Forwarded-Proto; WebSockets pass through. With vip instead of machine, the gateway forwards to the virtual address. A service (service_deploy) can be the target in place of a machine and port.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1585,7 +1585,7 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 65535,
-            "description": "Required with machine or vip; not with function."
+            "description": "Required with machine or vip; not with service."
           },
           "vip": {
             "type": "string",
@@ -1623,10 +1623,10 @@
             "default": 55,
             "description": "Seconds to wait for completion; 0 returns the job at once."
           },
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$",
-            "description": "A function of the tenant to publish, in place of machine or vip and target_port. The gateway wakes it on a request."
+            "description": "A service of the tenant to publish, in place of machine or vip and target_port. The gateway wakes it on a request."
           }
         },
         "required": [],
@@ -2367,8 +2367,8 @@
               "snapshot_gb",
               "frozen_gb",
               "images_gb",
-              "functions",
-              "function_gb"
+              "services",
+              "service_gb"
             ]
           },
           "amount": {
@@ -3119,8 +3119,8 @@
               "snapshot_gb",
               "frozen_gb",
               "images_gb",
-              "functions",
-              "function_gb"
+              "services",
+              "service_gb"
             ]
           },
           "amount": {
@@ -3936,7 +3936,7 @@
     },
     {
       "name": "env_upload",
-      "description": "Store environment variables once for apps on machines, without passing the values through tool arguments. Creates the set when it is new and returns a single-use upload link valid for 15 minutes: run its upload line where the environment file is (same format as function_env). The values replace the whole set and are sealed to the public key of each granted app's carrel-deployd, so carrel itself cannot read them back; each app writes them to a root-only file its unit reads, and restarts. Grant apps first with env_access. Prefer OIDC federation (GitHub, AWS, GCP) over storing a long-lived key.",
+      "description": "Store environment variables once for apps on machines, without passing the values through tool arguments. Creates the set when it is new and returns a single-use upload link valid for 15 minutes: run its upload line where the environment file is (same format as service_env). The values replace the whole set and are sealed to the public key of each granted app's carrel-deployd, so carrel itself cannot read them back; each app writes them to a root-only file its unit reads, and restarts. Grant apps first with env_access. Prefer OIDC federation (GitHub, AWS, GCP) over storing a long-lived key.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4214,7 +4214,7 @@
     },
     {
       "name": "webhook_add",
-      "description": "Send the tenant's events (a release that went live or failed, a failed build, a function version that is ready or failed) to an https URL as signed POSTs, in order, retried for about 8 hours. Each delivery follows Standard Webhooks: webhook-id, webhook-timestamp and webhook-signature headers. Returns the signing secret, shown only here. At most 10 per tenant. GET /v1/events streams the same events without a URL.",
+      "description": "Send the tenant's events (a release that went live or failed, a failed build, a service version that is ready or failed) to an https URL as signed POSTs, in order, retried for about 8 hours. Each delivery follows Standard Webhooks: webhook-id, webhook-timestamp and webhook-signature headers. Returns the signing secret, shown only here. At most 10 per tenant. GET /v1/events streams the same events without a URL.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4231,8 +4231,8 @@
                 "app.release.live",
                 "app.release.failed",
                 "app.build.failed",
-                "function.version.ready",
-                "function.version.failed",
+                "service.version.ready",
+                "service.version.failed",
                 "machine.operation.succeeded",
                 "machine.operation.failed",
                 "quota.warning",
@@ -4374,8 +4374,8 @@
       }
     },
     {
-      "name": "function_deploy",
-      "description": "Deploy a container image as a function: it runs only while it has requests and sleeps without memory otherwise, waking from a snapshot in about 100 ms. The image must serve HTTP on its port. Each deploy builds a new version from the image (pulled anonymously; linux/amd64) and puts it live once its first answer below 500 arrives. Returns at once with state building; follow it with function_get and wait_seconds. A function keeps no state between instances.",
+      "name": "service_deploy",
+      "description": "Deploy a container image as a service: it runs only while it has requests and sleeps without memory otherwise, waking from a snapshot in about 100 ms. The image must serve HTTP on its port. Each deploy builds a new version from the image (pulled anonymously; linux/amd64) and puts it live once its first answer below 500 arrives. Returns at once with state building; follow it with service_get and wait_seconds. A service keeps no state between instances.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4468,12 +4468,12 @@
       }
     },
     {
-      "name": "function_get",
-      "description": "Show one function: state (building, deployed, failed, not_deployed), the settings of its current version, its kept versions with build errors and sizes, and whether its function host is connected. With wait_seconds, waits up to 55 seconds while a build is in progress.",
+      "name": "service_get",
+      "description": "Show one service: state (building, deployed, failed, not_deployed), the settings of its current version, its kept versions with build errors and sizes, and whether its service host is connected. With wait_seconds, waits up to 55 seconds while a build is in progress.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
@@ -4499,7 +4499,7 @@
           }
         },
         "required": [
-          "function"
+          "service"
         ],
         "additionalProperties": false
       },
@@ -4510,12 +4510,12 @@
       }
     },
     {
-      "name": "function_logs",
-      "description": "Read the end of a function's output: what its instances wrote to standard output and standard error, each line starting with the time it was written. The platform keeps the last 10 MB per function on its host. With build, reads the output of its builds instead, the place to look when a version failed. Asks the function host and waits up to 15 seconds for it.",
+      "name": "service_logs",
+      "description": "Read the end of a service's output: what its instances wrote to standard output and standard error, each line starting with the time it was written. The platform keeps the last 10 MB per service on its host. With build, reads the output of its builds instead, the place to look when a version failed. Asks the service host and waits up to 15 seconds for it.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
@@ -4542,7 +4542,7 @@
           }
         },
         "required": [
-          "function"
+          "service"
         ],
         "additionalProperties": false
       },
@@ -4553,12 +4553,12 @@
       }
     },
     {
-      "name": "function_env",
-      "description": "Set a function's environment variables without passing the values through tool arguments. Returns a single-use upload link valid for 15 minutes: run its upload line where the environment file is (UTF-8, one KEY=VALUE per line; whole-line # comments, export and one pair of quotes around a value are allowed; no inline comments, escapes or multi-line values). The values replace the whole environment, are kept encrypted, and a new version of the function builds with them; follow it with function_get and wait_seconds. A deploy keeps the environment; a rollback brings back the one its version was built with. clear builds a version without variables. function_get shows the variable names, never the values.",
+      "name": "service_env",
+      "description": "Set a service's environment variables without passing the values through tool arguments. Returns a single-use upload link valid for 15 minutes: run its upload line where the environment file is (UTF-8, one KEY=VALUE per line; whole-line # comments, export and one pair of quotes around a value are allowed; no inline comments, escapes or multi-line values). The values replace the whole environment, are kept encrypted, and a new version of the service builds with them; follow it with service_get and wait_seconds. A deploy keeps the environment; a rollback brings back the one its version was built with. clear builds a version without variables. service_get shows the variable names, never the values.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
@@ -4576,7 +4576,7 @@
           }
         },
         "required": [
-          "function"
+          "service"
         ],
         "additionalProperties": false
       },
@@ -4587,12 +4587,12 @@
       }
     },
     {
-      "name": "function_registry",
-      "description": "Let a function pull its image from a private registry, without passing the token through tool arguments. Returns a single-use upload link valid for 15 minutes and an upload line that reads REGISTRY_USER and REGISTRY_TOKEN from the shell. The credentials are kept encrypted and sent only to that registry (default: the registry of the function's current image), when the function's host builds a version. Deploy after uploading. clear removes them. function_get shows the registry, never the credentials.",
+      "name": "service_registry",
+      "description": "Let a service pull its image from a private registry, without passing the token through tool arguments. Returns a single-use upload link valid for 15 minutes and an upload line that reads REGISTRY_USER and REGISTRY_TOKEN from the shell. The credentials are kept encrypted and sent only to that registry (default: the registry of the service's current image), when the service's host builds a version. Deploy after uploading. clear removes them. service_get shows the registry, never the credentials.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
@@ -4600,7 +4600,7 @@
             "type": "string",
             "pattern": "^[a-z0-9.-]+(:[0-9]{1,5})?$",
             "maxLength": 253,
-            "description": "Registry host, such as ghcr.io. Default: the registry of the function's current image."
+            "description": "Registry host, such as ghcr.io. Default: the registry of the service's current image."
           },
           "clear": {
             "type": "boolean",
@@ -4616,7 +4616,7 @@
           }
         },
         "required": [
-          "function"
+          "service"
         ],
         "additionalProperties": false
       },
@@ -4627,12 +4627,12 @@
       }
     },
     {
-      "name": "function_link",
-      "description": "Deploy a function on every push to a GitHub repository branch (PLAN 7.11). Returns workflow (commit to .github/workflows/carrel.yml): GitHub Actions builds the image, pushes it to ghcr.io and sends its digest to carrel with the job's OIDC token, so the repository holds no carrel secret. Each push builds a new version with the function's current settings and environment; deploy once with function_deploy first. Only the linked repository and branch, on push or workflow_dispatch, can deploy; with previews, each pull request from the repository itself also deploys to its own preview. clear unlinks and removes the previews.",
+      "name": "service_link",
+      "description": "Deploy a service on every push to a GitHub repository branch (PLAN 7.11). Returns workflow (commit to .github/workflows/carrel.yml): GitHub Actions builds the image, pushes it to ghcr.io and sends its digest to carrel with the job's OIDC token, so the repository holds no carrel secret. Each push builds a new version with the service's current settings and environment; deploy once with service_deploy first. Only the linked repository and branch, on push or workflow_dispatch, can deploy; with previews, each pull request from the repository itself also deploys to its own preview. clear unlinks and removes the previews.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
@@ -4651,7 +4651,7 @@
           "previews": {
             "type": "boolean",
             "default": false,
-            "description": "Also deploy each pull request from the repository itself to its own preview, pr-<number>-<function>, at https://pr-<number>-<function>.<tenant>.winlab.tw, removed when the pull request closes. A preview starts from the function's settings without its environment, schedules or registry credentials. At most 5 at once; they count against the functions and domains quota. Needs one push deploy first."
+            "description": "Also deploy each pull request from the repository itself to its own preview, pr-<number>-<service>, at https://pr-<number>-<service>.<tenant>.winlab.tw, removed when the pull request closes. A preview starts from the service's settings without its environment, schedules or registry credentials. At most 5 at once; they count against the services and domains quota. Needs one push deploy first."
           },
           "clear": {
             "type": "boolean",
@@ -4667,7 +4667,7 @@
           }
         },
         "required": [
-          "function"
+          "service"
         ],
         "additionalProperties": false
       },
@@ -4678,8 +4678,8 @@
       }
     },
     {
-      "name": "function_list",
-      "description": "List the tenant's functions with their state and current version.",
+      "name": "service_list",
+      "description": "List the tenant's services with their state and current version.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4707,12 +4707,12 @@
       }
     },
     {
-      "name": "function_rollback",
+      "name": "service_rollback",
       "description": "Put the previous version live again, without a new build.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
@@ -4736,7 +4736,7 @@
           }
         },
         "required": [
-          "function"
+          "service"
         ],
         "additionalProperties": false
       },
@@ -4747,19 +4747,19 @@
       }
     },
     {
-      "name": "function_schedule",
-      "description": "Add, replace or remove one cron schedule of a function. At each minute the expression matches in time_zone, the function's host sends GET path (POST with body as application/json when body is set) to the function with the header X-Carrel-Schedule: <name>, which outside requests can never carry. A run still going when its schedule comes round is skipped; minutes missed during an outage are not replayed. Each run's status goes to function_logs. function_get lists the schedules. At most 10 per function.",
+      "name": "service_schedule",
+      "description": "Add, replace or remove one cron schedule of a service. At each minute the expression matches in time_zone, the service's host sends GET path (POST with body as application/json when body is set) to the service with the header X-Carrel-Schedule: <name>, which outside requests can never carry. A run still going when its schedule comes round is skipped; minutes missed during an outage are not replayed. Each run's status goes to service_logs. service_get lists the schedules. At most 10 per service.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
           "name": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$",
-            "description": "The schedule's name, unique within the function."
+            "description": "The schedule's name, unique within the service."
           },
           "cron": {
             "type": "string",
@@ -4799,7 +4799,7 @@
           }
         },
         "required": [
-          "function",
+          "service",
           "name"
         ],
         "additionalProperties": false
@@ -4811,18 +4811,18 @@
       }
     },
     {
-      "name": "function_remove",
-      "description": "Remove a function, its versions and snapshots.",
+      "name": "service_remove",
+      "description": "Remove a service, its versions and snapshots.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "function": {
+          "service": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{0,31}$"
           },
           "confirm": {
             "type": "string",
-            "description": "Must equal the function name."
+            "description": "Must equal the service name."
           },
           "tenant": {
             "type": "string",
@@ -4844,7 +4844,7 @@
           }
         },
         "required": [
-          "function",
+          "service",
           "confirm"
         ],
         "additionalProperties": false
@@ -5838,13 +5838,13 @@
     "machine_import",
     "zone_add",
     "zone_remove",
-    "function_deploy",
-    "function_env",
-    "function_registry",
-    "function_link",
-    "function_rollback",
-    "function_schedule",
-    "function_remove",
+    "service_deploy",
+    "service_env",
+    "service_registry",
+    "service_link",
+    "service_rollback",
+    "service_schedule",
+    "service_remove",
     "runner_add",
     "runner_remove",
     "operation_cancel",
@@ -5989,7 +5989,7 @@
     "existing_machine_access": true,
     "machine_freeze": false
   },
-  "instructions": "WinLab machines through MCP. Call the tool for the task directly with the known machine name; whoami, catalog_get, quota_get and capacity_get are not prerequisites. Use machine_list only to list or for an ambiguous target. Omit tenant for personal resources. Do not use operator memories, runbooks, hypervisor access or unrelated SSH inspection. dry_run previews; wait_seconds 0 returns the job at once. Toolsets: core, machines (snapshot_*, machine_freeze/thaw), network (domain_*, port_*, peer_*), apps (app_*, runner_*), functions; all are listed by default, ?toolsets=<names> lists fewer.\nRouting: create -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; no key logs in any more -> machine_reset_access; delete -> machine_delete; park a stopped machine -> machine_freeze, back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push, or any website or service built from a GitHub repository -> app_link (then run its install line over SSH and commit its workflow), not manual SSH copies; status -> app_get. CI jobs on your own machine -> runner_add. A container image that runs only while it has requests -> function_deploy, then function_get with wait_seconds until deployed. Features, images, size presets and quota defaults -> catalog_get. Read the matching skill with skill_get before the first state change.\nIsolation: to let one machine reach another in the same tenant, or to limit what reaches a machine, use deployment_apply with access=[{machine, network_access, confirm: machine_name}] together with connections; restricted permits declared connections and public services, tenant allows same-tenant traffic. peer_allow is only for another tenant. Preview only when asked to plan or compare: deployment_plan is the complete preview. Authorized groups go straight to deployment_apply.\nSSH: after creating a machine or connection for a local CLI client, merge the returned ssh_config into the client config, keep existing entries, verify the tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short. If local file access is unavailable, the user opts out or setup fails, present ssh and say the alias is not installed. Status-only requests need no local edits. Never disable host-key checking or replace unrelated aliases. A creation with no ssh_keys uses the tenant's saved keys, then the creator's key; pass a key inline only when the plan lists ssh_public_key as a requirement, reading only the known default public key. Never read or send private keys or tokens.\nResults: member mutations wait up to 55 seconds. Read operation.state/result/error; succeeded needs no follow-up poll, list or quota call. If pending, follow next_action and poll_after_seconds with operation_get. Queued is not reserved or completed, and disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission; operation_retry resumes, revise_request needs corrected arguments. detail=full gives full accounting. A result may carry suggestions: a Carrel feature that fits the task. Follow one that matches the user's goal.\nSafety: shutdown is graceful, stop is forced and needs explicit intent. Deletion is never a substitute for shutdown. Do not shut down running work just to resize without authorization. Required confirmation fields express the user's existing authorization; ask only when intent or target is unclear. VM pause retains RAM, disks and quota; CT pause is unsupported. machine_list state is recorded, machine_get power and SSH are live. not_checked and routing_configured do not verify an application response. Units: MiB for memory_mb and swap_mb, GiB for disk_gb.",
+  "instructions": "WinLab machines through MCP. Call the tool for the task directly with the known machine name; whoami, catalog_get, quota_get and capacity_get are not prerequisites. Use machine_list only to list or for an ambiguous target. Omit tenant for personal resources. Do not use operator memories, runbooks, hypervisor access or unrelated SSH inspection. dry_run previews; wait_seconds 0 returns the job at once. Toolsets: core, machines (snapshot_*, machine_freeze/thaw), network (domain_*, port_*, peer_*), apps (app_*, runner_*), services; all are listed by default, ?toolsets=<names> lists fewer.\nRouting: create -> machine_create; status/connect -> machine_get; start/shutdown/reboot/pause/resume -> machine_power; resize -> machine_resize; rename -> machine_rename; no key logs in any more -> machine_reset_access; delete -> machine_delete; park a stopped machine -> machine_freeze, back -> machine_thaw; disk snapshots -> snapshot_*; HTTPS -> domain_add; a name outside *.<tenant>.winlab.tw -> domain_request, then domain_add with name once approved; TCP/UDP -> port_open; a fixed public port such as 25565 -> port_request, then port_open with public_port once approved. Deploy on every push, or any website or service built from a GitHub repository -> app_link (then run its install line over SSH and commit its workflow), not manual SSH copies; status -> app_get. CI jobs on your own machine -> runner_add. A container image that runs only while it has requests -> service_deploy, then service_get with wait_seconds until deployed. Features, images, size presets and quota defaults -> catalog_get. Read the matching skill with skill_get before the first state change.\nIsolation: to let one machine reach another in the same tenant, or to limit what reaches a machine, use deployment_apply with access=[{machine, network_access, confirm: machine_name}] together with connections; restricted permits declared connections and public services, tenant allows same-tenant traffic. peer_allow is only for another tenant. Preview only when asked to plan or compare: deployment_plan is the complete preview. Authorized groups go straight to deployment_apply.\nSSH: after creating a machine or connection for a local CLI client, merge the returned ssh_config into the client config, keep existing entries, verify the tenant-qualified alias HostName/User/Port with ssh -G, then present ssh_short. If local file access is unavailable, the user opts out or setup fails, present ssh and say the alias is not installed. Status-only requests need no local edits. Never disable host-key checking or replace unrelated aliases. A creation with no ssh_keys uses the tenant's saved keys, then the creator's key; pass a key inline only when the plan lists ssh_public_key as a requirement, reading only the known default public key. Never read or send private keys or tokens.\nResults: member mutations wait up to 55 seconds. Read operation.state/result/error; succeeded needs no follow-up poll, list or quota call. If pending, follow next_action and poll_after_seconds with operation_get. Queued is not reserved or completed, and disconnects do not cancel jobs. Reuse an idempotency_key for an identical lost submission; operation_retry resumes, revise_request needs corrected arguments. detail=full gives full accounting. A result may carry suggestions: a Carrel feature that fits the task. Follow one that matches the user's goal.\nSafety: shutdown is graceful, stop is forced and needs explicit intent. Deletion is never a substitute for shutdown. Do not shut down running work just to resize without authorization. Required confirmation fields express the user's existing authorization; ask only when intent or target is unclear. VM pause retains RAM, disks and quota; CT pause is unsupported. machine_list state is recorded, machine_get power and SSH are live. not_checked and routing_configured do not verify an application response. Units: MiB for memory_mb and swap_mb, GiB for disk_gb.",
   "toolsets": {
     "plugins": [],
     "core": [
@@ -6082,17 +6082,17 @@
       "webhook_rotate",
       "webhook_test"
     ],
-    "functions": [
-      "function_deploy",
-      "function_get",
-      "function_logs",
-      "function_env",
-      "function_registry",
-      "function_link",
-      "function_list",
-      "function_rollback",
-      "function_schedule",
-      "function_remove"
+    "services": [
+      "service_deploy",
+      "service_get",
+      "service_logs",
+      "service_env",
+      "service_registry",
+      "service_link",
+      "service_list",
+      "service_rollback",
+      "service_schedule",
+      "service_remove"
     ],
     "admin": [
       "domain_proxy",

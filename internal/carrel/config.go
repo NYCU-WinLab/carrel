@@ -123,7 +123,7 @@ type Config struct {
 	// app, as https origins. nil: gitlab.com only; [] turns GitLab off.
 	GitLabIssuers []string `json:"gitlab_issuers,omitempty"`
 
-	FunctionHosts []FunctionHostConfig `json:"function_hosts,omitempty"`
+	ServiceHosts []ServiceHostConfig `json:"service_hosts,omitempty"`
 	// AgentListen is the address of the TLS listener node agents connect
 	// to, such as 10.200.0.3:8443, with the certificate and key it serves.
 	// Agents pin the CA of that certificate.
@@ -135,13 +135,13 @@ type Config struct {
 	// step-ca provisioner that issues them (#601).
 	AgentClientCAFile string `json:"agent_client_ca_file,omitempty"`
 	AgentProvisioner  string `json:"agent_provisioner,omitempty"`
-	// FunctionEnvKey encrypts functions' environment values at rest: 32
-	// bytes in standard base64. Without it function_env is unavailable.
-	FunctionEnvKey string `json:"function_env_key,omitempty"`
-	// FunctionEnvOldKeys are earlier function_env_key values, in the same
+	// ServiceEnvKey encrypts services' environment values at rest: 32
+	// bytes in standard base64. Without it service_env is unavailable.
+	ServiceEnvKey string `json:"service_env_key,omitempty"`
+	// ServiceEnvOldKeys are earlier service_env_key values, in the same
 	// form. They only open values; new values are sealed with
-	// function_env_key. Keep an old key until nothing sealed with it is left.
-	FunctionEnvOldKeys []string `json:"function_env_old_keys,omitempty"`
+	// service_env_key. Keep an old key until nothing sealed with it is left.
+	ServiceEnvOldKeys []string `json:"service_env_old_keys,omitempty"`
 
 	// WebhookBlockedRanges are CIDR ranges webhooks must not reach, on top
 	// of the private and reserved ones: the site's public pool and IPv6
@@ -340,15 +340,15 @@ func (c Config) Validate() error {
 		names[n.Name], targets[n.Target] = true, true
 	}
 	hosts := map[string]bool{}
-	for _, h := range c.FunctionHosts {
-		if !functionHostName.MatchString(h.Name) || hosts[h.Name] {
-			return fmt.Errorf("function host %q needs a unique name", h.Name)
+	for _, h := range c.ServiceHosts {
+		if !serviceHostName.MatchString(h.Name) || hosts[h.Name] {
+			return fmt.Errorf("service host %q needs a unique name", h.Name)
 		}
 		if ap, err := netip.ParseAddrPort(h.Router); err != nil || !ap.Addr().Is4() {
-			return fmt.Errorf("function host %s: router must be an IPv4 address and port", h.Name)
+			return fmt.Errorf("service host %s: router must be an IPv4 address and port", h.Name)
 		}
 		if !sha256Hex.MatchString(h.TokenSHA256) {
-			return fmt.Errorf("function host %s: token_sha256 must be 64 lowercase hex digits", h.Name)
+			return fmt.Errorf("service host %s: token_sha256 must be 64 lowercase hex digits", h.Name)
 		}
 		hosts[h.Name] = true
 	}
@@ -361,9 +361,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("gitlab_issuers: %q must be a lower-case https origin such as https://gitlab.com, with no trailing slash", issuer)
 		}
 	}
-	if c.FunctionEnvKey != "" {
-		if key, err := base64.StdEncoding.DecodeString(c.FunctionEnvKey); err != nil || len(key) != 32 {
-			return fmt.Errorf("function_env_key must be 32 bytes in standard base64")
+	if c.ServiceEnvKey != "" {
+		if key, err := base64.StdEncoding.DecodeString(c.ServiceEnvKey); err != nil || len(key) != 32 {
+			return fmt.Errorf("service_env_key must be 32 bytes in standard base64")
 		}
 	}
 	for _, r := range c.WebhookBlockedRanges {
@@ -410,12 +410,12 @@ func (c Config) Validate() error {
 			return fmt.Errorf("agent_listen must be an address and port, such as 10.200.0.3:8443")
 		}
 	}
-	if len(c.FunctionEnvOldKeys) > 0 && c.FunctionEnvKey == "" {
-		return fmt.Errorf("function_env_old_keys needs function_env_key")
+	if len(c.ServiceEnvOldKeys) > 0 && c.ServiceEnvKey == "" {
+		return fmt.Errorf("service_env_old_keys needs service_env_key")
 	}
-	for _, old := range c.FunctionEnvOldKeys {
+	for _, old := range c.ServiceEnvOldKeys {
 		if key, err := base64.StdEncoding.DecodeString(old); err != nil || len(key) != 32 {
-			return fmt.Errorf("function_env_old_keys: each key must be 32 bytes in standard base64")
+			return fmt.Errorf("service_env_old_keys: each key must be 32 bytes in standard base64")
 		}
 	}
 	return nil

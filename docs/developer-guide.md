@@ -23,7 +23,7 @@ service. The live wire contract is `internal/carrel/contract.json`.
 
 `/mcp` lists every tool the caller may use (admins also see the admin toolset). A client that loads every listed
 tool on every turn can ask for fewer with `?toolsets=core` (under 50 tools, under 60 KB) plus any of
-`machines,network,apps,functions`, or the `X-Carrel-Toolsets` header. Claude Code defers tool loading and can call
+`machines,network,apps,services`, or the `X-Carrel-Toolsets` header. Claude Code defers tool loading and can call
 only listed tools, so it should keep the default. Toolsets only shape the list: every tool the caller may use stays
 callable by name for clients that allow it. `/mcp/read-only` registers and lists
 `readOnlyHint` tools plus `whoami`. The admin filter applies on every endpoint. Toolsets are defined in `contract.json`.

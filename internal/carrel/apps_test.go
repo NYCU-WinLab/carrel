@@ -347,9 +347,9 @@ func TestWorkflowsNameTheirOwnOrigin(t *testing.T) {
 	p.Config.Origin = "https://carrel.staging.test"
 	e := p.execution(context.Background())
 	for name, w := range map[string]string{
-		"app":      e.appWorkflow(D{"slug": "alice"}, D{"name": "site", "branch": "main"}),
-		"function": e.functionWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main", false),
-		"preview":  e.previewWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main"),
+		"app":     e.appWorkflow(D{"slug": "alice"}, D{"name": "site", "branch": "main"}),
+		"service": e.serviceWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main", false),
+		"preview": e.previewWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main"),
 	} {
 		uses := strings.Count(w, "NYCU-WinLab/carrel-deploy@v1")
 		if uses == 0 || strings.Count(w, "url: https://carrel.staging.test\n") != uses {

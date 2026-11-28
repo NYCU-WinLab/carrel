@@ -905,56 +905,56 @@ carrel sends no alerts itself. Point an alerting service at the collector's back
 | Out of room, guest not up | WARN `operation_failed` with `code` `capacity_exhausted` or `guest_not_ready` |
 | Site silent | no new `carrel.node.reachable` point for 10 minutes; run the alerting outside the site |
 
-## Function environment key
+## Service environment key
 
-`function_env_key` encrypts function environments and registry credentials. To rotate it:
+`service_env_key` encrypts service environments and registry credentials. To rotate it:
 
 1. Generate a new key: `openssl rand -base64 32`.
-2. In `/etc/carrel/config.json`, move the current key into `function_env_old_keys` and put the new
-   key in `function_env_key`. Restart carrel.
+2. In `/etc/carrel/config.json`, move the current key into `service_env_old_keys` and put the new
+   key in `service_env_key`. Restart carrel.
 3. New uploads are sealed with the new key. Values sealed earlier (every kept version, the rollback
-   target included, and every function's registry credentials) stay sealed with their old key
+   target included, and every service's registry credentials) stay sealed with their old key
    until you re-seal them.
-4. Count what each key still opens: `carrel -reseal-function-values -dry-run`. It prints
+4. Count what each key still opens: `carrel -reseal-service-values -dry-run`. It prints
    `{"counts":{"current":N,"old:0":N,"none":N},...}`, where `old:i` is the i-th entry of
-   `function_env_old_keys` (from 0). Then re-seal with `carrel -reseal-function-values`, which
+   `service_env_old_keys` (from 0). Then re-seal with `carrel -reseal-service-values`, which
    changes only values an old key opens, in one transaction. Run it with the same config and
    database as the service, and take a backup first.
-5. When a key's count is zero, remove it from `function_env_old_keys` and restart carrel. A count
+5. When a key's count is zero, remove it from `service_env_old_keys` and restart carrel. A count
    under `none` is values no key opens; those fail as below until the member uploads them again.
 
 Copy the old key exactly: a wrong old key passes validation, and the versions it should open fail.
 
-A version no configured key opens fails when a function host builds it: the host reports
+A version no configured key opens fails when a service host builds it: the host reports
 `environment: ... cannot be decrypted with any configured key` (or `registry credentials: ...`),
-and the control plane logs `function_value_open_failed`. The member uploads the environment again
-with `function_env`, which builds a new version. For registry credentials, the member uploads
-them again with `function_registry`, then deploys again.
+and the control plane logs `service_value_open_failed`. The member uploads the environment again
+with `service_env`, which builds a new version. For registry credentials, the member uploads
+them again with `service_registry`, then deploys again.
 
-### Function host keys
+### Service host keys
 
-Each function host's `carrel-fnd` makes its own key on the first start (`/etc/carrel-fn/env.key`)
-and registers the public key. From then on function environments and registry credentials are
+Each service host's `carrel-svcd` makes its own key on the first start (`/etc/carrel-svc/env.key`)
+and registers the public key. From then on service environments and registry credentials are
 sealed to that key, and
-carrel cannot open them; `-reseal-function-values` counts them under `host` and leaves them alone.
+carrel cannot open them; `-reseal-service-values` counts them under `host` and leaves them alone.
 The first registration seals the host's older values again, then runs `VACUUM` and empties the
-write-ahead log, so the database files keep no copy under `function_env_key`. Backups taken before
-still hold those copies: they open with `function_env_key`, so keep that key as secret as the
+write-ahead log, so the database files keep no copy under `service_env_key`. Backups taken before
+still hold those copies: they open with `service_env_key`, so keep that key as secret as the
 backups until they expire.
 
-After a function host is rebuilt, its agent logs `the control plane holds another key for this
+After a service host is rebuilt, its agent logs `the control plane holds another key for this
 host` with the new fingerprint, and versions sealed to the old key fail. Check the fingerprint on
 the host's log, then on the control plane run:
 
 ```sh
-carrel -trust-function-host-key fn01=SHA256:...
+carrel -trust-service-host-key fn01=SHA256:...
 ```
 
-Members then upload each function's environment again with `function_env`, after the trust:
+Members then upload each service's environment again with `service_env`, after the trust:
 an upload before it is sealed to the old key and fails on the rebuilt host.
 
-Rolling carrel or `carrel-fnd` back to a release before host keys is one way for these values: an
-older carrel answers 409 for them, and an older `carrel-fnd` keeps asking for them. Members upload
+Rolling carrel or `carrel-svcd` back to a release before host keys is one way for these values: an
+older carrel answers 409 for them, and an older `carrel-svcd` keeps asking for them. Members upload
 the environments again after such a rollback.
 
 ## NetBox sync

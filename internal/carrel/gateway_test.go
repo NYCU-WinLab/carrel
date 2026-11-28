@@ -35,7 +35,7 @@ func TestGatewayServesTheOriginAndTenantWildcardsOverTLS(t *testing.T) {
 	block := strings.SplitN(strings.SplitN(caddy, "https://carrel.winlab.tw {", 2)[1], "\n}\n", 2)[0]
 	for _, want := range []string{
 		"tls /etc/caddy/carrel-certs/_origin/fullchain.pem /etc/caddy/carrel-certs/_origin/privkey.pem",
-		"@control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /status /openapi.json /v1/* /apps/* /console/* /functions/v1/env/* /functions/v1/registry/* /functions/v1/deploy/*",
+		"@control path /mcp /mcp/* /oauth/* /.well-known/* /healthz /status /openapi.json /v1/* /apps/* /console/* /services/v1/env/* /services/v1/registry/* /services/v1/deploy/*",
 		"reverse_proxy 10.200.0.3:8080", "flush_interval -1", "stream_close_delay 5m", "root * /srv/carrel-site", "hide .*",
 	} {
 		if !strings.Contains(block, want) {
@@ -166,23 +166,23 @@ func TestTruncateKeepsWholeCharacters(t *testing.T) {
 	}
 }
 
-func TestGatewayRoutesAFunctionToItsHostsRouter(t *testing.T) {
+func TestGatewayRoutesAServiceToItsHostsRouter(t *testing.T) {
 	state, origin := gatewayState(t)
 	state["domains"] = append(arr(state["domains"]),
-		D{"id": "9", "tenant_n": 3, "function": "3-hook", "sub": "hook", "name": "hook.zyx1121.winlab.tw", "state": "ready"},
-		// A function with no route (removed, or its host unconfigured) answers 503.
-		D{"id": "10", "tenant_n": 3, "function": "3-gone", "sub": "gone", "name": "gone.zyx1121.winlab.tw", "state": "ready"},
+		D{"id": "9", "tenant_n": 3, "service": "3-hook", "sub": "hook", "name": "hook.zyx1121.winlab.tw", "state": "ready"},
+		// A service with no route (removed, or its host unconfigured) answers 503.
+		D{"id": "10", "tenant_n": 3, "service": "3-gone", "sub": "gone", "name": "gone.zyx1121.winlab.tw", "state": "ready"},
 		// Another tenant's route never serves this tenant's name.
-		D{"id": "11", "tenant_n": 3, "function": "4-other", "sub": "other", "name": "other.zyx1121.winlab.tw", "state": "ready"})
-	state["function_routes"] = []any{
+		D{"id": "11", "tenant_n": 3, "service": "4-other", "sub": "other", "name": "other.zyx1121.winlab.tw", "state": "ready"})
+	state["service_routes"] = []any{
 		D{"id": "3-hook", "tenant_n": 3, "router": "10.200.0.20:8090", "host_id": "t3-hook"},
 		D{"id": "4-other", "tenant_n": 4, "router": "10.200.0.20:8090", "host_id": "t4-other"},
 	}
 	caddy, _, _ := gatewayConfig(state, "carrel.winlab.tw", origin, dicts(state["certificates"]))
 	tenant := strings.SplitN(caddy, "https://*.zyx1121.winlab.tw {", 2)[1]
-	want := " @d9 host hook.zyx1121.winlab.tw\n handle @d9 {\n  reverse_proxy 10.200.0.20:8090 {\n   header_up X-Carrel-Function t3-hook\n   flush_interval -1\n  }\n }"
+	want := " @d9 host hook.zyx1121.winlab.tw\n handle @d9 {\n  reverse_proxy 10.200.0.20:8090 {\n   header_up X-Carrel-Service t3-hook\n   flush_interval -1\n  }\n }"
 	if !strings.Contains(tenant, want) {
-		t.Fatalf("no function route in\n%s", tenant)
+		t.Fatalf("no service route in\n%s", tenant)
 	}
 	for _, id := range []string{"10", "11"} {
 		if !strings.Contains(tenant, " handle @d"+id+" {\n  respond 503\n }") {
@@ -190,6 +190,6 @@ func TestGatewayRoutesAFunctionToItsHostsRouter(t *testing.T) {
 		}
 	}
 	if strings.Contains(tenant, "t4-other") {
-		t.Fatal("another tenant's function is reachable")
+		t.Fatal("another tenant's service is reachable")
 	}
 }

@@ -46,7 +46,7 @@ func NewApp(p *Platform, verifier IdentityVerifier) *App {
 	a.oauthRoutes(mux, origin, issuer, ep)
 	a.guestRoutes(mux)
 	a.appRoutes(mux)
-	a.functionRoutes(mux)
+	a.serviceRoutes(mux)
 	a.keysRoutes(mux)
 	a.statusRoute(mux, p)
 	a.askRoute(mux, p)
@@ -175,7 +175,7 @@ func (a *App) networkGate(origin string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host, _, _ := net.SplitHostPort(r.RemoteAddr)
 			guest := strings.HasPrefix(r.URL.Path, "/internal/")
-			internal := guest || r.URL.Path == "/gateway/ask" || strings.HasPrefix(r.URL.Path, "/functions/v1/agent/")
+			internal := guest || r.URL.Path == "/gateway/ask" || strings.HasPrefix(r.URL.Path, "/services/v1/agent/")
 			// The gateway (10.200.0.2) forwards internet clients, so it is no
 			// guest even though its address is on the infra network (#262).
 			if internal && !strings.HasPrefix(host, "10.200.") || guest && host == "10.200.0.2" {
@@ -238,11 +238,11 @@ func limitBody(next http.Handler) http.Handler {
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/apps/v1/") && strings.HasSuffix(r.URL.Path, "/releases"),
 			r.Method == "POST" && r.URL.Path == "/apps/v1/agent/upload":
 			// A release streams up to maxReleaseBytes; storeRelease bounds it.
-		case r.URL.Path == "/functions/v1/agent/report":
-			// A host reports every function it holds.
-			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionReport)
-		case r.URL.Path == "/functions/v1/agent/logs":
-			r.Body = http.MaxBytesReader(w, r.Body, maxFunctionLogReply)
+		case r.URL.Path == "/services/v1/agent/report":
+			// A host reports every service it holds.
+			r.Body = http.MaxBytesReader(w, r.Body, maxServiceReport)
+		case r.URL.Path == "/services/v1/agent/logs":
+			r.Body = http.MaxBytesReader(w, r.Body, maxServiceLogReply)
 		case r.URL.Path == "/apps/v1/agent/logs":
 			r.Body = http.MaxBytesReader(w, r.Body, maxAppLogReply)
 		default:

@@ -11,7 +11,7 @@ import (
 func TestSiteFeaturesGateTools(t *testing.T) {
 	p, _, _ := originFixture(t)
 	p.Config.Site = "b09"
-	p.Config.BackupStorage, p.Config.Fetch, p.Config.FunctionHosts = "", false, nil
+	p.Config.BackupStorage, p.Config.Fetch, p.Config.ServiceHosts = "", false, nil
 	p.Config.Nodes = p.Config.Nodes[:1]
 	e := p.execution(context.Background())
 	member := person("alice", false)
@@ -24,12 +24,12 @@ func TestSiteFeaturesGateTools(t *testing.T) {
 	if obj(features["snapshot"])["available"] != true {
 		t.Fatal(encoded(features))
 	}
-	for _, name := range []string{"machine_freeze", "machine_migrate", "image_import", "functions"} {
+	for _, name := range []string{"machine_freeze", "machine_migrate", "image_import", "services"} {
 		if f := obj(features[name]); f["available"] != false || str(f["reason"]) == "" {
 			t.Fatalf("%s: %v", name, f)
 		}
 	}
-	for tool, feature := range map[string]string{"machine_freeze": "machine_freeze", "machine_thaw": "machine_freeze", "iso_import": "image_import", "function_deploy": "functions", "node_drain": "machine_migrate"} {
+	for tool, feature := range map[string]string{"machine_freeze": "machine_freeze", "machine_thaw": "machine_freeze", "iso_import": "image_import", "service_deploy": "services", "node_drain": "machine_migrate"} {
 		r := failureResult(attempt(func() { e.Dispatch(tool, D{"tenant": "alice"}, person("admin", true)) }))
 		err := obj(r["error"])
 		if err["code"] != "unsupported" || err["feature"] != feature || !strings.Contains(str(err["message"]), "does not support") || len(arr(err["sites_with_feature"])) != 0 {

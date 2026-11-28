@@ -269,12 +269,12 @@ func (p *Platform) ReceiveEnvSet(ctx context.Context, token string, body io.Read
 	if !strings.HasPrefix(token, "cen_") {
 		fail("not_found", "Unknown or used link")
 	}
-	content, err := io.ReadAll(io.LimitReader(body, maxFunctionEnv+1))
+	content, err := io.ReadAll(io.LimitReader(body, maxServiceEnv+1))
 	if err != nil {
 		fail("invalid", "Upload did not complete")
 	}
 	// Parse first: a file with a mistake leaves the link usable.
-	pairs := parseFunctionEnv(content)
+	pairs := parseServiceEnv(content)
 	e := p.execution(ctx)
 	p.writer.Lock()
 	defer p.writer.Unlock()

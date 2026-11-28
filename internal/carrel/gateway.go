@@ -20,11 +20,11 @@ import (
 // the names in the database, and any other name to the tenant's catch-all
 // domain (sub "*") or a 404.
 
-// The function paths are the public ones only: the host agents' paths
-// (/functions/v1/agent/*) stay on the infra network, and so do the guests'
+// The service paths are the public ones only: the host agents' paths
+// (/services/v1/agent/*) stay on the infra network, and so do the guests'
 // /internal/* paths, which they call on 10.200.0.3:8080 directly (#262).
 var controlPaths = []string{"/mcp", "/mcp/*", "/oauth/*", "/.well-known/*", "/healthz", "/status", "/openapi.json", "/v1/*", "/apps/*", "/console/*",
-	"/functions/v1/env/*", "/functions/v1/registry/*", "/functions/v1/deploy/*"}
+	"/services/v1/env/*", "/services/v1/registry/*", "/services/v1/deploy/*"}
 
 const gatewayCerts = "/etc/caddy/carrel-certs"
 
@@ -60,21 +60,21 @@ type route struct {
 	domain  D
 	address string
 	port    int
-	// function names the function on its host, t<tenant>-<name>, when the
-	// route goes to a function host's router.
-	function string
+	// service names the service on its host, t<tenant>-<name>, when the
+	// route goes to a service host's router.
+	service string
 }
 
 // forward is the route's Caddy directive: its machine or virtual address, or
-// 503 while the machine it names is frozen. A function's route tells the
-// router which function the request is for; header_up replaces whatever the
+// 503 while the machine it names is frozen. A service's route tells the
+// router which service the request is for; header_up replaces whatever the
 // client sent in that header.
 func (r route) forward() string {
 	if r.address == "" {
 		return "  respond 503"
 	}
-	if r.function != "" {
-		return fmt.Sprintf("  reverse_proxy %s:%d {\n   header_up X-Carrel-Function %s\n   flush_interval -1\n  }", r.address, r.port, r.function)
+	if r.service != "" {
+		return fmt.Sprintf("  reverse_proxy %s:%d {\n   header_up X-Carrel-Service %s\n   flush_interval -1\n  }", r.address, r.port, r.service)
 	}
 	return fmt.Sprintf("  reverse_proxy %s:%d", r.address, r.port)
 }
@@ -88,8 +88,8 @@ func gatewayConfig(state D, origin string, originBundle D, bundles []D) (string,
 	vips := vipIndex(state)
 	grants, srv := grantIndex(state, slugs, origin)
 	frozen := frozenIndex(state)
-	functions := functionIndex(state)
-	routes, grantRoutes := domainRoutes(state, slugs, machines, vips, grants, srv, frozen, functions)
+	services := serviceIndex(state)
+	routes, grantRoutes := domainRoutes(state, slugs, machines, vips, grants, srv, frozen, services)
 	byName := bundleIndex(bundles)
 	// strict_sni_host: a request's Host must be the name its TLS handshake
 	// was for, so a connection made for one site cannot ask another (#166).
@@ -149,9 +149,9 @@ func (e *Execution) BuildGatewaySync(state D) gatewaySync {
 				fail("backend_unavailable", "Gateway configuration rejected; use the operation ID for operator diagnostics", D{"component": "carrel-gateway", "recovery": "retry_infrastructure"})
 			}
 		}()
-		// The frozen machines and the functions' routers are for this
+		// The frozen machines and the services' routers are for this
 		// configuration only: the nodes get the state as it was.
-		view := D{"frozen": e.S.Objects("frozen"), pluginObjectRows: e.S.Objects(pluginObjectRows), "function_routes": e.functionRoutes()}
+		view := D{"frozen": e.S.Objects("frozen"), pluginObjectRows: e.S.Objects(pluginObjectRows), "service_routes": e.serviceRoutes()}
 		for k, v := range state {
 			view[k] = v
 		}

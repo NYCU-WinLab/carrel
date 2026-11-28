@@ -582,7 +582,7 @@ func TestReadOnlyInstructionsAndNoOnboarding(t *testing.T) {
 func TestContractAnnotations(t *testing.T) {
 	destructive := map[string]bool{
 		"machine_delete": true, "image_delete": true,
-		"public_ip_release": true, "vip_remove": true, "function_remove": true, "app_unlink": true,
+		"public_ip_release": true, "vip_remove": true, "service_remove": true, "app_unlink": true,
 		"app_webhook_rotate": true, "webhook_rotate": true, "env_remove": true,
 	}
 	tools := dicts(Contract["tools"])
