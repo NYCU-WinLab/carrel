@@ -139,3 +139,93 @@ func TestKeycloakConfigIsAllOrNothing(t *testing.T) {
 		t.Fatalf("issuer trailing slash: %v", err)
 	}
 }
+
+// keycloakMemberServer answers the token route and the per-user routes for sub "sub-1".
+func keycloakMemberServer(t *testing.T, p *Platform, userStatus int, user string, groupsStatus int, groups string) {
+	t.Helper()
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		answer := func(status int, body string) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}
+		if r.URL.Path == "/realms/lab/protocol/openid-connect/token" {
+			_, _ = w.Write([]byte(`{"access_token":"tok"}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/admin/realms/lab/users/sub-1":
+			answer(userStatus, user)
+		case "/admin/realms/lab/users/sub-1/groups":
+			answer(groupsStatus, groups)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(s.Close)
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.HTTP = s.Client()
+	p.Config.KeycloakURL, p.Config.KeycloakRealm = s.URL, "lab"
+	p.Config.KeycloakClientID, p.Config.KeycloakClientSecretFile = "carrel", secret
+}
+
+func TestKeycloakMember(t *testing.T) {
+	const on, off = `{"id":"sub-1","enabled":true}`, `{"id":"sub-1","enabled":false}`
+	cases := []struct {
+		name         string
+		userStatus   int
+		user         string
+		groupsStatus int
+		groups       string
+		state        MemberState
+		paths        []string
+		err          string
+	}{
+		{"enabled member", 200, on, 200, `[{"path":"/lab-member"}]`, MemberEnabled, []string{"/lab-member"}, ""},
+		{"disabled member", 200, off, 200, `[{"path":"/lab-member"}]`, MemberDisabled, []string{"/lab-member"}, ""},
+		{"alumni only", 200, on, 200, `[{"path":"/lab-member/alumni"}]`, MemberEnabled, []string{"/lab-member/alumni"}, ""},
+		{"not found", 404, ``, 200, `[]`, MemberDisabled, nil, ""},
+		{"user server error", 500, ``, 200, `[]`, MemberUnknown, nil, "status 500"},
+		{"no rights", 403, ``, 200, `[]`, MemberUnknown, nil, "status 403"},
+		{"groups server error", 200, on, 500, ``, MemberUnknown, nil, "status 500"},
+		{"wrong id", 200, `{"id":"other","enabled":true}`, 200, `[]`, MemberUnknown, nil, "unexpected id"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p, _ := fixture(t)
+			keycloakMemberServer(t, p, c.userStatus, c.user, c.groupsStatus, c.groups)
+			m, err := (&Execution{P: p, Ctx: context.Background()}).keycloakMember("sub-1")
+			if c.err != "" {
+				if err == nil || !strings.Contains(err.Error(), c.err) {
+					t.Fatalf("got %v; want error containing %q", err, c.err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if m.State != c.state || strings.Join(m.Groups, ",") != strings.Join(c.paths, ",") {
+				t.Fatalf("got %+v; want state %d groups %v", m, c.state, c.paths)
+			}
+		})
+	}
+}
+
+func TestKeycloakMemberUnreachableAndNotConfigured(t *testing.T) {
+	p, _ := fixture(t)
+	keycloakMemberServer(t, p, 200, `{}`, 200, `[]`)
+	p.Config.KeycloakURL = "https://127.0.0.1:1"
+	m, err := (&Execution{P: p, Ctx: context.Background()}).keycloakMember("sub-1")
+	if err == nil || m.State != MemberUnknown {
+		t.Fatalf("unreachable: got %+v, %v", m, err)
+	}
+	p.Config.KeycloakURL = ""
+	m, err = (&Execution{P: p, Ctx: context.Background()}).keycloakMember("sub-1")
+	if err == nil || m.State != MemberUnknown {
+		t.Fatalf("not configured: got %+v, %v", m, err)
+	}
+}
