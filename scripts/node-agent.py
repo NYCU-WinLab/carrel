@@ -2074,13 +2074,22 @@ SNIPPETS = Path("/var/lib/vz/snippets")
 RESET_DROPPED = ("bootcmd", "runcmd", "packages", "package_update", "package_upgrade", "package_reboot_if_required", "apt", "write_files", "swap", "mounts")
 
 
-def reset_user_data(raw, new_keys):
+def reset_user_data(raw, new_keys, reset_id):
     """A carrel user file for machine_reset_access: the login user's keys
-    replaced, the creation steps dropped, the SSH host keys kept. Applying it
-    to its own output gives the same bytes, so a retry changes nothing."""
+    replaced, the creation steps dropped, the SSH host keys kept.
+
+    The reset's ID goes in a comment line, so every reset has new bytes and a
+    new instance id, even with the keys of the last one: cloud-init adds keys
+    only once per instance. A retry of the same reset gives the same bytes.
+    """
+    if not isinstance(reset_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", reset_id):
+        raise ValueError("invalid reset ID")
     prefix = "#cloud-config\n"
+    body = raw[len(prefix):] if raw.startswith(prefix) else None
+    while body is not None and body.startswith("#"):
+        body = body.partition("\n")[2]
     try:
-        data = json.loads(raw[len(prefix):]) if raw.startswith(prefix) else None
+        data = json.loads(body) if body is not None else None
     except ValueError:
         data = None
     users = data.get("users") if isinstance(data, dict) else None
@@ -2090,7 +2099,10 @@ def reset_user_data(raw, new_keys):
         data.pop(key, None)
     users[0]["ssh_authorized_keys"] = list(new_keys)
     data["ssh_deletekeys"] = False
-    return prefix + json.dumps(data)
+    # Without an apt section cloud-init renders the distro's default sources
+    # again, dropping a site mirror and the owner's edits.
+    data["apt"] = {"preserve_sources_list": True}
+    return prefix + "# carrel reset " + reset_id + "\n" + json.dumps(data)
 
 
 def cloud_init_files(m):
@@ -3091,8 +3103,14 @@ def action(req):
         if not isinstance(new_keys, list) or not all(isinstance(k, str) for k in new_keys):
             raise ValueError("invalid SSH public key")
         keys(new_keys)
+        # A thawed VM has no files here until its next start: the stored
+        # copy goes back first, as a start would write it.
+        if req.get("cloud_init"):
+            restore_cloud_init(m, req["cloud_init"])
         path = SNIPPETS / f"carrel-{vmid}-user.json"
-        write(path, reset_user_data(path.read_text(), new_keys), 0o600)
+        if not path.exists():
+            raise ValueError("the VM has no cloud-init files on this node")
+        write(path, reset_user_data(path.read_text(), new_keys, req.get("reset_id")), 0o600)
         files = cloud_init_files(m)
         if not files:
             raise ValueError("the VM has no cloud-init files on this node")

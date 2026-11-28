@@ -2,6 +2,7 @@ package carrel
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -108,5 +109,82 @@ func TestResetAccessRefusals(t *testing.T) {
 	}
 	if len(actions) != 0 {
 		t.Fatal("a refusal must not reach the node", actions)
+	}
+}
+
+func TestResetAccessNeverForcesAMachineOff(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "running", &actions)
+	next := b.call
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "action" && r["action"] == "shutdown" {
+			actions = append(actions, r)
+			return nil, errors.New("shutdown timed out")
+		}
+		return next(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	if attempt(func() {
+		e.ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAnew"}}, D{}, p.Store.TenantN(1))
+	}) == nil {
+		t.Fatal("a failed shutdown must fail the reset")
+	}
+	for _, a := range actions {
+		if a["action"] == "stop" || a["action"] == "start" {
+			t.Fatal("forced off or started after a failed shutdown", actions)
+		}
+	}
+	if e.cloudInitFiles(p.Store.Get("machines", "10100"))["user"] != "#cloud-config\n{\"reset\":true}" {
+		t.Fatal("the keys are saved for the next start")
+	}
+}
+
+func TestResetAccessReadsTheFilesWhenTheNodeReplaysItsAnswer(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "stopped", &actions)
+	next := b.call
+	reads := 0
+	b.call = func(r D, target string) (any, error) {
+		switch {
+		case r["op"] == "action" && r["action"] == "reset_access":
+			// A journal replay: the node strips the files from it.
+			return D{}, nil
+		case r["op"] == "cloud_init_read":
+			reads++
+			return D{"cloud_init": D{"user": "#cloud-config\n# carrel reset x\n{}", "network": "{}"}}, nil
+		}
+		return next(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	p.execution(context.Background()).ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAnew"}}, D{}, p.Store.TenantN(1))
+	if reads != 1 || p.execution(context.Background()).cloudInitFiles(p.Store.Get("machines", "10100"))["user"] != "#cloud-config\n# carrel reset x\n{}" {
+		t.Fatal("the record must hold what the node has", reads)
+	}
+}
+
+func TestResetAccessBoundsAndDeduplicatesTheMachinesKeys(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "stopped", &actions)
+	m := seedMachine(p, "web", 10100)
+	full := []any{}
+	for i := 0; i < maxMachineKeys; i++ {
+		full = append(full, "ssh-ed25519 AAAA"+string(rune('a'+i%26))+string(rune('a'+i/26))+" n")
+	}
+	m["ssh_keys"] = full
+	p.Store.Put("machines", 10100, 1, m)
+	e := p.execution(context.Background())
+	// The same key under another comment is not a new key.
+	e.ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAaa other"}}, D{}, p.Store.TenantN(1))
+	if len(arr(p.Store.Get("machines", "10100")["ssh_keys"])) != maxMachineKeys {
+		t.Fatal("a known key was added twice")
+	}
+	if attempt(func() {
+		e.ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAzzz"}}, D{}, p.Store.TenantN(1))
+	}) == nil {
+		t.Fatal("accepted a 51st key")
 	}
 }

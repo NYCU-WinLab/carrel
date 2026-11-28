@@ -464,7 +464,9 @@ shuts down and starts a running VM; a stopped VM takes them at its next start.
 
 - Keys already on the machine stay. Remove the ones you no longer trust from `~/.ssh/authorized_keys`.
 - The SSH host key does not change, so your client shows no warning.
-- Commands, packages and files from creation do not run again.
+- Commands, packages, files and apt sources from creation are not applied again.
+- A VM that does not shut down is never forced off: the keys wait for its next start.
+- A reset with the same keys as the last one works too, and a machine holds at most 50 keys.
 - It works on a VM that Carrel configures. A CT, a machine installed from an ISO and one that serves its
   own ports are refused.
 - Every reset is recorded in the audit log.

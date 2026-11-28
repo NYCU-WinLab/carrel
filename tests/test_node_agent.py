@@ -2829,17 +2829,26 @@ def test_a_reset_keeps_the_login_and_drops_every_creation_step(monkeypatch):
     module = load("node-agent.py")
     created = created_user_file(monkeypatch, module, root)
     new = "ssh-ed25519 AAAAnew owner@laptop"
-    reset = module.reset_user_data(created, [new])
-    config = json.loads(reset.split("\n", 1)[1])
+    reset = module.reset_user_data(created, [new], "op-00000001")
+    config = json.loads(reset.split("\n", 2)[2])
     assert config["users"][0]["name"] == "user"
     assert config["users"][0]["ssh_authorized_keys"] == [new]
     assert config["users"][0]["sudo"] == "ALL=(ALL) NOPASSWD:ALL"
     assert config["ssh_deletekeys"] is False
     assert config["hostname"] == "web" and config["disable_root"] is True and config["ssh_pwauth"] is False
-    for step in ("runcmd", "packages", "package_update", "write_files", "swap", "apt"):
+    assert config["apt"] == {"preserve_sources_list": True}
+    for step in ("runcmd", "packages", "package_update", "write_files", "swap"):
         assert step not in config
     # A retry after a lost answer writes the same bytes.
-    assert module.reset_user_data(reset, [new]) == reset
+    assert module.reset_user_data(reset, [new], "op-00000001") == reset
+    # A new reset with the same keys still changes the bytes, so cloud-init
+    # sees a new instance and adds the keys again.
+    assert module.reset_user_data(reset, [new], "op-00000002") != reset
+    assert reset.split("\n")[1] == "# carrel reset op-00000001"
+
+
+def created_user_file_text():
+    return '#cloud-config\n{"users": [{"name": "user"}]}'
 
 
 def test_a_reset_refuses_a_file_carrel_did_not_write():
@@ -2853,7 +2862,10 @@ def test_a_reset_refuses_a_file_carrel_did_not_write():
         "machine:\n  type: controlplane\n",
     ):
         with pytest.raises(ValueError):
-            module.reset_user_data(raw, [KEY])
+            module.reset_user_data(raw, [KEY], "op-00000001")
+    for bad_id in (None, "", "short", "a\nb" * 8, "x" * 65):
+        with pytest.raises(ValueError):
+            module.reset_user_data(created_user_file_text(), [KEY], bad_id)
 
 
 def test_the_reset_action_writes_the_file_and_returns_both(monkeypatch, tmp_path):
@@ -2866,12 +2878,38 @@ def test_the_reset_action_writes_the_file_and_returns_both(monkeypatch, tmp_path
     monkeypatch.setattr(module, "owned", lambda m, **kw: {})
     monkeypatch.setattr(module, "write", lambda path, data, mode: Path(path).write_text(data))
     new = "ssh-ed25519 AAAAnew"
-    got = module.action({"machine": MACHINE, "action": "reset_access", "ssh_keys": [new]})
+    got = module.action(
+        {"machine": MACHINE, "action": "reset_access", "ssh_keys": [new], "reset_id": "op-00000001"}
+    )
     assert got["cloud_init"]["user"] == (tmp_path / "carrel-10100-user.json").read_text()
-    assert got["cloud_init"]["user"] == module.reset_user_data(created, [new])
+    assert got["cloud_init"]["user"] == module.reset_user_data(created, [new], "op-00000001")
     assert got["cloud_init"]["network"] == '{"version": 2}'
     for bad in ([], ["command=x ssh-ed25519 AAAA"], "ssh-ed25519 AAAA", [7]):
         with pytest.raises((ValueError, TypeError)):
-            module.action({"machine": MACHINE, "action": "reset_access", "ssh_keys": bad})
+            module.action(
+                {"machine": MACHINE, "action": "reset_access", "ssh_keys": bad, "reset_id": "op-00000001"}
+            )
     with pytest.raises(ValueError):
-        module.action({"machine": {**MACHINE, "kind": "ct"}, "action": "reset_access", "ssh_keys": [new]})
+        module.action(
+            {
+                "machine": {**MACHINE, "kind": "ct"},
+                "action": "reset_access",
+                "ssh_keys": [new],
+                "reset_id": "op-00000001",
+            }
+        )
+
+
+def test_a_reset_after_a_thaw_writes_the_stored_files_back_first(monkeypatch, tmp_path):
+    root = Path(__file__).parents[1]
+    module = load("node-agent.py")
+    created = created_user_file(monkeypatch, module, root)
+    monkeypatch.setattr(module, "SNIPPETS", tmp_path)
+    monkeypatch.setattr(module, "owned", lambda m, **kw: {})
+    monkeypatch.setattr(module, "write", lambda path, data, mode: Path(path).write_text(data))
+    request = {"machine": MACHINE, "action": "reset_access", "ssh_keys": [KEY], "reset_id": "op-00000001"}
+    with pytest.raises(ValueError):
+        module.action(request)
+    got = module.action({**request, "cloud_init": {"user": created, "network": '{"version": 2}'}})
+    assert got["cloud_init"]["user"] == module.reset_user_data(created, [KEY], "op-00000001")
+    assert got["cloud_init"]["network"] == '{"version": 2}'
