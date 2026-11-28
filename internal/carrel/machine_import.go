@@ -14,7 +14,7 @@ import (
 // machine_import (PLAN 10.6). This file holds the plan: dry_run reads the
 // guest's configuration from a registered source (sources.go) and says what
 // an import would do. It reserves, allocates and changes nothing on either
-// side. The call with confirm is not built yet.
+// side. The confirmed import is in machine_import_move.go.
 
 // importTargetStorage is the storage the guest lands on (PLAN 10.6).
 const (
@@ -79,14 +79,35 @@ func importDisks(config D, storageTypes map[string]string) []importDisk {
 	return disks
 }
 
-// MachineImport runs machine_import.
+// importContext is what a plan learned about the guest and the target; the
+// confirmed import acts on the same facts.
+type importContext struct {
+	Tenant, Config, Plan                   D
+	Source, SourceNode, API, Kind, TokenID string
+	URL, Fingerprint                       string
+	VMID, N, Slot                          int
+	Running, CloudInit, Hop                bool
+	Disks                                  []importDisk
+	Delta                                  D
+	DiskGiB, CPU, Memory                   float64
+	Target                                 nodeRef
+}
+
+// MachineImport runs machine_import: dry_run plans, confirm moves the guest.
 func (e *Execution) MachineImport(a, w D) D {
-	if !boolean(a["dry_run"]) {
-		if boolean(a["confirm"]) {
-			fail("not_implemented", "machine_import with confirm is not built yet; run it with dry_run to see the plan")
-		}
-		fail("invalid", "Give dry_run: true. machine_import only plans for now", D{"recovery": "revise_request"})
+	if !boolean(a["dry_run"]) && !boolean(a["confirm"]) {
+		fail("invalid", "Give dry_run: true to plan, or confirm: true to run the import", D{"recovery": "revise_request"})
 	}
+	r, c := e.importPlan(a)
+	if boolean(a["dry_run"]) {
+		return r
+	}
+	return e.importStart(a, c, r)
+}
+
+// importPlan reads the guest from its source and works out the import. It
+// reserves, allocates and changes nothing.
+func (e *Execution) importPlan(a D) (D, importContext) {
 	t := find(e.S.Tenants(), func(t D) bool { return t["slug"] == a["tenant"] })
 	if t == nil {
 		fail("not_found", "Tenant not found", D{"recovery": "revise_request"})
@@ -213,7 +234,7 @@ func (e *Execution) MachineImport(a, w D) D {
 		}
 	}
 
-	return D{
+	r := D{
 		"dry_run": true,
 		"plan": D{
 			"source": name, "guest": D{"vmid": vmid, "name": config["name"], "hostname": config["hostname"], "kind": kind, "node": node, "state": str(guest["status"])},
@@ -223,4 +244,7 @@ func (e *Execution) MachineImport(a, w D) D {
 		"quota_after":  e.Quota(t, delta),
 		"requirements": []any{},
 	}
+	return r, importContext{Tenant: t, Config: config, Plan: obj(r["plan"]), Source: name, SourceNode: node, API: api, Kind: kind, TokenID: tokenID,
+		URL: base, Fingerprint: str(rec["fingerprint"]), VMID: vmid, N: n, Slot: slot, Running: running, CloudInit: hasCloudInit, Hop: !allZFS,
+		Disks: disks, Delta: delta, DiskGiB: math.Ceil(diskGiB), CPU: cpu, Memory: memory, Target: target}
 }

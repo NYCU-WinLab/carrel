@@ -46,8 +46,19 @@ type Config struct {
 	CertificateDir  string `json:"certificate_dir,omitempty"`
 	ZoneDir         string `json:"zone_dir,omitempty"`
 	SourceDir       string `json:"source_dir,omitempty"`
-	ACMEDirectory   string `json:"acme_directory,omitempty"`
-	ACMEEmail       string `json:"acme_email,omitempty"`
+	// Import* tell a source's Proxmox where machine_import moves a guest to
+	// (PLAN 10.6): the target cluster's API address (host or host:port), an
+	// API token on it (its secret is the file _target.secret in SourceDir),
+	// the certificate fingerprint, the bridge the guest first joins and the
+	// directory storage offline volumes land on before they move to the
+	// guest storage.
+	ImportTargetEndpoint    string `json:"import_target_endpoint,omitempty"`
+	ImportTargetTokenID     string `json:"import_target_token_id,omitempty"`
+	ImportTargetFingerprint string `json:"import_target_fingerprint,omitempty"`
+	ImportBridge            string `json:"import_bridge,omitempty"`
+	ImportHopStorage        string `json:"import_hop_storage,omitempty"`
+	ACMEDirectory           string `json:"acme_directory,omitempty"`
+	ACMEEmail               string `json:"acme_email,omitempty"`
 
 	// PortalKeysURL is the portal service that serves members' SSH keys,
 	// e.g. https://portal.winlab.tw/api/ssh-keys/services/carrel, and
@@ -207,6 +218,8 @@ func (c Config) WithDefaults() Config {
 	def(&c.CertificateDir, defaultCertificateDir)
 	def(&c.ZoneDir, defaultZoneDir)
 	def(&c.SourceDir, defaultSourceDir)
+	def(&c.ImportBridge, "vmbr0")
+	def(&c.ImportHopStorage, "local")
 	def(&c.AppsDir, defaultAppsDir)
 	def(&c.DeploydBinary, defaultDeploydBinary)
 	def(&c.ACMEDirectory, acme.LetsEncryptURL)

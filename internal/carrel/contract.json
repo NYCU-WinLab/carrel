@@ -3336,7 +3336,7 @@
     },
     {
       "name": "machine_import",
-      "description": "Admin: plan the import of a guest from a registered source (source_add) into a tenant. Only dry_run is built: it returns the target VMID, address and node, disk sizes, the quota the machine takes, every configuration change and warnings (a cloud-init disk to drop, offline volumes that need a directory storage hop, source and target storage types). It reserves and changes nothing on either side. With confirm it answers not_implemented.",
+      "description": "Admin: import a guest from a registered source (source_add) into a tenant. dry_run returns the target VMID, address and node, disk sizes, the quota the machine takes, every configuration change and warnings (a cloud-init disk to drop, offline volumes that need a directory storage hop, source and target storage types); it reserves and changes nothing on either side. With confirm, a job moves the guest with Proxmox remote migration: it drops a VM's cloud-init disk, stops a container (pct shutdown, else pct stop, and the result says which), migrates, and moves offline volumes to the guest storage. The source ends stopped with lock: migrate and is never deleted. The machine is registered under the tenant as imported_unverified. A failure removes the machine record and its quota reservation.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3362,7 +3362,7 @@
           },
           "confirm": {
             "type": "boolean",
-            "description": "Run the import. Not built yet: answers not_implemented."
+            "description": "Run the import as a job; follow it with operation_get."
           },
           "dry_run": {
             "type": "boolean",
@@ -5865,6 +5865,7 @@
     "machine_create",
     "machine_delete",
     "machine_freeze",
+    "machine_import",
     "machine_media",
     "machine_migrate",
     "machine_nic_attach",

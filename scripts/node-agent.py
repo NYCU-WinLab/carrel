@@ -2278,6 +2278,36 @@ def migrate_finish(req):
     return {"state": "done"}
 
 
+def import_finish(req):
+    """On the target, after a remote migration (PLAN 10.6): every volume that
+    landed on the hop directory storage moves to the guest storage. The guest
+    is not tagged yet (normalization does that), so the VMID range of its
+    tenant is the proof that carrel allocated it."""
+    n = integer(req["tenant_n"], 1, 254)
+    vmid = integer(req["vmid"], 10000 + n * 100, 10099 + n * 100)
+    if req["kind"] not in ("vm", "ct"):
+        raise ValueError("invalid machine kind")
+    hop = req["hop_storage"]
+    if not isinstance(hop, str) or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,62}", hop):
+        raise ValueError("invalid hop storage")
+    kind = "qemu" if req["kind"] == "vm" else "lxc"
+    cfg = pve_get(f"/nodes/{NODE}/{kind}/{vmid}/config")
+    keys = r"(virtio|scsi|sata|ide)[0-9]+|efidisk0|tpmstate0" if kind == "qemu" else r"rootfs|mp[0-9]+"
+    target = storage_id()
+    moved = []
+    for key, value in sorted(cfg.items()):
+        if not re.fullmatch(keys, key) or not isinstance(value, str):
+            continue
+        if value.split(",")[0].partition(":")[0] != hop:
+            continue
+        if kind == "qemu":
+            run("qm", "disk", "move", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+        else:
+            run("pct", "move-volume", vmid, key, target, "--delete", "1", "--bwlimit", migration_bwlimit(req), timeout=4 * 3600)
+        moved.append(key)
+    return {"state": "done", "moved": moved}
+
+
 def cloud_init_remove(req):
     # On the node a VM left: its files must not outlive it here.
     m = req["machine"]
@@ -3668,8 +3698,8 @@ def main():
     # ca_backfill is not long: it mounts a stopped disk, so a start (node.lock)
     # must wait for it, and it picks a free nbd device another backfill must not take.
     # It also tries the VM's lock itself, so a migration or freeze excludes it.
-    long = op in ("migrate", "migrate_finish", "freeze", "thaw", "backup_remove")
-    lock_path = STATE / (f"vm-{machine(req['machine'])}.lock" if long else "node.lock")
+    long = op in ("migrate", "migrate_finish", "import_finish", "freeze", "thaw", "backup_remove")
+    lock_path = STATE / (f"vm-{integer(req['vmid'], 10000, 99999999) if op == 'import_finish' else machine(req['machine'])}.lock" if long else "node.lock")
     with lock_path.open("w") as lock:
         if op not in ("inventory", "guest_memory", "status", "metrics", "node_files", "cloud_init_read", "disk_volume", "fetch_status", "fetch_store", "vmids_present"):
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -3739,6 +3769,8 @@ def main():
             out = migrate(req)
         elif op == "migrate_finish":
             out = migrate_finish(req)
+        elif op == "import_finish":
+            out = import_finish(req)
         elif op == "cloud_init_remove":
             out = cloud_init_remove(req)
         elif op in ("freeze", "thaw", "backup_remove"):
