@@ -493,6 +493,34 @@ func TestNodeListNamesNodesBehindOnTheirDesiredState(t *testing.T) {
 	}
 }
 
+func TestNodeListNamesNodesWithAServiceDown(t *testing.T) {
+	p, b, _ := nodeFixture(t)
+	admin := person("admin", true)
+	if r := p.execution(context.Background()).Admin("node_list", D{}, admin); len(arr(r["degraded_nodes"])) != 0 || dicts(r["nodes"])[0]["services_ok"] != nil {
+		t.Fatal("unknown without a report: ", encoded(r["degraded_nodes"]))
+	}
+	inner := b.call
+	b.call = func(r D, target string) (any, error) {
+		out, err := inner(r, target)
+		if r["op"] == "inventory" {
+			state := "active"
+			if target == "node-02" {
+				state = "failed"
+			}
+			out = merge(obj(out), D{"services": D{"pve-cluster": "active", "pvestatd": state}})
+		}
+		return out, err
+	}
+	r := p.execution(context.Background()).Admin("node_list", D{}, admin)
+	nodes := dicts(r["nodes"])
+	if nodes[0]["services_ok"] != true || nodes[1]["services_ok"] != false {
+		t.Fatal(encoded(nodes))
+	}
+	if d := arr(r["degraded_nodes"]); len(d) != 1 || d[0] != "carrel02" {
+		t.Fatal(encoded(r["degraded_nodes"]))
+	}
+}
+
 // A gateway config that cannot be built (here a tenant pair that does not
 // cover its names) fails the reconcile, but only after the other nodes got
 // their state: one bad pair must not stop firewall changes for every tenant

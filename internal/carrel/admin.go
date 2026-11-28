@@ -67,6 +67,11 @@ func (e *Execution) Admin(tool string, a, w D) D {
 			if sent, ok := e.P.desired.Load(n.Name); ok {
 				entry["desired_current"] = obj(obj(inventory)["desired"])["revision"] == sent
 			}
+			// The Proxmox services the node needs; unknown for a node whose
+			// programs predate the report (#879).
+			if services, ok := obj(inventory)["services"].(map[string]any); ok {
+				entry["services_ok"] = servicesActive(services)
+			}
 			nodes = append(nodes, entry)
 		}
 		// A node whose programs came from another release than the control
@@ -88,16 +93,27 @@ func (e *Execution) Admin(tool string, a, w D) D {
 		if len(lagging) > 0 {
 			slog.Warn("nodes_lagging", "nodes", lagging)
 		}
+		// A node with a Proxmox service down reports guests as unknown and may
+		// have lost its firewall rules (#879).
+		degraded := []any{}
+		for _, n := range nodes {
+			if n["services_ok"] == false {
+				degraded = append(degraded, n["name"])
+			}
+		}
+		if len(degraded) > 0 {
+			slog.Warn("nodes_services_down", "nodes", degraded)
+		}
 		if len(nodes) == 1 {
-			out := D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale, "lagging_nodes": lagging}
-			for _, k := range []string{"agent", "error", "desired_current"} {
+			out := D{"inventory": nodes[0]["inventory"], "capacity": nodes[0]["capacity"], "control_plane": Build(), "programs": nodes[0]["programs"], "stale_nodes": stale, "lagging_nodes": lagging, "degraded_nodes": degraded}
+			for _, k := range []string{"agent", "error", "desired_current", "services_ok"} {
 				if v, ok := nodes[0][k]; ok {
 					out[k] = v
 				}
 			}
 			return out
 		}
-		return D{"inventory": nodes[0]["inventory"], "nodes": nodes, "control_plane": Build(), "stale_nodes": stale, "lagging_nodes": lagging}
+		return D{"inventory": nodes[0]["inventory"], "nodes": nodes, "control_plane": Build(), "stale_nodes": stale, "lagging_nodes": lagging, "degraded_nodes": degraded}
 	case "machine_migrate":
 		return e.PlanMigration(a)
 	case "node_drain", "node_undrain":
@@ -280,4 +296,18 @@ func (e *Execution) graceFields(t D) D {
 		out["grace_reason"] = str(t["grace_reason"])
 	}
 	return out
+}
+
+// servicesActive reports whether every service a node lists is active. An
+// empty list is not healthy: the node should always name at least pve-cluster.
+func servicesActive(services map[string]any) bool {
+	if len(services) == 0 {
+		return false
+	}
+	for _, state := range services {
+		if state != "active" {
+			return false
+		}
+	}
+	return true
 }
