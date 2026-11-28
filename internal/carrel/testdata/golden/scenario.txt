@@ -121,6 +121,7 @@ requests mcp {"ok":true,"requests":[{"actor":"alice","created_at":"<time:int>","
 admin mcp {"ok":true,"requests":[{"actor":"alice","created_at":"<time:int>","domain_kind":"exact","existing_record":false,"id":"0e3b4d24182913ae","kind":"domain","name":"lab.winlab.tw","reason":"golden special","status":"pending","tenant_n":1,"zone":"winlab.tw"},{"actor":"alice","created_at":"<time:int>","id":"76b1ff1a6cb1b237","kind":"port","proto":"tcp","public_port":25565,"reason":"golden special","status":"pending","tenant_n":1}]}
 admin mcp {"error":{"code":"invalid","details":"jsonschema validation failed with 'https://carrel.invalid/schema/request_approve#'\n- at '/id': got null, want string","message":"Invalid tool arguments"},"ok":false}
 admin mcp {"error":{"code":"invalid","details":"jsonschema validation failed with 'https://carrel.invalid/schema/request_reject#'\n- at '/id': got null, want string","message":"Invalid tool arguments"},"ok":false}
+admin mcp {"error":{"code":"invalid","details":"jsonschema validation failed with 'https://carrel.invalid/schema/source_add#'\n- at '/fingerprint': 'bad' does not match pattern '^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$'","message":"Invalid tool arguments"},"ok":false}
 admin mcp {"ok":true,"zones":[{"name":"winlab.tw","open_to":"all","site":true}]}
 admin mcp {"error":{"code":"conflict","message":"The token does not see exactly this zone in Cloudflare"},"ok":false}
 admin mcp {"error":{"code":"not_found","message":"This zone is not managed by carrel"},"ok":false}

@@ -45,6 +45,7 @@ type Config struct {
 	CloudflareAPI   string `json:"cloudflare_api,omitempty"`
 	CertificateDir  string `json:"certificate_dir,omitempty"`
 	ZoneDir         string `json:"zone_dir,omitempty"`
+	SourceDir       string `json:"source_dir,omitempty"`
 	ACMEDirectory   string `json:"acme_directory,omitempty"`
 	ACMEEmail       string `json:"acme_email,omitempty"`
 
@@ -162,6 +163,7 @@ const (
 	defaultDomain         = "winlab.tw"
 	defaultCertificateDir = "/var/lib/carrel/certificates"
 	defaultZoneDir        = "/var/lib/carrel/zones"
+	defaultSourceDir      = "/var/lib/carrel/sources"
 	defaultAppsDir        = "/var/lib/carrel/apps"
 	defaultDeploydBinary  = "/usr/local/lib/carrel/carrel-deployd"
 	defaultFreezeWait     = 1800
@@ -204,6 +206,7 @@ func (c Config) WithDefaults() Config {
 	def(&c.PublicHost, "carrel."+c.Domain)
 	def(&c.CertificateDir, defaultCertificateDir)
 	def(&c.ZoneDir, defaultZoneDir)
+	def(&c.SourceDir, defaultSourceDir)
 	def(&c.AppsDir, defaultAppsDir)
 	def(&c.DeploydBinary, defaultDeploydBinary)
 	def(&c.ACMEDirectory, acme.LetsEncryptURL)
