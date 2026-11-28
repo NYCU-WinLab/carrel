@@ -51,6 +51,15 @@ func readinessState(m D) {
 		if len(servicePortsOf(m)) > 0 && m["state"] == "ready" {
 			return
 		}
+		// A failed import verification is the only needs_owner_fix of an
+		// unmanaged machine (#920): it stays until SSH answers.
+		if m["state"] == "needs_owner_fix" {
+			if boolean(m["ssh_ready"]) {
+				m["state"] = bootState(m)
+				delete(m, "reason")
+			}
+			return
+		}
 		if m["power_state"] == "running" || m["state"] == "readiness_unknown" {
 			m["state"] = bootState(m)
 		}

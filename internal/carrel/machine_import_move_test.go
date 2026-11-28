@@ -742,3 +742,26 @@ func TestMachineImportedGuestRebootsWithoutGuestReport(t *testing.T) {
 		t.Errorf("machine after reboot: %v", m)
 	}
 }
+
+// A failed verification stays needs_owner_fix in the public view of the
+// unmanaged import until SSH answers (#931 review round 2).
+func TestMachineImportFailedVerifyShowsNeedsOwnerFix(t *testing.T) {
+	p, _, run := importSite(t)
+	p.sshProbe = func(context.Context, D) bool { return false }
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	listed := dicts(member(p, "machine_list", D{})["machines"])
+	if len(listed) != 1 || listed[0]["state"] != "needs_owner_fix" || !strings.Contains(str(listed[0]["reason"]), "SSH port 22") {
+		t.Fatalf("machine_list: %v", listed)
+	}
+	got := dicts(member(p, "machine_get", D{"machine": str(listed[0]["name"])})["machines"])
+	if len(got) != 1 || got[0]["state"] != "needs_owner_fix" || got[0]["reason"] == nil {
+		t.Fatalf("machine_get: %v", got)
+	}
+	p.sshProbe = func(context.Context, D) bool { return true }
+	got = dicts(member(p, "machine_get", D{"machine": str(listed[0]["name"])})["machines"])
+	if len(got) != 1 || got[0]["state"] != "ready" || got[0]["reason"] != nil {
+		t.Fatalf("machine_get once SSH answers: %v", got)
+	}
+}
