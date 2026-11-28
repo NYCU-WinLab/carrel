@@ -480,8 +480,12 @@ func TestToolCallsBecomeSpans(t *testing.T) {
 			t.Fatal("arguments leaked into a span")
 		}
 	}
-	if num(walk(spans[0], "status", "code")) != 1 || num(walk(spans[1], "status", "code")) != 2 {
+	if num(walk(spans[0], "status", "code")) != 1 || num(walk(spans[1], "status", "code")) != 1 {
 		t.Fatal(spans)
+	}
+	// A caller refusal is not a service fault; a real fault still is.
+	if callerRefusal("internal") || callerRefusal("backend_unavailable") || !callerRefusal("not_found") {
+		t.Fatal("callerRefusal misclassifies codes")
 	}
 }
 
@@ -546,5 +550,9 @@ func TestSkillGetSpanAndUsageReport(t *testing.T) {
 	}
 	if attr(spans[1], "skill") != "" || attr(spans[3], "skill") != "" {
 		t.Fatal("only a successful skill_get names a skill")
+	}
+	// An unknown skill is a refusal of caller input: status OK, outcome kept.
+	if code := integer(walk(spans[3], "status", "code")); code != 1 || attr(spans[3], "carrel.outcome") != "not_found" {
+		t.Fatal(spans[3])
 	}
 }
