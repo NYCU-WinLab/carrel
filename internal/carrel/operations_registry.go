@@ -1,7 +1,7 @@
 package carrel
 
 // Phases are the slow steps an async tool runs outside the infrastructure
-// writer. Each tool's own file registers them from an init service.
+// writer. Each tool's own file registers them from an init function.
 type Phases struct {
 	Prepare func(*Execution)
 	Perform func(*Execution)

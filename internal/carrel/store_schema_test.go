@@ -304,7 +304,10 @@ func TestSchemaFourRenamesFunctionsToServices(t *testing.T) {
 		`INSERT INTO objects VALUES('domains','d2',1,'{"id":"d2","vmid":10100,"name":"web"}')`,
 		`INSERT INTO objects VALUES('requests','r1',1,'{"id":"r1","dimension":"function_gb"}')`,
 		`INSERT INTO objects VALUES('requests','r2',1,'{"id":"r2","dimension":"vcpu"}')`,
-		`INSERT INTO objects VALUES('webhooks','w1',1,'{"id":"w1","events":["function.version.ready","app.release.live"]}')`,
+		`INSERT INTO objects VALUES('webhooks','w1',1,'{"id":"w1","url":"https://h.test/\"function.version.x","types":["function.version.ready","app.release.live"]}')`,
+		`INSERT INTO objects VALUES('operations','o1',1,'{"id":"o1","tool":"domain_add","state":"failed","args":{"sub":"api","function":"demo"}}')`,
+		`INSERT INTO site VALUES('quota_warnings','1','{"functions":true,"vcpu":true}')`,
+		`INSERT INTO events(tenant,at,type,data) VALUES(1,2,'quota.warning','{"dimension":"function_gb","used":19,"limit":20}')`,
 		`INSERT INTO site VALUES('functions','version','{"version":9}')`,
 		`INSERT INTO site VALUES('function_hosts','fn-lab','{"name":"fn-lab"}')`,
 		`INSERT INTO site VALUES('function_host_keys','fn-lab','{"fingerprint":"x"}')`,
@@ -345,8 +348,14 @@ func TestSchemaFourRenamesFunctionsToServices(t *testing.T) {
 	if r := s.Get("requests", "r2"); r["dimension"] != "vcpu" {
 		t.Fatalf("another request changed: %v", r)
 	}
-	if w := s.Get("webhooks", "w1"); fmt.Sprint(w["events"]) != "[service.version.ready app.release.live]" {
+	if w := s.Get("webhooks", "w1"); fmt.Sprint(w["types"]) != "[service.version.ready app.release.live]" || w["url"] != `https://h.test/"function.version.x` {
 		t.Fatalf("webhook = %v", w)
+	}
+	if a := obj(s.Get("operations", "o1")["args"]); a["service"] != "demo" || a["function"] != nil || a["sub"] != "api" {
+		t.Fatalf("operation args = %v", a)
+	}
+	if w := s.SiteGet("quota_warnings", "1"); w["services"] != true || w["vcpu"] != true || w["functions"] != nil {
+		t.Fatalf("quota warnings = %v", w)
 	}
 	if integer(obj(s.SiteGet("services", "version"))["version"]) != 9 || s.SiteGet("functions", "version") != nil {
 		t.Fatal("the version counter did not move")
@@ -354,8 +363,8 @@ func TestSchemaFourRenamesFunctionsToServices(t *testing.T) {
 	if s.SiteGet("service_hosts", "fn-lab") == nil || s.SiteGet("service_host_keys", "fn-lab") == nil {
 		t.Fatal("the host rows did not move")
 	}
-	ev := s.Rows("SELECT type, data FROM events")
-	if len(ev) != 1 || ev[0]["type"] != "service.version.failed" || !strings.Contains(str(ev[0]["data"]), `"service":"demo"`) {
+	ev := s.Rows("SELECT type, data FROM events ORDER BY at")
+	if len(ev) != 2 || ev[0]["type"] != "service.version.failed" || !strings.Contains(str(ev[0]["data"]), `"service":"demo"`) || !strings.Contains(str(ev[1]["data"]), `"dimension":"service_gb"`) {
 		t.Fatalf("events = %v", ev)
 	}
 	if a := s.Rows("SELECT tool FROM audit"); len(a) != 1 || a[0]["tool"] != "function_deploy" {

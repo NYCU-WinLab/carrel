@@ -1510,7 +1510,7 @@ still open values; new values are sealed with `service_env_key` only. A value no
 answers 409, and the host fails that version instead of asking again.
 
 Sealed to the host (#639): `carrel-svcd` makes an HPKE key pair (the suite of environment sets,
-7.9) in `-env-key` (default `/etc/carrel-svc/env.key`, root, `0600`) and registers only the public
+7.9) in `-env-key` (default `/etc/carrel-fn/env.key`, root, `0600`) and registers only the public
 key at `POST /services/v1/agent/key`. Once a host has a key, `service_env` seals to it, bound to
 the service's host id, and stores `hpke1:<base64>` in the version's `env`; the agent endpoint
 returns it as `env_box` and only the host opens it. When a host registers its first key, carrel
@@ -1641,7 +1641,7 @@ to tenant networks, one instance per `reuse` service.
    from image to `asleep`.
 3. Gateway routes, domains and the OIDC deploy action. The deploy action is built:
    `service_link` binds a repository branch to a service and returns a workflow that builds
-   the image, pushes it to ghcr.io and runs `NYCU-WinLab/carrel-deploy@v1` with `service` and
+   the image, pushes it to ghcr.io and runs `NYCU-WinLab/carrel-deploy@v2` with `service` and
    `image`. The action sends the image by digest to `POST /services/v1/deploy/<tenant>/<name>`
    with the job's OIDC token, checked as for apps (section 7.9), including the pinned
    repository id. carrel builds a version from the current version's settings and environment

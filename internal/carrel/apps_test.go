@@ -351,7 +351,7 @@ func TestWorkflowsNameTheirOwnOrigin(t *testing.T) {
 		"service": e.serviceWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main", false),
 		"preview": e.previewWorkflow(D{"slug": "alice"}, D{"name": "fn"}, "alice/fn", "main"),
 	} {
-		uses := strings.Count(w, "NYCU-WinLab/carrel-deploy@v1")
+		uses := strings.Count(w, "NYCU-WinLab/carrel-deploy@v")
 		if uses == 0 || strings.Count(w, "url: https://carrel.staging.test\n") != uses {
 			t.Fatalf("%s workflow does not pass its origin to every deploy step:\n%s", name, w)
 		}

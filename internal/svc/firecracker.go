@@ -53,7 +53,7 @@ const (
 	// logHalf is the size at which a service's serial log moves to log.1:
 	// a service keeps the last 5 to 10 MiB of its output (PLAN 7.11).
 	logHalf      = 5 << 20
-	cgroupParent = "carrel-svc"
+	cgroupParent = "carrel-fn"
 	cgroupRoot   = "/sys/fs/cgroup"
 	// Memory a Firecracker process may use beyond its guest's memory.
 	overheadMB = 128

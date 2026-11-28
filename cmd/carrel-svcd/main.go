@@ -58,10 +58,10 @@ type common struct {
 
 func commonFlags(flags *flag.FlagSet) *common {
 	c := &common{}
-	flags.StringVar(&c.root, "root", "/var/lib/carrel-svc", "directory that holds every service")
+	flags.StringVar(&c.root, "root", "/var/lib/carrel-fn", "directory that holds every service")
 	flags.StringVar(&c.firecracker, "firecracker", "/usr/local/bin/firecracker", "firecracker executable")
 	flags.StringVar(&c.jailer, "jailer", "/usr/local/bin/jailer", "Firecracker jailer executable")
-	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-svc/vmlinux", "guest kernel, on the file system of -root")
+	flags.StringVar(&c.kernel, "kernel", "/var/lib/carrel-fn/vmlinux", "guest kernel, on the file system of -root")
 	flags.IntVar(&c.uidBase, "uid-base", 300000, "first of the user IDs instances run as, one per slot")
 	flags.IntVar(&c.gid, "gid", 300000, "group ID that reads service files")
 	flags.StringVar(&c.uplink, "uplink", "", "the one interface services leave through (default: the default route's)")
@@ -119,8 +119,8 @@ func serve(args []string) error {
 	callers := flags.String("callers", "127.0.0.1,::1,10.200.0.2", "the only addresses the router serves, comma separated: loopback and the gateway")
 	slots := flags.Int("slots", 32, "instances that may be awake at once")
 	control := flags.String("control", "", "control plane URL; with it the host builds and removes services as the control plane asks")
-	tokenFile := flags.String("token-file", "/etc/carrel-svc/token", "file that holds the host's token for -control")
-	envKeyFile := flags.String("env-key", "/etc/carrel-svc/env.key", "the host's private key for sealed environments, made on the first start")
+	tokenFile := flags.String("token-file", "/etc/carrel-fn/token", "file that holds the host's token for -control")
+	envKeyFile := flags.String("env-key", "/etc/carrel-fn/env.key", "the host's private key for sealed environments, made on the first start")
 	_ = flags.Parse(args)
 	if *slots < 1 || *slots > maxSlots {
 		return fmt.Errorf("-slots must be 1 to %d", maxSlots)
@@ -147,6 +147,13 @@ func serve(args []string) error {
 		return fmt.Errorf("another carrel-svcd serve runs on %s: %w", c.root, err)
 	}
 	defer held.Close()
+	// Host state keeps its carrel-fn paths across the rename (#908); only
+	// the manifests changed name, and the router must find them.
+	if n, err := svc.AdoptLegacyManifests(c.root); err != nil {
+		return fmt.Errorf("rename function.json manifests: %w", err)
+	} else if n > 0 {
+		slog.Info("renamed function.json manifests", "count", n)
+	}
 	runtime, err := svc.NewFirecracker(c.config("cfn", 0, *slots, 0, true))
 	if err != nil {
 		return err

@@ -106,6 +106,12 @@ WantedBy=timers.target
 """,
 }
 # What a failed upgrade puts back in CT 100, from the archive taken before it.
+# Configuration keys an upgrade renames before the new binary reads them.
+RENAMED_KEYS = {
+    "function_hosts": "service_hosts",
+    "function_env_key": "service_env_key",
+    "function_env_old_keys": "service_env_old_keys",
+}
 CONFIGURED = ["etc/carrel/config.json", "etc/carrel/ssh_config", "etc/carrel/known_hosts", "etc/carrel/agent/lab-root.pem"]
 ACTIVATED = [*(f"etc/systemd/system/{name}" for name in UNITS), "usr/local/bin/carrel"]
 
@@ -184,6 +190,13 @@ def ct_activate():
     manifest = ETC / "templates.next.json"
     path = ETC / "config.json"
     config = json.loads(path.read_text())
+    # Functions became services (#908): the new binary refuses the old keys.
+    # A key already under the new name wins. The previous file is in this
+    # upgrade's backup and comes back with a rollback.
+    for before, after in RENAMED_KEYS.items():
+        if before in config:
+            value = config.pop(before)
+            config.setdefault(after, value)
     environment = config.setdefault("vm_environment", {})
     keys = ("environment", "packages", "built_at", "node_archive", "node_sha256", "sha256")
     for image, entry in json.loads(manifest.read_text()).items():

@@ -267,7 +267,7 @@ jobs:
           platforms: linux/amd64
           tags: ghcr.io/%s:${{ github.sha }}
       # On a pull request this deploys the preview and comments its URL.
-      - uses: NYCU-WinLab/carrel-deploy@v1
+      - uses: NYCU-WinLab/carrel-deploy@v2
         with:
           url: %s
           tenant: %s
@@ -277,7 +277,7 @@ jobs:
     if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: NYCU-WinLab/carrel-deploy@v1
+      - uses: NYCU-WinLab/carrel-deploy@v2
         with:
           url: %s
           tenant: %s

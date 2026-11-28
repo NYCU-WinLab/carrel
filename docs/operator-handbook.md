@@ -933,7 +933,7 @@ them again with `service_registry`, then deploys again.
 
 ### Service host keys
 
-Each service host's `carrel-svcd` makes its own key on the first start (`/etc/carrel-svc/env.key`)
+Each service host's `carrel-svcd` makes its own key on the first start (`/etc/carrel-fn/env.key`)
 and registers the public key. From then on service environments and registry credentials are
 sealed to that key, and
 carrel cannot open them; `-reseal-service-values` counts them under `host` and leaves them alone.

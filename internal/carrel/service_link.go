@@ -104,7 +104,7 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: ghcr.io/%s:${{ github.sha }}
-      - uses: NYCU-WinLab/carrel-deploy@v1
+      - uses: NYCU-WinLab/carrel-deploy@v2
         with:
           url: %s
           tenant: %s
