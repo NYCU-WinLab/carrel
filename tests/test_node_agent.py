@@ -450,6 +450,39 @@ def test_cloud_init_files_are_read_whole_and_only_missing_ones_written_back(monk
     module.restore_cloud_init(vm, {"user": "x" * 5_000_000, "network": None})
 
 
+def test_migrate_reports_a_cleanup_failure_after_cutover_as_a_warning(monkeypatch, tmp_path):
+    module = load("node-agent.py")
+    vm = dict(MACHINE, vmid=10100, kind="vm")
+    nodes = tmp_path / "nodes"
+    for n in ("carrel01", "carrel02"):
+        (nodes / n / "qemu-server").mkdir(parents=True)
+    conf = nodes / "carrel01" / "qemu-server" / "10100.conf"
+    conf.write_text("x")
+    monkeypatch.setattr(module, "PVE_NODES", nodes)
+    monkeypatch.setattr(module, "NODE", "carrel01")
+    monkeypatch.setattr(module, "storage_id", lambda: "local-zfs")
+    monkeypatch.setattr(
+        module, "owned", lambda m, node=None, **k: {"scsi0": "local-zfs:vm-10100-disk-0,size=10G"}
+    )
+    moves = [True]
+
+    def run(*args, **kwargs):
+        if args[:2] == ("qm", "migrate"):
+            if moves[0]:
+                conf.rename(nodes / "carrel02" / "qemu-server" / "10100.conf")
+            raise module.CommandFailure("qm migrate failed: could not remove the old disk")
+        return "status: running"
+
+    monkeypatch.setattr(module, "run", run)
+    out = module.migrate({"machine": vm, "target": "carrel02"})
+    assert out["state"] == "moved" and "old disk" in out["warning"]
+    # A failure before the cutover, with the machine still here, stays an error.
+    nodes.joinpath("carrel02", "qemu-server", "10100.conf").rename(conf)
+    moves[0] = False
+    with pytest.raises(module.CommandFailure):
+        module.migrate({"machine": vm, "target": "carrel02"})
+
+
 def test_migrate_unlinks_a_linked_clone_through_shared_storage_and_is_idempotent(monkeypatch, tmp_path):
     module = load("node-agent.py")
     vm = dict(MACHINE, vmid=10100, kind="vm")

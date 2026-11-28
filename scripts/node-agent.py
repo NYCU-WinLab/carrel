@@ -2196,13 +2196,23 @@ def migrate(req):
             if entry is None or entry["type"] not in ("nfs", "cifs") or "images" not in entry.get("content", ""):
                 raise ValueError("moving a linked clone needs the site's shared images storage")
             run("qm", "disk", "move", vmid, "scsi0", transit, "--format", "qcow2", "--delete", "1", "--bwlimit", bw, timeout=4 * 3600)
-        run("qm", "migrate", vmid, target, "--with-local-disks", "--bwlimit", bw, *(["--online"] if running else []), timeout=4 * 3600)
+        command = ("qm", "migrate", vmid, target, "--with-local-disks", "--bwlimit", bw, *(["--online"] if running else []))
     else:
         running = "running" in run("pct", "status", vmid)
-        run("pct", "migrate", vmid, target, "--bwlimit", bw, *(["--restart"] if running else []), timeout=4 * 3600)
+        command = ("pct", "migrate", vmid, target, "--bwlimit", bw, *(["--restart"] if running else []))
+    warning = None
+    try:
+        run(*command, timeout=4 * 3600)
+    except CommandFailure as failure:
+        # Proxmox can fail after the cutover, while it removes the old disk
+        # copy. A machine that already sits on the target moved; the failure
+        # is a warning, so the control plane records the new node (issue #878).
+        if located(m) != target:
+            raise
+        warning = str(failure)
     if located(m) != target:
         raise CommandFailure("migration did not reach the target")
-    return {"state": "moved"}
+    return {"state": "moved", "warning": warning} if warning else {"state": "moved"}
 
 
 def migrate_finish(req):
