@@ -68,6 +68,7 @@ def test_another_node_joins_and_skips_bootstrap(tmp_path):
     assert "+ pvecm add n1 --use_ssh 1" in r.stdout
     assert "bootstrap-platform.py" not in "".join(l for l in r.stdout.splitlines() if l.startswith("+ "))
     assert "run scripts/bootstrap-platform.py --firewall" in r.stdout
+    assert "on every other node" in r.stdout and "install.sh --site" in r.stdout
 
 
 def test_a_join_that_leaves_no_cluster_stops_the_install(tmp_path):
