@@ -425,3 +425,22 @@ func TestMachineImportResumeWaitsForSavedShutdown(t *testing.T) {
 		t.Errorf("job: %v", raw["import"])
 	}
 }
+
+func TestMachineImportedGuestCanBeReadAndDeleted(t *testing.T) {
+	p, _, run := importSite(t)
+	if op := run(104); op["state"] != "succeeded" {
+		t.Fatalf("operation: %v", op)
+	}
+	m := p.Store.Get("machines", "10100")
+	if m == nil || m["state"] != "imported_unverified" {
+		t.Fatalf("machine: %v", m)
+	}
+	alice := person("alice", false)
+	app := NewApp(p, nil)
+	if r := app.Call(context.Background(), "machine_get", D{"machine": str(m["name"])}, alice); r["ok"] != true {
+		t.Errorf("machine_get: %v", r)
+	}
+	if r := app.Call(context.Background(), "machine_delete", D{"machine": str(m["name"]), "confirm": str(m["name"])}, alice); r["ok"] != true {
+		t.Errorf("machine_delete: %v", r)
+	}
+}

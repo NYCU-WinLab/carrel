@@ -254,10 +254,16 @@ func (e *Execution) moveGuest(job D) {
 		note("migrated", true)
 	}
 
+	// Tags the guest too, so the node agent accepts it (#917); without a hop
+	// there is no volume to move and no hop storage to name.
+	hopStorage := ""
 	if job["hop"] == true {
 		note("step", "move_volumes")
-		e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": cfg.ImportHopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
+		hopStorage = cfg.ImportHopStorage
+	} else {
+		note("step", "tag_guest")
 	}
+	e.Call(D{"op": "import_finish", "tenant_n": e.Op["tenant_n"], "vmid": job["target_vmid"], "kind": job["kind"], "hop_storage": hopStorage, "bwlimit": cfg.MigrationBwlimitKiB}, e.importTargetNode(str(job["target_node"])))
 }
 
 // startMigration prepares the guest on the source, sends remote_migrate and
