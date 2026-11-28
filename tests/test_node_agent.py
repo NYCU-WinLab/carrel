@@ -3235,6 +3235,19 @@ def test_import_network_adds_one_cloud_init_drive(monkeypatch):
     assert not [a for a in qm if str(a).endswith(":cloudinit")]
 
 
+def test_import_network_drops_the_old_cloud_init_credentials(monkeypatch):
+    module = load("node-agent.py")
+    old = {**OLD_VM, "ciuser": "lab", "sshkeys": "ssh-ed25519%20AAAA%20admin", "cipassword": "$5$x"}
+    calls = import_cleanup(module, monkeypatch, "vm", old)
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert qm[qm.index("--delete") + 1] == "cipassword,hookscript,hostpci0,sshkeys,usb1"
+    assert "ciuser" not in qm[qm.index("--delete") + 1]
+    # A retry, the keys gone, deletes nothing for them.
+    calls = import_cleanup(module, monkeypatch, "vm", {"net0": OLD_VM["net0"], "ciuser": "lab"})
+    [qm] = [c for c in calls if c[0] == "qm"]
+    assert "--delete" not in qm
+
+
 def test_import_network_puts_the_cloud_init_drive_in_a_free_slot(monkeypatch):
     module = load("node-agent.py")
     cd = {**OLD_VM, "ide2": "none,media=cdrom", "ide0": "tank:vm-10100-disk-0"}

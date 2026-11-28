@@ -2351,8 +2351,9 @@ def import_network(req):
     `ipfilter` and the tenant's rules. The guest stays stopped; every step
     sets the same values again, so a retry is safe. The same call (#919)
     removes the foreign keys of the old cluster (hookscript, host PCI and USB
-    mappings), replaces an old `cicustom` with carrel's vendor data and sets
-    the CPU type to `x86-64-v3`, unless the owner asked for `nested_virt`."""
+    mappings, the cloud-init `sshkeys` and `cipassword`), replaces an old
+    `cicustom` with carrel's vendor data and sets the CPU type to
+    `x86-64-v3`, unless the owner asked for `nested_virt`."""
     m = req["machine"]
     vmid = machine(m)
     if located(m) != NODE:
@@ -2360,7 +2361,12 @@ def import_network(req):
     n = m["tenant_n"]
     cfg = owned(m)
     gateway = f"10.200.{n}.1"
-    foreign = sorted(k for k in cfg if k == "hookscript" or (m["kind"] == "vm" and re.fullmatch(r"hostpci[0-9]+|usb[0-9]+", k)))
+    # The new cloud-init drive would apply the old config's sshkeys and
+    # cipassword on first boot: keys that are not the owner's leave the
+    # cloud-init configuration (PLAN 10.6). ciuser stays, so cloud-init does
+    # not create the distro default user.
+    vm_keys = r"hostpci[0-9]+|usb[0-9]+|sshkeys|cipassword"
+    foreign = sorted(k for k in cfg if k == "hookscript" or (m["kind"] == "vm" and re.fullmatch(vm_keys, k)))
     drop = ["--delete", ",".join(foreign)] if foreign else []
     if m["kind"] == "vm":
         cpu = [] if m.get("nested_virt") else ["--cpu", "x86-64-v3"]
