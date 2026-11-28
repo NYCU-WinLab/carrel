@@ -47,8 +47,11 @@ func validateKeys(keys any) {
 }
 
 type Platform struct {
-	Store   *Store
-	Backend Backend
+	// lastAlumni is when the maintenance pass last asked Keycloak about
+	// tenants (alumni.go). The writer lock guards it.
+	lastAlumni time.Time
+	Store      *Store
+	Backend    Backend
 	// Hub carries calls to nodes on the agent transport (PLAN 8.6).
 	Hub    *AgentHub
 	Config Config

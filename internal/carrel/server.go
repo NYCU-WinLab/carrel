@@ -359,6 +359,7 @@ func (p *Platform) Start() {
 				e := p.execution(p.ctx)
 				if e.maintenanceReconciles() {
 					e.ExpireGrants()
+					e.checkAlumniNow()
 					e.ExpireVPNClients()
 					e.ReapPreviews()
 					e.deferJump = true
