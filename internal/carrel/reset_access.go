@@ -29,26 +29,41 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 	if state := str(m["state"]); contains([]string{"provisioning", "deleting", "migrating"}, state) {
 		fail("conflict", "The machine is "+state+"; reset its access once that has finished", D{"recovery": "resolve_prerequisite"})
 	}
-	keys := arr(a["ssh_keys"])
-	if len(keys) == 0 {
-		for _, k := range rowsOf[sshKey](e.S, "keys", n) {
-			keys = append(keys, k.Key)
-		}
-		if len(keys) > 20 {
-			fail("invalid", "The tenant has more than 20 saved keys; pass the ones to add as ssh_keys", D{"recovery": "revise_request"})
-		}
-	}
-	if len(keys) == 0 {
-		fail("invalid", "Pass ssh_keys, or save a key with ssh_key_add first", D{"recovery": "revise_request", "requirements": []any{"ssh_public_key"}})
-	}
-	validateKeys(keys)
-	power := powerState(obj(e.Call(D{"op": "status", "machine": m})))
-	restart := power == "running"
 	// A retry resumes the reset it started: the same keys and the same
-	// restart, even after the first attempt left the VM shut down.
-	if e.Op != nil {
-		if saved := obj(e.Op["reset"]); e.Op["reset"] != nil {
-			keys, restart = arr(saved["keys"]), boolean(saved["restart"])
+	// restart, even after the first attempt left the VM shut down, and even
+	// if the tenant has since changed its saved keys.
+	var keys []any
+	var restart, resumed bool
+	if e.Op != nil && e.Op["reset"] != nil {
+		saved := obj(e.Op["reset"])
+		keys, restart, resumed = arr(saved["keys"]), boolean(saved["restart"]), true
+	}
+	if !resumed {
+		keys = arr(a["ssh_keys"])
+		if len(keys) == 0 {
+			for _, k := range rowsOf[sshKey](e.S, "keys", n) {
+				keys = append(keys, k.Key)
+			}
+			if len(keys) > 20 {
+				fail("invalid", "The tenant has more than 20 saved keys; pass the ones to add as ssh_keys", D{"recovery": "revise_request"})
+			}
+		}
+		if len(keys) == 0 {
+			fail("invalid", "Pass ssh_keys, or save a key with ssh_key_add first", D{"recovery": "revise_request", "requirements": []any{"ssh_public_key"}})
+		}
+		validateKeys(keys)
+	}
+	power := powerState(obj(e.Call(D{"op": "status", "machine": m})))
+	if !resumed {
+		restart = power == "running"
+		// The node's file holds only the last reset's keys. While no boot has
+		// consumed an earlier reset, the new one carries its keys too.
+		if power == "stopped" {
+			for _, k := range arr(m["pending_reset_keys"]) {
+				if !containsKey(keys, k) {
+					keys = append(keys, k)
+				}
+			}
 		}
 	}
 	if power != "running" && power != "stopped" {
@@ -97,6 +112,11 @@ func (e *Execution) ResetAccess(a, w, t D) D {
 			tx.keepCloudInit(cur, files)
 			if err == nil {
 				cur["ssh_keys"] = have
+				if restart {
+					delete(cur, "pending_reset_keys")
+				} else {
+					cur["pending_reset_keys"] = keys
+				}
 			}
 			tx.S.Put("machines", cur["vmid"], n, cur)
 			m = cur

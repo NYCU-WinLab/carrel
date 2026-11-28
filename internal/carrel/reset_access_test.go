@@ -242,3 +242,71 @@ func TestResetAccessLogsANoticeForTheAlerts(t *testing.T) {
 		t.Fatal("the notice must not carry key material", out)
 	}
 }
+
+func TestResetAccessRetryResumesAfterTheTenantDeletesItsLastSavedKey(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "running", &actions)
+	next := b.call
+	startFails := true
+	b.call = func(r D, target string) (any, error) {
+		if r["op"] == "action" && r["action"] == "start" && startFails {
+			return nil, errors.New("start failed")
+		}
+		return next(r, target)
+	}
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	e.Op = D{"id": "op-reset-2", "tenant_n": 1, "tool": "machine_reset_access"}
+	a := D{"machine": "web", "confirm": "web"}
+	p.Store.Put("keys", "k1", 1, D{"id": "k1", "key": "ssh-ed25519 AAAAsaved"})
+	if attempt(func() { e.ResetAccess(a, D{}, p.Store.TenantN(1)) }) == nil {
+		t.Fatal("the failed start must fail the attempt")
+	}
+	// The tenant removes its last saved key, then the operation retries.
+	p.Store.Exec("DELETE FROM objects WHERE kind='keys'")
+	startFails, actions = false, nil
+	r := e.ResetAccess(a, D{}, p.Store.TenantN(1))
+	if r["restart"] != true || actions[0]["reset_id"] == "" || !equal(actions[0]["ssh_keys"], []any{"ssh-ed25519 AAAAsaved"}) {
+		t.Fatal("the retry must resume with the saved keys", r, actions)
+	}
+}
+
+func TestResetAccessRetryResumesWithMoreThan20SavedKeys(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "stopped", &actions)
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	e.Op = D{"id": "op-reset-3", "tenant_n": 1, "tool": "machine_reset_access",
+		"reset": D{"id": "r1", "keys": []any{"ssh-ed25519 AAAAone"}, "restart": false}}
+	for i := 0; i < 21; i++ {
+		id := "k" + string(rune('a'+i))
+		p.Store.Put("keys", id, 1, D{"id": id, "key": "ssh-ed25519 AAAA" + id})
+	}
+	e.ResetAccess(D{"machine": "web", "confirm": "web"}, D{}, p.Store.TenantN(1))
+	if len(actions) != 1 || actions[0]["reset_id"] != "r1" || !equal(actions[0]["ssh_keys"], []any{"ssh-ed25519 AAAAone"}) {
+		t.Fatal(actions)
+	}
+}
+
+func TestResetAccessTwiceOnAStoppedVMSendsBothKeys(t *testing.T) {
+	p, b := fixture(t)
+	var actions []D
+	resetNode(b, "stopped", &actions)
+	seedMachine(p, "web", 10100)
+	e := p.execution(context.Background())
+	e.ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAa"}}, D{}, p.Store.TenantN(1))
+	e.ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAb"}}, D{}, p.Store.TenantN(1))
+	if !equal(actions[1]["ssh_keys"], []any{"ssh-ed25519 AAAAb", "ssh-ed25519 AAAAa"}) {
+		t.Fatal("key A must still reach the guest", actions[1]["ssh_keys"])
+	}
+	// A boot consumes the reset: the next one carries only its own key.
+	e.PowerMachine(e.Machine(p.Store.TenantN(1), "web"), D{"action": "start"}, p.Store.TenantN(1))
+	e.PowerMachine(e.Machine(p.Store.TenantN(1), "web"), D{"action": "shutdown"}, p.Store.TenantN(1))
+	actions = nil
+	e.ResetAccess(D{"machine": "web", "confirm": "web", "ssh_keys": []any{"ssh-ed25519 AAAAc"}}, D{}, p.Store.TenantN(1))
+	if !equal(actions[0]["ssh_keys"], []any{"ssh-ed25519 AAAAc"}) {
+		t.Fatal(actions[0]["ssh_keys"])
+	}
+}

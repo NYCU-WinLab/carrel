@@ -81,6 +81,10 @@ func (e *Execution) PowerMachine(m, a, t D) D {
 	m["state"], m["power_state"], m["ssh_ready"] = state, state, false
 	if state == "running" {
 		m["state"] = bootState(m)
+		if action == "start" || action == "reboot" {
+			// A boot consumed any reset that was waiting for one.
+			delete(m, "pending_reset_keys")
+		}
 		// A CT that missed a push (rolled back while stopped) gets it now.
 		if m["ca_sync"] == "push" && !equal(m["ca_applied"], caPrincipals(m)) {
 			e.caRestored(m, true)
